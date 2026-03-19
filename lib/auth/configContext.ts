@@ -19,6 +19,7 @@ export type StepFourView = "methods" | "pix_form" | "card_form" | "pix_checkout"
 export type StepFourDraft = {
   visited: boolean;
   view: StepFourView;
+  lastKnownOrderNumber: number | null;
   payerDocument: string;
   payerName: string;
   cardNumber: string;
@@ -87,6 +88,20 @@ function normalizeStepFourView(value: unknown): StepFourView {
   return value as StepFourView;
 }
 
+function normalizeOrderNumberOrNull(value: unknown) {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? Number(value)
+      : Number.NaN;
+
+  if (!Number.isInteger(numeric)) return null;
+  if (numeric <= 0) return null;
+  if (numeric > 9_999_999_999) return null;
+  return numeric;
+}
+
 export function normalizeConfigStep(value: unknown): ConfigStep | null {
   const numeric =
     typeof value === "number"
@@ -132,6 +147,7 @@ function sanitizeStepFourDraft(value: unknown): StepFourDraft | null {
   return {
     visited: Boolean(data.visited),
     view: normalizeStepFourView(data.view),
+    lastKnownOrderNumber: normalizeOrderNumberOrNull(data.lastKnownOrderNumber),
     payerDocument: normalizeDraftText(data.payerDocument, 24),
     payerName: normalizeDraftText(data.payerName, 120),
     cardNumber: normalizeDraftText(data.cardNumber, 32),
@@ -226,6 +242,7 @@ export function hasStepFourDraftValues(value: StepFourDraft | null | undefined) 
   return Boolean(
     value.visited ||
       value.view !== "methods" ||
+      value.lastKnownOrderNumber ||
       value.payerDocument.trim() ||
       value.payerName.trim() ||
       value.cardNumber.trim() ||

@@ -90,6 +90,7 @@ type MethodSelectorPanelProps = {
   className: string;
   onChooseMethod: (method: PaymentMethod) => void;
   methodMessage: string | null;
+  canInteract: boolean;
 };
 
 type PixFormPanelProps = {
@@ -211,6 +212,7 @@ const PAYMENT_ORDER_CACHE_STORAGE_KEY = "flowdesk_payment_order_cache_v1";
 const EMPTY_STEP_FOUR_DRAFT: StepFourDraft = {
   visited: false,
   view: "methods",
+  lastKnownOrderNumber: null,
   payerDocument: "",
   payerName: "",
   cardNumber: "",
@@ -238,6 +240,12 @@ function buildStepFourDraft(input: Partial<StepFourDraft> | null | undefined): S
   return {
     visited: Boolean(input.visited),
     view,
+    lastKnownOrderNumber:
+      typeof input.lastKnownOrderNumber === "number" &&
+      Number.isInteger(input.lastKnownOrderNumber) &&
+      input.lastKnownOrderNumber > 0
+        ? input.lastKnownOrderNumber
+        : null,
     payerDocument: normalizeDraftText(input.payerDocument, 24),
     payerName: normalizeDraftText(input.payerName, 120),
     cardNumber: normalizeDraftText(input.cardNumber, 32),
@@ -713,6 +721,7 @@ function MethodSelectorPanel({
   className,
   onChooseMethod,
   methodMessage,
+  canInteract,
 }: MethodSelectorPanelProps) {
   return (
     <div className={className}>
@@ -723,20 +732,37 @@ function MethodSelectorPanel({
       <div className="mt-[25px] mb-[25px] h-[2px] w-full bg-[#242424] max-[1529px]:hidden" />
 
       <div className="mt-0 flex flex-col gap-4">
-        <button type="button" onClick={() => onChooseMethod("pix")} className="flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] font-medium text-[#D8D8D8]">
+        <button
+          type="button"
+          onClick={() => onChooseMethod("pix")}
+          disabled={!canInteract}
+          className="flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] font-medium text-[#D8D8D8] transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
+        >
           <span className="relative h-[22px] w-[22px] shrink-0">
             <Image src="/cdn/icons/pix_.png" alt="PIX" fill sizes="22px" className="object-contain" />
           </span>
           Continuar com PIX
         </button>
 
-        <button type="button" onClick={() => onChooseMethod("card")} className="flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] font-medium text-[#D8D8D8]">
+        <button
+          type="button"
+          onClick={() => onChooseMethod("card")}
+          disabled={!canInteract}
+          className="flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] font-medium text-[#D8D8D8] transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
+        >
           <span className="relative h-[22px] w-[22px] shrink-0">
             <Image src="/cdn/icons/card_.png" alt="Cartao" fill sizes="22px" className="object-contain" />
           </span>
           Continuar com Cartao
         </button>
       </div>
+
+      {!canInteract ? (
+        <div className="mt-[14px] flex items-center justify-center gap-2 text-[12px] text-[#C2C2C2]">
+          <ButtonLoader size={14} colorClassName="text-[#C2C2C2]" />
+          <span>Aguardando carregamento do pedido</span>
+        </div>
+      ) : null}
 
       {methodMessage ? <p className="mt-[14px] text-center text-[12px] text-[#C2C2C2]">{methodMessage}</p> : null}
 
@@ -1031,8 +1057,12 @@ export function ConfigStepFour({
   const [isSubmittingCard, setIsSubmittingCard] = useState(false);
 
   const [pixOrder, setPixOrder] = useState<PixOrder | null>(null);
+  const [lastKnownOrderNumber, setLastKnownOrderNumber] = useState<number | null>(
+    initialStepFourDraft.lastKnownOrderNumber,
+  );
   const [copied, setCopied] = useState(false);
   const [isLoadingOrder, setIsLoadingOrder] = useState(true);
+  const [orderReloadNonce, setOrderReloadNonce] = useState(0);
 
   const documentDigits = useMemo(() => normalizeBrazilDocumentDigits(payerDocument), [payerDocument]);
   const cardDocumentDigits = useMemo(() => normalizeBrazilDocumentDigits(cardDocument), [cardDocument]);
@@ -1053,6 +1083,7 @@ export function ConfigStepFour({
       setCardCvv("");
       setCardDocument("");
       setPixOrder(null);
+      setLastKnownOrderNumber(null);
       setCopied(false);
       setIsLoadingOrder(false);
       return;
@@ -1072,9 +1103,11 @@ export function ConfigStepFour({
     setCardExpiry(guildDraft.cardExpiry);
     setCardCvv(guildDraft.cardCvv);
     setCardDocument(guildDraft.cardDocument);
+    setLastKnownOrderNumber(guildDraft.lastKnownOrderNumber);
     setCopied(false);
     if (cachedOrder) {
       setPixOrder(cachedOrder);
+      setLastKnownOrderNumber(cachedOrder.orderNumber);
       setView(
         resolveRestoredView({
           hasStoredDraft,
@@ -1106,6 +1139,7 @@ export function ConfigStepFour({
 
         if (remoteOrder) {
           writeCachedOrderByGuild(activeGuildId, remoteOrder);
+          setLastKnownOrderNumber(remoteOrder.orderNumber);
         }
 
         setPixOrder(order);
@@ -1119,6 +1153,9 @@ export function ConfigStepFour({
       } catch {
         if (!isMounted) return;
         setPixOrder(cachedOrder || null);
+        if (cachedOrder) {
+          setLastKnownOrderNumber(cachedOrder.orderNumber);
+        }
         setView(
           resolveRestoredView({
             hasStoredDraft,
@@ -1140,7 +1177,7 @@ export function ConfigStepFour({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [guildId]);
+  }, [guildId, orderReloadNonce]);
 
   useEffect(() => {
     if (!guildId || isLoadingOrder) return;
@@ -1148,6 +1185,7 @@ export function ConfigStepFour({
     onDraftChange?.(guildId, {
       visited: true,
       view,
+      lastKnownOrderNumber,
       payerDocument,
       payerName,
       cardNumber,
@@ -1164,6 +1202,7 @@ export function ConfigStepFour({
     cardNumber,
     guildId,
     isLoadingOrder,
+    lastKnownOrderNumber,
     onDraftChange,
     payerDocument,
     payerName,
@@ -1187,6 +1226,7 @@ export function ConfigStepFour({
           if (!isMounted || !response.ok || !payload.ok || !payload.order) return;
 
           setPixOrder(payload.order);
+          setLastKnownOrderNumber(payload.order.orderNumber);
           writeCachedOrderByGuild(activeGuildId, payload.order);
 
           if (payload.order.status && payload.order.status !== "pending") {
@@ -1352,9 +1392,15 @@ export function ConfigStepFour({
   }, [cardBrand, cardCvvStatus, cardDocumentStatus, cardExpiryStatus, cardHolderStatus, cardNumberStatus, guildId, isSubmittingCard]);
 
   const paymentStatus = pixOrder?.status || "pending";
-  const orderNumberLabel = pixOrder ? `#${pixOrder.orderNumber}` : "--";
+  const resolvedOrderNumber = pixOrder?.orderNumber || lastKnownOrderNumber || null;
+  const orderNumberLabel = resolvedOrderNumber ? `#${resolvedOrderNumber}` : null;
   const currentPaymentStatusLabel = paymentStatusLabel(pixOrder?.status || null);
   const statusVisual = resolveStatusVisual(paymentStatus);
+  const canChoosePaymentMethod = Boolean(
+    !isLoadingOrder &&
+      resolvedOrderNumber &&
+      (!pixOrder || pixOrder.status === "pending"),
+  );
   const shouldShowStatusResultPanel = Boolean(
     view === "methods" &&
       pixOrder &&
@@ -1416,6 +1462,11 @@ export function ConfigStepFour({
   }, []);
 
   const handleChooseMethod = useCallback((method: PaymentMethod) => {
+    if (!canChoosePaymentMethod) {
+      setMethodMessage("Aguardando o pedido ficar pronto para pagamento.");
+      return;
+    }
+
     setMethodMessage(null);
     setPixFormHasInputError(false);
     setPixFormError(null);
@@ -1429,7 +1480,7 @@ export function ConfigStepFour({
     }
 
     setView("card_form");
-  }, []);
+  }, [canChoosePaymentMethod]);
 
   const handleSubmitPixPayment = useCallback(async () => {
     if (!guildId || isSubmittingPix) return;
@@ -1469,6 +1520,7 @@ export function ConfigStepFour({
       }
 
       setPixOrder(payload.order);
+      setLastKnownOrderNumber(payload.order.orderNumber);
       writeCachedOrderByGuild(guildId, payload.order);
       setView("pix_checkout");
     } catch (error) {
@@ -1591,6 +1643,7 @@ export function ConfigStepFour({
       }
 
       setPixOrder(payload.order);
+      setLastKnownOrderNumber(payload.order.orderNumber);
       writeCachedOrderByGuild(guildId, payload.order);
       setView("methods");
       setCardFormHasInputError(false);
@@ -1664,14 +1717,17 @@ export function ConfigStepFour({
       removeCachedOrderByGuild(guildId);
     }
 
+    setIsLoadingOrder(true);
     setMethodMessage("Selecione o metodo para gerar um novo pagamento.");
     setCopied(false);
     setPixOrder(null);
+    setLastKnownOrderNumber(null);
     setPixFormError(null);
     setPixFormHasInputError(false);
     setCardFormError(null);
     setCardFormHasInputError(false);
     setView("methods");
+    setOrderReloadNonce((current) => current + 1);
   }, [guildId]);
 
   const rightPanel = useMemo(() => {
@@ -1779,9 +1835,11 @@ export function ConfigStepFour({
         className="mx-auto hidden w-full max-w-[536px] min-[1530px]:block min-[1530px]:self-center"
         onChooseMethod={handleChooseMethod}
         methodMessage={methodMessage}
+        canInteract={canChoosePaymentMethod}
       />
     );
   }, [
+    canChoosePaymentMethod,
     canSubmitCard,
     canSubmitPix,
     cardBrand,
@@ -1933,6 +1991,7 @@ export function ConfigStepFour({
         className="mt-[26px] w-full min-[1530px]:hidden"
         onChooseMethod={handleChooseMethod}
         methodMessage={methodMessage}
+        canInteract={canChoosePaymentMethod}
       />
     );
   }
@@ -1958,7 +2017,14 @@ export function ConfigStepFour({
 
             <div className="mt-[26px] flex justify-center">
               <div className="flex h-[51px] w-[256px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] text-[#D8D8D8]">
-                Pedido: {orderNumberLabel}
+                <span>Pedido:</span>
+                {orderNumberLabel ? (
+                  <span className="ml-1">{orderNumberLabel}</span>
+                ) : (
+                  <span className="ml-2 inline-flex items-center">
+                    <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
+                  </span>
+                )}
               </div>
             </div>
 
