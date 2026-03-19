@@ -4,6 +4,11 @@ import {
   buildSavedMethods,
   extractCardSnapshot,
 } from "@/lib/payments/savedMethods";
+import {
+  mergeSavedMethodsWithStored,
+  toSavedMethodFromStoredRecord,
+  type StoredPaymentMethodRecord,
+} from "@/lib/payments/userPaymentMethods";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type PaymentOrderStatus =
@@ -41,7 +46,6 @@ function toFiniteAmount(value: string | number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
-
 
 function toHistoryOrder(order: PaymentOrderRecord) {
   const card = order.payment_method === "card" ? extractCardSnapshot(order.provider_payload) : null;
@@ -109,7 +113,29 @@ export async function GET() {
     const hiddenMethodSet = new Set(
       (hiddenMethodsResult.data || []).map((item) => item.method_id),
     );
-    const methods = allMethods.filter((method) => !hiddenMethodSet.has(method.id));
+
+    const storedMethodsResult = await supabase
+      .from("auth_user_payment_methods")
+      .select(
+        "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, created_at, updated_at",
+      )
+      .eq("user_id", sessionData.authSession.user.id)
+      .eq("is_active", true)
+      .returns<StoredPaymentMethodRecord[]>();
+
+    if (storedMethodsResult.error) {
+      throw new Error(storedMethodsResult.error.message);
+    }
+
+    const storedMethods = (storedMethodsResult.data || [])
+      .map((row) => toSavedMethodFromStoredRecord(row))
+      .filter((method): method is NonNullable<typeof method> => Boolean(method));
+
+    const methods = mergeSavedMethodsWithStored({
+      derivedMethods: allMethods,
+      storedMethods,
+      hiddenMethodSet,
+    });
 
     return NextResponse.json({
       ok: true,

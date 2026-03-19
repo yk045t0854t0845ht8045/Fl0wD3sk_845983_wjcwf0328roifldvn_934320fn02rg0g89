@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
@@ -6,6 +6,11 @@ import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { serversScale } from "@/components/servers/serversScale";
+import {
+  isValidBrazilDocument,
+  normalizeBrazilDocumentDigits,
+  resolveBrazilDocumentType,
+} from "@/lib/payments/brazilDocument";
 
 type ManagedServerStatus = "paid" | "expired" | "off";
 type EditorTab = "settings" | "payments" | "methods" | "plans";
@@ -50,6 +55,7 @@ type SavedMethod = {
   expYear: number | null;
   lastUsedAt: string;
   timesUsed: number;
+  nickname?: string | null;
 };
 
 type PlanSettings = {
@@ -66,7 +72,18 @@ type PlanSettings = {
     expMonth: number | null;
     expYear: number | null;
     lastUsedAt: string;
+    nickname?: string | null;
   } | null;
+  availableMethods?: Array<{
+    id: string;
+    brand: string | null;
+    firstSix: string;
+    lastFour: string;
+    expMonth: number | null;
+    expYear: number | null;
+    lastUsedAt: string;
+    nickname?: string | null;
+  }>;
   availableMethodsCount: number;
   createdAt: string | null;
   updatedAt: string | null;
@@ -87,6 +104,7 @@ type ServerSettingsEditorProps = {
     guildName: string;
     iconUrl: string | null;
   }>;
+  initialTab?: EditorTab;
   onClose: () => void;
   standalone?: boolean;
 };
@@ -156,15 +174,155 @@ function formatAmount(amount: number, currency: string) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: currency || "BRL" }).format(amount);
 }
 
+const ELO_PREFIXES = [
+  "401178",
+  "401179",
+  "438935",
+  "457631",
+  "457632",
+  "431274",
+  "451416",
+  "457393",
+  "504175",
+  "506699",
+  "506770",
+  "506771",
+  "506772",
+  "506773",
+  "506774",
+  "506775",
+  "506776",
+  "506777",
+  "506778",
+  "509000",
+  "509999",
+  "627780",
+  "636297",
+  "636368",
+  "650031",
+  "650033",
+  "650035",
+  "650051",
+  "650405",
+  "650439",
+  "650485",
+  "650538",
+  "650541",
+  "650598",
+  "650700",
+  "650718",
+  "650720",
+  "650727",
+  "650901",
+  "650920",
+  "651652",
+  "651679",
+  "655000",
+  "655019",
+];
+
+function normalizeCardDigits(value: string) {
+  return value.replace(/\D/g, "").slice(0, 19);
+}
+
+function detectCardBrand(cardDigits: string) {
+  if (!cardDigits) return null;
+  if (ELO_PREFIXES.some((prefix) => cardDigits.startsWith(prefix))) return "elo";
+  if (/^3[47]/.test(cardDigits)) return "amex";
+  if (/^(50|5[1-5]|2[2-7])/.test(cardDigits)) return "mastercard";
+  if (/^4/.test(cardDigits)) return "visa";
+  return null;
+}
+
+function cardNumberLengthsForBrand(brand: string | null) {
+  switch (brand) {
+    case "amex":
+      return [15];
+    case "mastercard":
+    case "elo":
+      return [16];
+    case "visa":
+      return [13, 16, 19];
+    default:
+      return [13, 14, 15, 16, 17, 18, 19];
+  }
+}
+
+function isLuhnValid(cardDigits: string) {
+  let sum = 0;
+  let shouldDouble = false;
+
+  for (let index = cardDigits.length - 1; index >= 0; index -= 1) {
+    let digit = Number(cardDigits[index]);
+
+    if (shouldDouble) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+
+    sum += digit;
+    shouldDouble = !shouldDouble;
+  }
+
+  return sum % 10 === 0;
+}
+
+function normalizeCardExpiryDigits(value: string) {
+  return value.replace(/\D/g, "").slice(0, 4);
+}
+
+function formatCardNumberInput(value: string) {
+  const digits = normalizeCardDigits(value);
+  const brand = detectCardBrand(digits);
+
+  if (brand === "amex") {
+    const g1 = digits.slice(0, 4);
+    const g2 = digits.slice(4, 10);
+    const g3 = digits.slice(10, 15);
+    return [g1, g2, g3].filter(Boolean).join(" ");
+  }
+
+  const groups = digits.match(/.{1,4}/g) || [];
+  return groups.join(" ");
+}
+
+function formatCardExpiryInput(value: string) {
+  const digits = normalizeCardExpiryDigits(value);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}`;
+}
+
+function normalizeCardCvvInput(value: string) {
+  return value.replace(/\D/g, "").slice(0, 4);
+}
+
+function isValidCardExpiry(expiry: string) {
+  const digits = normalizeCardExpiryDigits(expiry);
+  if (digits.length !== 4) return false;
+
+  const month = Number(digits.slice(0, 2));
+  const year = Number(digits.slice(2, 4)) + 2000;
+  if (!Number.isInteger(month) || month < 1 || month > 12) return false;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if (year < currentYear) return false;
+  if (year === currentYear && month < currentMonth) return false;
+  return true;
+}
+
 export function ServerSettingsEditor({
   guildId,
   guildName,
   status,
   allServers,
+  initialTab = "settings",
   onClose,
   standalone = false,
 }: ServerSettingsEditorProps) {
-  const [activeTab, setActiveTab] = useState<EditorTab>("settings");
+  const [activeTab, setActiveTab] = useState<EditorTab>(initialTab);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -197,7 +355,20 @@ export function ServerSettingsEditor({
   const [methodGuildFilter, setMethodGuildFilter] = useState<string>(guildId);
   const [openMethodMenuId, setOpenMethodMenuId] = useState<string | null>(null);
   const [deletingMethodId, setDeletingMethodId] = useState<string | null>(null);
+  const [savingMethodNicknameId, setSavingMethodNicknameId] = useState<string | null>(null);
+  const [methodNicknameDrafts, setMethodNicknameDrafts] = useState<Record<string, string>>({});
   const [methodActionMessage, setMethodActionMessage] = useState<string | null>(null);
+  const [isAddMethodModalOpen, setIsAddMethodModalOpen] = useState(false);
+  const [isAddingMethod, setIsAddingMethod] = useState(false);
+  const [addMethodError, setAddMethodError] = useState<string | null>(null);
+  const [addMethodForm, setAddMethodForm] = useState({
+    cardNumber: "",
+    holderName: "",
+    expiry: "",
+    cvv: "",
+    document: "",
+    nickname: "",
+  });
 
   const [isPlanLoading, setIsPlanLoading] = useState(true);
   const [isPlanSaving, setIsPlanSaving] = useState(false);
@@ -209,7 +380,7 @@ export function ServerSettingsEditor({
   const headerStatus = statusBadge(status);
 
   useEffect(() => {
-    setActiveTab("settings");
+    setActiveTab(initialTab);
     setPaymentGuildFilter(guildId);
     setPaymentSearch("");
     setPaymentStatusFilter("all");
@@ -218,10 +389,22 @@ export function ServerSettingsEditor({
     setMethodStatusFilter("all");
     setOpenMethodMenuId(null);
     setDeletingMethodId(null);
+    setSavingMethodNicknameId(null);
     setMethodActionMessage(null);
+    setIsAddMethodModalOpen(false);
+    setIsAddingMethod(false);
+    setAddMethodError(null);
+    setAddMethodForm({
+      cardNumber: "",
+      holderName: "",
+      expiry: "",
+      cvv: "",
+      document: "",
+      nickname: "",
+    });
     setPlanError(null);
     setPlanSuccess(null);
-  }, [guildId]);
+  }, [guildId, initialTab]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -308,6 +491,16 @@ export function ServerSettingsEditor({
       mounted = false;
     };
   }, [guildId]);
+
+  useEffect(() => {
+    setMethodNicknameDrafts((current) => {
+      const next: Record<string, string> = {};
+      for (const method of methods) {
+        next[method.id] = current[method.id] ?? method.nickname ?? "";
+      }
+      return next;
+    });
+  }, [methods]);
 
   useEffect(() => {
     let mounted = true;
@@ -442,11 +635,12 @@ export function ServerSettingsEditor({
 
       const brandLabel = cardBrandLabel(method.brand);
       const masked = `${method.firstSix} ${method.lastFour}`;
+      const nickname = (method.nickname || "").trim();
       const relatedServerNames = relatedOrders
         .map((order) => serverMap.get(order.guildId)?.guildName || order.guildId)
         .join(" ");
       const relatedStatuses = relatedOrders.map((order) => order.status).join(" ");
-      const haystack = normalizeSearch(`${brandLabel} ${masked} ${relatedServerNames} ${relatedStatuses}`);
+      const haystack = normalizeSearch(`${brandLabel} ${nickname} ${masked} ${relatedServerNames} ${relatedStatuses}`);
       return haystack.includes(search);
     });
   }, [
@@ -472,6 +666,70 @@ export function ServerSettingsEditor({
     );
   }, [methodById, planSettings]);
 
+  const recurringMethodOptions = useMemo(() => {
+    const fromPlan = planSettings?.availableMethods || [];
+    if (fromPlan.length) return fromPlan;
+    return methods;
+  }, [methods, planSettings?.availableMethods]);
+
+  const addMethodCardDigits = useMemo(
+    () => normalizeCardDigits(addMethodForm.cardNumber),
+    [addMethodForm.cardNumber],
+  );
+
+  const addMethodCardBrand = useMemo(
+    () => detectCardBrand(addMethodCardDigits),
+    [addMethodCardDigits],
+  );
+
+  const addMethodExpiryDigits = useMemo(
+    () => normalizeCardExpiryDigits(addMethodForm.expiry),
+    [addMethodForm.expiry],
+  );
+
+  const addMethodCvvDigits = useMemo(
+    () => normalizeCardCvvInput(addMethodForm.cvv),
+    [addMethodForm.cvv],
+  );
+
+  const addMethodBrandIconPath = useMemo(
+    () => cardBrandIcon(addMethodCardBrand),
+    [addMethodCardBrand],
+  );
+
+  const addMethodDocumentDigits = useMemo(
+    () => normalizeBrazilDocumentDigits(addMethodForm.document),
+    [addMethodForm.document],
+  );
+
+  const addMethodCanSubmit = useMemo(() => {
+    const holderName = addMethodForm.holderName.trim().replace(/\s+/g, " ");
+    const nickname = addMethodForm.nickname.trim().replace(/\s+/g, " ");
+    const docType = resolveBrazilDocumentType(addMethodDocumentDigits);
+    const expectedCvvLength = addMethodCardBrand === "amex" ? 4 : 3;
+    const cardLengthValid = cardNumberLengthsForBrand(addMethodCardBrand).includes(addMethodCardDigits.length);
+
+    return Boolean(
+      addMethodCardBrand &&
+        cardLengthValid &&
+        isLuhnValid(addMethodCardDigits) &&
+        holderName.length >= 2 &&
+        isValidCardExpiry(addMethodForm.expiry) &&
+        addMethodCvvDigits.length === expectedCvvLength &&
+        docType &&
+        isValidBrazilDocument(addMethodDocumentDigits) &&
+        nickname.length <= 42,
+    );
+  }, [
+    addMethodCardBrand,
+    addMethodCardDigits,
+    addMethodCvvDigits.length,
+    addMethodDocumentDigits,
+    addMethodForm.expiry,
+    addMethodForm.holderName,
+    addMethodForm.nickname,
+  ]);
+
   const canSave = Boolean(
     !locked &&
       !isLoading &&
@@ -491,7 +749,7 @@ export function ServerSettingsEditor({
 
     const nextRecurringEnabled = !planSettings.recurringEnabled;
     const fallbackMethodId =
-      planSettings.recurringMethodId || methods[0]?.id || null;
+      planSettings.recurringMethodId || recurringMethodOptions[0]?.id || null;
 
     setIsPlanSaving(true);
     setPlanError(null);
@@ -528,7 +786,20 @@ export function ServerSettingsEditor({
     } finally {
       setIsPlanSaving(false);
     }
-  }, [guildId, isPlanSaving, locked, methods, planSettings]);
+  }, [guildId, isPlanSaving, locked, planSettings, recurringMethodOptions]);
+
+  const handleRenewByPix = useCallback(() => {
+    const params = new URLSearchParams({
+      guild: guildId,
+      method: "pix",
+      renew: "1",
+      return: "servers",
+      returnGuild: guildId,
+      returnTab: "plans",
+    });
+
+    window.location.assign(`/config?${params.toString()}#/payment`);
+  }, [guildId]);
 
   const handleDeleteMethod = useCallback(
     async (methodId: string) => {
@@ -559,6 +830,21 @@ export function ServerSettingsEditor({
 
         setMethods((current) => current.filter((method) => method.id !== methodId));
         setMethodActionMessage("Metodo removido com sucesso.");
+        setMethodNicknameDrafts((current) => {
+          const next = { ...current };
+          delete next[methodId];
+          return next;
+        });
+        setPlanSettings((current) =>
+          current
+            ? {
+                ...current,
+                availableMethods: (current.availableMethods || []).filter(
+                  (method) => method.id !== methodId,
+                ),
+              }
+            : current,
+        );
 
         if (planSettings?.recurringMethodId === methodId) {
           setPlanSettings((current) =>
@@ -582,6 +868,230 @@ export function ServerSettingsEditor({
       }
     },
     [deletingMethodId, guildId, planSettings?.recurringMethodId],
+  );
+
+  const handleSaveMethodNickname = useCallback(
+    async (methodId: string) => {
+      if (savingMethodNicknameId) return;
+
+      const nickname = (methodNicknameDrafts[methodId] || "").trim();
+      setSavingMethodNicknameId(methodId);
+      setPaymentsError(null);
+      setMethodActionMessage(null);
+
+      try {
+        const response = await fetch("/api/auth/me/payments/methods", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            methodId,
+            nickname,
+          }),
+        });
+        const payload = (await response.json()) as {
+          ok: boolean;
+          message?: string;
+          method?: SavedMethod;
+        };
+
+        if (!response.ok || !payload.ok || !payload.method) {
+          throw new Error(payload.message || "Falha ao salvar apelido.");
+        }
+
+        setMethods((current) =>
+          current.map((method) =>
+            method.id === methodId ? { ...method, nickname: payload.method?.nickname || null } : method,
+          ),
+        );
+        setPlanSettings((current) =>
+          current
+            ? {
+                ...current,
+                recurringMethod:
+                  current.recurringMethodId === methodId && current.recurringMethod
+                    ? {
+                        ...current.recurringMethod,
+                        nickname: payload.method?.nickname || null,
+                      }
+                    : current.recurringMethod,
+                availableMethods: (current.availableMethods || []).map((method) =>
+                  method.id === methodId
+                    ? {
+                        ...method,
+                        nickname: payload.method?.nickname || null,
+                      }
+                    : method,
+                ),
+              }
+            : current,
+        );
+        setMethodActionMessage("Apelido salvo com sucesso.");
+      } catch (error) {
+        setPaymentsError(
+          error instanceof Error
+            ? error.message
+            : "Erro ao salvar apelido do cartao.",
+        );
+      } finally {
+        setSavingMethodNicknameId(null);
+      }
+    },
+    [guildId, methodNicknameDrafts, savingMethodNicknameId],
+  );
+
+  const handleAddMethodSubmit = useCallback(async () => {
+    if (!addMethodCanSubmit || isAddingMethod) return;
+
+    setIsAddingMethod(true);
+    setAddMethodError(null);
+    setMethodActionMessage(null);
+    setPaymentsError(null);
+
+    try {
+      const expMonth = Number(addMethodExpiryDigits.slice(0, 2));
+      const expYear = Number(addMethodExpiryDigits.slice(2, 4)) + 2000;
+      const nickname = addMethodForm.nickname.trim().replace(/\s+/g, " ");
+
+      const response = await fetch("/api/auth/me/payments/methods", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          brand: addMethodCardBrand,
+          firstSix: addMethodCardDigits.slice(0, 6),
+          lastFour: addMethodCardDigits.slice(-4),
+          expMonth: Number.isInteger(expMonth) ? expMonth : null,
+          expYear: Number.isInteger(expYear) ? expYear : null,
+          nickname,
+        }),
+      });
+
+      const payload = (await response.json()) as {
+        ok: boolean;
+        message?: string;
+        method?: SavedMethod;
+      };
+
+      if (!response.ok || !payload.ok || !payload.method) {
+        throw new Error(payload.message || "Falha ao adicionar metodo.");
+      }
+
+      const addedMethod = payload.method;
+
+      setMethods((current) => {
+        const methodExists = current.some((method) => method.id === addedMethod.id);
+        if (methodExists) {
+          return current.map((method) =>
+            method.id === addedMethod.id ? { ...method, ...addedMethod } : method,
+          );
+        }
+        return [addedMethod as SavedMethod, ...current];
+      });
+
+      setMethodNicknameDrafts((current) => ({
+        ...current,
+        [addedMethod.id]: addedMethod.nickname || "",
+      }));
+      setPlanSettings((current) => {
+        if (!current) return current;
+        const currentMethods = current.availableMethods || [];
+        const exists = currentMethods.some((method) => method.id === addedMethod.id);
+        const nextMethods = exists
+          ? currentMethods.map((method) =>
+              method.id === addedMethod.id
+                ? {
+                    ...method,
+                    ...addedMethod,
+                  }
+                : method,
+            )
+          : [
+              {
+                id: addedMethod.id,
+                brand: addedMethod.brand,
+                firstSix: addedMethod.firstSix,
+                lastFour: addedMethod.lastFour,
+                expMonth: addedMethod.expMonth,
+                expYear: addedMethod.expYear,
+                lastUsedAt: addedMethod.lastUsedAt,
+                nickname: addedMethod.nickname || null,
+              },
+              ...currentMethods,
+            ];
+
+        return {
+          ...current,
+          availableMethods: nextMethods,
+          availableMethodsCount: nextMethods.length,
+        };
+      });
+
+      setAddMethodForm({
+        cardNumber: "",
+        holderName: "",
+        expiry: "",
+        cvv: "",
+        document: "",
+        nickname: "",
+      });
+      setIsAddMethodModalOpen(false);
+      setMethodActionMessage("Metodo adicionado com sucesso.");
+    } catch (error) {
+      setAddMethodError(
+        error instanceof Error ? error.message : "Erro ao adicionar metodo de pagamento.",
+      );
+    } finally {
+      setIsAddingMethod(false);
+    }
+  }, [
+    addMethodCanSubmit,
+    addMethodCardBrand,
+    addMethodCardDigits,
+    addMethodExpiryDigits,
+    addMethodForm.nickname,
+    guildId,
+    isAddingMethod,
+  ]);
+
+  const handleSelectRecurringMethod = useCallback(
+    async (methodId: string) => {
+      if (!planSettings || isPlanSaving || locked) return;
+      if (!methodId) return;
+
+      setIsPlanSaving(true);
+      setPlanError(null);
+      setPlanSuccess(null);
+
+      try {
+        const response = await fetch("/api/auth/me/servers/plans", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            recurringEnabled: planSettings.recurringEnabled,
+            recurringMethodId: methodId,
+          }),
+        });
+        const payload = (await response.json()) as PlanApiResponse;
+
+        if (!response.ok || !payload.ok || !payload.plan) {
+          throw new Error(payload.message || "Falha ao definir cartao da recorrencia.");
+        }
+
+        setPlanSettings(payload.plan);
+        setPlanSuccess("Cartao da recorrencia atualizado com sucesso.");
+      } catch (error) {
+        setPlanError(
+          error instanceof Error
+            ? error.message
+            : "Erro ao definir cartao da recorrencia.",
+        );
+      } finally {
+        setIsPlanSaving(false);
+      }
+    },
+    [guildId, isPlanSaving, locked, planSettings],
   );
 
   const handleSave = useCallback(async () => {
@@ -670,7 +1180,7 @@ export function ServerSettingsEditor({
       <div className="mb-4 flex items-center gap-2 border-b border-[#242424] pb-3">
         {([
           ["settings", "Configuracoes"],
-          ["payments", "Pagamentos"],
+          ["payments", "HistÃ³rico de CobranÃ§a"],
           ["methods", "Metodos"],
           ["plans", "Planos"],
         ] as const).map(([tab, label]) => (
@@ -866,7 +1376,7 @@ export function ServerSettingsEditor({
                               <Image src={cardBrandIcon(method.brand)} alt={brandLabel} fill sizes="32px" className="object-contain" unoptimized />
                             </span>
                             <div className="min-w-0">
-                              <p className="truncate text-[15px] text-[#D8D8D8]">{brandLabel}</p>
+                              <p className="truncate text-[15px] text-[#D8D8D8]">{method.nickname?.trim() || brandLabel}</p>
                               <p className="truncate text-[14px] text-[#777777]">{masked}</p>
                             </div>
                           </div>
@@ -902,14 +1412,62 @@ export function ServerSettingsEditor({
                           </div>
                         </div>
 
+                        <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-2">
+                          <div>
+                            <p className="mb-1 text-[11px] text-[#686868]">Apelido do cartao</p>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={methodNicknameDrafts[method.id] ?? ""}
+                                onChange={(event) => {
+                                  const nextValue = event.currentTarget.value.slice(0, 42);
+                                  setMethodNicknameDrafts((current) => ({
+                                    ...current,
+                                    [method.id]: nextValue,
+                                  }));
+                                }}
+                                placeholder="Ex: Cartao principal"
+                                className="h-[33px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-2 text-[12px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none"
+                              />
+                              <button
+                                type="button"
+                                disabled={savingMethodNicknameId === method.id}
+                                onClick={() => {
+                                  void handleSaveMethodNickname(method.id);
+                                }}
+                                className="inline-flex h-[33px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#121212] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {savingMethodNicknameId === method.id ? (
+                                  <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
+                                ) : (
+                                  "Salvar"
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col items-end justify-between text-[12px] text-[#777777]">
+                            <span>{method.timesUsed} uso(s)</span>
+                            <span className="mt-1">
+                              Validade:{" "}
+                              {method.expMonth && method.expYear
+                                ? `${String(method.expMonth).padStart(2, "0")}/${String(method.expYear).slice(-2)}`
+                                : "--/--"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 flex items-center justify-between text-[11px] text-[#686868]">
+                          <span>
+                            Bandeira: {brandLabel}
+                          </span>
+                          <span>Metodo: {method.id}</span>
+                        </div>
+
                         <div className="mt-3 flex items-center justify-between text-[12px] text-[#777777]">
                           <span>
-                            Validade:{" "}
-                            {method.expMonth && method.expYear
-                              ? `${String(method.expMonth).padStart(2, "0")}/${String(method.expYear).slice(-2)}`
-                              : "--/--"}
+                            Ultimo uso: {formatDateTime(method.lastUsedAt)}
                           </span>
-                          <span>{method.timesUsed} uso(s)</span>
                         </div>
                       </article>
                     );
@@ -920,6 +1478,17 @@ export function ServerSettingsEditor({
                   Nenhum metodo encontrado para esse filtro.
                 </div>
               )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAddMethodError(null);
+                  setIsAddMethodModalOpen(true);
+                }}
+                className="mt-3 flex h-[46px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[13px] font-medium text-black transition-opacity hover:opacity-90"
+              >
+                ADICIONAR NOVO METODO
+              </button>
 
               {methodActionMessage ? (
                 <p className="mt-2 text-[11px] text-[#9BD694]">{methodActionMessage}</p>
@@ -937,6 +1506,29 @@ export function ServerSettingsEditor({
               </div>
             ) : (
               <div className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-4">
+                {status !== "paid" ? (
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
+                    <div className="min-w-0">
+                      <p className="text-[14px] text-[#D8D8D8]">
+                        {status === "expired"
+                          ? "Plano expirado neste servidor"
+                          : "Plano desligado neste servidor"}
+                      </p>
+                      <p className="mt-1 text-[11px] text-[#8E8E8E]">
+                        Renove agora para reativar o Flowdesk com mais 30 dias de licenca.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleRenewByPix}
+                      className="inline-flex h-[34px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#D8D8D8] px-4 text-[12px] font-medium text-black transition-opacity hover:opacity-90"
+                    >
+                      RENOVAR
+                    </button>
+                  </div>
+                ) : null}
+
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-[16px] font-medium text-[#D8D8D8]">Plano Pro</p>
@@ -983,6 +1575,38 @@ export function ServerSettingsEditor({
 
                 <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
                   <p className="text-[12px] text-[#8E8E8E]">Cartao vinculado a recorrencia</p>
+
+                  {recurringMethodOptions.length > 1 ? (
+                    <div className="mt-2">
+                      <label className="mb-1 block text-[11px] text-[#686868]">
+                        Escolha o cartao para renovar
+                      </label>
+                      <select
+                        value={planSettings?.recurringMethodId || ""}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          if (!value) return;
+                          void handleSelectRecurringMethod(value);
+                        }}
+                        disabled={locked || isPlanSaving || !planSettings?.recurringEnabled}
+                        className="h-[38px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[12px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {recurringMethodOptions.map((method) => (
+                          <option key={method.id} value={method.id}>
+                            {(method.nickname?.trim() || cardBrandLabel(method.brand)) +
+                              " - " +
+                              `${method.firstSix} ****** ${method.lastFour}`}
+                          </option>
+                        ))}
+                      </select>
+                      {!planSettings?.recurringEnabled ? (
+                        <p className="mt-1 text-[11px] text-[#686868]">
+                          Ative a cobranca recorrente para escolher o cartao.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {recurringMethod ? (
                     <div className="mt-2 flex items-center gap-3">
                       <span className="relative block h-[38px] w-[38px] shrink-0 overflow-hidden rounded-[3px] bg-[#111111]">
@@ -997,7 +1621,7 @@ export function ServerSettingsEditor({
                       </span>
                       <div>
                         <p className="text-[14px] text-[#D8D8D8]">
-                          {cardBrandLabel(recurringMethod.brand)}
+                          {recurringMethod.nickname?.trim() || cardBrandLabel(recurringMethod.brand)}
                         </p>
                         <p className="text-[12px] text-[#777777]">
                           {recurringMethod.firstSix} ****** {recurringMethod.lastFour}
@@ -1024,6 +1648,144 @@ export function ServerSettingsEditor({
           </div>
         </div>
       </div>
+
+      {isAddMethodModalOpen ? (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 py-6">
+          <div className="relative w-full max-w-[760px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] p-6">
+            <button
+              type="button"
+              onClick={() => {
+                if (isAddingMethod) return;
+                setIsAddMethodModalOpen(false);
+              }}
+              className="absolute right-4 top-4 inline-flex h-[28px] w-[28px] items-center justify-center rounded-[3px] text-[#8A8A8A] transition-colors hover:text-[#D8D8D8]"
+              aria-label="Fechar modal"
+            >
+              X
+            </button>
+
+            <h3 className="text-center text-[24px] text-[#D8D8D8]">
+              Adicionar um cartao
+            </h3>
+
+            <div className="mt-6 h-[1px] w-full bg-[#242424]" />
+
+            <div className="mt-6">
+              <p className="mb-3 text-[12px] text-[#D8D8D8]">Dados do Cartao</p>
+
+              <div className="grid grid-cols-1 gap-3">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={addMethodForm.cardNumber}
+                    onChange={(event) => {
+                      setAddMethodForm((current) => ({
+                        ...current,
+                        cardNumber: formatCardNumberInput(event.currentTarget.value),
+                      }));
+                    }}
+                    placeholder="Numero do Cartao"
+                    inputMode="numeric"
+                    autoComplete="cc-number"
+                    className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 pr-[52px] text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 inline-flex h-[26px] w-[26px] -translate-y-1/2 items-center justify-center rounded-[3px] bg-[#111111]">
+                    <Image
+                      src={addMethodBrandIconPath}
+                      alt={addMethodCardBrand ? cardBrandLabel(addMethodCardBrand) : "Cartao"}
+                      width={18}
+                      height={18}
+                      className="object-contain"
+                      unoptimized
+                    />
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={addMethodForm.holderName}
+                  onChange={(event) => {
+                    setAddMethodForm((current) => ({
+                      ...current,
+                      holderName: event.currentTarget.value.slice(0, 120),
+                    }));
+                  }}
+                  placeholder="Nome do Titular"
+                  className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                />
+
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    value={addMethodForm.expiry}
+                    onChange={(event) => {
+                      setAddMethodForm((current) => ({
+                        ...current,
+                        expiry: formatCardExpiryInput(event.currentTarget.value),
+                      }));
+                    }}
+                    placeholder="Data de Validade"
+                    className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={addMethodForm.cvv}
+                    onChange={(event) => {
+                      setAddMethodForm((current) => ({
+                        ...current,
+                        cvv: normalizeCardCvvInput(event.currentTarget.value),
+                      }));
+                    }}
+                    placeholder="CVV/CVC"
+                    className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                  />
+                </div>
+
+                <input
+                  type="text"
+                  value={addMethodForm.document}
+                  onChange={(event) => {
+                    const digits = normalizeBrazilDocumentDigits(event.currentTarget.value).slice(0, 14);
+                    setAddMethodForm((current) => ({
+                      ...current,
+                      document: digits,
+                    }));
+                  }}
+                  placeholder="CPF/CNPJ"
+                  className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                />
+
+                <input
+                  type="text"
+                  value={addMethodForm.nickname}
+                  onChange={(event) => {
+                    setAddMethodForm((current) => ({
+                      ...current,
+                      nickname: event.currentTarget.value.slice(0, 42),
+                    }));
+                  }}
+                  placeholder="Apelido do cartao (opcional)"
+                  className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                void handleAddMethodSubmit();
+              }}
+              disabled={!addMethodCanSubmit || isAddingMethod}
+              className="mt-5 flex h-[51px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[16px] font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isAddingMethod ? <ButtonLoader size={24} /> : "Confirmar pagamento"}
+            </button>
+
+            {addMethodError ? (
+              <p className="mt-3 text-[14px] text-[#DB4646]">{addMethodError}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

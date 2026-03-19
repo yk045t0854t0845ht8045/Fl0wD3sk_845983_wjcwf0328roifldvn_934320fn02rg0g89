@@ -15,6 +15,7 @@ export type SavedMethod = {
   expYear: number | null;
   lastUsedAt: string;
   timesUsed: number;
+  nickname?: string | null;
 };
 
 export type OrderForSavedMethods = {
@@ -50,7 +51,7 @@ function asNumberOrNull(value: unknown) {
   return null;
 }
 
-function normalizeCardBrand(rawBrand: string | null) {
+export function normalizeCardBrand(rawBrand: string | null) {
   if (!rawBrand) return null;
   const normalized = rawBrand.trim().toLowerCase();
   if (!normalized) return null;
@@ -96,6 +97,42 @@ export function buildSavedMethodId(snapshot: CardSnapshot) {
     snapshot.expMonth ?? "",
     snapshot.expYear ?? "",
   ].join(":");
+}
+
+export function parseSavedMethodId(methodId: string) {
+  const normalized = methodId.trim();
+  if (!normalized) return null;
+
+  const [rawBrand = "", firstSix = "", lastFour = "", rawExpMonth = "", rawExpYear = ""] =
+    normalized.split(":");
+
+  if (!firstSix || !/^\d{6}$/.test(firstSix)) return null;
+  if (!lastFour || !/^\d{4}$/.test(lastFour)) return null;
+
+  const expMonth =
+    rawExpMonth && /^\d{1,2}$/.test(rawExpMonth) ? Number(rawExpMonth) : null;
+  const expYear =
+    rawExpYear && /^\d{2,4}$/.test(rawExpYear) ? Number(rawExpYear) : null;
+
+  return {
+    brand: normalizeCardBrand(rawBrand || null),
+    firstSix,
+    lastFour,
+    expMonth:
+      typeof expMonth === "number" &&
+      Number.isFinite(expMonth) &&
+      expMonth >= 1 &&
+      expMonth <= 12
+        ? expMonth
+        : null,
+    expYear:
+      typeof expYear === "number" &&
+      Number.isFinite(expYear) &&
+      expYear >= 0 &&
+      expYear <= 9999
+        ? expYear
+        : null,
+  };
 }
 
 export function isValidSavedMethodId(value: unknown) {
@@ -147,4 +184,3 @@ export function buildSavedMethods(orders: OrderForSavedMethods[]) {
     (a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt),
   );
 }
-

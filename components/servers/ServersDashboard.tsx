@@ -32,6 +32,12 @@ type ServersApiResponse = {
 };
 
 type FilterOption = "all" | ManagedServerStatus;
+type ServerEditorTab = "settings" | "payments" | "methods" | "plans";
+
+type PendingServerOpenQuery = {
+  guildId: string;
+  tab: ServerEditorTab;
+};
 
 const STATUS_LABEL: Record<ManagedServerStatus, string> = {
   paid: "Pago",
@@ -52,6 +58,20 @@ function normalizeSearchText(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+function normalizeGuildIdFromQuery(value: string | null) {
+  if (!value) return null;
+  const guildId = value.trim();
+  return /^\d{10,25}$/.test(guildId) ? guildId : null;
+}
+
+function normalizeEditorTabFromQuery(value: string | null): ServerEditorTab {
+  const normalized = (value || "").trim().toLowerCase();
+  if (normalized === "payments") return "payments";
+  if (normalized === "methods") return "methods";
+  if (normalized === "plans") return "plans";
+  return "settings";
 }
 
 function isSubsequence(query: string, target: string) {
@@ -290,7 +310,22 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
   const [copiedGuildId, setCopiedGuildId] = useState<string | null>(null);
   const [openCardMenuGuildId, setOpenCardMenuGuildId] = useState<string | null>(null);
   const [selectedGuildIdForConfig, setSelectedGuildIdForConfig] = useState<string | null>(null);
+  const [selectedEditorTabForConfig, setSelectedEditorTabForConfig] =
+    useState<ServerEditorTab>("settings");
+  const [pendingServerOpenQuery, setPendingServerOpenQuery] =
+    useState<PendingServerOpenQuery | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const queryGuildId = normalizeGuildIdFromQuery(params.get("guild"));
+    if (!queryGuildId) return;
+
+    setPendingServerOpenQuery({
+      guildId: queryGuildId,
+      tab: normalizeEditorTabFromQuery(params.get("tab")),
+    });
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -325,6 +360,23 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!pendingServerOpenQuery) return;
+    if (isLoading) return;
+
+    const targetExists = servers.some(
+      (server) => server.guildId === pendingServerOpenQuery.guildId,
+    );
+
+    if (targetExists) {
+      setSelectedGuildIdForConfig(pendingServerOpenQuery.guildId);
+      setSelectedEditorTabForConfig(pendingServerOpenQuery.tab);
+      setErrorMessage(null);
+    }
+
+    setPendingServerOpenQuery(null);
+  }, [isLoading, pendingServerOpenQuery, servers]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -415,10 +467,14 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
     setErrorMessage("Opcao de desativacao sera liberada em breve.");
   }, []);
 
-  const handleOpenServerConfig = useCallback((guildId: string) => {
-    setSelectedGuildIdForConfig(guildId);
-    setErrorMessage(null);
-  }, []);
+  const handleOpenServerConfig = useCallback(
+    (guildId: string, tab: ServerEditorTab = "settings") => {
+      setSelectedGuildIdForConfig(guildId);
+      setSelectedEditorTabForConfig(tab);
+      setErrorMessage(null);
+    },
+    [],
+  );
 
   const selectedServer = useMemo(
     () => servers.find((server) => server.guildId === selectedGuildIdForConfig) || null,
@@ -580,9 +636,21 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
               guildName={selectedServer.guildName}
               status={selectedServer.status}
               allServers={servers}
+              initialTab={selectedEditorTabForConfig}
               standalone
               onClose={() => {
                 setSelectedGuildIdForConfig(null);
+                setSelectedEditorTabForConfig("settings");
+                const url = new URL(window.location.href);
+                if (url.searchParams.has("guild") || url.searchParams.has("tab")) {
+                  url.searchParams.delete("guild");
+                  url.searchParams.delete("tab");
+                  window.history.replaceState(
+                    null,
+                    "",
+                    `${url.pathname}${url.search}${url.hash}`,
+                  );
+                }
               }}
             />
           ) : null}

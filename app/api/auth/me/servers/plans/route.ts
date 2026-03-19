@@ -5,6 +5,11 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { buildSavedMethods, isValidSavedMethodId } from "@/lib/payments/savedMethods";
+import {
+  mergeSavedMethodsWithStored,
+  toSavedMethodFromStoredRecord,
+  type StoredPaymentMethodRecord,
+} from "@/lib/payments/userPaymentMethods";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type GuildPlanSettingsRecord = {
@@ -25,6 +30,17 @@ type PaymentOrderForMethod = {
   payment_method: "pix" | "card";
   provider_payload: unknown;
   created_at: string;
+};
+
+type SavedMethodSummary = {
+  id: string;
+  brand: string | null;
+  firstSix: string;
+  lastFour: string;
+  expMonth: number | null;
+  expYear: number | null;
+  lastUsedAt: string;
+  nickname?: string | null;
 };
 
 type UpdatePlanBody = {
@@ -126,7 +142,7 @@ async function ensureGuildAccess(guildId: string) {
 async function getAvailableSavedMethodsForUser(userId: number) {
   const supabase = getSupabaseAdminClientOrThrow();
 
-  const [ordersResult, hiddenMethodsResult] = await Promise.all([
+  const [ordersResult, hiddenMethodsResult, storedMethodsResult] = await Promise.all([
     supabase
       .from("payment_orders")
       .select("payment_method, provider_payload, created_at")
@@ -140,6 +156,14 @@ async function getAvailableSavedMethodsForUser(userId: number) {
       .select("method_id")
       .eq("user_id", userId)
       .returns<HiddenMethodRecord[]>(),
+    supabase
+      .from("auth_user_payment_methods")
+      .select(
+        "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, created_at, updated_at",
+      )
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .returns<StoredPaymentMethodRecord[]>(),
   ]);
 
   if (ordersResult.error) {
@@ -150,13 +174,24 @@ async function getAvailableSavedMethodsForUser(userId: number) {
     throw new Error(`Erro ao carregar metodos ocultos: ${hiddenMethodsResult.error.message}`);
   }
 
+  if (storedMethodsResult.error) {
+    throw new Error(`Erro ao carregar metodos salvos: ${storedMethodsResult.error.message}`);
+  }
+
   const hiddenMethodSet = new Set(
     (hiddenMethodsResult.data || []).map((item) => item.method_id),
   );
 
-  return buildSavedMethods(ordersResult.data || []).filter(
-    (method) => !hiddenMethodSet.has(method.id),
-  );
+  const derivedMethods = buildSavedMethods(ordersResult.data || []);
+  const storedMethods = (storedMethodsResult.data || [])
+    .map((row) => toSavedMethodFromStoredRecord(row))
+    .filter((method): method is NonNullable<typeof method> => Boolean(method));
+
+  return mergeSavedMethodsWithStored({
+    derivedMethods,
+    storedMethods,
+    hiddenMethodSet,
+  });
 }
 
 async function getGuildPlanSettings(userId: number, guildId: string) {
@@ -178,7 +213,8 @@ async function getGuildPlanSettings(userId: number, guildId: string) {
 function toPlanResponse(input: {
   settings: GuildPlanSettingsRecord | null;
   recurringMethodId: string | null;
-  recurringMethod: ReturnType<typeof buildSavedMethods>[number] | null;
+  recurringMethod: SavedMethodSummary | null;
+  availableMethods: SavedMethodSummary[];
   availableMethodsCount: number;
 }) {
   const settings = input.settings;
@@ -199,6 +235,16 @@ function toPlanResponse(input: {
           lastUsedAt: input.recurringMethod.lastUsedAt,
         }
       : null,
+    availableMethods: input.availableMethods.map((method) => ({
+      id: method.id,
+      brand: method.brand,
+      firstSix: method.firstSix,
+      lastFour: method.lastFour,
+      expMonth: method.expMonth,
+      expYear: method.expYear,
+      lastUsedAt: method.lastUsedAt,
+      nickname: method.nickname || null,
+    })),
     availableMethodsCount: input.availableMethodsCount,
     createdAt: settings?.created_at || null,
     updatedAt: settings?.updated_at || null,
@@ -238,6 +284,7 @@ export async function GET(request: Request) {
         settings,
         recurringMethodId,
         recurringMethod,
+        availableMethods: savedMethods,
         availableMethodsCount: savedMethods.length,
       }),
     });
@@ -367,6 +414,7 @@ export async function POST(request: Request) {
         settings: upsertResult.data,
         recurringMethodId: resolvedRecurringMethodId,
         recurringMethod,
+        availableMethods: savedMethods,
         availableMethodsCount: savedMethods.length,
       }),
     });

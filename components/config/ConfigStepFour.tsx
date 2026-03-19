@@ -444,6 +444,73 @@ function readCheckoutStatusQuery() {
   return { code, status, guild };
 }
 
+function readRequestedPaymentMethodFromQuery() {
+  if (typeof window === "undefined") return null;
+
+  const method = new URLSearchParams(window.location.search)
+    .get("method")
+    ?.trim()
+    .toLowerCase();
+
+  if (method === "pix") return "pix" as const;
+  if (method === "card") return "card" as const;
+  return null;
+}
+
+function normalizeGuildIdFromQuery(value: string | null) {
+  if (!value) return null;
+  const guildId = value.trim();
+  return /^\d{10,25}$/.test(guildId) ? guildId : null;
+}
+
+function normalizeServersTabFromQuery(value: string | null) {
+  const normalized = (value || "").trim().toLowerCase();
+  if (normalized === "payments") return "payments";
+  if (normalized === "methods") return "methods";
+  if (normalized === "plans") return "plans";
+  return "settings";
+}
+
+function resolveApprovedRedirectConfig(fallbackGuildId: string | null) {
+  if (typeof window === "undefined") {
+    return {
+      targetUrl: "/servers",
+      delayMs: 10_000,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const isRenewFlow = params.get("renew")?.trim() === "1";
+  const returnTarget = params.get("return")?.trim().toLowerCase() || null;
+  const shouldReturnToServers = isRenewFlow || returnTarget === "servers";
+
+  if (!shouldReturnToServers) {
+    return {
+      targetUrl: "/servers",
+      delayMs: 10_000,
+    };
+  }
+
+  const returnGuildId =
+    normalizeGuildIdFromQuery(params.get("returnGuild")) || fallbackGuildId;
+  const returnTab = normalizeServersTabFromQuery(params.get("returnTab"));
+  const targetParams = new URLSearchParams();
+
+  if (returnGuildId) {
+    targetParams.set("guild", returnGuildId);
+    targetParams.set("tab", returnTab);
+  }
+
+  const targetUrl = targetParams.size
+    ? `/servers?${targetParams.toString()}`
+    : "/servers";
+
+  return {
+    targetUrl,
+    delayMs: isRenewFlow ? 5_000 : 10_000,
+  };
+}
+
 function setCheckoutStatusQuery(input: {
   order: PixOrder;
   guildId: string | null;
@@ -1405,6 +1472,7 @@ export function ConfigStepFour({
     const activeGuildId = guildId;
     const guildDraft = buildStepFourDraft(initialDraft);
     const hasStoredDraft = hasStepFourDraftValues(initialDraft);
+    const requestedPaymentMethod = readRequestedPaymentMethodFromQuery();
     const checkoutQuery = readCheckoutStatusQuery();
     const shouldLoadOrderByCode =
       checkoutQuery.code !== null &&
@@ -1514,13 +1582,18 @@ export function ConfigStepFour({
         }
 
         setPixOrder(order);
-        setView(
-          resolveRestoredView({
-            hasStoredDraft,
-            preferredView: guildDraft.view,
-            order,
-          }),
-        );
+
+        const restoredView = resolveRestoredView({
+          hasStoredDraft,
+          preferredView: guildDraft.view,
+          order,
+        });
+
+        if (!order && requestedPaymentMethod) {
+          setView(requestedPaymentMethod === "pix" ? "pix_form" : "card_form");
+        } else {
+          setView(restoredView);
+        }
       } catch {
         if (!isMounted) return;
         setPixOrder(cachedPendingOrder || null);
@@ -1538,7 +1611,13 @@ export function ConfigStepFour({
           setView("methods");
           setMethodMessage("Pagamento anterior finalizado. Escolha um novo metodo.");
         } else {
-          setView("methods");
+          setView(
+            requestedPaymentMethod === "pix"
+              ? "pix_form"
+              : requestedPaymentMethod === "card"
+                ? "card_form"
+                : "methods",
+          );
         }
       } finally {
         if (!isMounted) return;
@@ -1808,15 +1887,17 @@ export function ConfigStepFour({
       return;
     }
 
+    const redirectConfig = resolveApprovedRedirectConfig(guildId);
+
     const timeoutId = window.setTimeout(() => {
       markApprovedOrderAutoRedirected(resolvedOrderNumber);
-      window.location.assign("/servers");
-    }, 10_000);
+      window.location.assign(redirectConfig.targetUrl);
+    }, redirectConfig.delayMs);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [paymentStatus, resolvedOrderNumber, shouldShowStatusResultPanel]);
+  }, [guildId, paymentStatus, resolvedOrderNumber, shouldShowStatusResultPanel]);
 
   const triggerPixFormValidationError = useCallback((message: string) => {
     setPixFormError(message);
