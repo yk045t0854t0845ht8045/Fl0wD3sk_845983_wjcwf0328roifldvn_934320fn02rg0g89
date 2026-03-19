@@ -37,10 +37,38 @@ type DiscordRateLimitPayload = {
   global?: boolean;
 };
 
+export class DiscordRateLimitError extends Error {
+  retryAfterSeconds: number;
+
+  constructor(message: string, retryAfterSeconds = 1) {
+    super(message);
+    this.name = "DiscordRateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function parseRetryAfterSeconds(
+  response: Response,
+  payload: DiscordRateLimitPayload | null,
+) {
+  const headerRetryAfter = Number(response.headers.get("retry-after") || "");
+  const headerResetAfter = Number(
+    response.headers.get("x-ratelimit-reset-after") || "",
+  );
+
+  const payloadRetryAfter = Number(payload?.retry_after || "");
+
+  const resolved = [payloadRetryAfter, headerRetryAfter, headerResetAfter].find(
+    (value) => Number.isFinite(value) && value > 0,
+  );
+
+  return resolved || 1;
 }
 
 export function buildDiscordAuthorizeUrl(state: string, redirectUri: string) {
@@ -108,7 +136,7 @@ export async function fetchDiscordUser(accessToken: string) {
 }
 
 export async function fetchDiscordGuilds(accessToken: string) {
-  const maxRetries = 3;
+  const maxRetries = 5;
   let attempt = 0;
 
   while (attempt <= maxRetries) {
@@ -121,8 +149,11 @@ export async function fetchDiscordGuilds(accessToken: string) {
 
     if (response.status === 429) {
       const payload = (await response.json().catch(() => null)) as DiscordRateLimitPayload | null;
-      const retryAfterSeconds = Number(payload?.retry_after || 1);
-      const retryAfterMs = Math.max(250, Math.ceil(retryAfterSeconds * 1000) + 120);
+      const retryAfterSeconds = parseRetryAfterSeconds(response, payload);
+      const baseRetryAfterMs = Math.max(350, Math.ceil(retryAfterSeconds * 1000));
+      const backoffMs = attempt * 220;
+      const jitterMs = Math.floor(Math.random() * 140);
+      const retryAfterMs = baseRetryAfterMs + backoffMs + jitterMs;
 
       if (attempt < maxRetries) {
         await wait(retryAfterMs);
@@ -130,8 +161,9 @@ export async function fetchDiscordGuilds(accessToken: string) {
         continue;
       }
 
-      throw new Error(
-        `Falha ao buscar servidores do Discord: limite temporario de requisicoes (429). Tente novamente em alguns segundos.`,
+      throw new DiscordRateLimitError(
+        "Falha ao buscar servidores do Discord: limite temporario de requisicoes (429). Tente novamente em alguns segundos.",
+        retryAfterSeconds,
       );
     }
 

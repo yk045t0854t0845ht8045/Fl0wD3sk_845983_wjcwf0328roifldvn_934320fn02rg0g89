@@ -37,6 +37,45 @@ type BotPresenceApiResponse = {
 
 const DEFAULT_NEXT_STEP_URL = "/config/#/step/2";
 const BOT_CHECK_INTERVAL_MS = 4_000;
+const GUILDS_CACHE_STORAGE_KEY = "flowdesk_step1_guilds_cache_v1";
+const GUILDS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type GuildsCachePayload = {
+  guilds: GuildItem[];
+  cachedAt: number;
+};
+
+function readGuildsCache() {
+  try {
+    const raw = window.sessionStorage.getItem(GUILDS_CACHE_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as GuildsCachePayload;
+    if (!parsed || !Array.isArray(parsed.guilds)) return null;
+    if (!Number.isFinite(parsed.cachedAt)) return null;
+    if (Date.now() - parsed.cachedAt > GUILDS_CACHE_TTL_MS) return null;
+
+    return parsed.guilds;
+  } catch {
+    return null;
+  }
+}
+
+function writeGuildsCache(guilds: GuildItem[]) {
+  try {
+    const payload: GuildsCachePayload = {
+      guilds,
+      cachedAt: Date.now(),
+    };
+
+    window.sessionStorage.setItem(
+      GUILDS_CACHE_STORAGE_KEY,
+      JSON.stringify(payload),
+    );
+  } catch {
+    // Ignora erro de cache local.
+  }
+}
 
 export function ConfigStepOne({
   displayName,
@@ -65,15 +104,34 @@ export function ConfigStepOne({
     let isMounted = true;
 
     async function loadGuilds() {
+      const cachedGuilds = readGuildsCache();
+      if (cachedGuilds && cachedGuilds.length) {
+        setGuilds(cachedGuilds);
+        setIsLoadingGuilds(false);
+      }
+
       try {
         const response = await fetch("/api/auth/me/guilds", { cache: "no-store" });
         const payload = (await response.json()) as GuildsApiResponse;
 
         if (!isMounted) return;
-        setGuilds(payload.ok ? payload.guilds || [] : []);
+
+        if (payload.ok) {
+          const nextGuilds = payload.guilds || [];
+          setGuilds(nextGuilds);
+          writeGuildsCache(nextGuilds);
+          return;
+        }
+
+        if (!cachedGuilds) {
+          setGuilds([]);
+        }
       } catch {
         if (!isMounted) return;
-        setGuilds([]);
+
+        if (!cachedGuilds) {
+          setGuilds([]);
+        }
       } finally {
         if (!isMounted) return;
         setIsLoadingGuilds(false);

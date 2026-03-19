@@ -42,3 +42,45 @@ body {
   background-color: #2e2e2e;
   border-radius: 999px;
 }
+
+@keyframes flowdesk-input-shake {
+  0% {
+    transform: translateX(0);
+  }
+
+  25% {
+    transform: translateX(-6px);
+  }
+
+  50% {
+    transform: translateX(5px);
+  }
+
+  75% {
+    transform: translateX(-3px);
+  }
+
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.flowdesk-input-shake {
+  animation: flowdesk-input-shake 220ms ease-in-out;
+}
+
+@keyframes flowdesk-slide-down {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.flowdesk-slide-down {
+  animation: flowdesk-slide-down 180ms ease-out;
+}

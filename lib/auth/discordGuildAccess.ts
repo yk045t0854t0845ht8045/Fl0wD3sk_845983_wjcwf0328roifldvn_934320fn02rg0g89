@@ -1,5 +1,10 @@
 import { authConfig } from "@/lib/auth/config";
-import { fetchDiscordGuilds, type DiscordGuild, refreshDiscordToken } from "@/lib/auth/discord";
+import {
+  DiscordRateLimitError,
+  fetchDiscordGuilds,
+  type DiscordGuild,
+  refreshDiscordToken,
+} from "@/lib/auth/discord";
 import {
   type CurrentAuthSession,
   getCurrentAuthSessionFromCookie,
@@ -9,7 +14,7 @@ import {
 
 const DISCORD_ADMINISTRATOR = BigInt(8);
 const DISCORD_MANAGE_GUILD = BigInt(32);
-const GUILD_CACHE_TTL_MS = 10 * 60 * 1000;
+const GUILD_CACHE_TTL_MS = 30 * 60 * 1000;
 
 export type DiscordGuildChannel = {
   id: string;
@@ -100,8 +105,7 @@ export async function getAccessibleGuildsForSession(
 ) {
   const cachedGuilds = sessionContext.authSession.discordGuildsCache;
   if (
-    cachedGuilds &&
-    cachedGuilds.length > 0 &&
+    cachedGuilds !== null &&
     isGuildCacheFresh(sessionContext.authSession.discordGuildsCachedAt)
   ) {
     return filterAccessibleGuilds(cachedGuilds);
@@ -114,8 +118,12 @@ export async function getAccessibleGuildsForSession(
     await updateSessionGuildsCache(sessionContext.authSession.id, guilds);
     return accessibleGuilds;
   } catch (error) {
-    if (cachedGuilds && cachedGuilds.length > 0) {
+    if (cachedGuilds !== null) {
       return filterAccessibleGuilds(cachedGuilds);
+    }
+
+    if (error instanceof DiscordRateLimitError) {
+      return [];
     }
 
     throw error;

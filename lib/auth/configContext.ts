@@ -14,9 +14,24 @@ export type StepThreeDraft = {
   notifyRoleIds: string[];
 };
 
+export type StepFourView = "methods" | "pix_form" | "card_form" | "pix_checkout";
+
+export type StepFourDraft = {
+  visited: boolean;
+  view: StepFourView;
+  payerDocument: string;
+  payerName: string;
+  cardNumber: string;
+  cardHolderName: string;
+  cardExpiry: string;
+  cardCvv: string;
+  cardDocument: string;
+};
+
 export type ConfigDraft = {
   stepTwoByGuild: Record<string, StepTwoDraft>;
   stepThreeByGuild: Record<string, StepThreeDraft>;
+  stepFourByGuild: Record<string, StepFourDraft>;
 };
 
 export type StoredConfigContext = {
@@ -27,6 +42,12 @@ export type StoredConfigContext = {
 };
 
 const SNOWFLAKE_REGEX = /^\d{10,25}$/;
+const STEP_FOUR_VIEW_SET: ReadonlySet<StepFourView> = new Set([
+  "methods",
+  "pix_form",
+  "card_form",
+  "pix_checkout",
+]);
 
 export const CONFIG_CONTEXT_STORAGE_KEY = "flowdesk_config_context_v2";
 export const LEGACY_GUILD_STORAGE_KEY = "flowdesk_config_guild_id";
@@ -53,6 +74,17 @@ function normalizeIdArray(value: unknown) {
   }
 
   return Array.from(ids);
+}
+
+function normalizeDraftText(value: unknown, maxLength: number) {
+  if (typeof value !== "string") return "";
+  return value.slice(0, maxLength);
+}
+
+function normalizeStepFourView(value: unknown): StepFourView {
+  if (typeof value !== "string") return "methods";
+  if (!STEP_FOUR_VIEW_SET.has(value as StepFourView)) return "methods";
+  return value as StepFourView;
 }
 
 export function normalizeConfigStep(value: unknown): ConfigStep | null {
@@ -93,6 +125,23 @@ function sanitizeStepThreeDraft(value: unknown): StepThreeDraft | null {
   };
 }
 
+function sanitizeStepFourDraft(value: unknown): StepFourDraft | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+
+  return {
+    visited: Boolean(data.visited),
+    view: normalizeStepFourView(data.view),
+    payerDocument: normalizeDraftText(data.payerDocument, 24),
+    payerName: normalizeDraftText(data.payerName, 120),
+    cardNumber: normalizeDraftText(data.cardNumber, 32),
+    cardHolderName: normalizeDraftText(data.cardHolderName, 120),
+    cardExpiry: normalizeDraftText(data.cardExpiry, 8),
+    cardCvv: normalizeDraftText(data.cardCvv, 4),
+    cardDocument: normalizeDraftText(data.cardDocument, 24),
+  };
+}
+
 function sanitizeDraftMap<T>(
   value: unknown,
   itemSanitizer: (input: unknown) => T | null,
@@ -114,6 +163,7 @@ export function createEmptyConfigDraft(): ConfigDraft {
   return {
     stepTwoByGuild: {},
     stepThreeByGuild: {},
+    stepFourByGuild: {},
   };
 }
 
@@ -127,6 +177,7 @@ export function sanitizeConfigDraft(value: unknown): ConfigDraft {
   return {
     stepTwoByGuild: sanitizeDraftMap(data.stepTwoByGuild, sanitizeStepTwoDraft),
     stepThreeByGuild: sanitizeDraftMap(data.stepThreeByGuild, sanitizeStepThreeDraft),
+    stepFourByGuild: sanitizeDraftMap(data.stepFourByGuild, sanitizeStepFourDraft),
   };
 }
 
@@ -139,6 +190,10 @@ export function mergeConfigDraft(base: ConfigDraft, override: ConfigDraft): Conf
     stepThreeByGuild: {
       ...base.stepThreeByGuild,
       ...override.stepThreeByGuild,
+    },
+    stepFourByGuild: {
+      ...base.stepFourByGuild,
+      ...override.stepFourByGuild,
     },
   };
 }
@@ -162,6 +217,22 @@ export function hasStepThreeDraftValues(value: StepThreeDraft | null | undefined
       value.claimRoleIds.length ||
       value.closeRoleIds.length ||
       value.notifyRoleIds.length,
+  );
+}
+
+export function hasStepFourDraftValues(value: StepFourDraft | null | undefined) {
+  if (!value) return false;
+
+  return Boolean(
+    value.visited ||
+      value.view !== "methods" ||
+      value.payerDocument.trim() ||
+      value.payerName.trim() ||
+      value.cardNumber.trim() ||
+      value.cardHolderName.trim() ||
+      value.cardExpiry.trim() ||
+      value.cardCvv.trim() ||
+      value.cardDocument.trim(),
   );
 }
 

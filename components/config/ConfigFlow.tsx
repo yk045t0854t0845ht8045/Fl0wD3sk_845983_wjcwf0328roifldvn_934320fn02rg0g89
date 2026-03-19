@@ -10,6 +10,7 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 import type {
   ConfigDraft,
   ConfigStep,
+  StepFourDraft,
   StepThreeDraft,
   StepTwoDraft,
   StoredConfigContext,
@@ -54,6 +55,47 @@ function parseStepFromHash(hash: string): ConfigStep {
 
 function hasStepHash(hash: string) {
   return hash === "#/step/1" || hash === STEP_TWO_HASH || hash === STEP_THREE_HASH || hash === STEP_FOUR_HASH;
+}
+
+function parseContextUpdatedAtMs(context: StoredConfigContext | null) {
+  if (!context?.updatedAt) return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(context.updatedAt);
+  if (!Number.isFinite(parsed)) return Number.NEGATIVE_INFINITY;
+  return parsed;
+}
+
+function mergeStoredContexts(
+  localContext: StoredConfigContext | null,
+  serverContext: StoredConfigContext | null,
+) {
+  if (!localContext && !serverContext) {
+    return toStoredConfigContext({
+      activeGuildId: null,
+      activeStep: 1,
+      draft: createEmptyConfigDraft(),
+      updatedAt: null,
+    });
+  }
+
+  if (!localContext && serverContext) return serverContext;
+  if (!serverContext && localContext) return localContext;
+
+  const safeLocal = localContext as StoredConfigContext;
+  const safeServer = serverContext as StoredConfigContext;
+
+  const localUpdatedAtMs = parseContextUpdatedAtMs(safeLocal);
+  const serverUpdatedAtMs = parseContextUpdatedAtMs(safeServer);
+  const localIsPrimary = localUpdatedAtMs >= serverUpdatedAtMs;
+
+  const primary = localIsPrimary ? safeLocal : safeServer;
+  const secondary = localIsPrimary ? safeServer : safeLocal;
+
+  return toStoredConfigContext({
+    activeGuildId: primary.activeGuildId,
+    activeStep: primary.activeStep,
+    draft: mergeConfigDraft(secondary.draft, primary.draft),
+    updatedAt: primary.updatedAt || secondary.updatedAt || null,
+  });
 }
 
 function writeLocalConfigContext(context: StoredConfigContext) {
@@ -256,21 +298,19 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
 
   useEffect(() => {
     function syncStepFromHash() {
-      setCurrentStep(parseStepFromHash(window.location.hash));
+      const hash = window.location.hash;
+      if (!hasStepHash(hash)) return;
+      setCurrentStep(parseStepFromHash(hash));
     }
 
     let isMounted = true;
 
     async function loadConfigContext() {
       const localContext = readLocalConfigContext();
-      const localDraft = localContext?.draft || createEmptyConfigDraft();
-      const initialHashStep = parseStepFromHash(window.location.hash);
-      const shouldRespectHash = hasStepHash(window.location.hash);
-
-      let mergedGuildId = localContext?.activeGuildId || null;
-      let mergedStep = shouldRespectHash ? initialHashStep : localContext?.activeStep || 1;
-      let mergedDraft = localDraft;
-      let mergedUpdatedAt = localContext?.updatedAt || null;
+      const initialHash = window.location.hash;
+      const initialHashStep = parseStepFromHash(initialHash);
+      const shouldRespectHash = hasStepHash(initialHash);
+      let serverContext: StoredConfigContext | null = null;
 
       try {
         const response = await fetch("/api/auth/me/config-context", {
@@ -279,23 +319,19 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
         const payload = (await response.json()) as ConfigContextApiResponse;
 
         if (response.ok && payload.ok) {
-          const serverContext = sanitizeStoredConfigContext({
+          const sanitizedServerContext = sanitizeStoredConfigContext({
             activeGuildId: payload.activeGuildId,
             activeStep: payload.activeStep,
             draft: payload.draft,
             updatedAt: payload.updatedAt,
           });
-
-          if (serverContext) {
-            mergedGuildId = localContext?.activeGuildId || serverContext.activeGuildId;
-            mergedDraft = localContext
-              ? mergeConfigDraft(serverContext.draft, localContext.draft)
-              : serverContext.draft;
-            mergedUpdatedAt = localContext?.updatedAt || serverContext.updatedAt;
-
-            if (!shouldRespectHash) {
-              mergedStep = localContext?.activeStep || serverContext.activeStep;
-            }
+          if (sanitizedServerContext) {
+            serverContext = toStoredConfigContext({
+              activeGuildId: sanitizedServerContext.activeGuildId,
+              activeStep: sanitizedServerContext.activeStep,
+              draft: sanitizedServerContext.draft,
+              updatedAt: sanitizedServerContext.updatedAt,
+            });
           }
         }
       } catch {
@@ -303,11 +339,12 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
       } finally {
         if (!isMounted) return;
 
+        const mergedContext = mergeStoredContexts(localContext, serverContext);
         const hydratedContext = toStoredConfigContext({
-          activeGuildId: mergedGuildId,
-          activeStep: mergedStep,
-          draft: mergedDraft,
-          updatedAt: mergedUpdatedAt,
+          activeGuildId: mergedContext.activeGuildId,
+          activeStep: shouldRespectHash ? initialHashStep : mergedContext.activeStep,
+          draft: mergedContext.draft,
+          updatedAt: mergedContext.updatedAt,
         });
 
         contextRef.current = hydratedContext;
@@ -476,6 +513,21 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     [setAndSyncContext],
   );
 
+  const handleStepFourDraftChange = useCallback(
+    (guildId: string, draft: StepFourDraft) => {
+      const nextDraft = {
+        ...contextRef.current.draft,
+        stepFourByGuild: {
+          ...contextRef.current.draft.stepFourByGuild,
+          [guildId]: draft,
+        },
+      } satisfies ConfigDraft;
+
+      setAndSyncContext({ draft: nextDraft }, false);
+    },
+    [setAndSyncContext],
+  );
+
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return;
 
@@ -506,6 +558,13 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     return draft || null;
   }, [configDraft.stepThreeByGuild, selectedGuildId]);
 
+  const stepFourDraft = useMemo(() => {
+    if (!selectedGuildId) return null;
+
+    const draft = configDraft.stepFourByGuild[selectedGuildId];
+    return draft || null;
+  }, [configDraft.stepFourByGuild, selectedGuildId]);
+
   const stepContent = useMemo(() => {
     if (isConfigContextLoading && currentStep !== 1) {
       return (
@@ -516,7 +575,14 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     }
 
     if (currentStep === 4) {
-      return <ConfigStepFour displayName={displayName} />;
+      return (
+        <ConfigStepFour
+          displayName={displayName}
+          guildId={selectedGuildId}
+          initialDraft={stepFourDraft}
+          onDraftChange={handleStepFourDraftChange}
+        />
+      );
     }
 
     if (currentStep === 3) {
@@ -561,10 +627,12 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     handleProceedToStepFour,
     handleProceedToStepThree,
     handleProceedToStepTwo,
+    handleStepFourDraftChange,
     handleStepThreeDraftChange,
     handleStepTwoDraftChange,
     isConfigContextLoading,
     selectedGuildId,
+    stepFourDraft,
     stepThreeDraft,
     stepTwoDraft,
   ]);

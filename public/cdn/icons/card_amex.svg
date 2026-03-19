@@ -1,0 +1,5 @@
+<svg width="56" height="32" viewBox="0 0 56 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0.5" y="0.5" width="55" height="31" rx="6.5" fill="#0A0A0A" stroke="#2E2E2E"/>
+  <rect x="10" y="9" width="36" height="14" rx="3" fill="#2AA8FF"/>
+  <text x="28" y="19" text-anchor="middle" fill="#0A0A0A" font-size="8" font-family="Arial, sans-serif" font-weight="700">AMEX</text>
+</svg>

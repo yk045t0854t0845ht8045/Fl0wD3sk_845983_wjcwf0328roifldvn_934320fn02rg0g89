@@ -1,13 +1,18 @@
 type ButtonLoaderProps = {
   size?: number;
   text?: string;
+  colorClassName?: string;
 };
 
-export function ButtonLoader({ size = 24, text = "" }: ButtonLoaderProps) {
+export function ButtonLoader({
+  size = 24,
+  text = "",
+  colorClassName = "text-[rgba(107,114,128,1)]",
+}: ButtonLoaderProps) {
   return (
     <div aria-label="Loading..." role="status" className="flex items-center">
       <svg
-        className="animate-spin stroke-[rgba(107,114,128,1)]"
+        className={`animate-spin stroke-current ${colorClassName}`}
         viewBox="0 0 256 256"
         style={{ width: `${size}px`, height: `${size}px` }}
         fill="none"
@@ -85,9 +90,11 @@ export function ButtonLoader({ size = 24, text = "" }: ButtonLoaderProps) {
           strokeWidth="24"
         />
       </svg>
-      <span className="text-xs leading-4 font-medium text-[rgba(107,114,128,1)]">
-        {text}
-      </span>
+      {text ? (
+        <span className={`text-xs leading-4 font-medium ${colorClassName}`}>
+          {text}
+        </span>
+      ) : null}
     </div>
   );
 }
