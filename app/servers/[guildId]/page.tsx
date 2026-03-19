@@ -2,9 +2,11 @@ import { redirect } from "next/navigation";
 import { ServersDashboard } from "@/components/servers/ServersDashboard";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 
-type ServersPageProps = {
+type ServersByGuildPageProps = {
+  params: Promise<{
+    guildId: string;
+  }>;
   searchParams?: Promise<{
-    guild?: string | string[];
     tab?: string | string[];
   }>;
 };
@@ -28,23 +30,32 @@ function normalizeServerTab(value: string | null) {
   return "settings" as const;
 }
 
-export default async function ServersPage({ searchParams }: ServersPageProps) {
+export default async function ServersByGuildPage({
+  params,
+  searchParams,
+}: ServersByGuildPageProps) {
   const user = await getCurrentUserFromSessionCookie();
 
   if (!user) {
     redirect("/login");
   }
 
-  const query = searchParams ? await searchParams : {};
-  const legacyGuildId = normalizeGuildId(takeFirstQueryValue(query.guild));
-  const legacyTab = normalizeServerTab(takeFirstQueryValue(query.tab));
+  const routeParams = await params;
+  const safeGuildId = normalizeGuildId(routeParams.guildId);
 
-  if (legacyGuildId) {
-    if (legacyTab === "settings") {
-      redirect(`/servers/${legacyGuildId}`);
-    }
-    redirect(`/servers/${legacyGuildId}?tab=${legacyTab}`);
+  if (!safeGuildId) {
+    redirect("/servers");
   }
 
-  return <ServersDashboard displayName={user.display_name} />;
+  const query = searchParams ? await searchParams : {};
+  const tab = normalizeServerTab(takeFirstQueryValue(query.tab));
+
+  return (
+    <ServersDashboard
+      displayName={user.display_name}
+      initialGuildId={safeGuildId}
+      initialTab={tab}
+    />
+  );
 }
+

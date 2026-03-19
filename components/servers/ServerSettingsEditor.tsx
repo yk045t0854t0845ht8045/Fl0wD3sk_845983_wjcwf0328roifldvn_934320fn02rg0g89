@@ -105,6 +105,7 @@ type ServerSettingsEditorProps = {
     iconUrl: string | null;
   }>;
   initialTab?: EditorTab;
+  onTabChange?: (tab: EditorTab) => void;
   onClose: () => void;
   standalone?: boolean;
 };
@@ -319,6 +320,7 @@ export function ServerSettingsEditor({
   status,
   allServers,
   initialTab = "settings",
+  onTabChange,
   onClose,
   standalone = false,
 }: ServerSettingsEditorProps) {
@@ -405,6 +407,10 @@ export function ServerSettingsEditor({
     setPlanError(null);
     setPlanSuccess(null);
   }, [guildId, initialTab]);
+
+  useEffect(() => {
+    onTabChange?.(activeTab);
+  }, [activeTab, onTabChange]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -729,6 +735,8 @@ export function ServerSettingsEditor({
     addMethodForm.holderName,
     addMethodForm.nickname,
   ]);
+
+  const serverSettingsControlHeight = 60;
 
   const canSave = Boolean(
     !locked &&
@@ -1179,9 +1187,9 @@ export function ServerSettingsEditor({
 
       <div className="mb-4 flex items-center gap-2 border-b border-[#242424] pb-3">
         {([
-          ["settings", "Configuracoes"],
-          ["payments", "HistÃ³rico de CobranÃ§a"],
-          ["methods", "Metodos"],
+          ["settings", "Configurações"],
+          ["payments", "Histórico de Cobrança"],
+          ["methods", "Métodos"],
           ["plans", "Planos"],
         ] as const).map(([tab, label]) => (
           <button
@@ -1213,17 +1221,17 @@ export function ServerSettingsEditor({
               <>
                 <div className="grid grid-cols-1 gap-3 min-[1100px]:grid-cols-2">
                   <div className="flex flex-col gap-4">
-                    <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || locked} />
-                    <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || locked} />
-                    <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || locked} />
-                    <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || locked} />
+                    <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
                   </div>
 
                   <div className="flex flex-col gap-4">
-                    <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || locked} />
-                    <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || locked} />
-                    <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || locked} />
-                    <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || locked} />
+                    <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
                   </div>
                 </div>
 
@@ -1505,9 +1513,9 @@ export function ServerSettingsEditor({
                 <ButtonLoader size={28} />
               </div>
             ) : (
-              <div className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-4">
+              <div className="flex flex-col gap-3">
                 {status !== "paid" ? (
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
                     <div className="min-w-0">
                       <p className="text-[14px] text-[#D8D8D8]">
                         {status === "expired"
@@ -1529,120 +1537,122 @@ export function ServerSettingsEditor({
                   </div>
                 ) : null}
 
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-[16px] font-medium text-[#D8D8D8]">Plano Pro</p>
-                    <p className="text-[12px] text-[#8E8E8E]">
-                      Licenca padrao do servidor por 30 dias
-                    </p>
-                  </div>
-                  <span className="inline-flex h-[23px] items-center justify-center rounded-[3px] border border-[#6AE25A] bg-[rgba(106,226,90,0.2)] px-3 text-[11px] text-[#6AE25A]">
-                    R$ 9,99 / mes
-                  </span>
-                </div>
-
-                <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
-                  <div className="flex items-center justify-between gap-3">
+                <div className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-[14px] text-[#D8D8D8]">Cobranca recorrente</p>
-                      <p className="mt-1 text-[11px] text-[#8E8E8E]">
-                        Ative para renovar automaticamente a cada 30 dias.
+                      <p className="text-[16px] font-medium text-[#D8D8D8]">Plano Pro</p>
+                      <p className="text-[12px] text-[#8E8E8E]">
+                        Licenca padrao do servidor por 30 dias
                       </p>
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleToggleRecurring();
-                      }}
-                      disabled={locked || isPlanSaving || !planSettings}
-                      className={`inline-flex h-[31px] min-w-[92px] items-center justify-center rounded-[3px] border px-3 text-[12px] transition-opacity disabled:cursor-not-allowed disabled:opacity-45 ${
-                        planSettings?.recurringEnabled
-                          ? "border-[#6AE25A] bg-[rgba(106,226,90,0.2)] text-[#6AE25A]"
-                          : "border-[#2E2E2E] bg-[#0A0A0A] text-[#D8D8D8]"
-                      }`}
-                    >
-                      {isPlanSaving ? (
-                        <ButtonLoader size={16} colorClassName="text-[#D8D8D8]" />
-                      ) : planSettings?.recurringEnabled ? (
-                        "Ativado"
-                      ) : (
-                        "Desativado"
-                      )}
-                    </button>
+                    <span className="inline-flex h-[23px] items-center justify-center rounded-[3px] border border-[#6AE25A] bg-[rgba(106,226,90,0.2)] px-3 text-[11px] text-[#6AE25A]">
+                      R$ 9,99 / mes
+                    </span>
                   </div>
-                </div>
 
-                <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
-                  <p className="text-[12px] text-[#8E8E8E]">Cartao vinculado a recorrencia</p>
-
-                  {recurringMethodOptions.length > 1 ? (
-                    <div className="mt-2">
-                      <label className="mb-1 block text-[11px] text-[#686868]">
-                        Escolha o cartao para renovar
-                      </label>
-                      <select
-                        value={planSettings?.recurringMethodId || ""}
-                        onChange={(event) => {
-                          const value = event.currentTarget.value;
-                          if (!value) return;
-                          void handleSelectRecurringMethod(value);
-                        }}
-                        disabled={locked || isPlanSaving || !planSettings?.recurringEnabled}
-                        className="h-[38px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[12px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {recurringMethodOptions.map((method) => (
-                          <option key={method.id} value={method.id}>
-                            {(method.nickname?.trim() || cardBrandLabel(method.brand)) +
-                              " - " +
-                              `${method.firstSix} ****** ${method.lastFour}`}
-                          </option>
-                        ))}
-                      </select>
-                      {!planSettings?.recurringEnabled ? (
-                        <p className="mt-1 text-[11px] text-[#686868]">
-                          Ative a cobranca recorrente para escolher o cartao.
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {recurringMethod ? (
-                    <div className="mt-2 flex items-center gap-3">
-                      <span className="relative block h-[38px] w-[38px] shrink-0 overflow-hidden rounded-[3px] bg-[#111111]">
-                        <Image
-                          src={cardBrandIcon(recurringMethod.brand)}
-                          alt={cardBrandLabel(recurringMethod.brand)}
-                          fill
-                          sizes="32px"
-                          className="object-contain"
-                          unoptimized
-                        />
-                      </span>
+                  <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-[14px] text-[#D8D8D8]">
-                          {recurringMethod.nickname?.trim() || cardBrandLabel(recurringMethod.brand)}
-                        </p>
-                        <p className="text-[12px] text-[#777777]">
-                          {recurringMethod.firstSix} ****** {recurringMethod.lastFour}
+                        <p className="text-[14px] text-[#D8D8D8]">Cobranca recorrente</p>
+                        <p className="mt-1 text-[11px] text-[#8E8E8E]">
+                          Ative para renovar automaticamente a cada 30 dias.
                         </p>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleToggleRecurring();
+                        }}
+                        disabled={locked || isPlanSaving || !planSettings}
+                        className={`inline-flex h-[31px] min-w-[92px] items-center justify-center rounded-[3px] border px-3 text-[12px] transition-opacity disabled:cursor-not-allowed disabled:opacity-45 ${
+                          planSettings?.recurringEnabled
+                            ? "border-[#6AE25A] bg-[rgba(106,226,90,0.2)] text-[#6AE25A]"
+                            : "border-[#2E2E2E] bg-[#0A0A0A] text-[#D8D8D8]"
+                        }`}
+                      >
+                        {isPlanSaving ? (
+                          <ButtonLoader size={16} colorClassName="text-[#D8D8D8]" />
+                        ) : planSettings?.recurringEnabled ? (
+                          "Ativado"
+                        ) : (
+                          "Desativado"
+                        )}
+                      </button>
                     </div>
-                  ) : (
-                    <p className="mt-2 text-[12px] text-[#777777]">
-                      Nenhum cartao vinculado.
+                  </div>
+
+                  <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
+                    <p className="text-[12px] text-[#8E8E8E]">Cartao vinculado a recorrencia</p>
+
+                    {recurringMethodOptions.length > 1 ? (
+                      <div className="mt-2">
+                        <label className="mb-1 block text-[11px] text-[#686868]">
+                          Escolha o cartao para renovar
+                        </label>
+                        <select
+                          value={planSettings?.recurringMethodId || ""}
+                          onChange={(event) => {
+                            const value = event.currentTarget.value;
+                            if (!value) return;
+                            void handleSelectRecurringMethod(value);
+                          }}
+                          disabled={locked || isPlanSaving || !planSettings?.recurringEnabled}
+                          className="h-[38px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[12px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {recurringMethodOptions.map((method) => (
+                            <option key={method.id} value={method.id}>
+                              {(method.nickname?.trim() || cardBrandLabel(method.brand)) +
+                                " - " +
+                                `${method.firstSix} ****** ${method.lastFour}`}
+                            </option>
+                          ))}
+                        </select>
+                        {!planSettings?.recurringEnabled ? (
+                          <p className="mt-1 text-[11px] text-[#686868]">
+                            Ative a cobranca recorrente para escolher o cartao.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {recurringMethod ? (
+                      <div className="mt-2 flex items-center gap-3">
+                        <span className="relative block h-[38px] w-[38px] shrink-0 overflow-hidden rounded-[3px] bg-[#111111]">
+                          <Image
+                            src={cardBrandIcon(recurringMethod.brand)}
+                            alt={cardBrandLabel(recurringMethod.brand)}
+                            fill
+                            sizes="32px"
+                            className="object-contain"
+                            unoptimized
+                          />
+                        </span>
+                        <div>
+                          <p className="text-[14px] text-[#D8D8D8]">
+                            {recurringMethod.nickname?.trim() || cardBrandLabel(recurringMethod.brand)}
+                          </p>
+                          <p className="text-[12px] text-[#777777]">
+                            {recurringMethod.firstSix} ****** {recurringMethod.lastFour}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-[12px] text-[#777777]">
+                        Nenhum cartao vinculado.
+                      </p>
+                    )}
+                  </div>
+
+                  {locked ? (
+                    <p className="mt-3 text-[11px] text-[#C2C2C2]">
+                      Servidor expirado/desligado. Renove para alterar recorrencia.
                     </p>
-                  )}
+                  ) : null}
+
+                  {planError ? <p className="mt-2 text-[11px] text-[#C2C2C2]">{planError}</p> : null}
+                  {planSuccess ? <p className="mt-2 text-[11px] text-[#9BD694]">{planSuccess}</p> : null}
                 </div>
-
-                {locked ? (
-                  <p className="mt-3 text-[11px] text-[#C2C2C2]">
-                    Servidor expirado/desligado. Renove para alterar recorrencia.
-                  </p>
-                ) : null}
-
-                {planError ? <p className="mt-2 text-[11px] text-[#C2C2C2]">{planError}</p> : null}
-                {planSuccess ? <p className="mt-2 text-[11px] text-[#9BD694]">{planSuccess}</p> : null}
               </div>
             )}
           </div>

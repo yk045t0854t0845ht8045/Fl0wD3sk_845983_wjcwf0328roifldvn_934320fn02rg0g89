@@ -18,6 +18,7 @@ type ConfigStepSelectProps = {
   onChange: (value: string) => void;
   disabled?: boolean;
   loading?: boolean;
+  controlHeightPx?: number;
 };
 
 export function ConfigStepSelect({
@@ -28,6 +29,7 @@ export function ConfigStepSelect({
   onChange,
   disabled = false,
   loading = false,
+  controlHeightPx,
 }: ConfigStepSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -87,7 +89,7 @@ export function ConfigStepSelect({
           loading ? "justify-center" : "items-center"
         }`}
         style={{
-          height: `${configStepTwoScale.controlHeight}px`,
+          height: `${controlHeightPx ?? configStepTwoScale.controlHeight}px`,
           borderRadius: `${configStepTwoScale.controlRadius}px`,
           paddingLeft: `${configStepTwoScale.controlSidePadding}px`,
           paddingRight: `${Math.max(8, configStepTwoScale.controlSidePadding - 4)}px`,

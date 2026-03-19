@@ -494,15 +494,11 @@ function resolveApprovedRedirectConfig(fallbackGuildId: string | null) {
   const returnGuildId =
     normalizeGuildIdFromQuery(params.get("returnGuild")) || fallbackGuildId;
   const returnTab = normalizeServersTabFromQuery(params.get("returnTab"));
-  const targetParams = new URLSearchParams();
 
-  if (returnGuildId) {
-    targetParams.set("guild", returnGuildId);
-    targetParams.set("tab", returnTab);
-  }
-
-  const targetUrl = targetParams.size
-    ? `/servers?${targetParams.toString()}`
+  const targetUrl = returnGuildId
+    ? returnTab === "settings"
+      ? `/servers/${encodeURIComponent(returnGuildId)}`
+      : `/servers/${encodeURIComponent(returnGuildId)}?tab=${encodeURIComponent(returnTab)}`
     : "/servers";
 
   return {

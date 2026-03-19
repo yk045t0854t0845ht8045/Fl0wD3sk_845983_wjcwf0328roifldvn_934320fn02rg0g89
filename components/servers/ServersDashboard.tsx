@@ -9,6 +9,8 @@ import { serversScale } from "@/components/servers/serversScale";
 
 type ServersDashboardProps = {
   displayName: string;
+  initialGuildId?: string | null;
+  initialTab?: "settings" | "payments" | "methods" | "plans";
 };
 
 type ManagedServerStatus = "paid" | "expired" | "off";
@@ -34,11 +36,6 @@ type ServersApiResponse = {
 type FilterOption = "all" | ManagedServerStatus;
 type ServerEditorTab = "settings" | "payments" | "methods" | "plans";
 
-type PendingServerOpenQuery = {
-  guildId: string;
-  tab: ServerEditorTab;
-};
-
 const STATUS_LABEL: Record<ManagedServerStatus, string> = {
   paid: "Pago",
   expired: "Expirado",
@@ -58,20 +55,6 @@ function normalizeSearchText(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
-}
-
-function normalizeGuildIdFromQuery(value: string | null) {
-  if (!value) return null;
-  const guildId = value.trim();
-  return /^\d{10,25}$/.test(guildId) ? guildId : null;
-}
-
-function normalizeEditorTabFromQuery(value: string | null): ServerEditorTab {
-  const normalized = (value || "").trim().toLowerCase();
-  if (normalized === "payments") return "payments";
-  if (normalized === "methods") return "methods";
-  if (normalized === "plans") return "plans";
-  return "settings";
 }
 
 function isSubsequence(query: string, target: string) {
@@ -299,7 +282,11 @@ function ServerCardSkeleton({ index }: { index: number }) {
   );
 }
 
-export function ServersDashboard({ displayName }: ServersDashboardProps) {
+export function ServersDashboard({
+  displayName,
+  initialGuildId = null,
+  initialTab = "settings",
+}: ServersDashboardProps) {
   const [servers, setServers] = useState<ManagedServer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -309,23 +296,10 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [copiedGuildId, setCopiedGuildId] = useState<string | null>(null);
   const [openCardMenuGuildId, setOpenCardMenuGuildId] = useState<string | null>(null);
-  const [selectedGuildIdForConfig, setSelectedGuildIdForConfig] = useState<string | null>(null);
+  const [selectedGuildIdForConfig, setSelectedGuildIdForConfig] = useState<string | null>(initialGuildId);
   const [selectedEditorTabForConfig, setSelectedEditorTabForConfig] =
-    useState<ServerEditorTab>("settings");
-  const [pendingServerOpenQuery, setPendingServerOpenQuery] =
-    useState<PendingServerOpenQuery | null>(null);
+    useState<ServerEditorTab>(initialTab);
   const statusRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const queryGuildId = normalizeGuildIdFromQuery(params.get("guild"));
-    if (!queryGuildId) return;
-
-    setPendingServerOpenQuery({
-      guildId: queryGuildId,
-      tab: normalizeEditorTabFromQuery(params.get("tab")),
-    });
-  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -361,22 +335,6 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
     };
   }, []);
 
-  useEffect(() => {
-    if (!pendingServerOpenQuery) return;
-    if (isLoading) return;
-
-    const targetExists = servers.some(
-      (server) => server.guildId === pendingServerOpenQuery.guildId,
-    );
-
-    if (targetExists) {
-      setSelectedGuildIdForConfig(pendingServerOpenQuery.guildId);
-      setSelectedEditorTabForConfig(pendingServerOpenQuery.tab);
-      setErrorMessage(null);
-    }
-
-    setPendingServerOpenQuery(null);
-  }, [isLoading, pendingServerOpenQuery, servers]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -431,6 +389,29 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
       .map((item) => item.server);
   }, [normalizedQuery, servers, statusFilter]);
 
+  const buildServerConfigUrl = useCallback(
+    (guildId: string, tab: ServerEditorTab) => {
+      const encodedGuildId = encodeURIComponent(guildId);
+      if (tab === "settings") {
+        return `/servers/${encodedGuildId}`;
+      }
+      return `/servers/${encodedGuildId}?tab=${encodeURIComponent(tab)}`;
+    },
+    [],
+  );
+
+  const replaceBrowserUrl = useCallback((nextUrl: string) => {
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl === nextUrl) return;
+    window.history.replaceState(null, "", nextUrl);
+  }, []);
+
+  const pushBrowserUrl = useCallback((nextUrl: string) => {
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl === nextUrl) return;
+    window.history.pushState(null, "", nextUrl);
+  }, []);
+
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
@@ -472,8 +453,9 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
       setSelectedGuildIdForConfig(guildId);
       setSelectedEditorTabForConfig(tab);
       setErrorMessage(null);
+      pushBrowserUrl(buildServerConfigUrl(guildId, tab));
     },
-    [],
+    [buildServerConfigUrl, pushBrowserUrl],
   );
 
   const selectedServer = useMemo(
@@ -481,6 +463,27 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
     [selectedGuildIdForConfig, servers],
   );
   const isEditingServer = Boolean(selectedServer);
+
+  useEffect(() => {
+    if (!selectedGuildIdForConfig || !selectedServer) return;
+    replaceBrowserUrl(buildServerConfigUrl(selectedGuildIdForConfig, selectedEditorTabForConfig));
+  }, [
+    buildServerConfigUrl,
+    replaceBrowserUrl,
+    selectedEditorTabForConfig,
+    selectedGuildIdForConfig,
+    selectedServer,
+  ]);
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (!selectedGuildIdForConfig) return;
+    if (selectedServer) return;
+
+    setSelectedGuildIdForConfig(null);
+    setSelectedEditorTabForConfig("settings");
+    replaceBrowserUrl("/servers");
+  }, [isLoading, replaceBrowserUrl, selectedGuildIdForConfig, selectedServer]);
 
   return (
     <>
@@ -637,20 +640,14 @@ export function ServersDashboard({ displayName }: ServersDashboardProps) {
               status={selectedServer.status}
               allServers={servers}
               initialTab={selectedEditorTabForConfig}
+              onTabChange={(tab) => {
+                setSelectedEditorTabForConfig(tab);
+              }}
               standalone
               onClose={() => {
                 setSelectedGuildIdForConfig(null);
                 setSelectedEditorTabForConfig("settings");
-                const url = new URL(window.location.href);
-                if (url.searchParams.has("guild") || url.searchParams.has("tab")) {
-                  url.searchParams.delete("guild");
-                  url.searchParams.delete("tab");
-                  window.history.replaceState(
-                    null,
-                    "",
-                    `${url.pathname}${url.search}${url.hash}`,
-                  );
-                }
+                pushBrowserUrl("/servers");
               }}
             />
           ) : null}
