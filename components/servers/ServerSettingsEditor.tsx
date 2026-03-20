@@ -421,6 +421,7 @@ async function loadMercadoPagoSecuritySdk() {
   }
 
   await mercadoPagoSecuritySdkPromise;
+  await waitForMercadoPagoDeviceSessionId();
 }
 
 function resolveMercadoPagoDeviceSessionId() {
@@ -440,6 +441,35 @@ function resolveMercadoPagoDeviceSessionId() {
   }
 
   return null;
+}
+
+async function waitForMercadoPagoDeviceSessionId(timeoutMs = 5000) {
+  if (typeof window === "undefined") return null;
+
+  const startedAt = Date.now();
+
+  return new Promise<string>((resolve, reject) => {
+    const tick = () => {
+      const sessionId = resolveMercadoPagoDeviceSessionId();
+      if (sessionId) {
+        resolve(sessionId);
+        return;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        reject(
+          new Error(
+            "Nao foi possivel validar a identificacao segura do dispositivo.",
+          ),
+        );
+        return;
+      }
+
+      window.setTimeout(tick, 120);
+    };
+
+    tick();
+  });
 }
 
 function formatDocumentInput(value: string) {

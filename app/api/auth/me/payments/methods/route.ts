@@ -15,6 +15,7 @@ import {
   createMercadoPagoCardPayment,
   fetchMercadoPagoPaymentById,
   refundMercadoPagoCardPayment,
+  resolveMercadoPagoCardEnvironment,
 } from "@/lib/payments/mercadoPago";
 import { isValidSavedMethodId, parseSavedMethodId } from "@/lib/payments/savedMethods";
 import {
@@ -76,6 +77,15 @@ type PaymentMethodVerificationRecord = {
   refunded_at: string | null;
 };
 
+type LatestVerificationGuardRecord = {
+  id: number;
+  status: string;
+  provider_status: string | null;
+  provider_status_detail: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type AccessContext =
   | {
       ok: true;
@@ -103,6 +113,7 @@ const BLOCKED_CARD_DIGITS = new Set([
   "4321",
   "9999",
 ]);
+const HIGH_RISK_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 
 const STORED_METHOD_SELECT_COLUMNS =
   "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, verification_provider_payment_id, verified_at, last_context_guild_id, created_at, updated_at";
@@ -217,7 +228,7 @@ function isExpiryOutOfRange(expMonth: number | null, expYear: number | null) {
 }
 
 function resolveVerificationAmount() {
-  const cents = crypto.randomInt(1, 90);
+  const cents = crypto.randomInt(1, 100);
   return Math.round((1 + cents / 100) * 100) / 100;
 }
 
@@ -247,6 +258,40 @@ function shouldRefundCapturedVerification(status: string | null | undefined) {
 function isVerificationApproved(status: string | null | undefined) {
   const normalized = (status || "").trim().toLowerCase();
   return normalized === "authorized" || normalized === "approved";
+}
+
+function isHighRiskStatusDetail(value: string | null | undefined) {
+  const normalized = (value || "").trim().toLowerCase();
+  return (
+    normalized.includes("cc_rejected_high_risk") ||
+    normalized.includes("high_risk")
+  );
+}
+
+function isDuplicatedPaymentStatusDetail(value: string | null | undefined) {
+  const normalized = (value || "").trim().toLowerCase();
+  return (
+    normalized.includes("cc_rejected_duplicated_payment") ||
+    normalized.includes("duplicated_payment") ||
+    normalized.includes("duplicated")
+  );
+}
+
+function resolveRetryAfterSecondsFromAttempt(
+  attempt: LatestVerificationGuardRecord,
+  cooldownMs: number,
+) {
+  const referenceMs =
+    Date.parse(attempt.updated_at) ||
+    Date.parse(attempt.created_at) ||
+    Date.now();
+
+  if (!Number.isFinite(referenceMs)) return null;
+
+  const remainingMs = cooldownMs - (Date.now() - referenceMs);
+  if (remainingMs <= 0) return null;
+
+  return Math.max(1, Math.ceil(remainingMs / 1000));
 }
 
 async function ensureGuildAccess(guildId: string): Promise<AccessContext> {
@@ -356,6 +401,32 @@ async function createVerificationAttempt(input: {
   }
 
   return result.data;
+}
+
+async function getLatestVerificationAttemptForGuard(input: {
+  userId: number;
+  guildId: string;
+  methodId: string;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("auth_user_payment_method_verifications")
+    .select("id, status, provider_status, provider_status_detail, created_at, updated_at")
+    .eq("user_id", input.userId)
+    .eq("guild_id", input.guildId)
+    .eq("method_id", input.methodId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<LatestVerificationGuardRecord>();
+
+  if (result.error) {
+    throw new Error(
+      result.error.message ||
+        "Falha ao verificar tentativas recentes de validacao do cartao.",
+    );
+  }
+
+  return result.data || null;
 }
 
 async function updateVerificationAttempt(
@@ -654,6 +725,65 @@ export async function POST(request: Request) {
       ), baseRequestContext.requestId);
     }
 
+    const cardEnvironment = resolveMercadoPagoCardEnvironment();
+    if (cardEnvironment === "production" && !deviceSessionId) {
+      return attachRequestId(NextResponse.json(
+        {
+          ok: false,
+          message:
+            "Nao foi possivel concluir a identificacao segura do dispositivo. Aguarde alguns segundos e tente novamente.",
+        },
+        { status: 400 },
+      ), baseRequestContext.requestId);
+    }
+
+    const latestVerificationAttempt = await getLatestVerificationAttemptForGuard({
+      userId: access.context.userId,
+      guildId,
+      methodId,
+    });
+
+    if (
+      latestVerificationAttempt &&
+      latestVerificationAttempt.status === "failed" &&
+      (isHighRiskStatusDetail(latestVerificationAttempt.provider_status_detail) ||
+        isDuplicatedPaymentStatusDetail(
+          latestVerificationAttempt.provider_status_detail,
+        ))
+    ) {
+      const retryAfterSeconds = resolveRetryAfterSecondsFromAttempt(
+        latestVerificationAttempt,
+        HIGH_RISK_RETRY_COOLDOWN_MS,
+      );
+
+      if (retryAfterSeconds) {
+        await logSecurityAuditEventSafe(auditContext, {
+          action: "payment_method_post",
+          outcome: "blocked",
+          metadata: {
+            methodId,
+            reason: "provider_high_risk_cooldown",
+            retryAfterSeconds,
+            providerStatus: latestVerificationAttempt.provider_status,
+            providerStatusDetail:
+              latestVerificationAttempt.provider_status_detail,
+          },
+        });
+
+        const response = NextResponse.json(
+          {
+            ok: false,
+            retryAfterSeconds,
+            message:
+              "O provedor marcou a ultima tentativa como sensivel ao antifraude. Aguarde alguns minutos antes de tentar novamente com este cartao, no mesmo dispositivo.",
+          },
+          { status: 429 },
+        );
+        response.headers.set("Retry-After", String(retryAfterSeconds));
+        return attachRequestId(response, baseRequestContext.requestId);
+      }
+    }
+
     const verificationAmount = resolveVerificationAmount();
     const verificationCurrency = "BRL";
     const verificationAttempt = await createVerificationAttempt({
@@ -681,7 +811,7 @@ export async function POST(request: Request) {
     try {
       const initialPayment = await createMercadoPagoCardPayment({
         amount: verificationAmount,
-        description: `Flowdesk validacao do cartao ${methodId}`,
+        description: `Flowdesk validacao segura ${verificationAttempt.id}`,
         payerName,
         payerEmail,
         payerIdentification: {
@@ -696,6 +826,7 @@ export async function POST(request: Request) {
           flowdesk_guild_id: guildId,
           flowdesk_method_id: methodId,
           flowdesk_flow: "saved_method_validation",
+          flowdesk_verification_amount: String(verificationAmount.toFixed(2)),
         },
         token: cardToken,
         paymentMethodId,
@@ -752,15 +883,36 @@ export async function POST(request: Request) {
           },
         });
 
-        return attachRequestId(NextResponse.json(
+        const retryAfterSeconds =
+          isHighRiskStatusDetail(providerStatusDetail) ||
+          isDuplicatedPaymentStatusDetail(providerStatusDetail)
+            ? Math.ceil(HIGH_RISK_RETRY_COOLDOWN_MS / 1000)
+            : null;
+
+        const safeProviderMessage = isHighRiskStatusDetail(providerStatusDetail)
+          ? "O Mercado Pago sinalizou esta tentativa como risco elevado. Aguarde alguns minutos antes de tentar novamente com o mesmo cartao e no mesmo dispositivo."
+          : isDuplicatedPaymentStatusDetail(providerStatusDetail)
+            ? "O provedor identificou tentativas muito parecidas em sequencia. Aguarde alguns minutos antes de repetir a validacao deste cartao."
+            : providerStatusDetail ||
+              "O cartao nao conseguiu concluir a validacao de seguranca.";
+
+        const response = NextResponse.json(
           {
             ok: false,
-            message:
-              providerStatusDetail ||
-              "O cartao nao conseguiu concluir a validacao de seguranca.",
+            retryAfterSeconds,
+            message: safeProviderMessage,
           },
-          { status: 402 },
-        ), baseRequestContext.requestId);
+          {
+            status:
+              retryAfterSeconds && retryAfterSeconds > 0 ? 429 : 402,
+          },
+        );
+
+        if (retryAfterSeconds && retryAfterSeconds > 0) {
+          response.headers.set("Retry-After", String(retryAfterSeconds));
+        }
+
+        return attachRequestId(response, baseRequestContext.requestId);
       }
 
       let reversalPayload: unknown = null;
@@ -849,23 +1001,41 @@ export async function POST(request: Request) {
           ? providerError.message
           : "Falha ao validar o cartao com seguranca.";
       const normalizedMessage = message.toLowerCase();
+      const retryAfterSeconds =
+        normalizedMessage.includes("cc_rejected_high_risk") ||
+        normalizedMessage.includes("high_risk") ||
+        normalizedMessage.includes("duplicated_payment")
+          ? Math.ceil(HIGH_RISK_RETRY_COOLDOWN_MS / 1000)
+          : null;
       const responseStatus =
-        normalizedMessage.includes("mercado pago:") ||
-        normalizedMessage.includes("cartao") ||
-        normalizedMessage.includes("card") ||
-        normalizedMessage.includes("identification") ||
-        normalizedMessage.includes("documento") ||
-        normalizedMessage.includes("cpf/cnpj")
-          ? 400
-          : 502;
+        retryAfterSeconds && retryAfterSeconds > 0
+          ? 429
+          : normalizedMessage.includes("mercado pago:") ||
+              normalizedMessage.includes("cartao") ||
+              normalizedMessage.includes("card") ||
+              normalizedMessage.includes("identification") ||
+              normalizedMessage.includes("documento") ||
+              normalizedMessage.includes("cpf/cnpj")
+            ? 400
+            : 502;
+
+      const safeProviderMessage =
+        normalizedMessage.includes("cc_rejected_high_risk") ||
+        normalizedMessage.includes("high_risk")
+          ? "O Mercado Pago marcou esta validacao como risco elevado. Aguarde alguns minutos e tente novamente com o mesmo dispositivo."
+          : normalizedMessage.includes("duplicated_payment")
+            ? "O provedor identificou repeticao de tentativa. Aguarde alguns minutos antes de validar este cartao novamente."
+            : message;
 
       await updateVerificationAttempt(verificationAttempt.id, {
         status: "failed",
         providerStatus: "error",
-        providerStatusDetail: message,
+        providerStatusDetail: safeProviderMessage,
         providerPayload: {
           ...verificationPayload,
           error: message,
+          normalizedError: safeProviderMessage,
+          retryAfterSeconds,
         },
       });
 
@@ -876,16 +1046,25 @@ export async function POST(request: Request) {
           methodId,
           stage: "provider_error",
           message,
+          normalizedMessage: safeProviderMessage,
+          retryAfterSeconds,
         },
       });
 
-      return attachRequestId(NextResponse.json(
+      const response = NextResponse.json(
         {
           ok: false,
-          message,
+          retryAfterSeconds,
+          message: safeProviderMessage,
         },
         { status: responseStatus },
-      ), baseRequestContext.requestId);
+      );
+
+      if (retryAfterSeconds && retryAfterSeconds > 0) {
+        response.headers.set("Retry-After", String(retryAfterSeconds));
+      }
+
+      return attachRequestId(response, baseRequestContext.requestId);
     }
 
   } catch (error) {
