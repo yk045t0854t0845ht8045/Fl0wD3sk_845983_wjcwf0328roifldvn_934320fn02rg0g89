@@ -9,6 +9,7 @@ import {
   fetchDiscordUser,
 } from "@/lib/auth/discord";
 import { createUserSessionFromDiscordUser } from "@/lib/auth/session";
+import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 function buildLoginRedirect(request: NextRequest) {
@@ -27,12 +28,12 @@ function clearOAuthCookies(response: NextResponse) {
 }
 
 function redirectWithLocation(location: string) {
-  return new NextResponse(null, {
+  return applyNoStoreHeaders(new NextResponse(null, {
     status: 302,
     headers: {
       Location: location,
     },
-  });
+  }));
 }
 
 async function hasApprovedServerForUser(userId: number) {
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
   )?.value;
 
   if (!code || !state || !stateCookie || !redirectUriCookie || state !== stateCookie) {
-    const response = NextResponse.redirect(buildLoginRedirect(request));
+    const response = applyNoStoreHeaders(NextResponse.redirect(buildLoginRedirect(request)));
     clearOAuthCookies(response);
     return response;
   }
@@ -109,7 +110,7 @@ export async function GET(request: NextRequest) {
     clearOAuthCookies(response);
     return response;
   } catch {
-    const response = NextResponse.redirect(buildLoginRedirect(request));
+    const response = applyNoStoreHeaders(NextResponse.redirect(buildLoginRedirect(request)));
     clearOAuthCookies(response);
     return response;
   }

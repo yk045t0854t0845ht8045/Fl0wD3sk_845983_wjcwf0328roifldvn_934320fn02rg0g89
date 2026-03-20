@@ -167,6 +167,32 @@ function cardBrandIcon(brand: string | null | undefined) {
   return "/cdn/icons/card_.png";
 }
 
+function PaymentMethodIcon({
+  src,
+  alt,
+  size,
+}: {
+  src: string;
+  alt: string;
+  size: number;
+}) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={size}
+      height={size}
+      className="object-contain"
+      loading="lazy"
+      onError={(event) => {
+        const fallbackSrc = "/cdn/icons/card_.png";
+        if (event.currentTarget.src.endsWith(fallbackSrc)) return;
+        event.currentTarget.src = fallbackSrc;
+      }}
+    />
+  );
+}
+
 function formatDateTime(value: string | null) {
   if (!value) return "--";
   const time = Date.parse(value);
@@ -1463,8 +1489,8 @@ export function ServerSettingsEditor({
                       <div key={order.id} className="flex items-start justify-between gap-3 border-b border-[#1C1C1C] px-4 py-3 last:border-b-0">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-3">
-                            <span className="relative block h-[38px] w-[38px] shrink-0 overflow-hidden rounded-[3px] bg-[#111111]">
-                              <Image src={methodIcon} alt="Metodo" fill sizes="30px" className="object-contain" unoptimized />
+                            <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center overflow-hidden rounded-[3px] bg-[#111111]">
+                              <PaymentMethodIcon src={methodIcon} alt="Metodo" size={30} />
                             </span>
                             <div className="min-w-0">
                               <p className="truncate text-[15px] text-[#D8D8D8]">Pagamento #{order.orderNumber}</p>
@@ -1540,8 +1566,8 @@ export function ServerSettingsEditor({
                       <article key={method.id} className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex min-w-0 items-center gap-3">
-                            <span className="relative block h-[40px] w-[40px] shrink-0 overflow-hidden rounded-[3px] bg-[#111111]">
-                              <Image src={cardBrandIcon(method.brand)} alt={brandLabel} fill sizes="32px" className="object-contain" unoptimized />
+                            <span className="flex h-[40px] w-[40px] shrink-0 items-center justify-center overflow-hidden rounded-[3px] bg-[#111111]">
+                              <PaymentMethodIcon src={cardBrandIcon(method.brand)} alt={brandLabel} size={32} />
                             </span>
                             <div className="min-w-0">
                               <p className="truncate text-[15px] text-[#D8D8D8]">{method.nickname?.trim() || brandLabel}</p>
@@ -1778,14 +1804,11 @@ export function ServerSettingsEditor({
 
                     {recurringMethod ? (
                       <div className="mt-2 flex items-center gap-3">
-                        <span className="relative block h-[38px] w-[38px] shrink-0 overflow-hidden rounded-[3px] bg-[#111111]">
-                          <Image
+                        <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center overflow-hidden rounded-[3px] bg-[#111111]">
+                          <PaymentMethodIcon
                             src={cardBrandIcon(recurringMethod.brand)}
                             alt={cardBrandLabel(recurringMethod.brand)}
-                            fill
-                            sizes="32px"
-                            className="object-contain"
-                            unoptimized
+                            size={32}
                           />
                         </span>
                         <div>
@@ -1870,9 +1893,10 @@ export function ServerSettingsEditor({
                     type="text"
                     value={addMethodForm.cardNumber}
                     onChange={(event) => {
+                      const nextValue = event.currentTarget.value;
                       setAddMethodForm((current) => ({
                         ...current,
-                        cardNumber: formatCardNumberInput(event.currentTarget.value),
+                        cardNumber: formatCardNumberInput(nextValue),
                       }));
                     }}
                     placeholder="Numero do Cartao"
@@ -1881,13 +1905,10 @@ export function ServerSettingsEditor({
                     className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 pr-[52px] text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
                   />
                   <span className="pointer-events-none absolute right-3 top-1/2 inline-flex h-[26px] w-[26px] -translate-y-1/2 items-center justify-center rounded-[3px] bg-[#111111]">
-                    <Image
+                    <PaymentMethodIcon
                       src={addMethodBrandIconSafePath}
                       alt={addMethodCardBrand ? cardBrandLabel(addMethodCardBrand) : "Cartao"}
-                      width={18}
-                      height={18}
-                      className="object-contain"
-                      unoptimized
+                      size={18}
                     />
                   </span>
                 </div>
@@ -1895,9 +1916,10 @@ export function ServerSettingsEditor({
                   type="text"
                   value={addMethodForm.holderName}
                   onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
                     setAddMethodForm((current) => ({
                       ...current,
-                      holderName: event.currentTarget.value.slice(0, 120),
+                      holderName: nextValue.slice(0, 120),
                     }));
                   }}
                   placeholder="Nome do Titular"
@@ -1909,9 +1931,10 @@ export function ServerSettingsEditor({
                     type="text"
                     value={addMethodForm.expiry}
                     onChange={(event) => {
+                      const nextValue = event.currentTarget.value;
                       setAddMethodForm((current) => ({
                         ...current,
-                        expiry: formatCardExpiryInput(event.currentTarget.value),
+                        expiry: formatCardExpiryInput(nextValue),
                       }));
                     }}
                     placeholder="Data de Validade"
@@ -1921,9 +1944,10 @@ export function ServerSettingsEditor({
                     type="text"
                     value={addMethodForm.cvv}
                     onChange={(event) => {
+                      const nextValue = event.currentTarget.value;
                       setAddMethodForm((current) => ({
                         ...current,
-                        cvv: normalizeCardCvvInput(event.currentTarget.value),
+                        cvv: normalizeCardCvvInput(nextValue),
                       }));
                     }}
                     placeholder="CVV/CVC"
@@ -1935,7 +1959,8 @@ export function ServerSettingsEditor({
                   type="text"
                   value={addMethodForm.document}
                   onChange={(event) => {
-                    const digits = normalizeBrazilDocumentDigits(event.currentTarget.value).slice(0, 14);
+                    const nextValue = event.currentTarget.value;
+                    const digits = normalizeBrazilDocumentDigits(nextValue).slice(0, 14);
                     setAddMethodForm((current) => ({
                       ...current,
                       document: digits,
@@ -1949,9 +1974,10 @@ export function ServerSettingsEditor({
                   type="text"
                   value={addMethodForm.nickname}
                   onChange={(event) => {
+                    const nextValue = event.currentTarget.value;
                     setAddMethodForm((current) => ({
                       ...current,
-                      nickname: event.currentTarget.value.slice(0, 42),
+                      nickname: nextValue.slice(0, 42),
                     }));
                   }}
                   placeholder="Apelido do cartao (opcional)"

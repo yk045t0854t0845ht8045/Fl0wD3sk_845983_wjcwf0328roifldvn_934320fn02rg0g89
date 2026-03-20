@@ -6,6 +6,7 @@ import {
 } from "@/lib/auth/config";
 import { buildDiscordAuthorizeUrl } from "@/lib/auth/discord";
 import { createOAuthState } from "@/lib/auth/session";
+import { applyNoStoreHeaders } from "@/lib/security/http";
 
 export async function GET(request: NextRequest) {
   const state = createOAuthState();
@@ -30,5 +31,5 @@ export async function GET(request: NextRequest) {
     path: "/",
   });
 
-  return response;
+  return applyNoStoreHeaders(response);
 }

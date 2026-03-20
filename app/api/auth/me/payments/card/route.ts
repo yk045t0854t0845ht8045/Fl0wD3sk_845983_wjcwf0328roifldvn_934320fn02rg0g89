@@ -16,6 +16,7 @@ import {
   resolvePaymentStatus,
   toQrDataUri,
 } from "@/lib/payments/mercadoPago";
+import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreateCardPaymentBody = {
@@ -512,6 +513,9 @@ async function createDraftOrderForCheckout(input: {
 
 export async function POST(request: Request) {
   try {
+    const securityResponse = ensureSameOriginJsonMutationRequest(request);
+    if (securityResponse) return securityResponse;
+
     let body: CreateCardPaymentBody = {};
     try {
       body = (await request.json()) as CreateCardPaymentBody;

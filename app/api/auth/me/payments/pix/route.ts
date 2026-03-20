@@ -17,6 +17,7 @@ import {
   toQrDataUri,
   type MercadoPagoPaymentResponse,
 } from "@/lib/payments/mercadoPago";
+import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreatePixPaymentBody = {
@@ -627,6 +628,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const securityResponse = ensureSameOriginJsonMutationRequest(request);
+    if (securityResponse) return securityResponse;
+
     let body: CreatePixPaymentBody = {};
     try {
       body = (await request.json()) as CreatePixPaymentBody;

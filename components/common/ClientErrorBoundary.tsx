@@ -24,8 +24,10 @@ export class ClientErrorBoundary extends React.Component<
     return { hasError: true };
   }
 
-  public componentDidCatch() {
-    // Mantemos silencio aqui para evitar log sensivel no cliente.
+  public componentDidCatch(error: Error) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("ClientErrorBoundary", error);
+    }
   }
 
   public render() {
@@ -36,4 +38,3 @@ export class ClientErrorBoundary extends React.Component<
     return this.props.children;
   }
 }
-

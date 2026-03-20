@@ -11,6 +11,10 @@ import {
   assertUserAdminInGuildOrNull,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
+import {
+  applyNoStoreHeaders,
+  ensureSameOriginJsonMutationRequest,
+} from "@/lib/security/http";
 
 type ConfigContextBody = {
   activeGuildId?: unknown;
@@ -28,21 +32,21 @@ export async function GET() {
   try {
     const session = await getCurrentAuthSessionFromCookie();
     if (!session) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(NextResponse.json(
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
-      );
+      ));
     }
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(NextResponse.json({
       ok: true,
       activeGuildId: session.activeGuildId || null,
       activeStep: session.configCurrentStep || 1,
       draft: session.configDraft,
       updatedAt: session.configContextUpdatedAt || null,
-    });
+    }));
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(NextResponse.json(
       {
         ok: false,
         message:
@@ -51,28 +55,31 @@ export async function GET() {
             : "Erro ao carregar contexto de configuracao.",
       },
       { status: 500 },
-    );
+    ));
   }
 }
 
 export async function PUT(request: Request) {
   try {
+    const securityResponse = ensureSameOriginJsonMutationRequest(request);
+    if (securityResponse) return securityResponse;
+
     const session = await getCurrentAuthSessionFromCookie();
     if (!session) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(NextResponse.json(
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
-      );
+      ));
     }
 
     let body: ConfigContextBody = {};
     try {
       body = (await request.json()) as ConfigContextBody;
     } catch {
-      return NextResponse.json(
+      return applyNoStoreHeaders(NextResponse.json(
         { ok: false, message: "Payload JSON invalido." },
         { status: 400 },
-      );
+      ));
     }
 
     const hasActiveGuildPatch = Object.prototype.hasOwnProperty.call(
@@ -86,10 +93,10 @@ export async function PUT(request: Request) {
     const hasDraftPatch = Object.prototype.hasOwnProperty.call(body, "draft");
 
     if (!hasActiveGuildPatch && !hasActiveStepPatch && !hasDraftPatch) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(NextResponse.json(
         { ok: false, message: "Nenhuma alteracao informada." },
         { status: 400 },
-      );
+      ));
     }
 
     const activeGuildId = hasActiveGuildPatch
@@ -99,10 +106,10 @@ export async function PUT(request: Request) {
       : undefined;
 
     if (hasActiveGuildPatch && body.activeGuildId !== null && !activeGuildId) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(NextResponse.json(
         { ok: false, message: "Guild ID invalido." },
         { status: 400 },
-      );
+      ));
     }
 
     let activeStep: ReturnType<typeof normalizeConfigStep> | undefined = undefined;
@@ -111,10 +118,10 @@ export async function PUT(request: Request) {
     }
 
     if (hasActiveStepPatch && !activeStep) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(NextResponse.json(
         { ok: false, message: "Etapa ativa invalida." },
         { status: 400 },
-      );
+      ));
     }
 
     const draft = hasDraftPatch ? sanitizeConfigDraft(body.draft) : undefined;
@@ -122,17 +129,17 @@ export async function PUT(request: Request) {
     if (activeGuildId) {
       const sessionData = await resolveSessionAccessToken();
       if (!sessionData?.authSession || sessionData.authSession.id !== session.id) {
-        return NextResponse.json(
+        return applyNoStoreHeaders(NextResponse.json(
           { ok: false, message: "Nao autenticado." },
           { status: 401 },
-        );
+        ));
       }
 
       if (!sessionData.accessToken) {
-        return NextResponse.json(
+        return applyNoStoreHeaders(NextResponse.json(
           { ok: false, message: "Token OAuth ausente na sessao." },
           { status: 401 },
-        );
+        ));
       }
 
       const accessibleGuild = await assertUserAdminInGuildOrNull(
@@ -144,10 +151,10 @@ export async function PUT(request: Request) {
       );
 
       if (!accessibleGuild) {
-        return NextResponse.json(
+        return applyNoStoreHeaders(NextResponse.json(
           { ok: false, message: "Servidor nao encontrado para este usuario." },
           { status: 403 },
-        );
+        ));
       }
     }
 
@@ -159,15 +166,15 @@ export async function PUT(request: Request) {
       ...(hasDraftPatch ? { configDraft: draft } : {}),
     });
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(NextResponse.json({
       ok: true,
       activeGuildId: updatedContext.activeGuildId,
       activeStep: updatedContext.configCurrentStep,
       draft: updatedContext.configDraft,
       updatedAt: updatedContext.configContextUpdatedAt || null,
-    });
+    }));
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(NextResponse.json(
       {
         ok: false,
         message:
@@ -176,6 +183,6 @@ export async function PUT(request: Request) {
             : "Erro ao salvar contexto de configuracao.",
       },
       { status: 500 },
-    );
+    ));
   }
 }
