@@ -276,45 +276,13 @@ export async function getPaymentOrderByProviderPaymentId(providerPaymentId: stri
   return result.data || null;
 }
 
-export async function reconcilePaymentOrderRecord(
+async function reconcilePaymentOrderWithFetchedProviderPayment(
   order: PaymentOrderReconciliationRecord,
+  providerPayment: MercadoPagoPaymentResponse,
   options?: { source?: string },
 ): Promise<ReconcileResult> {
   const source = options?.source || "background_reconcile";
-  const providerPaymentId = normalizeNullableString(order.provider_payment_id);
-  if (!providerPaymentId) {
-    return {
-      order,
-      changed: false,
-      action: "unchanged",
-      providerStatus: order.provider_status ?? null,
-      providerStatusDetail: order.provider_status_detail ?? null,
-    };
-  }
-
-  let providerPayment: MercadoPagoPaymentResponse;
-  try {
-    providerPayment = await fetchMercadoPagoPaymentById(providerPaymentId, {
-      useCardToken: order.payment_method === "card",
-    });
-  } catch (error) {
-    await createPaymentOrderEventSafe(order.id, "provider_payment_reconcile_failed", {
-      source,
-      providerPaymentId,
-      message: error instanceof Error ? error.message : "provider_unreachable",
-    });
-
-    return {
-      order,
-      changed: false,
-      action: "provider_unreachable",
-      providerStatus: order.provider_status ?? null,
-      providerStatusDetail:
-        error instanceof Error
-          ? error.message
-          : order.provider_status_detail ?? null,
-    };
-  }
+  const providerPaymentId = String(providerPayment.id);
 
   const providerStatus = providerPayment.status || null;
   const providerStatusDetail = providerPayment.status_detail || null;
@@ -459,6 +427,63 @@ export async function reconcilePaymentOrderRecord(
     providerStatus,
     providerStatusDetail,
   };
+}
+
+export async function reconcilePaymentOrderWithProviderPayment(
+  order: PaymentOrderReconciliationRecord,
+  providerPayment: MercadoPagoPaymentResponse,
+  options?: { source?: string },
+) {
+  return reconcilePaymentOrderWithFetchedProviderPayment(
+    order,
+    providerPayment,
+    options,
+  );
+}
+
+export async function reconcilePaymentOrderRecord(
+  order: PaymentOrderReconciliationRecord,
+  options?: { source?: string },
+): Promise<ReconcileResult> {
+  const source = options?.source || "background_reconcile";
+  const providerPaymentId = normalizeNullableString(order.provider_payment_id);
+  if (!providerPaymentId) {
+    return {
+      order,
+      changed: false,
+      action: "unchanged",
+      providerStatus: order.provider_status ?? null,
+      providerStatusDetail: order.provider_status_detail ?? null,
+    };
+  }
+
+  let providerPayment: MercadoPagoPaymentResponse;
+  try {
+    providerPayment = await fetchMercadoPagoPaymentById(providerPaymentId, {
+      useCardToken: order.payment_method === "card",
+    });
+  } catch (error) {
+    await createPaymentOrderEventSafe(order.id, "provider_payment_reconcile_failed", {
+      source,
+      providerPaymentId,
+      message: error instanceof Error ? error.message : "provider_unreachable",
+    });
+
+    return {
+      order,
+      changed: false,
+      action: "provider_unreachable",
+      providerStatus: order.provider_status ?? null,
+      providerStatusDetail:
+        error instanceof Error
+          ? error.message
+          : order.provider_status_detail ?? null,
+    };
+  }
+
+  return reconcilePaymentOrderWithFetchedProviderPayment(order, providerPayment, {
+    source,
+  });
 }
 
 export async function reconcileRecentPaymentOrders(

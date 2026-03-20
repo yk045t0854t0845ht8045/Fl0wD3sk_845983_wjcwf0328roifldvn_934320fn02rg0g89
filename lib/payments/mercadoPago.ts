@@ -21,6 +21,10 @@ type CreateCardPaymentInput = {
   payerName: string;
   payerEmail: string;
   payerIdentification: MercadoPagoPayerIdentification;
+  payerEntityType?: "individual" | "association" | null;
+  payerAddress?: {
+    zipCode?: string | null;
+  } | null;
   externalReference: string;
   metadata: Record<string, string>;
   token: string;
@@ -30,6 +34,7 @@ type CreateCardPaymentInput = {
   deviceSessionId?: string | null;
   idempotencyKey?: string | null;
   capture?: boolean | null;
+  binaryMode?: boolean | null;
   threeDSecureMode?: "optional" | null;
   statementDescriptor?: string | null;
   additionalInfo?: {
@@ -52,6 +57,22 @@ type CreateCardPaymentInput = {
       };
     };
   } | null;
+};
+
+type CreateCardCheckoutPreferenceInput = {
+  amount: number;
+  currency: string;
+  title: string;
+  description?: string | null;
+  externalReference: string;
+  payerEmail?: string | null;
+  metadata: Record<string, string>;
+  notificationUrl: string;
+  successUrl: string;
+  pendingUrl: string;
+  failureUrl: string;
+  statementDescriptor?: string | null;
+  idempotencyKey?: string | null;
 };
 
 type PayerNameParts = {
@@ -108,6 +129,12 @@ export type MercadoPagoCustomerCardResponse = {
   issuer?: {
     id?: string | number | null;
   } | null;
+};
+
+export type MercadoPagoCheckoutPreferenceResponse = {
+  id: string | number;
+  init_point?: string | null;
+  sandbox_init_point?: string | null;
 };
 
 function resolveMercadoPagoAccessToken() {
@@ -206,14 +233,22 @@ function buildCardRequestBody(input: CreateCardPaymentInput) {
       email: input.payerEmail,
       first_name: payerName.firstName,
       last_name: payerName.lastName,
+      entity_type: input.payerEntityType || undefined,
       identification: {
         type: input.payerIdentification.type,
         number: input.payerIdentification.number,
       },
+      address: input.payerAddress
+        ? {
+            zip_code: input.payerAddress.zipCode || undefined,
+          }
+        : undefined,
     },
     external_reference: input.externalReference,
     metadata: input.metadata,
     capture: typeof input.capture === "boolean" ? input.capture : undefined,
+    binary_mode:
+      typeof input.binaryMode === "boolean" ? input.binaryMode : false,
     three_d_secure_mode: input.threeDSecureMode || undefined,
     statement_descriptor: input.statementDescriptor || undefined,
     additional_info: input.additionalInfo || undefined,
@@ -388,6 +423,73 @@ export async function createMercadoPagoCardPayment(input: CreateCardPaymentInput
   }
 
   return payload as MercadoPagoPaymentResponse;
+}
+
+export async function createMercadoPagoCardCheckoutPreference(
+  input: CreateCardCheckoutPreferenceInput,
+) {
+  const accessToken = getMercadoPagoCardAccessTokenOrThrow();
+  const idempotencyKey =
+    input.idempotencyKey?.trim() || crypto.randomUUID();
+
+  const response = await fetch("https://api.mercadopago.com/checkout/preferences", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "X-Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      items: [
+        {
+          id: input.externalReference,
+          title: input.title,
+          description: input.description || input.title,
+          category_id: "services",
+          quantity: 1,
+          currency_id: input.currency,
+          unit_price: input.amount,
+        },
+      ],
+      payer: input.payerEmail
+        ? {
+            email: input.payerEmail,
+          }
+        : undefined,
+      back_urls: {
+        success: input.successUrl,
+        pending: input.pendingUrl,
+        failure: input.failureUrl,
+      },
+      auto_return: "approved",
+      external_reference: input.externalReference,
+      metadata: input.metadata,
+      notification_url: input.notificationUrl,
+      statement_descriptor: input.statementDescriptor || undefined,
+      payment_methods: {
+        excluded_payment_types: [
+          { id: "ticket" },
+          { id: "atm" },
+          { id: "bank_transfer" },
+        ],
+        installments: 1,
+        default_installments: 1,
+      },
+    }),
+    cache: "no-store",
+  });
+
+  const payload = await readMercadoPagoPayload(response);
+
+  if (!response.ok) {
+    const providerMessage =
+      parseMercadoPagoErrorMessage(payload) ||
+      "Falha ao preparar checkout redirecionado com cartao.";
+
+    throw new Error(`Mercado Pago: ${providerMessage}`);
+  }
+
+  return payload as MercadoPagoCheckoutPreferenceResponse;
 }
 
 export async function cancelMercadoPagoCardPayment(paymentId: string | number) {

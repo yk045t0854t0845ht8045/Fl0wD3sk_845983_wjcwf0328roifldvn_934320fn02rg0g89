@@ -73,6 +73,7 @@ type PaymentOrderEventPayload = Record<string, unknown>;
 const DEFAULT_AMOUNT = 9.99;
 const DEFAULT_CURRENCY = "BRL";
 const CARD_RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+const CARD_ISSUER_ANTIFRAUD_COOLDOWN_MS = 10 * 60 * 1000;
 const CARD_PENDING_REUSE_WINDOW_MS = 15 * 60 * 1000;
 const LICENSE_VALIDITY_DAYS = 30;
 const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
@@ -224,10 +225,20 @@ function resolveCardRetryCooldownSeconds(input: {
 
   if (!Number.isFinite(referenceTimeMs)) return null;
 
-  const elapsedMs = Date.now() - referenceTimeMs;
-  if (elapsedMs >= CARD_RETRY_COOLDOWN_MS) return null;
+  const detail = (latestCardOrder.provider_status_detail || "").toLowerCase();
+  const cooldownWindowMs =
+    detail.includes("high_risk") ||
+    detail.includes("analise antifraude do emissor") ||
+    detail.includes("análise antifraude do emissor") ||
+    (detail.includes("issuer") && detail.includes("fraud")) ||
+    (detail.includes("emissor") && detail.includes("fraud"))
+      ? CARD_ISSUER_ANTIFRAUD_COOLDOWN_MS
+      : CARD_RETRY_COOLDOWN_MS;
 
-  return Math.max(1, Math.ceil((CARD_RETRY_COOLDOWN_MS - elapsedMs) / 1000));
+  const elapsedMs = Date.now() - referenceTimeMs;
+  if (elapsedMs >= cooldownWindowMs) return null;
+
+  return Math.max(1, Math.ceil((cooldownWindowMs - elapsedMs) / 1000));
 }
 
 function isRecentOrderTimestamp(
@@ -344,6 +355,26 @@ function isProviderInvalidUsersMessage(message: string) {
     (normalizedMessage.includes("invalid user") &&
       normalizedMessage.includes("involved"))
   );
+}
+
+function isIssuerAntifraudProviderMessage(message: string) {
+  const normalizedMessage = message.toLowerCase();
+  return (
+    normalizedMessage.includes("cc_rejected_high_risk") ||
+    normalizedMessage.includes("high_risk") ||
+    normalizedMessage.includes("analise antifraude do emissor") ||
+    normalizedMessage.includes("análise antifraude do emissor") ||
+    (normalizedMessage.includes("issuer") &&
+      normalizedMessage.includes("fraud")) ||
+    (normalizedMessage.includes("emissor") &&
+      normalizedMessage.includes("fraud"))
+  );
+}
+
+function resolvePayerEntityType(
+  identificationType: "CPF" | "CNPJ",
+): "individual" | "association" {
+  return identificationType === "CNPJ" ? "association" : "individual";
 }
 
 async function ensureGuildAccess(guildId: string) {
@@ -996,12 +1027,16 @@ export async function POST(request: Request) {
     try {
       const mercadoPagoPayment = await createMercadoPagoCardPayment({
         amount,
-        description: `Flowdesk pagamento #${createdOrder.order_number}`,
+        description: `Flowdesk plano do servidor #${createdOrder.order_number}`,
         payerName,
         payerEmail: discordPayerEmail,
         payerIdentification: {
           type: payerDocument.type,
           number: payerDocument.normalized,
+        },
+        payerEntityType: resolvePayerEntityType(payerDocument.type),
+        payerAddress: {
+          zipCode: billingZipCode,
         },
         externalReference,
         metadata: {
@@ -1010,6 +1045,7 @@ export async function POST(request: Request) {
           flowdesk_discord_user_id: user.discord_user_id,
           flowdesk_guild_id: guildId,
           flowdesk_payment_channel: cardChannel,
+          flowdesk_checkout_surface: "config_step_4_card",
         },
         token: cardToken,
         paymentMethodId,
@@ -1017,6 +1053,7 @@ export async function POST(request: Request) {
         issuerId,
         deviceSessionId,
         idempotencyKey: `flowdesk-card-order-${createdOrder.id}`,
+        binaryMode: false,
         threeDSecureMode: "optional",
         statementDescriptor: "FLOWDESK",
         additionalInfo: {
@@ -1024,7 +1061,7 @@ export async function POST(request: Request) {
             {
               id: `flowdesk-plan-${guildId}`,
               title: "Flowdesk Plano Pro",
-              description: "Licenca mensal do servidor no painel Flowdesk",
+              description: `Licenca mensal do servidor ${guildId} no painel Flowdesk`,
               category_id: "services",
               quantity: 1,
               unit_price: amount,
@@ -1134,10 +1171,21 @@ export async function POST(request: Request) {
         },
       });
 
+      const apiOrder = toApiOrder(updatedOrderResult.data);
+      const retryAfterSeconds =
+        updatedOrderResult.data.status === "rejected" &&
+        updatedOrderResult.data.provider_status_detail &&
+        isIssuerAntifraudProviderMessage(
+          updatedOrderResult.data.provider_status_detail,
+        )
+          ? Math.ceil(CARD_ISSUER_ANTIFRAUD_COOLDOWN_MS / 1000)
+          : null;
+
       return respond({
         ok: true,
         reused: false,
-        order: toApiOrder(updatedOrderResult.data),
+        retryAfterSeconds,
+        order: apiOrder,
       });
     } catch (providerError) {
       const message =
@@ -1304,6 +1352,25 @@ export async function POST(request: Request) {
           },
           { status: 400 },
         );
+      }
+
+      if (isIssuerAntifraudProviderMessage(message)) {
+        const response = respond(
+          {
+            ok: false,
+            retryAfterSeconds: Math.ceil(
+              CARD_ISSUER_ANTIFRAUD_COOLDOWN_MS / 1000,
+            ),
+            message:
+              "Pagamento recusado na analise antifraude do emissor. Aguarde alguns minutos e tente novamente com o mesmo titular, no mesmo dispositivo e na mesma rede.",
+          },
+          { status: 429 },
+        );
+        response.headers.set(
+          "Retry-After",
+          String(Math.ceil(CARD_ISSUER_ANTIFRAUD_COOLDOWN_MS / 1000)),
+        );
+        return response;
       }
 
       throw new Error(message);

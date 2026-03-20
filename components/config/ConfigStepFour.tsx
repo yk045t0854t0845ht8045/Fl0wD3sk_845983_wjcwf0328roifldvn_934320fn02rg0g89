@@ -63,6 +63,18 @@ type PixPaymentApiResponse = {
   order?: PixOrder | null;
 };
 
+type CardRedirectApiResponse = {
+  ok: boolean;
+  message?: string;
+  reused?: boolean;
+  alreadyProcessing?: boolean;
+  blockedByActiveLicense?: boolean;
+  licenseActive?: boolean;
+  licenseExpiresAt?: string | null;
+  orderNumber?: number | null;
+  redirectUrl?: string | null;
+};
+
 type MercadoPagoCardTokenPayload = {
   id?: string;
   payment_method_id?: string;
@@ -164,8 +176,11 @@ type PixCheckoutPanelProps = {
 
 type StatusResultPanelProps = {
   className: string;
-  iconPath: string;
+  iconPath?: string | null;
   label: string;
+  useLoader?: boolean;
+  loaderColorClassName?: string;
+  panelTone?: "neutral" | "live" | "success";
 };
 
 const ELO_PREFIXES = [
@@ -231,7 +246,14 @@ let mercadoPagoSecuritySdkPromise: Promise<void> | null = null;
 const PAYMENT_ORDER_CACHE_STORAGE_KEY = "flowdesk_payment_order_cache_v1";
 const APPROVED_REDIRECTED_ORDERS_STORAGE_KEY =
   "flowdesk_approved_redirected_orders_v1";
-const CHECKOUT_STATUS_QUERY_KEYS = ["status", "code", "guild"] as const;
+const CHECKOUT_STATUS_QUERY_KEYS = [
+  "status",
+  "code",
+  "guild",
+  "payment_id",
+  "paymentId",
+  "collection_id",
+] as const;
 
 const EMPTY_STEP_FOUR_DRAFT: StepFourDraft = {
   visited: false,
@@ -287,9 +309,16 @@ function resolveRestoredView(input: {
   preferredView: StepFourView;
   order: PixOrder | null;
 }): StepFourView {
+  const hasPendingCardOrder = Boolean(
+    input.order && input.order.method === "card" && input.order.status === "pending",
+  );
   const hasPixCheckoutOrder = Boolean(
     input.order && input.order.method === "pix" && input.order.qrCodeText,
   );
+
+  if (hasPendingCardOrder) {
+    return "methods";
+  }
 
   if (!input.hasStoredDraft) {
     return hasPixCheckoutOrder ? "pix_checkout" : "methods";
@@ -442,6 +471,7 @@ function readCheckoutStatusQuery() {
       code: null as number | null,
       status: null as string | null,
       guild: null as string | null,
+      paymentId: null as string | null,
     };
   }
 
@@ -451,8 +481,13 @@ function readCheckoutStatusQuery() {
     rawCode && /^\d{1,12}$/.test(rawCode.trim()) ? Number(rawCode.trim()) : null;
   const status = params.get("status")?.trim().toLowerCase() || null;
   const guild = params.get("guild")?.trim() || null;
+  const paymentId =
+    params.get("payment_id")?.trim() ||
+    params.get("paymentId")?.trim() ||
+    params.get("collection_id")?.trim() ||
+    null;
 
-  return { code, status, guild };
+  return { code, status, guild, paymentId };
 }
 
 function readRequestedPaymentMethodFromQuery() {
@@ -533,7 +568,30 @@ function setCheckoutStatusQuery(input: {
     url.searchParams.delete("guild");
   }
 
+  url.searchParams.set("method", input.order.method);
+  url.searchParams.delete("payment_id");
+  url.searchParams.delete("paymentId");
+  url.searchParams.delete("collection_id");
+
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function buildPaymentOrderLookupUrl(input: {
+  guildId: string;
+  orderCode?: number | null;
+  paymentId?: string | null;
+}) {
+  const params = new URLSearchParams({ guildId: input.guildId });
+
+  if (input.orderCode) {
+    params.set("code", String(input.orderCode));
+  }
+
+  if (input.paymentId) {
+    params.set("paymentId", input.paymentId);
+  }
+
+  return `/api/auth/me/payments/order?${params.toString()}`;
 }
 
 function clearCheckoutStatusQuery() {
@@ -1145,6 +1203,7 @@ function summarizeMercadoPagoStatusDetail(
 
 function paymentStatusLabel(order: PixOrder | null | undefined) {
   const status = order?.status || "pending";
+  const method = order?.method || "pix";
   const reason = summarizeMercadoPagoStatusDetail(
     order?.providerStatusDetail || null,
     order?.providerStatus || null,
@@ -1153,16 +1212,35 @@ function paymentStatusLabel(order: PixOrder | null | undefined) {
   switch (status) {
     case "approved":
       return "Pagamento aprovado";
+    case "pending":
+      if (method === "card") {
+        return reason
+          ? `Pagamento em analise: ${reason}`
+          : "Pagamento em analise: aguardando confirmacao do emissor";
+      }
+      return reason ? `Pagamento pendente: ${reason}` : "Pagamento pendente";
     case "cancelled":
+      return reason
+        ? method === "card"
+          ? `Checkout cancelado: ${reason}`
+          : `Pagamento cancelado: ${reason}`
+        : method === "card"
+          ? "Checkout cancelado"
+          : "Pagamento cancelado";
     case "rejected":
       return reason
-        ? `Pagamento cancelado: ${reason}`
-        : "Pagamento cancelado";
+        ? `Pagamento nao aprovado: ${reason}`
+        : "Pagamento nao aprovado";
     case "expired":
       return reason ? `Pagamento expirado: ${reason}` : "Pagamento expirado";
     case "failed":
-      return reason ? `Falha no pagamento: ${reason}` : "Falha no pagamento";
-    case "pending":
+      return reason
+        ? method === "card"
+          ? `Falha ao concluir checkout: ${reason}`
+          : `Falha no pagamento: ${reason}`
+        : method === "card"
+          ? "Falha ao concluir checkout"
+          : "Falha no pagamento";
     default:
       return reason ? `Pagamento pendente: ${reason}` : "Pagamento pendente";
   }
@@ -1174,9 +1252,13 @@ type StatusVisual = {
   colorClassName: string;
   iconPath: string | null;
   showRegenerate: boolean;
+  useLoaderPanel?: boolean;
 };
 
-function resolveStatusVisual(status: string | null | undefined): StatusVisual {
+function resolveStatusVisual(order: PixOrder | null | undefined): StatusVisual {
+  const status = order?.status || "pending";
+  const method = order?.method || "pix";
+
   if (status === "approved") {
     return {
       title: "Ja Aprovado, Todos seus sistemas estao ja online!!",
@@ -1184,6 +1266,18 @@ function resolveStatusVisual(status: string | null | undefined): StatusVisual {
       colorClassName: "text-[#6AE25A]",
       iconPath: "/cdn/icons/check.png",
       showRegenerate: false,
+      useLoaderPanel: false,
+    };
+  }
+
+  if (status === "pending" && method === "card") {
+    return {
+      title: "Pagamento em analise, aguardando confirmacao do emissor",
+      label: "Pagamento em analise",
+      colorClassName: "text-[#D8D8D8]",
+      iconPath: null,
+      showRegenerate: false,
+      useLoaderPanel: true,
     };
   }
 
@@ -1194,16 +1288,46 @@ function resolveStatusVisual(status: string | null | undefined): StatusVisual {
       colorClassName: "text-[#F2C823]",
       iconPath: "/cdn/icons/expired.png",
       showRegenerate: true,
+      useLoaderPanel: false,
     };
   }
 
-  if (status === "cancelled" || status === "rejected" || status === "failed") {
+  if (status === "cancelled") {
     return {
-      title: "Pagamento Cancelado, Gere outro pagamento",
-      label: "Pagamento Cancelado",
+      title:
+        method === "card"
+          ? "Checkout cancelado, voce pode tentar novamente quando quiser"
+          : "Pagamento Cancelado, Gere outro pagamento",
+      label: method === "card" ? "Checkout cancelado" : "Pagamento Cancelado",
       colorClassName: "text-[#DB4646]",
       iconPath: "/cdn/icons/canceled.png",
       showRegenerate: true,
+      useLoaderPanel: false,
+    };
+  }
+
+  if (status === "rejected") {
+    return {
+      title: "Pagamento nao aprovado, revise os dados e tente novamente",
+      label: "Pagamento nao aprovado",
+      colorClassName: "text-[#DB4646]",
+      iconPath: "/cdn/icons/canceled.png",
+      showRegenerate: true,
+      useLoaderPanel: false,
+    };
+  }
+
+  if (status === "failed") {
+    return {
+      title:
+        method === "card"
+          ? "Falha ao concluir o checkout, gere uma nova tentativa"
+          : "Pagamento Cancelado, Gere outro pagamento",
+      label: method === "card" ? "Falha no checkout" : "Pagamento Cancelado",
+      colorClassName: "text-[#DB4646]",
+      iconPath: "/cdn/icons/canceled.png",
+      showRegenerate: true,
+      useLoaderPanel: false,
     };
   }
 
@@ -1213,7 +1337,65 @@ function resolveStatusVisual(status: string | null | undefined): StatusVisual {
     colorClassName: "text-[#D8D8D8]",
     iconPath: null,
     showRegenerate: false,
+    useLoaderPanel: false,
   };
+}
+
+function resolveStatusSupportCopy(order: PixOrder | null | undefined) {
+  if (!order) {
+    return "Apos a confirmacao do pagamento, a aprovacao sera imediata, juntamente com a liberacao do sistema.";
+  }
+
+  if (order.method === "card" && order.status === "pending") {
+    return "Seu pagamento com cartao foi enviado para analise do emissor. Em alguns casos, a confirmacao pode levar alguns instantes. Se o status mudar, esta tela sera atualizada automaticamente.";
+  }
+
+  if (order.method === "card" && order.status === "rejected") {
+    return "O emissor do cartao nao aprovou esta tentativa. Revise os dados, utilize o mesmo titular do cartao e tente novamente. Se preferir, voce tambem pode concluir por PIX.";
+  }
+
+  if (order.method === "card" && order.status === "cancelled") {
+    return "O checkout com cartao foi encerrado antes da confirmacao do pagamento. Quando quiser, voce pode gerar uma nova tentativa segura e concluir novamente.";
+  }
+
+  if (order.method === "card" && order.status === "failed") {
+    return "Nao foi possivel concluir o checkout do cartao nesta tentativa. Gere um novo checkout para continuar com seguranca.";
+  }
+
+  if (order.status === "expired") {
+    return "O prazo deste pagamento terminou. Gere um novo pagamento para continuar a liberacao do sistema neste servidor.";
+  }
+
+  return "Apos a confirmacao do pagamento, a aprovacao sera imediata, juntamente com a liberacao do sistema.";
+}
+
+function resolveRegenerateButtonLabel(order: PixOrder | null | undefined) {
+  if (!order) return "Gerar novo pagamento";
+
+  if (order.method === "card") {
+    switch (order.status) {
+      case "cancelled":
+        return "Abrir checkout com cartao novamente";
+      case "rejected":
+        return "Tentar novamente com cartao";
+      case "failed":
+        return "Gerar novo checkout com cartao";
+      case "expired":
+        return "Gerar novo checkout com cartao";
+      default:
+        return "Tentar novamente com cartao";
+    }
+  }
+
+  switch (order.status) {
+    case "expired":
+      return "Gerar novo PIX";
+    case "cancelled":
+    case "failed":
+      return "Gerar novo pagamento";
+    default:
+      return "Gerar novo pagamento";
+  }
 }
 
 function resolveDocumentStatus(digits: string): ValidationStatus {
@@ -1411,38 +1593,10 @@ function PixFormPanel({
   );
 }
 
-function CardFormPanel({
-  className,
-  cardNumber,
-  cardHolderName,
-  cardExpiry,
-  cardCvv,
-  cardDocument,
-  cardBillingZipCode,
-  cardBrand,
-  cardNumberStatus,
-  cardHolderStatus,
-  cardExpiryStatus,
-  cardCvvStatus,
-  cardDocumentStatus,
-  cardBillingZipCodeStatus,
-  onCardNumberChange,
-  onCardHolderNameChange,
-  onCardExpiryChange,
-  onCardCvvChange,
-  onCardDocumentChange,
-  onCardBillingZipCodeChange,
-  onSubmit,
-  onBack,
-  isSubmitting,
-  canSubmit,
-  cooldownMessage,
-  errorMessage,
-  hasInputError,
-  errorAnimationTick,
-}: CardFormPanelProps) {
+function CardFormPanel(props: CardFormPanelProps) {
+  const { className, onBack, isSubmitting, errorMessage } = props;
   return (
-    <div className={className}>
+    <div className={`${className} flowdesk-stage-fade`}>
       <div className="mx-auto mb-[14px] flex h-[64px] w-[64px] items-center justify-center">
         <span className="relative h-[64px] w-[64px]">
           <Image
@@ -1455,77 +1609,46 @@ function CardFormPanel({
         </span>
       </div>
 
-      <h2 className="text-center text-[33px] font-medium text-[#D8D8D8]">Pagamento com Cartao</h2>
+      <h2 className="text-center text-[33px] font-medium text-[#D8D8D8]">
+        Redirecionando para o checkout com Cartao
+      </h2>
 
       <div className="mt-[25px] h-[2px] w-full bg-[#242424]" />
 
-      <p className="mt-[25px] text-[18px] font-medium text-[#D8D8D8]">Dados do Cartao</p>
-
-      <div className="mt-[14px] flex flex-col gap-3">
-        <div key={`card-number-${errorAnimationTick}`} className={hasInputError ? "flowdesk-input-shake" : undefined}>
-          <div className="relative">
-            <input type="text" value={cardNumber} onChange={(event) => onCardNumberChange(event.currentTarget.value)} placeholder="Numero do Cartao" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[70px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardNumberStatus)}`} inputMode="numeric" autoComplete="cc-number" aria-invalid={hasInputError} />
-            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardNumberStatus} brand={cardBrand} /></span>
-          </div>
-        </div>
-
-        <div key={`card-holder-${errorAnimationTick}`} className={hasInputError ? "flowdesk-input-shake" : undefined}>
-          <div className="relative">
-            <input type="text" value={cardHolderName} onChange={(event) => onCardHolderNameChange(event.currentTarget.value)} placeholder="Nome do Titular" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[62px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardHolderStatus)}`} autoComplete="cc-name" aria-invalid={hasInputError} />
-            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardHolderStatus} /></span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div key={`card-expiry-${errorAnimationTick}`} className={hasInputError ? "flowdesk-input-shake" : undefined}>
-            <div className="relative">
-              <input type="text" value={cardExpiry} onChange={(event) => onCardExpiryChange(event.currentTarget.value)} placeholder="Data de Validade" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[20px] pr-[52px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardExpiryStatus)}`} inputMode="numeric" autoComplete="cc-exp" aria-invalid={hasInputError} />
-              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardExpiryStatus} /></span>
-            </div>
-          </div>
-
-          <div key={`card-cvv-${errorAnimationTick}`} className={hasInputError ? "flowdesk-input-shake" : undefined}>
-            <div className="relative">
-              <input type="text" value={cardCvv} onChange={(event) => onCardCvvChange(event.currentTarget.value)} placeholder="CVV/CVC" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[20px] pr-[52px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardCvvStatus)}`} inputMode="numeric" autoComplete="cc-csc" aria-invalid={hasInputError} />
-              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardCvvStatus} /></span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <p className="mt-[14px] text-[18px] font-medium text-[#D8D8D8]">CPF ou CNPJ</p>
-
-      <div key={`card-document-${errorAnimationTick}`} className={`mt-[10px] ${hasInputError ? "flowdesk-input-shake" : ""}`}>
-        <div className="relative">
-          <input type="text" value={cardDocument} onChange={(event) => onCardDocumentChange(event.currentTarget.value)} placeholder="CPF/CNPJ" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[62px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardDocumentStatus)}`} inputMode="numeric" aria-invalid={hasInputError} />
-          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardDocumentStatus} /></span>
-        </div>
-      </div>
-
-      <div key={`card-billing-zip-${errorAnimationTick}`} className={`mt-[10px] ${hasInputError ? "flowdesk-input-shake" : ""}`}>
-        <div className="relative">
-          <input type="text" value={cardBillingZipCode} onChange={(event) => onCardBillingZipCodeChange(event.currentTarget.value)} placeholder="CEP de cobranca" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[62px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardBillingZipCodeStatus)}`} inputMode="numeric" autoComplete="postal-code" aria-invalid={hasInputError} />
-          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardBillingZipCodeStatus} /></span>
-        </div>
+      <div
+        className={`mt-[34px] flex flex-col items-center justify-center rounded-[5px] border border-[#2E2E2E] bg-[#0A0A0A] px-6 py-9 text-center transition-[transform,opacity] duration-300 ${
+          isSubmitting ? "flowdesk-panel-glow" : "flowdesk-scale-in-soft"
+        }`}
+      >
+        {isSubmitting ? (
+          <ButtonLoader size={30} />
+        ) : (
+          <span className="text-[14px] font-medium uppercase tracking-[0.18em] text-[#D8D8D8]">
+            Checkout seguro
+          </span>
+        )}
+        <p className="mt-[18px] text-[18px] font-medium text-[#D8D8D8]">
+          {isSubmitting ? "Redirecionando" : "Preparacao do checkout"}
+        </p>
+        <p className="mt-[10px] max-w-[410px] text-[13px] leading-[1.65] text-[#9B9B9B]">
+          {isSubmitting
+            ? "Voce sera levado ao checkout seguro do Mercado Pago para concluir o pagamento com cartao."
+            : "Se algo falhar ao abrir o checkout, voce pode voltar para os metodos e tentar novamente em poucos segundos."}
+        </p>
       </div>
 
       {errorMessage ? (
-        <p key={`card-form-error-${errorAnimationTick}-${errorMessage}`} className="mt-[10px] flowdesk-slide-down text-left text-[12px] text-[#DB4646]">
+        <p className="mt-[12px] flowdesk-slide-down text-left text-[12px] text-[#DB4646]">
           {errorMessage}
         </p>
       ) : null}
 
-      <button type="button" onClick={onSubmit} disabled={!canSubmit || isSubmitting} className="mt-[16px] flex h-[56px] w-full items-center justify-center rounded-[5px] bg-[#D8D8D8] text-[20px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45">
-        {isSubmitting ? <ButtonLoader size={24} /> : "Confirmar pagamento"}
-      </button>
-
-      {cooldownMessage ? (
-        <p className="mt-[10px] text-center text-[12px] text-[#8E8E8E]">
-          {cooldownMessage}
-        </p>
-      ) : null}
-
-      <button type="button" onClick={onBack} disabled={isSubmitting} className="mt-[12px] w-full text-center text-[12px] text-[#8E8E8E] transition-colors hover:text-[#B5B5B5] disabled:cursor-not-allowed disabled:opacity-50">
+      <button
+        type="button"
+        onClick={onBack}
+        disabled={isSubmitting}
+        className="mt-[14px] w-full text-center text-[12px] text-[#8E8E8E] transition-colors hover:text-[#B5B5B5] disabled:cursor-not-allowed disabled:opacity-50"
+      >
         Voltar para metodos
       </button>
 
@@ -1620,18 +1743,40 @@ function PixCheckoutPanel({
   );
 }
 
-function StatusResultPanel({ className, iconPath, label }: StatusResultPanelProps) {
+function StatusResultPanel({
+  className,
+  iconPath = null,
+  label,
+  useLoader = false,
+  loaderColorClassName = "text-[#D8D8D8]",
+  panelTone = "neutral",
+}: StatusResultPanelProps) {
+  const panelEffectClass =
+    panelTone === "success"
+      ? "flowdesk-success-glow"
+      : panelTone === "live"
+        ? "flowdesk-panel-glow"
+        : "flowdesk-scale-in-soft";
+
   return (
-    <div className={className}>
-      <div className="relative mx-auto h-[390px] w-[390px] overflow-hidden border border-[#2E2E2E] bg-[#0A0A0A] max-[520px]:h-[300px] max-[520px]:w-[300px]">
-        <Image
-          src={iconPath}
-          alt={label}
-          fill
-          sizes="(max-width: 520px) 300px, 390px"
-          className="object-contain p-10"
-          priority
-        />
+    <div className={`${className} flowdesk-stage-fade`}>
+      <div
+        className={`relative mx-auto h-[390px] w-[390px] overflow-hidden border border-[#2E2E2E] bg-[#0A0A0A] max-[520px]:h-[300px] max-[520px]:w-[300px] ${panelEffectClass}`}
+      >
+        {useLoader ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <ButtonLoader size={42} colorClassName={loaderColorClassName} />
+          </div>
+        ) : iconPath ? (
+          <Image
+            src={iconPath}
+            alt={label}
+            fill
+            sizes="(max-width: 520px) 300px, 390px"
+            className="object-contain p-10"
+            priority
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -1654,8 +1799,10 @@ export function ConfigStepFour({
   const latestInitialStepFourDraftRef = useRef(initialStepFourDraft);
   const hasInitialStepFourDraftRef = useRef(hasInitialStepFourDraft);
   const paymentPollingInFlightRef = useRef(false);
+  const lastHandledCardRedirectKeyRef = useRef(0);
   const [view, setView] = useState<StepFourView>(initialStepFourDraft.view);
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
+  const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
 
   const [payerDocument, setPayerDocument] = useState(initialStepFourDraft.payerDocument);
   const [payerName, setPayerName] = useState(initialStepFourDraft.payerName);
@@ -1759,6 +1906,7 @@ export function ConfigStepFour({
       setCardCvv("");
       setCardDocument("");
       setCardBillingZipCode("");
+      setIsSubmittingCard(false);
       setPixOrder(null);
       setLastKnownOrderNumber(null);
       setCopied(false);
@@ -1829,12 +1977,18 @@ export function ConfigStepFour({
 
     async function loadLatestPixOrder() {
       try {
-        const queryParams = new URLSearchParams({ guildId: activeGuildId });
-        if (shouldLoadOrderByCode && checkoutQuery.code !== null) {
-          queryParams.set("code", String(checkoutQuery.code));
-        }
+        const lookupUrl =
+          shouldLoadOrderByCode && checkoutQuery.code !== null
+            ? buildPaymentOrderLookupUrl({
+                guildId: activeGuildId,
+                orderCode: checkoutQuery.code,
+                paymentId: checkoutQuery.paymentId,
+              })
+            : `/api/auth/me/payments/pix?${new URLSearchParams({
+                guildId: activeGuildId,
+              }).toString()}`;
 
-        const response = await fetch(`/api/auth/me/payments/pix?${queryParams.toString()}`, {
+        const response = await fetch(lookupUrl, {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -1873,6 +2027,22 @@ export function ConfigStepFour({
 
         const order = remoteOrder || cachedPendingOrder || null;
 
+        const shouldResetCancelledCardReturn =
+          shouldLoadOrderByCode &&
+          checkoutQuery.status === "cancelled" &&
+          order?.method === "card" &&
+          order.status === "pending" &&
+          !order.providerPaymentId;
+
+        if (shouldResetCancelledCardReturn) {
+          removeCachedOrderByGuild(activeGuildId);
+          setPixOrder(null);
+          setView("methods");
+          setMethodMessage("Checkout com cartao cancelado. Escolha outro metodo para continuar.");
+          clearCheckoutStatusQuery();
+          return;
+        }
+
         if (remoteOrder) {
           writeCachedOrderByGuild(activeGuildId, remoteOrder);
           setLastKnownOrderNumber(remoteOrder.orderNumber);
@@ -1881,6 +2051,10 @@ export function ConfigStepFour({
 
         setPixOrder(order);
 
+        if (order?.method === "card" && order.status === "pending") {
+          setMethodMessage("Pagamento com cartao em analise.");
+        }
+
         const restoredView = resolveRestoredView({
           hasStoredDraft,
           preferredView: guildDraft.view,
@@ -1888,7 +2062,13 @@ export function ConfigStepFour({
         });
 
         if (!order && requestedPaymentMethod) {
-          setView(requestedPaymentMethod === "pix" ? "pix_form" : "card_form");
+          if (requestedPaymentMethod === "pix") {
+            setView("pix_form");
+          } else {
+            setView("card_form");
+            setMethodMessage("Preparando checkout seguro do cartao.");
+            setCardRedirectRequestKey((current) => current + 1);
+          }
         } else {
           setView(restoredView);
         }
@@ -1897,6 +2077,9 @@ export function ConfigStepFour({
         setPixOrder(cachedPendingOrder || null);
         if (cachedPendingOrder) {
           setLastKnownOrderNumber(cachedPendingOrder.orderNumber);
+          if (cachedPendingOrder.method === "card") {
+            setMethodMessage("Pagamento com cartao em analise.");
+          }
           setView(
             resolveRestoredView({
               hasStoredDraft,
@@ -1909,13 +2092,15 @@ export function ConfigStepFour({
           setView("methods");
           setMethodMessage("Pagamento anterior finalizado. Escolha um novo metodo.");
         } else {
-          setView(
-            requestedPaymentMethod === "pix"
-              ? "pix_form"
-              : requestedPaymentMethod === "card"
-                ? "card_form"
-                : "methods",
-          );
+          if (requestedPaymentMethod === "pix") {
+            setView("pix_form");
+          } else if (requestedPaymentMethod === "card") {
+            setView("card_form");
+            setMethodMessage("Preparando checkout seguro do cartao.");
+            setCardRedirectRequestKey((current) => current + 1);
+          } else {
+            setView("methods");
+          }
         }
       } finally {
         if (!isMounted) return;
@@ -1986,8 +2171,15 @@ export function ConfigStepFour({
           guildId: activeGuildId,
           code: String(activeOrderCode),
         });
+        const lookupUrl =
+          pixOrder?.method === "card"
+            ? buildPaymentOrderLookupUrl({
+                guildId: activeGuildId,
+                orderCode: activeOrderCode,
+              })
+            : `/api/auth/me/payments/pix?${queryParams.toString()}`;
         const response = await fetch(
-          `/api/auth/me/payments/pix?${queryParams.toString()}`,
+          lookupUrl,
           {
             cache: "no-store",
             signal: activeController.signal,
@@ -2009,9 +2201,14 @@ export function ConfigStepFour({
                 : "Pagamento aprovado para este servidor.",
             );
             setCheckoutStatusQuery({ order: payload.order, guildId: activeGuildId });
+          } else if (payload.order.method === "card") {
+            setMethodMessage("Pagamento com cartao finalizado. Escolha como deseja continuar.");
+            clearCheckoutStatusQuery();
           } else {
             clearCheckoutStatusQuery();
           }
+        } else if (payload.order.method === "card") {
+          setMethodMessage("Pagamento com cartao em analise.");
         }
       } catch {
         // polling silencioso
@@ -2031,7 +2228,7 @@ export function ConfigStepFour({
       paymentPollingInFlightRef.current = false;
       window.clearInterval(intervalId);
     };
-  }, [guildId, pendingPixOrderId, pendingPixOrderNumber]);
+  }, [guildId, pendingPixOrderId, pendingPixOrderNumber, pixOrder?.method]);
 
   useEffect(() => {
     if (!documentDigits) {
@@ -2207,7 +2404,9 @@ export function ConfigStepFour({
   const resolvedOrderNumber = pixOrder?.orderNumber || lastKnownOrderNumber || null;
   const orderNumberLabel = resolvedOrderNumber ? `#${resolvedOrderNumber}` : null;
   const currentPaymentStatusLabel = paymentStatusLabel(pixOrder);
-  const statusVisual = resolveStatusVisual(paymentStatus);
+  const statusVisual = resolveStatusVisual(pixOrder);
+  const statusSupportCopy = resolveStatusSupportCopy(pixOrder);
+  const regenerateButtonLabel = resolveRegenerateButtonLabel(pixOrder);
   const canChoosePaymentMethod = Boolean(
     !isLoadingOrder &&
       resolvedOrderNumber &&
@@ -2216,8 +2415,44 @@ export function ConfigStepFour({
   const shouldShowStatusResultPanel = Boolean(
     view === "methods" &&
       pixOrder &&
-      paymentStatus !== "pending",
+      (paymentStatus !== "pending" || pixOrder.method === "card"),
   );
+  const statusStageKey = useMemo(() => {
+    if (view === "card_form") {
+      return `card-redirect-${isSubmittingCard ? "live" : "idle"}-${cardRedirectRequestKey}`;
+    }
+
+    if (shouldShowStatusResultPanel && pixOrder) {
+      return `status-${pixOrder.method}-${pixOrder.status}-${resolvedOrderNumber ?? "none"}`;
+    }
+
+    return `view-${view}-${resolvedOrderNumber ?? "none"}`;
+  }, [
+    cardRedirectRequestKey,
+    isSubmittingCard,
+    pixOrder,
+    resolvedOrderNumber,
+    shouldShowStatusResultPanel,
+    view,
+  ]);
+  const statusBarEffectClass =
+    shouldShowStatusResultPanel && paymentStatus === "approved"
+      ? "flowdesk-success-glow"
+      : (view === "card_form" && isSubmittingCard) ||
+          (shouldShowStatusResultPanel &&
+            pixOrder?.method === "card" &&
+            paymentStatus === "pending")
+        ? "flowdesk-panel-glow"
+        : "";
+  const resultPanelTone: "neutral" | "live" | "success" =
+    shouldShowStatusResultPanel && paymentStatus === "approved"
+      ? "success"
+      : (view === "card_form" && isSubmittingCard) ||
+            (shouldShowStatusResultPanel &&
+              pixOrder?.method === "card" &&
+              paymentStatus === "pending")
+        ? "live"
+        : "neutral";
 
   useEffect(() => {
     if (!shouldShowStatusResultPanel) return;
@@ -2300,6 +2535,119 @@ export function ConfigStepFour({
     setCardFormError(null);
   }, []);
 
+  const startCardRedirectCheckout = useCallback(async () => {
+    if (!guildId || isSubmittingCard) return;
+
+    if (pixOrder?.method === "card" && pixOrder.status === "pending") {
+      setView("methods");
+      setMethodMessage(
+        "Ja existe um pagamento com cartao em analise para este servidor. Aguarde o retorno antes de tentar novamente.",
+      );
+      return;
+    }
+
+    setIsSubmittingCard(true);
+    setCardFormHasInputError(false);
+    setCardFormError(null);
+    setMethodMessage("Redirecionando para o checkout seguro do cartao.");
+
+    let redirected = false;
+
+    try {
+      const params =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search)
+          : null;
+      const renew =
+        params?.get("renew")?.trim() === "1" ||
+        params?.get("renew")?.trim()?.toLowerCase() === "true";
+      const rawReturnTarget = params?.get("return")?.trim().toLowerCase() || null;
+      const returnTarget = rawReturnTarget === "servers" ? "servers" : null;
+      const returnGuildId = normalizeGuildIdFromQuery(params?.get("returnGuild") || null);
+      const rawReturnTab = params?.get("returnTab");
+      const returnTab = rawReturnTab
+        ? normalizeServersTabFromQuery(rawReturnTab)
+        : null;
+
+      const response = await fetch("/api/auth/me/payments/card/redirect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          renew,
+          returnTarget,
+          returnGuildId,
+          returnTab,
+        }),
+      });
+      const requestId = resolveResponseRequestId(response);
+      const payload = (await response.json()) as CardRedirectApiResponse;
+
+      if (payload.blockedByActiveLicense) {
+        setView("methods");
+        setMethodMessage(
+          payload.licenseActive
+            ? buildActiveLicenseMessage(payload.licenseExpiresAt)
+            : "Pagamento bloqueado por licenca ativa neste servidor.",
+        );
+        return;
+      }
+
+      if (payload.alreadyProcessing) {
+        setView("methods");
+        setMethodMessage(
+          withSupportRequestId(
+            payload.message ||
+              "Ja existe um pagamento com cartao em analise para este servidor.",
+            requestId,
+          ),
+        );
+        return;
+      }
+
+      if (!response.ok || !payload.ok || !payload.redirectUrl) {
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Falha ao preparar checkout com cartao.",
+            requestId,
+          ),
+        );
+      }
+
+      if (payload.orderNumber && Number.isInteger(payload.orderNumber)) {
+        setLastKnownOrderNumber(payload.orderNumber);
+      }
+
+      redirected = true;
+      window.setTimeout(() => {
+        window.location.assign(payload.redirectUrl!);
+      }, 180);
+    } catch (error) {
+      const message =
+        parseUnknownErrorMessage(error) ||
+        "Falha ao preparar checkout com cartao.";
+
+      setCardFormHasInputError(false);
+      setCardFormError(message);
+      setCardFormErrorAnimationTick((current) => current + 1);
+    } finally {
+      if (!redirected) {
+        setIsSubmittingCard(false);
+      }
+    }
+  }, [guildId, isSubmittingCard, pixOrder?.method, pixOrder?.status]);
+
+  useEffect(() => {
+    if (view !== "card_form") return;
+    if (cardRedirectRequestKey === 0) return;
+    if (lastHandledCardRedirectKeyRef.current === cardRedirectRequestKey) {
+      return;
+    }
+
+    lastHandledCardRedirectKeyRef.current = cardRedirectRequestKey;
+    void startCardRedirectCheckout();
+  }, [cardRedirectRequestKey, startCardRedirectCheckout, view]);
+
   const handleChooseMethod = useCallback((method: PaymentMethod) => {
     if (!canChoosePaymentMethod) {
       setMethodMessage("Aguardando o pedido ficar pronto para pagamento.");
@@ -2320,6 +2668,8 @@ export function ConfigStepFour({
     }
 
     setView("card_form");
+    setMethodMessage("Preparando checkout seguro do cartao.");
+    setCardRedirectRequestKey((current) => current + 1);
   }, [canChoosePaymentMethod]);
 
   const handleSubmitPixPayment = useCallback(async () => {
@@ -2568,6 +2918,14 @@ export function ConfigStepFour({
       setCardFormHasInputError(false);
       setCardFormError(null);
 
+      if (
+        payload.order.status === "rejected" &&
+        retryAfterSeconds &&
+        retryAfterSeconds > 0
+      ) {
+        setCardClientCooldownUntil(Date.now() + retryAfterSeconds * 1000);
+      }
+
       if (payload.order.status === "approved" || payload.blockedByActiveLicense) {
         setMethodMessage(
           payload.licenseActive
@@ -2579,7 +2937,11 @@ export function ConfigStepFour({
         setMethodMessage("Pagamento com cartao em analise.");
         clearCheckoutStatusQuery();
       } else if (payload.order.status === "rejected") {
-        setMethodMessage("Pagamento com cartao rejeitado.");
+        setMethodMessage(
+          retryAfterSeconds
+            ? `Pagamento com cartao recusado pelo emissor. ${formatCooldownMessage(retryAfterSeconds) || "Aguarde alguns minutos antes de tentar novamente."}`
+            : "Pagamento com cartao rejeitado.",
+        );
         clearCheckoutStatusQuery();
       } else {
         setMethodMessage("Pagamento com cartao processado.");
@@ -2717,7 +3079,8 @@ export function ConfigStepFour({
 
         if (lastMethod === "card") {
           setView("card_form");
-          setMethodMessage("Pedido regerado. Continue com o cartao.");
+          setMethodMessage("Preparando checkout seguro do cartao.");
+          setCardRedirectRequestKey((current) => current + 1);
           return;
         }
 
@@ -2789,6 +3152,10 @@ export function ConfigStepFour({
 
         setMethodMessage(message);
         setView(lastMethod === "card" ? "card_form" : "pix_form");
+        if (lastMethod === "card") {
+          setCardFormError(message);
+          setCardFormErrorAnimationTick((current) => current + 1);
+        }
       } finally {
         setIsLoadingOrder(false);
       }
@@ -2804,12 +3171,15 @@ export function ConfigStepFour({
       );
     }
 
-    if (shouldShowStatusResultPanel && statusVisual.iconPath) {
+    if (shouldShowStatusResultPanel && (statusVisual.iconPath || statusVisual.useLoaderPanel)) {
       return (
         <StatusResultPanel
           className="mx-auto hidden w-full max-w-[536px] min-[1530px]:flex min-[1530px]:items-center min-[1530px]:justify-center min-[1530px]:self-center"
           iconPath={statusVisual.iconPath}
           label={currentPaymentStatusLabel}
+          useLoader={Boolean(statusVisual.useLoaderPanel)}
+          loaderColorClassName={statusVisual.colorClassName}
+          panelTone={resultPanelTone}
         />
       );
     }
@@ -2954,9 +3324,12 @@ export function ConfigStepFour({
     pixNameStatus,
     pixOrder,
     shouldShowStatusResultPanel,
+    statusVisual.colorClassName,
     statusVisual.iconPath,
+    statusVisual.useLoaderPanel,
     view,
     currentPaymentStatusLabel,
+    resultPanelTone,
   ]);
 
   function renderInlinePanel() {
@@ -2968,12 +3341,15 @@ export function ConfigStepFour({
       );
     }
 
-    if (shouldShowStatusResultPanel && statusVisual.iconPath) {
+    if (shouldShowStatusResultPanel && (statusVisual.iconPath || statusVisual.useLoaderPanel)) {
       return (
         <StatusResultPanel
           className="mt-[26px] w-full min-[1530px]:hidden"
           iconPath={statusVisual.iconPath}
           label={currentPaymentStatusLabel}
+          useLoader={Boolean(statusVisual.useLoaderPanel)}
+          loaderColorClassName={statusVisual.colorClassName}
+          panelTone={resultPanelTone}
         />
       );
     }
@@ -3078,75 +3454,81 @@ export function ConfigStepFour({
       <section className="w-full max-w-[1840px]">
         <div className="grid grid-cols-1 items-start gap-12 max-[1529px]:justify-items-center min-[1530px]:grid-cols-[815px_536px] min-[1530px]:items-center min-[1530px]:justify-center min-[1530px]:gap-24">
           <div className="w-full max-[1529px]:max-w-[536px]">
-            <div className="flex flex-col items-center">
-              <div className="relative h-[112px] w-[112px] shrink-0">
-                <Image src="/cdn/logos/logotipo.png" alt="Flowdesk" fill sizes="112px" className="object-contain" priority />
-              </div>
+            <div key={`header-${statusStageKey}`} className="flowdesk-stage-fade">
+              <div className="flex flex-col items-center">
+                <div className="relative h-[112px] w-[112px] shrink-0">
+                  <Image src="/cdn/logos/logotipo.png" alt="Flowdesk" fill sizes="112px" className="object-contain" priority />
+                </div>
 
-              <h1 className="mt-[26px] whitespace-normal text-center text-[33px] font-medium text-[#D8D8D8] min-[960px]:whitespace-nowrap">
-                {statusVisual.title}
-              </h1>
+                <h1 className="mt-[26px] whitespace-normal text-center text-[33px] font-medium text-[#D8D8D8] min-[960px]:whitespace-nowrap">
+                  {statusVisual.title}
+                </h1>
+              </div>
             </div>
 
             {renderInlinePanel()}
 
             <div className="mt-[36px] hidden h-[2px] w-full bg-[#242424] min-[1530px]:block" />
 
-            <div className="mt-[26px] flex justify-center">
-              <div className="flex h-[51px] w-[256px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] text-[#D8D8D8]">
-                <span>Pedido:</span>
-                {orderNumberLabel ? (
-                  <span className="ml-1">{orderNumberLabel}</span>
-                ) : (
-                  <span className="ml-2 inline-flex items-center">
-                    <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
-                  </span>
-                )}
+            <div key={`summary-${statusStageKey}`} className="flowdesk-stage-fade">
+              <div className="mt-[26px] flex justify-center">
+                <div className="flex h-[51px] w-[256px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] text-[#D8D8D8]">
+                  <span>Pedido:</span>
+                  {orderNumberLabel ? (
+                    <span className="ml-1">{orderNumberLabel}</span>
+                  ) : (
+                    <span className="ml-2 inline-flex items-center">
+                      <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
 
-            <p className="mt-[26px] text-[16px] leading-[1.55] text-[#D8D8D8]">
-              A assinatura possui cobranca mensal no valor de{" "}
-              <span className="font-semibold text-white">R$ 9,99</span>, com
-              pagamento via <span className="font-semibold text-white">PIX</span>{" "}
-              ou <span className="font-semibold text-white">Cartao</span>.
-            </p>
+              <p className="mt-[26px] text-[16px] leading-[1.55] text-[#D8D8D8]">
+                A assinatura possui cobranca mensal no valor de{" "}
+                <span className="font-semibold text-white">R$ 9,99</span>, com
+                pagamento via <span className="font-semibold text-white">PIX</span>{" "}
+                ou <span className="font-semibold text-white">Cartao</span>.
+              </p>
 
-            <p className="mt-[16px] text-[16px] leading-[1.55] text-[#D8D8D8]">
-              Apos a confirmacao do pagamento (que ocorre de forma imediata), seu acesso sera liberado automaticamente e voce recebera um e-mail com a confirmacao da compra e os detalhes do servico.
-            </p>
+              <p className="mt-[16px] text-[16px] leading-[1.55] text-[#D8D8D8]">
+                Apos a confirmacao do pagamento (que ocorre de forma imediata), seu acesso sera liberado automaticamente e voce recebera um e-mail com a confirmacao da compra e os detalhes do servico.
+              </p>
 
-            <div className="mt-[26px] flex h-[51px] w-full items-center justify-between rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-6">
-              <span
-                className={`max-w-[calc(100%-42px)] truncate pr-3 text-[16px] ${statusVisual.colorClassName}`}
-                title={currentPaymentStatusLabel}
+              <div
+                className={`mt-[26px] flex h-[51px] w-full items-center justify-between rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-6 ${statusBarEffectClass}`}
               >
-                {currentPaymentStatusLabel}
-              </span>
-              <ButtonLoader size={24} colorClassName={statusVisual.colorClassName} />
+                <span
+                  className={`max-w-[calc(100%-42px)] truncate pr-3 text-[16px] ${statusVisual.colorClassName}`}
+                  title={currentPaymentStatusLabel}
+                >
+                  {currentPaymentStatusLabel}
+                </span>
+                <ButtonLoader size={24} colorClassName={statusVisual.colorClassName} />
+              </div>
+
+              <div className="mt-[36px] h-[2px] w-full bg-[#242424]" />
+
+              <p className="mt-[36px] text-[12px] leading-[1.6] text-[#949494]">
+                {statusSupportCopy} Caso ocorra algum erro, entre em contato imediatamente em:{" "}
+                <a href="https://discord.gg/j9V2UUmfYP" target="_blank" rel="noreferrer noopener" className="text-[#A8A8A8] underline decoration-[#A0A0A0] underline-offset-2 transition-colors hover:text-[#C7C7C7]">
+                  Ajuda com meu pagamento
+                </a>
+                . O pagamento de R$ 9,99 e referente a validacao de apenas 1 licenca, ou seja, o Flowdesk funcionara somente no servidor do Discord que foi configurado inicialmente.
+              </p>
+
+              <CheckoutLegalText className="mt-[16px] text-[12px] leading-[1.6] text-[#949494] min-[1530px]:hidden" />
+
+              {shouldShowStatusResultPanel && statusVisual.showRegenerate ? (
+                <button
+                  type="button"
+                  onClick={handleRegeneratePayment}
+                  className="mt-[26px] flex h-[51px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[16px] font-medium text-black transition-opacity hover:opacity-90"
+                >
+                  {regenerateButtonLabel}
+                </button>
+              ) : null}
             </div>
-
-            <div className="mt-[36px] h-[2px] w-full bg-[#242424]" />
-
-            <p className="mt-[36px] text-[12px] leading-[1.6] text-[#949494]">
-              Apos a confirmacao do pagamento, a aprovacao sera imediata, juntamente com a liberacao do sistema. Caso ocorra algum erro, entre em contato imediatamente em:{" "}
-              <a href="https://discord.gg/j9V2UUmfYP" target="_blank" rel="noreferrer noopener" className="text-[#A8A8A8] underline decoration-[#A0A0A0] underline-offset-2 transition-colors hover:text-[#C7C7C7]">
-                Ajuda com meu pagamento
-              </a>
-              . O pagamento de R$ 9,99 e referente a validacao de apenas 1 licenca, ou seja, o Flowdesk funcionara somente no servidor do Discord que foi configurado inicialmente.
-            </p>
-
-            <CheckoutLegalText className="mt-[16px] text-[12px] leading-[1.6] text-[#949494] min-[1530px]:hidden" />
-
-            {shouldShowStatusResultPanel && statusVisual.showRegenerate ? (
-              <button
-                type="button"
-                onClick={handleRegeneratePayment}
-                className="mt-[26px] flex h-[51px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[16px] font-medium text-black transition-opacity hover:opacity-90"
-              >
-                Regerar o pagamento
-              </button>
-            ) : null}
           </div>
 
           {rightPanel}
