@@ -61,6 +61,19 @@ type AccessContext =
       response: NextResponse;
     };
 
+const BLOCKED_CARD_DIGITS = new Set([
+  "000000",
+  "111111",
+  "123456",
+  "654321",
+  "999999",
+  "0000",
+  "1111",
+  "1234",
+  "4321",
+  "9999",
+]);
+
 function normalizeGuildId(value: unknown) {
   if (typeof value !== "string") return null;
   const guildId = value.trim();
@@ -85,6 +98,75 @@ function normalizeNullableInteger(value: unknown) {
   const numeric = Number(value);
   if (!Number.isInteger(numeric)) return null;
   return numeric;
+}
+
+function isRepeatedDigits(value: string) {
+  return /^(\d)\1+$/.test(value);
+}
+
+function isBlockedDigitPattern(value: string) {
+  return BLOCKED_CARD_DIGITS.has(value);
+}
+
+function isSameOriginRequest(request: Request) {
+  const requestUrl = new URL(request.url);
+  const originHeader = request.headers.get("origin");
+
+  if (originHeader) {
+    try {
+      const originUrl = new URL(originHeader);
+      if (originUrl.host !== requestUrl.host) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  const secFetchSite = request.headers.get("sec-fetch-site");
+  if (
+    secFetchSite &&
+    secFetchSite !== "same-origin" &&
+    secFetchSite !== "same-site" &&
+    secFetchSite !== "none"
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function ensureMutationSecurity(request: Request) {
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json(
+      { ok: false, message: "Origem da requisicao invalida." },
+      { status: 403 },
+    );
+  }
+
+  const contentType = request.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return NextResponse.json(
+      { ok: false, message: "Content-Type invalido." },
+      { status: 415 },
+    );
+  }
+
+  return null;
+}
+
+function isExpiryOutOfRange(expMonth: number | null, expYear: number | null) {
+  if (expMonth === null || expYear === null) return false;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if (expYear < currentYear) return true;
+  if (expYear > currentYear + 20) return true;
+  if (expYear === currentYear && expMonth < currentMonth) return true;
+
+  return false;
 }
 
 function toApiMethod(method: StoredPaymentMethodRecord) {
@@ -165,6 +247,9 @@ async function ensureGuildAccess(guildId: string): Promise<AccessContext> {
 
 export async function POST(request: Request) {
   try {
+    const securityResponse = ensureMutationSecurity(request);
+    if (securityResponse) return securityResponse;
+
     let body: AddMethodBody = {};
     try {
       body = (await request.json()) as AddMethodBody;
@@ -202,6 +287,25 @@ export async function POST(request: Request) {
       );
     }
 
+    if (
+      isRepeatedDigits(normalized.firstSix) ||
+      isRepeatedDigits(normalized.lastFour) ||
+      isBlockedDigitPattern(normalized.firstSix) ||
+      isBlockedDigitPattern(normalized.lastFour)
+    ) {
+      return NextResponse.json(
+        { ok: false, message: "Dados do cartao invalidos para salvar metodo." },
+        { status: 400 },
+      );
+    }
+
+    if (isExpiryOutOfRange(normalized.expMonth, normalized.expYear)) {
+      return NextResponse.json(
+        { ok: false, message: "Validade do cartao invalida para salvar metodo." },
+        { status: 400 },
+      );
+    }
+
     const methodId = buildMethodIdFromStoredInput(normalized);
     if (!methodId || !isValidSavedMethodId(methodId)) {
       return NextResponse.json(
@@ -211,6 +315,66 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
+    const existingMethodResult = await supabase
+      .from("auth_user_payment_methods")
+      .select("id")
+      .eq("user_id", access.context.userId)
+      .eq("method_id", methodId)
+      .maybeSingle<{ id: number }>();
+
+    if (existingMethodResult.error) {
+      throw new Error(existingMethodResult.error.message);
+    }
+
+    const isNewMethod = !existingMethodResult.data;
+    if (isNewMethod) {
+      const [activeCountResult, recentUpdatesResult] = await Promise.all([
+        supabase
+          .from("auth_user_payment_methods")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", access.context.userId)
+          .eq("is_active", true),
+        supabase
+          .from("auth_user_payment_methods")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", access.context.userId)
+          .gte(
+            "updated_at",
+            new Date(Date.now() - 60_000).toISOString(),
+          ),
+      ]);
+
+      if (activeCountResult.error) {
+        throw new Error(activeCountResult.error.message);
+      }
+
+      if (recentUpdatesResult.error) {
+        throw new Error(recentUpdatesResult.error.message);
+      }
+
+      if ((activeCountResult.count || 0) >= 20) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Limite de metodos atingido. Remova um metodo antigo antes de adicionar outro.",
+          },
+          { status: 409 },
+        );
+      }
+
+      if ((recentUpdatesResult.count || 0) >= 8) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Muitas tentativas em pouco tempo. Aguarde alguns segundos e tente novamente.",
+          },
+          { status: 429 },
+        );
+      }
+    }
+
     const upsertResult = await supabase
       .from("auth_user_payment_methods")
       .upsert(
@@ -265,6 +429,9 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
+    const securityResponse = ensureMutationSecurity(request);
+    if (securityResponse) return securityResponse;
+
     let body: UpdateMethodBody = {};
     try {
       body = (await request.json()) as UpdateMethodBody;
@@ -309,6 +476,18 @@ export async function PATCH(request: Request) {
 
     const parsed = parseSavedMethodId(methodId);
     if (!parsed || !parsed.firstSix || !parsed.lastFour) {
+      return NextResponse.json(
+        { ok: false, message: "Metodo de pagamento invalido para apelido." },
+        { status: 400 },
+      );
+    }
+
+    if (
+      isRepeatedDigits(parsed.firstSix) ||
+      isRepeatedDigits(parsed.lastFour) ||
+      isBlockedDigitPattern(parsed.firstSix) ||
+      isBlockedDigitPattern(parsed.lastFour)
+    ) {
       return NextResponse.json(
         { ok: false, message: "Metodo de pagamento invalido para apelido." },
         { status: 400 },
@@ -370,6 +549,9 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const securityResponse = ensureMutationSecurity(request);
+    if (securityResponse) return securityResponse;
+
     let body: DeleteMethodBody = {};
     try {
       body = (await request.json()) as DeleteMethodBody;
@@ -476,4 +658,3 @@ export async function DELETE(request: Request) {
     );
   }
 }
-

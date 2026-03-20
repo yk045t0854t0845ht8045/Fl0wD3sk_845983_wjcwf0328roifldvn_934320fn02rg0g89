@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { ConfigLogoutButton } from "@/components/config/ConfigLogoutButton";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor";
@@ -287,6 +288,7 @@ export function ServersDashboard({
   initialGuildId = null,
   initialTab = "settings",
 }: ServersDashboardProps) {
+  const router = useRouter();
   const [servers, setServers] = useState<ManagedServer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -400,17 +402,21 @@ export function ServersDashboard({
     [],
   );
 
-  const replaceBrowserUrl = useCallback((nextUrl: string) => {
-    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    if (currentUrl === nextUrl) return;
-    window.history.replaceState(null, "", nextUrl);
-  }, []);
+  const navigateToUrl = useCallback(
+    (nextUrl: string, mode: "push" | "replace" = "push") => {
+      if (typeof window === "undefined") return;
+      const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (currentUrl === nextUrl) return;
 
-  const pushBrowserUrl = useCallback((nextUrl: string) => {
-    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    if (currentUrl === nextUrl) return;
-    window.history.pushState(null, "", nextUrl);
-  }, []);
+      if (mode === "replace") {
+        router.replace(nextUrl, { scroll: false });
+        return;
+      }
+
+      router.push(nextUrl, { scroll: false });
+    },
+    [router],
+  );
 
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return;
@@ -453,9 +459,9 @@ export function ServersDashboard({
       setSelectedGuildIdForConfig(guildId);
       setSelectedEditorTabForConfig(tab);
       setErrorMessage(null);
-      pushBrowserUrl(buildServerConfigUrl(guildId, tab));
+      navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
     },
-    [buildServerConfigUrl, pushBrowserUrl],
+    [buildServerConfigUrl, navigateToUrl],
   );
 
   const selectedServer = useMemo(
@@ -465,25 +471,14 @@ export function ServersDashboard({
   const isEditingServer = Boolean(selectedServer);
 
   useEffect(() => {
-    if (!selectedGuildIdForConfig || !selectedServer) return;
-    replaceBrowserUrl(buildServerConfigUrl(selectedGuildIdForConfig, selectedEditorTabForConfig));
-  }, [
-    buildServerConfigUrl,
-    replaceBrowserUrl,
-    selectedEditorTabForConfig,
-    selectedGuildIdForConfig,
-    selectedServer,
-  ]);
-
-  useEffect(() => {
     if (isLoading) return;
     if (!selectedGuildIdForConfig) return;
     if (selectedServer) return;
 
     setSelectedGuildIdForConfig(null);
     setSelectedEditorTabForConfig("settings");
-    replaceBrowserUrl("/servers");
-  }, [isLoading, replaceBrowserUrl, selectedGuildIdForConfig, selectedServer]);
+    navigateToUrl("/servers", "replace");
+  }, [isLoading, navigateToUrl, selectedGuildIdForConfig, selectedServer]);
 
   return (
     <>
@@ -642,12 +637,13 @@ export function ServersDashboard({
               initialTab={selectedEditorTabForConfig}
               onTabChange={(tab) => {
                 setSelectedEditorTabForConfig(tab);
+                navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab), "replace");
               }}
               standalone
               onClose={() => {
                 setSelectedGuildIdForConfig(null);
                 setSelectedEditorTabForConfig("settings");
-                pushBrowserUrl("/servers");
+                navigateToUrl("/servers", "push");
               }}
             />
           ) : null}

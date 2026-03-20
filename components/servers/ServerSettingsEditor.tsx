@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { ClientErrorBoundary } from "@/components/common/ClientErrorBoundary";
 import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect";
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
@@ -118,11 +119,17 @@ const TAB_INDEX: Record<EditorTab, number> = {
 };
 
 function normalizeSearch(value: string) {
+  if (typeof value !== "string") return "";
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+function normalizeBrandValue(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
 }
 
 function statusBadge(status: ManagedServerStatus) {
@@ -140,17 +147,19 @@ function orderStatusBadge(status: PaymentStatus) {
   return { label: "Falhou", cls: "border-[#DB4646] bg-[rgba(219,70,70,0.2)] text-[#DB4646]" };
 }
 
-function cardBrandLabel(brand: string | null) {
-  const normalized = (brand || "").toLowerCase();
+function cardBrandLabel(brand: string | null | undefined) {
+  const normalized = normalizeBrandValue(brand);
   if (normalized === "visa") return "Visa";
   if (normalized === "mastercard") return "Mastercard";
   if (normalized === "amex") return "American Express";
   if (normalized === "elo") return "Elo";
-  return brand ? brand.toUpperCase() : "Cartao";
+  return typeof brand === "string" && brand.trim()
+    ? brand.trim().toUpperCase()
+    : "Cartao";
 }
 
-function cardBrandIcon(brand: string | null) {
-  const normalized = (brand || "").toLowerCase();
+function cardBrandIcon(brand: string | null | undefined) {
+  const normalized = normalizeBrandValue(brand);
   if (normalized === "visa") return "/cdn/icons/card_visa.svg";
   if (normalized === "mastercard") return "/cdn/icons/card_mastercard.svg";
   if (normalized === "amex") return "/cdn/icons/card_amex.svg";
@@ -227,11 +236,12 @@ function normalizeCardDigits(value: string) {
 }
 
 function detectCardBrand(cardDigits: string) {
-  if (!cardDigits) return null;
-  if (ELO_PREFIXES.some((prefix) => cardDigits.startsWith(prefix))) return "elo";
-  if (/^3[47]/.test(cardDigits)) return "amex";
-  if (/^(50|5[1-5]|2[2-7])/.test(cardDigits)) return "mastercard";
-  if (/^4/.test(cardDigits)) return "visa";
+  const digits = normalizeCardDigits(cardDigits);
+  if (!digits) return null;
+  if (ELO_PREFIXES.some((prefix) => digits.startsWith(prefix))) return "elo";
+  if (/^3[47]/.test(digits)) return "amex";
+  if (/^(50|5[1-5]|2[2-7])/.test(digits)) return "mastercard";
+  if (/^4/.test(digits)) return "visa";
   return null;
 }
 
@@ -312,6 +322,112 @@ function isValidCardExpiry(expiry: string) {
   if (year < currentYear) return false;
   if (year === currentYear && month < currentMonth) return false;
   return true;
+}
+
+function asRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function toSafeText(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function toSafeNullableText(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function toSafeInteger(value: unknown) {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return null;
+}
+
+function toSafeNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function toSafePaymentStatus(value: unknown): PaymentStatus {
+  if (value === "approved") return "approved";
+  if (value === "pending") return "pending";
+  if (value === "rejected") return "rejected";
+  if (value === "cancelled") return "cancelled";
+  if (value === "expired") return "expired";
+  return "failed";
+}
+
+function sanitizePaymentOrder(input: unknown): PaymentOrder | null {
+  const order = asRecord(input);
+  if (!order) return null;
+
+  const id = toSafeInteger(order.id);
+  const orderNumber = toSafeInteger(order.orderNumber);
+  const guildId = toSafeText(order.guildId);
+  const method = order.method === "card" ? "card" : order.method === "pix" ? "pix" : null;
+  const status = toSafePaymentStatus(order.status);
+  const currency = toSafeText(order.currency, "BRL");
+  const providerStatusDetail = toSafeNullableText(order.providerStatusDetail);
+  const createdAt = toSafeText(order.createdAt);
+
+  if (id === null || orderNumber === null || !guildId || !method || !createdAt) {
+    return null;
+  }
+
+  const cardRaw = asRecord(order.card);
+  const card = cardRaw
+    ? {
+        brand: toSafeNullableText(cardRaw.brand),
+        firstSix: toSafeNullableText(cardRaw.firstSix),
+        lastFour: toSafeNullableText(cardRaw.lastFour),
+        expMonth: toSafeInteger(cardRaw.expMonth),
+        expYear: toSafeInteger(cardRaw.expYear),
+      }
+    : null;
+
+  return {
+    id,
+    orderNumber,
+    guildId,
+    method,
+    status,
+    amount: toSafeNumber(order.amount),
+    currency,
+    providerStatusDetail,
+    card,
+    createdAt,
+  };
+}
+
+function sanitizeSavedMethod(input: unknown): SavedMethod | null {
+  const method = asRecord(input);
+  if (!method) return null;
+
+  const id = toSafeText(method.id);
+  const firstSix = toSafeText(method.firstSix);
+  const lastFour = toSafeText(method.lastFour);
+  const lastUsedAt = toSafeText(method.lastUsedAt);
+  const timesUsed = toSafeInteger(method.timesUsed);
+
+  if (!id || !/^[a-z0-9:_-]{1,120}$/i.test(id)) return null;
+  if (!/^\d{6}$/.test(firstSix) || !/^\d{4}$/.test(lastFour)) return null;
+  if (!lastUsedAt) return null;
+
+  return {
+    id,
+    brand: toSafeNullableText(method.brand),
+    firstSix,
+    lastFour,
+    expMonth: toSafeInteger(method.expMonth),
+    expYear: toSafeInteger(method.expYear),
+    lastUsedAt,
+    timesUsed: timesUsed === null ? 0 : Math.max(0, timesUsed),
+    nickname: toSafeNullableText(method.nickname),
+  };
 }
 
 export function ServerSettingsEditor({
@@ -409,13 +525,12 @@ export function ServerSettingsEditor({
   }, [guildId, initialTab]);
 
   useEffect(() => {
-    onTabChange?.(activeTab);
-  }, [activeTab, onTabChange]);
-
-  useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
-      const target = event.target as Element | null;
-      if (!target) return;
+      const target = event.target as Node | null;
+      if (!(target instanceof Element)) {
+        setOpenMethodMenuId(null);
+        return;
+      }
       if (!target.closest("[data-method-menu-root='true']")) {
         setOpenMethodMenuId(null);
       }
@@ -520,8 +635,19 @@ export function ServerSettingsEditor({
         if (!response.ok || !payload.ok) {
           throw new Error(payload.message || "Falha ao carregar pagamentos.");
         }
-        setOrders((payload.orders || []) as PaymentOrder[]);
-        setMethods((payload.methods || []) as SavedMethod[]);
+        const safeOrders = Array.isArray(payload.orders)
+          ? payload.orders
+              .map((order: unknown) => sanitizePaymentOrder(order))
+              .filter((order: PaymentOrder | null): order is PaymentOrder => Boolean(order))
+          : [];
+        const safeMethods = Array.isArray(payload.methods)
+          ? payload.methods
+              .map((method: unknown) => sanitizeSavedMethod(method))
+              .filter((method: SavedMethod | null): method is SavedMethod => Boolean(method))
+          : [];
+
+        setOrders(safeOrders);
+        setMethods(safeMethods);
       } catch (error) {
         if (!mounted) return;
         setPaymentsError(error instanceof Error ? error.message : "Erro ao carregar pagamentos.");
@@ -701,6 +827,14 @@ export function ServerSettingsEditor({
   const addMethodBrandIconPath = useMemo(
     () => cardBrandIcon(addMethodCardBrand),
     [addMethodCardBrand],
+  );
+  const addMethodBrandIconSafePath = useMemo(
+    () =>
+      typeof addMethodBrandIconPath === "string" &&
+      addMethodBrandIconPath.startsWith("/")
+        ? addMethodBrandIconPath
+        : "/cdn/icons/card_.png",
+    [addMethodBrandIconPath],
   );
 
   const addMethodDocumentDigits = useMemo(
@@ -1157,14 +1291,37 @@ export function ServerSettingsEditor({
   ]);
 
   return (
-    <section
-      className="flowdesk-fade-up-soft border border-[#2E2E2E] bg-[#0A0A0A]"
-      style={{
-        marginTop: standalone ? "0px" : `${serversScale.cardsTopSpacing}px`,
-        borderRadius: `${serversScale.cardRadius}px`,
-        padding: `${Math.max(16, serversScale.cardPadding + 4)}px`,
-      }}
+    <ClientErrorBoundary
+      fallback={
+        <section
+          className="flowdesk-fade-up-soft border border-[#2E2E2E] bg-[#0A0A0A]"
+          style={{
+            marginTop: standalone ? "0px" : `${serversScale.cardsTopSpacing}px`,
+            borderRadius: `${serversScale.cardRadius}px`,
+            padding: `${Math.max(16, serversScale.cardPadding + 4)}px`,
+          }}
+        >
+          <div className="flex min-h-[220px] items-center justify-center text-center">
+            <div>
+              <p className="text-[16px] text-[#D8D8D8]">
+                Nao foi possivel carregar as configuracoes deste servidor.
+              </p>
+              <p className="mt-2 text-[12px] text-[#8E8E8E]">
+                Atualize a pagina para tentar novamente.
+              </p>
+            </div>
+          </div>
+        </section>
+      }
     >
+      <section
+        className="flowdesk-fade-up-soft border border-[#2E2E2E] bg-[#0A0A0A]"
+        style={{
+          marginTop: standalone ? "0px" : `${serversScale.cardsTopSpacing}px`,
+          borderRadius: `${serversScale.cardRadius}px`,
+          padding: `${Math.max(16, serversScale.cardPadding + 4)}px`,
+        }}
+      >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[12px] text-[#777777]">Configuracoes do servidor</p>
@@ -1195,7 +1352,10 @@ export function ServerSettingsEditor({
           <button
             key={tab}
             type="button"
-            onClick={() => setActiveTab(tab)}
+            onClick={() => {
+              setActiveTab(tab);
+              onTabChange?.(tab);
+            }}
             className={`rounded-[3px] border px-3 py-[7px] text-[12px] transition-colors ${
               activeTab === tab
                 ? "border-[#D8D8D8] bg-[#D8D8D8] text-black"
@@ -1515,14 +1675,14 @@ export function ServerSettingsEditor({
             ) : (
               <div className="flex flex-col gap-3">
                 {status !== "paid" ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-[#F2C823] bg-[rgba(242,200,35,0.12)] px-3 py-3">
                     <div className="min-w-0">
-                      <p className="text-[14px] text-[#D8D8D8]">
+                      <p className="text-[14px] text-[#F2C823]">
                         {status === "expired"
                           ? "Plano expirado neste servidor"
                           : "Plano desligado neste servidor"}
                       </p>
-                      <p className="mt-1 text-[11px] text-[#8E8E8E]">
+                      <p className="mt-1 text-[11px] text-[#D6C68A]">
                         Renove agora para reativar o Flowdesk com mais 30 dias de licenca.
                       </p>
                     </div>
@@ -1660,8 +1820,29 @@ export function ServerSettingsEditor({
       </div>
 
       {isAddMethodModalOpen ? (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 py-6">
-          <div className="relative w-full max-w-[760px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] p-6">
+        <ClientErrorBoundary
+          fallback={
+            <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 py-6">
+              <div className="w-full max-w-[520px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] p-6 text-center">
+                <p className="text-[16px] text-[#D8D8D8]">
+                  Nao foi possivel abrir o modal de cartao.
+                </p>
+                <p className="mt-2 text-[12px] text-[#8E8E8E]">
+                  Feche e tente novamente em alguns segundos.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsAddMethodModalOpen(false)}
+                  className="mt-5 inline-flex h-[40px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[13px] text-[#D8D8D8] transition-colors hover:bg-[#121212]"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          }
+        >
+          <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 py-6">
+            <div className="relative w-full max-w-[760px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] p-6">
             <button
               type="button"
               onClick={() => {
@@ -1701,7 +1882,7 @@ export function ServerSettingsEditor({
                   />
                   <span className="pointer-events-none absolute right-3 top-1/2 inline-flex h-[26px] w-[26px] -translate-y-1/2 items-center justify-center rounded-[3px] bg-[#111111]">
                     <Image
-                      src={addMethodBrandIconPath}
+                      src={addMethodBrandIconSafePath}
                       alt={addMethodCardBrand ? cardBrandLabel(addMethodCardBrand) : "Cartao"}
                       width={18}
                       height={18}
@@ -1793,9 +1974,11 @@ export function ServerSettingsEditor({
             {addMethodError ? (
               <p className="mt-3 text-[14px] text-[#DB4646]">{addMethodError}</p>
             ) : null}
+            </div>
           </div>
-        </div>
+        </ClientErrorBoundary>
       ) : null}
-    </section>
+      </section>
+    </ClientErrorBoundary>
   );
 }
