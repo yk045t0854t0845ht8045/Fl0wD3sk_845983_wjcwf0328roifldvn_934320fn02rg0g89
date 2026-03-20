@@ -594,9 +594,13 @@ export async function createMercadoPagoCustomer(input: {
   email: string;
   firstName: string;
   lastName?: string | null;
+  idempotencyKey?: string | null;
 }) {
   const accessToken = getMercadoPagoCardAccessTokenOrThrow();
-  const idempotencyKey = crypto.randomUUID();
+  const idempotencyKey =
+    typeof input.idempotencyKey === "string" && input.idempotencyKey.trim()
+      ? input.idempotencyKey.trim()
+      : crypto.randomUUID();
 
   const response = await fetch("https://api.mercadopago.com/v1/customers", {
     method: "POST",
@@ -628,9 +632,13 @@ export async function createMercadoPagoCustomer(input: {
 export async function createMercadoPagoCustomerCard(input: {
   customerId: string | number;
   token: string;
+  idempotencyKey?: string | null;
 }) {
   const accessToken = getMercadoPagoCardAccessTokenOrThrow();
-  const idempotencyKey = crypto.randomUUID();
+  const idempotencyKey =
+    typeof input.idempotencyKey === "string" && input.idempotencyKey.trim()
+      ? input.idempotencyKey.trim()
+      : crypto.randomUUID();
 
   const response = await fetch(
     `https://api.mercadopago.com/v1/customers/${encodeURIComponent(String(input.customerId))}/cards`,

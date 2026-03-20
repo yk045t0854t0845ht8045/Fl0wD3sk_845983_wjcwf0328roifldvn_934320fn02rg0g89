@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ConfigLogoutButton } from "@/components/config/ConfigLogoutButton";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor";
+import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { serversScale } from "@/components/servers/serversScale";
 
 type ServersDashboardProps = {
@@ -473,11 +474,20 @@ export function ServersDashboard({
     [buildServerConfigUrl, navigateToUrl],
   );
 
+  const prefetchServerConfig = useCallback(
+    (guildId: string, tab: ServerEditorTab = "settings") => {
+      router.prefetch(buildServerConfigUrl(guildId, tab));
+    },
+    [buildServerConfigUrl, router],
+  );
+
   const selectedServer = useMemo(
     () => servers.find((server) => server.guildId === selectedGuildIdForConfig) || null,
     [selectedGuildIdForConfig, servers],
   );
-  const isEditingServer = Boolean(selectedServer);
+  const isEditingServer = Boolean(selectedGuildIdForConfig);
+  const shouldShowEditorSkeleton =
+    Boolean(selectedGuildIdForConfig) && isLoading && !selectedServer;
 
   useEffect(() => {
     if (isLoading) return;
@@ -655,6 +665,8 @@ export function ServersDashboard({
                 navigateToUrl("/servers", "push");
               }}
             />
+          ) : shouldShowEditorSkeleton ? (
+            <ServerSettingsEditorSkeleton standalone />
           ) : null}
 
           {!isEditingServer ? (
@@ -703,6 +715,12 @@ export function ServersDashboard({
                         animationDelay: `${Math.min(index, 12) * 45}ms`,
                       }}
                       onClick={() => handleOpenServerConfig(server.guildId)}
+                      onMouseEnter={() => {
+                        prefetchServerConfig(server.guildId);
+                      }}
+                      onFocus={() => {
+                        prefetchServerConfig(server.guildId);
+                      }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();

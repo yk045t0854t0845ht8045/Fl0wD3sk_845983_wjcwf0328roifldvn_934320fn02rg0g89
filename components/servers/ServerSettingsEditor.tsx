@@ -267,6 +267,22 @@ function resolveRetryAfterSeconds(
   return Math.ceil(parsed);
 }
 
+function resolveResponseRequestId(response: Response | null | undefined) {
+  const headerValue = response?.headers.get("X-Request-Id");
+  if (typeof headerValue !== "string") return null;
+  const normalized = headerValue.trim();
+  return normalized || null;
+}
+
+function withSupportRequestId(
+  message: string,
+  requestId: string | null | undefined,
+) {
+  const normalizedMessage = message.trim();
+  if (!requestId) return normalizedMessage;
+  return `${normalizedMessage} Protocolo: ${requestId}.`;
+}
+
 function formatCooldownMessage(seconds: number | null | undefined) {
   if (!seconds || seconds <= 0) return null;
   if (seconds < 60) return `Aguarde ${seconds}s para tentar novamente.`;
@@ -1852,9 +1868,11 @@ export function ServerSettingsEditor({
         locale: "pt-BR",
       });
       const deviceSessionId = resolveMercadoPagoDeviceSessionId();
+      let requestId: string | null = null;
 
       let tokenPayload: MercadoPagoCardTokenPayload;
       try {
+        setAddMethodStatusMessage("Protegendo e tokenizando os dados do cartao...");
         tokenPayload = await mercadoPago.createCardToken({
           cardNumber: addMethodCardDigits,
           cardholderName: holderName,
@@ -1900,6 +1918,9 @@ export function ServerSettingsEditor({
       const expYear = Number(addMethodExpiryDigits.slice(2, 4)) + 2000;
       const nickname = addMethodForm.nickname.trim().replace(/\s+/g, " ");
 
+      setAddMethodStatusMessage(
+        "Registrando o cartao no cofre seguro do Mercado Pago...",
+      );
       const response = await fetch("/api/auth/me/payments/methods", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1919,6 +1940,7 @@ export function ServerSettingsEditor({
           deviceSessionId,
         }),
       });
+      requestId = resolveResponseRequestId(response);
 
       const payload = (await response.json()) as {
         ok: boolean;
@@ -1940,7 +1962,12 @@ export function ServerSettingsEditor({
             Date.now() + retryAfterSeconds * 1000,
           );
         }
-        throw new Error(payload.message || "Falha ao adicionar metodo.");
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Falha ao adicionar metodo.",
+            requestId,
+          ),
+        );
       }
 
       const addedMethod = payload.method;

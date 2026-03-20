@@ -94,9 +94,79 @@ const BLOCKED_CARD_DIGITS = new Set([
   "9999",
 ]);
 const HIGH_RISK_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
+const VAULT_TRANSIENT_RETRY_DELAY_MS = 650;
+const VAULT_MAX_RETRY_ATTEMPTS = 2;
 
 const STORED_METHOD_SELECT_COLUMNS =
   "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, verification_provider_payment_id, provider_customer_id, provider_card_id, verified_at, last_context_guild_id, created_at, updated_at";
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetryableVaultProviderError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message.toLowerCase()
+      : typeof error === "string"
+        ? error.toLowerCase()
+        : "";
+
+  if (!message) return false;
+
+  return [
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+    "temporariamente indisponivel",
+    "internal error",
+    "internal_server_error",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "connection",
+    "network",
+    "socket",
+    "econnreset",
+    "too many requests",
+    "rate limit",
+    "429",
+  ].some((pattern) => message.includes(pattern));
+}
+
+async function runVaultOperationWithRetry<T>(input: {
+  operation: (attempt: number) => Promise<T>;
+  maxAttempts?: number;
+  onRetry?: (attempt: number, error: unknown) => Promise<void> | void;
+}) {
+  const maxAttempts =
+    typeof input.maxAttempts === "number" && input.maxAttempts > 0
+      ? Math.floor(input.maxAttempts)
+      : VAULT_MAX_RETRY_ATTEMPTS;
+
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await input.operation(attempt);
+    } catch (error) {
+      lastError = error;
+
+      if (attempt >= maxAttempts || !isRetryableVaultProviderError(error)) {
+        throw error;
+      }
+
+      await input.onRetry?.(attempt, error);
+      await delay(VAULT_TRANSIENT_RETRY_DELAY_MS * attempt);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Falha ao concluir a operacao do cofre seguro.");
+}
 
 function normalizeGuildId(value: unknown) {
   if (typeof value !== "string") return null;
@@ -601,6 +671,10 @@ export async function POST(request: Request) {
     }
 
     const cardEnvironment = resolveMercadoPagoCardEnvironment();
+    const customerIdempotencyKey = crypto.randomUUID();
+    const cardVaultIdempotencyKey = crypto.randomUUID();
+    let vaultCustomerRetryCount = 0;
+    let vaultCardRetryCount = 0;
 
     try {
       let providerCustomerId =
@@ -616,10 +690,32 @@ export async function POST(request: Request) {
 
       if (!providerCustomerId) {
         try {
-          const createdCustomer = await createMercadoPagoCustomer({
-            email: payerEmail,
-            firstName: payerName.split(/\s+/)[0] || "Cliente",
-            lastName: payerName.split(/\s+/).slice(1).join(" ") || undefined,
+          const createdCustomer = await runVaultOperationWithRetry({
+            operation: async (attempt) => {
+              vaultCustomerRetryCount = attempt - 1;
+              return createMercadoPagoCustomer({
+                email: payerEmail,
+                firstName: payerName.split(/\s+/)[0] || "Cliente",
+                lastName:
+                  payerName.split(/\s+/).slice(1).join(" ") || undefined,
+                idempotencyKey: customerIdempotencyKey,
+              });
+            },
+            onRetry: async (attempt, error) => {
+              await logSecurityAuditEventSafe(auditContext, {
+                action: "payment_method_post",
+                outcome: "blocked",
+                metadata: {
+                  methodId,
+                  stage: "vault_customer_retry",
+                  nextAttempt: attempt + 1,
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "unknown_customer_retry_error",
+                },
+              });
+            },
           });
           providerCustomerId = normalizeProviderId(createdCustomer.id);
         } catch (createCustomerError) {
@@ -640,9 +736,34 @@ export async function POST(request: Request) {
         );
       }
 
-      const vaultedCard = await createMercadoPagoCustomerCard({
-        customerId: providerCustomerId,
-        token: cardToken,
+      const vaultedCard = await runVaultOperationWithRetry({
+        operation: async (attempt) => {
+          vaultCardRetryCount = attempt - 1;
+          return createMercadoPagoCustomerCard({
+            customerId: providerCustomerId,
+            token: cardToken,
+            idempotencyKey: cardVaultIdempotencyKey,
+          });
+        },
+        onRetry: async (attempt, error) => {
+          await logSecurityAuditEventSafe(auditContext, {
+            action: "payment_method_post",
+            outcome: "blocked",
+            metadata: {
+              methodId,
+              stage: "vault_card_retry",
+              nextAttempt: attempt + 1,
+              paymentMethodId,
+              issuerId,
+              cardEnvironment,
+              deviceSessionIdPresent: Boolean(deviceSessionId),
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "unknown_card_retry_error",
+            },
+          });
+        },
       });
 
       const providerCardId = normalizeProviderId(vaultedCard.id);
@@ -721,6 +842,8 @@ export async function POST(request: Request) {
           providerCardId,
           cardEnvironment,
           flow: "vault_saved_card",
+          vaultCustomerRetryCount,
+          vaultCardRetryCount,
           paymentMethodId,
           issuerId,
           deviceSessionIdPresent: Boolean(deviceSessionId),
@@ -776,6 +899,8 @@ export async function POST(request: Request) {
           normalizedMessage: safeProviderMessage,
           retryAfterSeconds,
           cardEnvironment,
+          vaultCustomerRetryCount,
+          vaultCardRetryCount,
           paymentMethodId,
           issuerId,
           deviceSessionIdPresent: Boolean(deviceSessionId),

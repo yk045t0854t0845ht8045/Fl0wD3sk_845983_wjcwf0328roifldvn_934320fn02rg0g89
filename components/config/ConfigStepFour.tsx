@@ -572,6 +572,22 @@ function resolveRetryAfterSeconds(
   return Math.ceil(parsed);
 }
 
+function resolveResponseRequestId(response: Response | null | undefined) {
+  const headerValue = response?.headers.get("X-Request-Id");
+  if (typeof headerValue !== "string") return null;
+  const normalized = headerValue.trim();
+  return normalized || null;
+}
+
+function withSupportRequestId(
+  message: string,
+  requestId: string | null | undefined,
+) {
+  const normalizedMessage = message.trim();
+  if (!requestId) return normalizedMessage;
+  return `${normalizedMessage} Protocolo: ${requestId}.`;
+}
+
 function formatCooldownMessage(seconds: number | null | undefined) {
   if (!seconds || seconds <= 0) return null;
   if (seconds < 60) return `Aguarde ${seconds}s para tentar novamente.`;
@@ -2336,11 +2352,17 @@ export function ConfigStepFour({
           payerName: normalizedName,
         }),
       });
+      const requestId = resolveResponseRequestId(response);
 
       const payload = (await response.json()) as PixPaymentApiResponse;
 
       if (!response.ok || !payload.ok || !payload.order) {
-        throw new Error(payload.message || "Falha ao gerar pagamento PIX.");
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Falha ao gerar pagamento PIX.",
+            requestId,
+          ),
+        );
       }
 
       setPixOrder(payload.order);
@@ -2520,6 +2542,7 @@ export function ConfigStepFour({
           deviceSessionId,
         }),
       });
+      const requestId = resolveResponseRequestId(response);
 
       const payload = (await response.json()) as PixPaymentApiResponse;
       const retryAfterSeconds = resolveRetryAfterSeconds(response, payload);
@@ -2530,7 +2553,12 @@ export function ConfigStepFour({
             Date.now() + retryAfterSeconds * 1000,
           );
         }
-        throw new Error(payload.message || "Falha ao processar pagamento com cartao.");
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Falha ao processar pagamento com cartao.",
+            requestId,
+          ),
+        );
       }
 
       setPixOrder(payload.order);
@@ -2710,6 +2738,7 @@ export function ConfigStepFour({
             payerName: normalizedName,
           }),
         });
+        const requestId = resolveResponseRequestId(pixPaymentResponse);
 
         const pixPaymentPayload =
           (await pixPaymentResponse.json()) as PixPaymentApiResponse;
@@ -2717,8 +2746,11 @@ export function ConfigStepFour({
         if (!pixPaymentResponse.ok || !pixPaymentPayload.ok || !pixPaymentPayload.order) {
           setView("pix_form");
           setMethodMessage(
-            pixPaymentPayload.message ||
-              "Pedido regerado. Confirme os dados para gerar novo QR Code PIX.",
+            withSupportRequestId(
+              pixPaymentPayload.message ||
+                "Pedido regerado. Confirme os dados para gerar novo QR Code PIX.",
+              requestId,
+            ),
           );
           return;
         }
