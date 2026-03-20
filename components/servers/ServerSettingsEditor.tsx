@@ -384,9 +384,24 @@ async function loadMercadoPagoSdk() {
       );
 
       if (existingScript) {
-        existingScript.addEventListener("load", () => resolve(), {
-          once: true,
-        });
+        if (
+          window.MercadoPago ||
+          existingScript.dataset.loaded === "true"
+        ) {
+          resolve();
+          return;
+        }
+
+        existingScript.addEventListener(
+          "load",
+          () => {
+            existingScript.dataset.loaded = "true";
+            resolve();
+          },
+          {
+            once: true,
+          },
+        );
         existingScript.addEventListener(
           "error",
           () => reject(new Error("Falha ao carregar SDK do Mercado Pago.")),
@@ -400,7 +415,10 @@ async function loadMercadoPagoSdk() {
       script.async = true;
       script.defer = true;
       script.dataset.mpSdk = "v2";
-      script.onload = () => resolve();
+      script.onload = () => {
+        script.dataset.loaded = "true";
+        resolve();
+      };
       script.onerror = () =>
         reject(new Error("Falha ao carregar SDK do Mercado Pago."));
 
@@ -408,15 +426,27 @@ async function loadMercadoPagoSdk() {
     });
   }
 
-  await mercadoPagoSdkPromise;
+  try {
+    await mercadoPagoSdkPromise;
+  } catch (error) {
+    mercadoPagoSdkPromise = null;
+    document
+      .querySelector<HTMLScriptElement>("script[data-mp-sdk='v2']")
+      ?.remove();
+    throw error;
+  }
 
   if (!window.MercadoPago) {
     throw new Error("SDK do Mercado Pago nao carregou corretamente.");
   }
 }
 
-async function loadMercadoPagoSecuritySdk() {
+async function loadMercadoPagoSecuritySdk(retryAttempt = 0) {
   if (typeof window === "undefined") return;
+
+  if (resolveMercadoPagoDeviceSessionId()) {
+    return;
+  }
 
   if (!mercadoPagoSecuritySdkPromise) {
     mercadoPagoSecuritySdkPromise = new Promise<void>((resolve, reject) => {
@@ -425,14 +455,24 @@ async function loadMercadoPagoSecuritySdk() {
       );
 
       if (existingScript) {
-        if (window.MP_DEVICE_SESSION_ID || window.flowdeskDeviceSessionId) {
+        if (
+          resolveMercadoPagoDeviceSessionId() ||
+          existingScript.dataset.loaded === "true"
+        ) {
           resolve();
           return;
         }
 
-        existingScript.addEventListener("load", () => resolve(), {
-          once: true,
-        });
+        existingScript.addEventListener(
+          "load",
+          () => {
+            existingScript.dataset.loaded = "true";
+            resolve();
+          },
+          {
+            once: true,
+          },
+        );
         existingScript.addEventListener(
           "error",
           () =>
@@ -447,13 +487,19 @@ async function loadMercadoPagoSecuritySdk() {
       }
 
       const script = document.createElement("script");
-      script.src = MERCADO_PAGO_SECURITY_SDK_URL;
+      const separator = MERCADO_PAGO_SECURITY_SDK_URL.includes("?")
+        ? "&"
+        : "?";
+      script.src = `${MERCADO_PAGO_SECURITY_SDK_URL}${separator}flowdesk_device_retry=${Date.now()}_${retryAttempt}`;
       script.async = true;
       script.defer = true;
       script.dataset.mpSdk = "security-v2";
       script.setAttribute("view", "checkout");
       script.setAttribute("output", "flowdeskDeviceSessionId");
-      script.onload = () => resolve();
+      script.onload = () => {
+        script.dataset.loaded = "true";
+        resolve();
+      };
       script.onerror = () =>
         reject(
           new Error("Falha ao carregar modulo de seguranca do Mercado Pago."),
@@ -463,12 +509,47 @@ async function loadMercadoPagoSecuritySdk() {
     });
   }
 
-  await mercadoPagoSecuritySdkPromise;
-  await waitForMercadoPagoDeviceSessionId();
+  try {
+    await mercadoPagoSecuritySdkPromise;
+    await waitForMercadoPagoDeviceSessionId(12000);
+  } catch (error) {
+    mercadoPagoSecuritySdkPromise = null;
+
+    if (resolveMercadoPagoDeviceSessionId()) {
+      return;
+    }
+
+    document
+      .querySelector<HTMLScriptElement>("script[data-mp-sdk='security-v2']")
+      ?.remove();
+
+    window.MP_DEVICE_SESSION_ID = undefined;
+    window.flowdeskDeviceSessionId = undefined;
+
+    if (retryAttempt >= 1) {
+      throw error;
+    }
+
+    await loadMercadoPagoSecuritySdk(retryAttempt + 1);
+  }
 }
 
 function resolveMercadoPagoDeviceSessionId() {
   if (typeof window === "undefined") return null;
+
+  try {
+    const storedSessionId = window.sessionStorage.getItem(
+      MERCADO_PAGO_DEVICE_SESSION_STORAGE_KEY,
+    );
+    if (
+      storedSessionId &&
+      /^[a-zA-Z0-9:_-]{8,200}$/.test(storedSessionId.trim())
+    ) {
+      return storedSessionId.trim();
+    }
+  } catch {
+    // ignorar falha de storage local
+  }
 
   const candidates = [
     window.MP_DEVICE_SESSION_ID,
@@ -480,13 +561,23 @@ function resolveMercadoPagoDeviceSessionId() {
     const normalized = candidate.trim();
     if (!normalized) continue;
     if (!/^[a-zA-Z0-9:_-]{8,200}$/.test(normalized)) continue;
+
+    try {
+      window.sessionStorage.setItem(
+        MERCADO_PAGO_DEVICE_SESSION_STORAGE_KEY,
+        normalized,
+      );
+    } catch {
+      // ignorar falha de storage local
+    }
+
     return normalized;
   }
 
   return null;
 }
 
-async function waitForMercadoPagoDeviceSessionId(timeoutMs = 5000) {
+async function waitForMercadoPagoDeviceSessionId(timeoutMs = 12000) {
   if (typeof window === "undefined") return null;
 
   const startedAt = Date.now();
@@ -609,6 +700,8 @@ const ELO_PREFIXES = [
 
 const MERCADO_PAGO_SDK_URL = "https://sdk.mercadopago.com/js/v2";
 const MERCADO_PAGO_SECURITY_SDK_URL = "https://www.mercadopago.com/v2/security.js";
+const MERCADO_PAGO_DEVICE_SESSION_STORAGE_KEY =
+  "flowdesk_mp_device_session_v1";
 let mercadoPagoSdkPromise: Promise<void> | null = null;
 let mercadoPagoSecuritySdkPromise: Promise<void> | null = null;
 
@@ -993,7 +1086,11 @@ export function ServerSettingsEditor({
       setAddMethodError(null);
 
       try {
-        await loadMercadoPagoSecuritySdk();
+        try {
+          await loadMercadoPagoSecuritySdk();
+        } catch {
+          // A identificacao do dispositivo sera tentada novamente ao enviar.
+        }
         await loadMercadoPagoSdk();
         if (!cancelled) {
           setIsAddMethodSdkReady(true);
@@ -1704,17 +1801,6 @@ export function ServerSettingsEditor({
     const fallbackPaymentMethodId =
       resolveCardPaymentMethodIdFromBrand(addMethodCardBrand);
 
-    if (!isAddMethodSdkReady) {
-      setAddMethodFlowState("preparing");
-      setAddMethodStatusMessage(
-        "Aguardando o ambiente seguro do cartao ficar pronto...",
-      );
-      setAddMethodError(
-        "O cofre seguro do cartao ainda esta sendo preparado. Aguarde alguns instantes.",
-      );
-      return;
-    }
-
     if (!documentType) {
       setAddMethodError("CPF/CNPJ invalido para validar o cartao.");
       return;
@@ -1738,12 +1824,25 @@ export function ServerSettingsEditor({
     setPaymentsError(null);
     setAddMethodFlowState("validating");
     setAddMethodStatusMessage(
-      "Salvando o cartao no cofre seguro do Mercado Pago...",
+      isAddMethodSdkReady
+        ? "Salvando o cartao no cofre seguro do Mercado Pago..."
+        : "Preparando o ambiente seguro do cartao...",
     );
 
     try {
-      await loadMercadoPagoSecuritySdk();
       await loadMercadoPagoSdk();
+
+      if (!isAddMethodSdkReady) {
+        setIsAddMethodSdkReady(true);
+      }
+
+      try {
+        await loadMercadoPagoSecuritySdk();
+      } catch {
+        setAddMethodStatusMessage(
+          "Continuando com a validacao reforcada do cartao...",
+        );
+      }
 
       if (!window.MercadoPago) {
         throw new Error("SDK do Mercado Pago indisponivel para validar o cartao.");
@@ -2894,7 +2993,7 @@ export function ServerSettingsEditor({
               onClick={() => {
                 void handleAddMethodSubmit();
               }}
-              disabled={!addMethodCanSubmit || isAddingMethod || !isAddMethodSdkReady || isAddMethodSdkLoading}
+              disabled={!addMethodCanSubmit || isAddingMethod || isAddMethodSdkLoading}
               className="mt-5 flex h-[51px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[16px] font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isAddingMethod || isAddMethodSdkLoading ? (

@@ -601,16 +601,6 @@ export async function POST(request: Request) {
     }
 
     const cardEnvironment = resolveMercadoPagoCardEnvironment();
-    if (cardEnvironment === "production" && !deviceSessionId) {
-      return attachRequestId(NextResponse.json(
-        {
-          ok: false,
-          message:
-            "Nao foi possivel concluir a identificacao segura do dispositivo. Aguarde alguns segundos e tente novamente.",
-        },
-        { status: 400 },
-      ), baseRequestContext.requestId);
-    }
 
     try {
       let providerCustomerId =
