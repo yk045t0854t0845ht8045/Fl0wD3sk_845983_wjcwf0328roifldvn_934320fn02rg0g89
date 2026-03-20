@@ -830,6 +830,13 @@ export function ServerSettingsEditor({
   const [planError, setPlanError] = useState<string | null>(null);
   const [planSuccess, setPlanSuccess] = useState<string | null>(null);
   const [planSettings, setPlanSettings] = useState<PlanSettings | null>(null);
+  const [isRecurringMethodModalOpen, setIsRecurringMethodModalOpen] =
+    useState(false);
+  const [recurringMethodDraftId, setRecurringMethodDraftId] = useState<
+    string | null
+  >(null);
+  const [shouldEnableRecurringAfterMethodAdd, setShouldEnableRecurringAfterMethodAdd] =
+    useState(false);
 
   const locked = status === "expired" || status === "off";
   const headerStatus = statusBadge(status);
@@ -863,6 +870,9 @@ export function ServerSettingsEditor({
     });
     setPlanError(null);
     setPlanSuccess(null);
+    setIsRecurringMethodModalOpen(false);
+    setRecurringMethodDraftId(null);
+    setShouldEnableRecurringAfterMethodAdd(false);
   }, [guildId, initialTab]);
 
   useEffect(() => {
@@ -880,6 +890,7 @@ export function ServerSettingsEditor({
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpenMethodMenuId(null);
+        setIsRecurringMethodModalOpen(false);
       }
     }
 
@@ -1275,6 +1286,28 @@ export function ServerSettingsEditor({
 
   const serverSettingsControlHeight = 60;
 
+  const openAddMethodModal = useCallback(
+    (options?: { enableRecurringAfterAdd?: boolean }) => {
+      setAddMethodFlowState("idle");
+      setAddMethodStatusMessage(null);
+      setAddMethodError(null);
+      setShouldEnableRecurringAfterMethodAdd(
+        Boolean(options?.enableRecurringAfterAdd),
+      );
+      setIsAddMethodModalOpen(true);
+    },
+    [],
+  );
+
+  const closeAddMethodModal = useCallback(() => {
+    if (isAddingMethod) return;
+    setAddMethodFlowState("idle");
+    setAddMethodStatusMessage(null);
+    setAddMethodError(null);
+    setShouldEnableRecurringAfterMethodAdd(false);
+    setIsAddMethodModalOpen(false);
+  }, [isAddingMethod]);
+
   const canSave = Boolean(
     !locked &&
       !isLoading &&
@@ -1289,49 +1322,98 @@ export function ServerSettingsEditor({
       notifyRoleIds.length,
   );
 
-  const handleToggleRecurring = useCallback(async () => {
-    if (!planSettings || isPlanSaving || locked) return;
+  const persistPlanSettings = useCallback(
+    async (input: {
+      recurringEnabled: boolean;
+      recurringMethodId: string | null;
+      successMessage: string;
+    }) => {
+      if (isPlanSaving) return null;
 
-    const nextRecurringEnabled = !planSettings.recurringEnabled;
+      setIsPlanSaving(true);
+      setPlanError(null);
+      setPlanSuccess(null);
+
+      try {
+        const response = await fetch("/api/auth/me/servers/plans", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            recurringEnabled: input.recurringEnabled,
+            recurringMethodId: input.recurringMethodId,
+          }),
+        });
+        const payload = (await response.json()) as PlanApiResponse;
+
+        if (!response.ok || !payload.ok || !payload.plan) {
+          throw new Error(payload.message || "Falha ao atualizar recorrencia.");
+        }
+
+        setPlanSettings(payload.plan);
+        setPlanSuccess(input.successMessage);
+        return payload.plan;
+      } catch (error) {
+        setPlanError(
+          error instanceof Error
+            ? error.message
+            : "Erro ao atualizar recorrencia.",
+        );
+        return null;
+      } finally {
+        setIsPlanSaving(false);
+      }
+    },
+    [guildId, isPlanSaving],
+  );
+
+  const handleToggleRecurring = useCallback(async () => {
+    if (!planSettings || isPlanSaving) return;
+
+    if (planSettings.recurringEnabled) {
+      setIsRecurringMethodModalOpen(false);
+      setRecurringMethodDraftId(null);
+      setShouldEnableRecurringAfterMethodAdd(false);
+      await persistPlanSettings({
+        recurringEnabled: false,
+        recurringMethodId: null,
+        successMessage: "Cobranca recorrente desativada com sucesso.",
+      });
+      return;
+    }
+
     const fallbackMethodId =
       planSettings.recurringMethodId || recurringMethodOptions[0]?.id || null;
 
-    setIsPlanSaving(true);
-    setPlanError(null);
-    setPlanSuccess(null);
-
-    try {
-      const response = await fetch("/api/auth/me/servers/plans", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          guildId,
-          recurringEnabled: nextRecurringEnabled,
-          recurringMethodId: nextRecurringEnabled ? fallbackMethodId : null,
-        }),
-      });
-      const payload = (await response.json()) as PlanApiResponse;
-
-      if (!response.ok || !payload.ok || !payload.plan) {
-        throw new Error(payload.message || "Falha ao atualizar recorrencia.");
-      }
-
-      setPlanSettings(payload.plan);
-      setPlanSuccess(
-        nextRecurringEnabled
-          ? "Cobranca recorrente ativada com sucesso."
-          : "Cobranca recorrente desativada com sucesso.",
-      );
-    } catch (error) {
+    if (!fallbackMethodId) {
       setPlanError(
-        error instanceof Error
-          ? error.message
-          : "Erro ao atualizar recorrencia.",
+        "Salve um cartao verificado para ativar a cobranca recorrente deste servidor.",
       );
-    } finally {
-      setIsPlanSaving(false);
+      setPlanSuccess(null);
+      openAddMethodModal({ enableRecurringAfterAdd: true });
+      return;
     }
-  }, [guildId, isPlanSaving, locked, planSettings, recurringMethodOptions]);
+
+    if (recurringMethodOptions.length > 1) {
+      setPlanError(null);
+      setPlanSuccess(null);
+      setRecurringMethodDraftId(fallbackMethodId);
+      setIsRecurringMethodModalOpen(true);
+      return;
+    }
+
+    await persistPlanSettings({
+      recurringEnabled: true,
+      recurringMethodId: fallbackMethodId,
+      successMessage: "Cobranca recorrente ativada com sucesso.",
+    });
+  }, [
+    isPlanSaving,
+    openAddMethodModal,
+    persistPlanSettings,
+    planSettings,
+    recurringMethodOptions,
+  ]);
 
   const handleRenewByPix = useCallback(() => {
     const params = new URLSearchParams({
@@ -1619,6 +1701,7 @@ export function ServerSettingsEditor({
       }
 
       const addedMethod = payload.method;
+      const shouldAutoEnableRecurring = shouldEnableRecurringAfterMethodAdd;
 
       setMethods((current) => {
         const methodExists = current.some((method) => method.id === addedMethod.id);
@@ -1701,8 +1784,18 @@ export function ServerSettingsEditor({
           ? "Cartao reconhecido e liberado para uso."
           : "Cartao aprovado na validacao e liberado para uso no sistema.",
       );
+      setShouldEnableRecurringAfterMethodAdd(false);
       await new Promise((resolve) => setTimeout(resolve, 900));
       setIsAddMethodModalOpen(false);
+
+      if (shouldAutoEnableRecurring) {
+        await persistPlanSettings({
+          recurringEnabled: true,
+          recurringMethodId: addedMethod.id,
+          successMessage:
+            "Cobranca recorrente ativada com sucesso com o novo cartao.",
+        });
+      }
     } catch (error) {
       setAddMethodFlowState("rejected");
       setAddMethodStatusMessage(
@@ -1724,51 +1817,50 @@ export function ServerSettingsEditor({
     addMethodExpiryDigits,
     addMethodForm.holderName,
     addMethodForm.nickname,
+    persistPlanSettings,
     guildId,
     isAddMethodSdkLoading,
     isAddMethodSdkReady,
     isAddingMethod,
+    shouldEnableRecurringAfterMethodAdd,
   ]);
 
   const handleSelectRecurringMethod = useCallback(
     async (methodId: string) => {
-      if (!planSettings || isPlanSaving || locked) return;
+      if (!planSettings || isPlanSaving) return;
       if (!methodId) return;
 
-      setIsPlanSaving(true);
-      setPlanError(null);
-      setPlanSuccess(null);
+      const savedPlan = await persistPlanSettings({
+        recurringEnabled: planSettings.recurringEnabled,
+        recurringMethodId: methodId,
+        successMessage: "Cartao da recorrencia atualizado com sucesso.",
+      });
 
-      try {
-        const response = await fetch("/api/auth/me/servers/plans", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            guildId,
-            recurringEnabled: planSettings.recurringEnabled,
-            recurringMethodId: methodId,
-          }),
-        });
-        const payload = (await response.json()) as PlanApiResponse;
-
-        if (!response.ok || !payload.ok || !payload.plan) {
-          throw new Error(payload.message || "Falha ao definir cartao da recorrencia.");
-        }
-
-        setPlanSettings(payload.plan);
-        setPlanSuccess("Cartao da recorrencia atualizado com sucesso.");
-      } catch (error) {
-        setPlanError(
-          error instanceof Error
-            ? error.message
-            : "Erro ao definir cartao da recorrencia.",
-        );
-      } finally {
-        setIsPlanSaving(false);
+      if (savedPlan) {
+        setIsRecurringMethodModalOpen(false);
       }
     },
-    [guildId, isPlanSaving, locked, planSettings],
+    [isPlanSaving, persistPlanSettings, planSettings],
   );
+
+  const handleConfirmRecurringActivation = useCallback(async () => {
+    if (!recurringMethodDraftId) {
+      setPlanError(
+        "Escolha um cartao valido para ativar a cobranca recorrente.",
+      );
+      return;
+    }
+
+    const savedPlan = await persistPlanSettings({
+      recurringEnabled: true,
+      recurringMethodId: recurringMethodDraftId,
+      successMessage: "Cobranca recorrente ativada com sucesso.",
+    });
+
+    if (savedPlan) {
+      setIsRecurringMethodModalOpen(false);
+    }
+  }, [persistPlanSettings, recurringMethodDraftId]);
 
   const handleSave = useCallback(async () => {
     if (!canSave || !adminRoleId) return;
@@ -2202,12 +2294,7 @@ export function ServerSettingsEditor({
 
               <button
                 type="button"
-                onClick={() => {
-                  setAddMethodFlowState("idle");
-                  setAddMethodStatusMessage(null);
-                  setAddMethodError(null);
-                  setIsAddMethodModalOpen(true);
-                }}
+                onClick={() => openAddMethodModal()}
                 className="mt-3 flex h-[46px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[13px] font-medium text-black transition-opacity hover:opacity-90"
               >
                 ADICIONAR NOVO METODO
@@ -2279,7 +2366,7 @@ export function ServerSettingsEditor({
                         onClick={() => {
                           void handleToggleRecurring();
                         }}
-                        disabled={locked || isPlanSaving || !planSettings}
+                        disabled={isPlanSaving || !planSettings}
                         className={`inline-flex h-[31px] min-w-[92px] items-center justify-center rounded-[3px] border px-3 text-[12px] transition-opacity disabled:cursor-not-allowed disabled:opacity-45 ${
                           planSettings?.recurringEnabled
                             ? "border-[#6AE25A] bg-[rgba(106,226,90,0.2)] text-[#6AE25A]"
@@ -2298,7 +2385,16 @@ export function ServerSettingsEditor({
                   </div>
 
                   <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
-                    <p className="text-[12px] text-[#8E8E8E]">Cartao vinculado a recorrencia</p>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-[12px] text-[#8E8E8E]">Cartao vinculado a recorrencia</p>
+                      <button
+                        type="button"
+                        onClick={() => openAddMethodModal()}
+                        className="inline-flex h-[31px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#111111]"
+                      >
+                        Adicionar cartao
+                      </button>
+                    </div>
 
                     {recurringMethodOptions.length > 1 ? (
                       <div className="mt-2">
@@ -2312,7 +2408,7 @@ export function ServerSettingsEditor({
                             if (!value) return;
                             void handleSelectRecurringMethod(value);
                           }}
-                          disabled={locked || isPlanSaving || !planSettings?.recurringEnabled}
+                          disabled={isPlanSaving || !planSettings?.recurringEnabled}
                           className="h-[38px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[12px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {recurringMethodOptions.map((method) => (
@@ -2351,14 +2447,14 @@ export function ServerSettingsEditor({
                       </div>
                     ) : (
                       <p className="mt-2 text-[12px] text-[#777777]">
-                        Nenhum cartao vinculado.
+                        Nenhum cartao vinculado. Adicione ou valide um cartao para usar na recorrencia.
                       </p>
                     )}
                   </div>
 
                   {locked ? (
                     <p className="mt-3 text-[11px] text-[#C2C2C2]">
-                      Servidor expirado/desligado. Renove para alterar recorrencia.
+                      Mesmo com o servidor expirado ou desligado, voce ainda pode configurar a cobranca recorrente para reativacao automatica.
                     </p>
                   ) : null}
 
@@ -2370,6 +2466,108 @@ export function ServerSettingsEditor({
           </div>
         </div>
       </div>
+
+      {isRecurringMethodModalOpen ? (
+        <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/75 px-4 py-6">
+          <div className="relative w-full max-w-[560px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] p-6">
+            <button
+              type="button"
+              onClick={() => {
+                if (isPlanSaving) return;
+                setIsRecurringMethodModalOpen(false);
+              }}
+              className="absolute right-4 top-4 inline-flex h-[28px] w-[28px] items-center justify-center rounded-[3px] text-[#8A8A8A] transition-colors hover:text-[#D8D8D8]"
+              aria-label="Fechar modal de recorrencia"
+            >
+              X
+            </button>
+
+            <h3 className="text-center text-[24px] text-[#D8D8D8]">
+              Escolha o cartao da renovacao
+            </h3>
+
+            <div className="mt-6 h-[1px] w-full bg-[#242424]" />
+
+            <p className="mt-5 text-center text-[12px] text-[#8E8E8E]">
+              Selecione qual cartao sera usado para renovar automaticamente este servidor.
+            </p>
+
+            <div className="thin-scrollbar mt-5 flex max-h-[320px] flex-col gap-3 overflow-y-auto pr-1">
+              {recurringMethodOptions.map((method) => {
+                const isSelected = recurringMethodDraftId === method.id;
+                const label =
+                  method.nickname?.trim() || cardBrandLabel(method.brand);
+
+                return (
+                  <button
+                    key={method.id}
+                    type="button"
+                    onClick={() => setRecurringMethodDraftId(method.id)}
+                    className={`flex items-center gap-3 rounded-[3px] border px-3 py-3 text-left transition-colors ${
+                      isSelected
+                        ? "border-[#6AE25A] bg-[rgba(106,226,90,0.12)]"
+                        : "border-[#2E2E2E] bg-[#090909] hover:bg-[#101010]"
+                    }`}
+                  >
+                    <span className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[3px] bg-[#111111]">
+                      <PaymentMethodIcon
+                        src={cardBrandIcon(method.brand)}
+                        alt={cardBrandLabel(method.brand)}
+                        size={32}
+                      />
+                    </span>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] text-[#D8D8D8]">
+                        {label}
+                      </p>
+                      <p className="mt-1 text-[12px] text-[#777777]">
+                        {method.firstSix} ****** {method.lastFour}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border ${
+                        isSelected
+                          ? "border-[#6AE25A] bg-[#6AE25A]"
+                          : "border-[#3A3A3A] bg-transparent"
+                      }`}
+                    >
+                      {isSelected ? (
+                        <span className="text-[10px] font-semibold text-black">OK</span>
+                      ) : null}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (isPlanSaving) return;
+                  setIsRecurringMethodModalOpen(false);
+                }}
+                className="inline-flex h-[40px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[13px] text-[#D8D8D8] transition-colors hover:bg-[#111111]"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void handleConfirmRecurringActivation();
+                }}
+                disabled={!recurringMethodDraftId || isPlanSaving}
+                className="inline-flex h-[40px] min-w-[180px] items-center justify-center rounded-[3px] bg-[#D8D8D8] px-4 text-[13px] font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isPlanSaving ? <ButtonLoader size={20} /> : "Ativar recorrencia"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {isAddMethodModalOpen ? (
         <ClientErrorBoundary
@@ -2384,7 +2582,7 @@ export function ServerSettingsEditor({
                 </p>
                 <button
                   type="button"
-                  onClick={() => setIsAddMethodModalOpen(false)}
+                  onClick={closeAddMethodModal}
                   className="mt-5 inline-flex h-[40px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[13px] text-[#D8D8D8] transition-colors hover:bg-[#121212]"
                 >
                   Fechar
@@ -2397,12 +2595,7 @@ export function ServerSettingsEditor({
             <div className="relative w-full max-w-[760px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] p-6">
             <button
               type="button"
-              onClick={() => {
-                if (isAddingMethod) return;
-                setAddMethodFlowState("idle");
-                setAddMethodStatusMessage(null);
-                setIsAddMethodModalOpen(false);
-              }}
+              onClick={closeAddMethodModal}
               className="absolute right-4 top-4 inline-flex h-[28px] w-[28px] items-center justify-center rounded-[3px] text-[#8A8A8A] transition-colors hover:text-[#D8D8D8]"
               aria-label="Fechar modal"
             >

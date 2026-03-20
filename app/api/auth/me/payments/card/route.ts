@@ -10,11 +10,14 @@ import {
   resolveBrazilDocumentType,
 } from "@/lib/payments/brazilDocument";
 import {
+  cancelMercadoPagoCardPayment,
   createMercadoPagoCardPayment,
   fetchMercadoPagoPaymentById,
+  refundMercadoPagoCardPayment,
   resolveMercadoPagoCardEnvironment,
   resolvePaymentStatus,
   toQrDataUri,
+  type MercadoPagoPaymentResponse,
 } from "@/lib/payments/mercadoPago";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
@@ -412,6 +415,88 @@ async function createPaymentOrderEvent(
   }
 }
 
+async function createPaymentOrderEventSafe(
+  paymentOrderId: number,
+  eventType: string,
+  eventPayload: PaymentOrderEventPayload,
+) {
+  try {
+    await createPaymentOrderEvent(paymentOrderId, eventType, eventPayload);
+  } catch {
+    // evento de telemetria nao pode quebrar o fluxo principal
+  }
+}
+
+function shouldCancelCardPayment(status: string | null | undefined) {
+  const normalized = (status || "").trim().toLowerCase();
+  return (
+    normalized === "authorized" ||
+    normalized === "in_process" ||
+    normalized === "pending"
+  );
+}
+
+function shouldRefundCardPayment(status: string | null | undefined) {
+  const normalized = (status || "").trim().toLowerCase();
+  return normalized === "approved";
+}
+
+async function tryReverseCardProviderPayment(input: {
+  orderId: number;
+  providerPaymentId: string;
+  payment: MercadoPagoPaymentResponse | null;
+  reason: string;
+}) {
+  const providerPayment =
+    input.payment ||
+    (await fetchMercadoPagoPaymentById(input.providerPaymentId, {
+      useCardToken: true,
+    }));
+  const providerStatus = providerPayment.status || null;
+
+  if (shouldRefundCardPayment(providerStatus)) {
+    await refundMercadoPagoCardPayment(input.providerPaymentId);
+    await createPaymentOrderEventSafe(
+      input.orderId,
+      "provider_payment_auto_refunded_after_failure",
+      {
+        providerPaymentId: input.providerPaymentId,
+        providerStatus,
+        reason: input.reason,
+      },
+    );
+    return {
+      action: "refund" as const,
+      providerPayment,
+      providerStatus,
+    };
+  }
+
+  if (shouldCancelCardPayment(providerStatus)) {
+    await cancelMercadoPagoCardPayment(input.providerPaymentId);
+    await createPaymentOrderEventSafe(
+      input.orderId,
+      "provider_payment_auto_cancelled_after_failure",
+      {
+        providerPaymentId: input.providerPaymentId,
+        providerStatus,
+        reason: input.reason,
+      },
+    );
+    return {
+      action: "cancel" as const,
+      providerPayment,
+      providerStatus,
+    };
+  }
+
+  return {
+    action: null,
+    providerPayment,
+    providerStatus,
+  };
+}
+
 async function getLatestOrderForUserAndGuild(userId: number, guildId: string) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -799,6 +884,8 @@ export async function POST(request: Request) {
       );
     }
 
+    let createdProviderPayment: MercadoPagoPaymentResponse | null = null;
+
     try {
       const mercadoPagoPayment = await createMercadoPagoCardPayment({
         amount,
@@ -824,6 +911,7 @@ export async function POST(request: Request) {
         deviceSessionId,
         idempotencyKey: `flowdesk-card-order-${createdOrder.id}`,
       });
+      createdProviderPayment = mercadoPagoPayment;
 
       const providerPaymentId = String(mercadoPagoPayment.id);
       let latestProviderPayment = mercadoPagoPayment;
@@ -923,6 +1011,116 @@ export async function POST(request: Request) {
         providerError instanceof Error
           ? providerError.message
           : "Falha ao criar pagamento com cartao.";
+
+      const providerPaymentId = createdProviderPayment
+        ? String(createdProviderPayment.id)
+        : null;
+
+      if (providerPaymentId && !createdOrder.provider_payment_id) {
+        let recoveredOrder: PaymentOrderRecord | null = null;
+        let recoveredProviderPayment = createdProviderPayment;
+
+        try {
+          const snapshot = await fetchMercadoPagoPaymentById(providerPaymentId, {
+            useCardToken: true,
+          });
+          if (snapshot && typeof snapshot === "object") {
+            recoveredProviderPayment = snapshot;
+          }
+        } catch {
+          // manter retorno inicial do provedor se o snapshot nao estiver disponivel
+        }
+
+        try {
+          const providerStatus = recoveredProviderPayment?.status || null;
+          const resolvedStatus = resolvePaymentStatus(providerStatus);
+          const paidAt =
+            resolvedStatus === "approved"
+              ? recoveredProviderPayment?.date_approved || new Date().toISOString()
+              : null;
+          const expiresAt =
+            recoveredProviderPayment?.date_of_expiration || null;
+
+          const recoveredOrderResult = await supabase
+            .from("payment_orders")
+            .update({
+              status: resolvedStatus,
+              provider_payment_id: providerPaymentId,
+              provider_external_reference: externalReference,
+              provider_qr_code: null,
+              provider_qr_base64: null,
+              provider_ticket_url: null,
+              provider_status: providerStatus,
+              provider_status_detail:
+                recoveredProviderPayment?.status_detail || message,
+              provider_payload: {
+                source: "flowdesk_checkout",
+                step: 4,
+                channel: cardChannel,
+                recovery_after_error: true,
+                payer_email_source: "discord",
+                payer_email_masked: maskEmail(discordPayerEmail),
+                device_session_id_present: Boolean(deviceSessionId),
+                mercado_pago: recoveredProviderPayment,
+              },
+              paid_at: paidAt,
+              expires_at: expiresAt,
+            })
+            .eq("id", createdOrder.id)
+            .select(PAYMENT_ORDER_SELECT_COLUMNS)
+            .single<PaymentOrderRecord>();
+
+          if (recoveredOrderResult.error || !recoveredOrderResult.data) {
+            throw new Error(
+              recoveredOrderResult.error?.message ||
+                "Falha ao recuperar pagamento com cartao apos erro local.",
+            );
+          }
+
+          recoveredOrder = recoveredOrderResult.data;
+
+          await createPaymentOrderEventSafe(
+            createdOrder.id,
+            "provider_payment_recovered_after_error",
+            {
+              providerPaymentId,
+              providerStatus,
+              resolvedStatus,
+              method: "card",
+            },
+          );
+        } catch {
+          try {
+            await tryReverseCardProviderPayment({
+              orderId: createdOrder.id,
+              providerPaymentId,
+              payment: recoveredProviderPayment,
+              reason: "recovery_after_local_failure",
+            });
+          } catch {
+            // melhor esforco
+          }
+        }
+
+        if (recoveredOrder) {
+          await logSecurityAuditEventSafe(auditContext, {
+            action: "payment_card_post",
+            outcome: "succeeded",
+            metadata: {
+              orderNumber: recoveredOrder.order_number,
+              status: recoveredOrder.status,
+              recoveredAfterFailure: true,
+            },
+          });
+
+          return respond({
+            ok: true,
+            reused: false,
+            recovered: true,
+            order: toApiOrder(recoveredOrder),
+          });
+        }
+      }
 
       await supabase
         .from("payment_orders")

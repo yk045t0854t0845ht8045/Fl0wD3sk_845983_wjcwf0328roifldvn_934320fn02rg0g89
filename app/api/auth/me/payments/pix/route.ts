@@ -910,6 +910,7 @@ export async function POST(request: Request) {
 
       if (providerPaymentId && !createdOrder.provider_payment_id) {
         // Protecao: tentamos recuperar o vinculo do pagamento ao pedido.
+        let recoveredOrder: PaymentOrderRecord | null = null;
         try {
           const providerStatus = createdProviderPayment?.status || null;
           const resolvedStatus = resolvePaymentStatus(providerStatus);
@@ -921,7 +922,7 @@ export async function POST(request: Request) {
               : null;
           const expiresAt = createdProviderPayment?.date_of_expiration || null;
 
-          await supabase
+          const recoveredOrderResult = await supabase
             .from("payment_orders")
             .update({
               status: resolvedStatus,
@@ -942,7 +943,18 @@ export async function POST(request: Request) {
               paid_at: paidAt,
               expires_at: expiresAt,
             })
-            .eq("id", createdOrder.id);
+            .eq("id", createdOrder.id)
+            .select(PAYMENT_ORDER_SELECT_COLUMNS)
+            .single<PaymentOrderRecord>();
+
+          if (recoveredOrderResult.error || !recoveredOrderResult.data) {
+            throw new Error(
+              recoveredOrderResult.error?.message ||
+                "Falha ao recuperar pagamento PIX apos erro local.",
+            );
+          }
+
+          recoveredOrder = recoveredOrderResult.data;
 
           await createPaymentOrderEventSafe(
             createdOrder.id,
@@ -971,6 +983,25 @@ export async function POST(request: Request) {
           } catch {
             // melhor esforco
           }
+        }
+
+        if (recoveredOrder) {
+          await logSecurityAuditEventSafe(auditContext, {
+            action: "payment_pix_post",
+            outcome: "succeeded",
+            metadata: {
+              orderNumber: recoveredOrder.order_number,
+              status: recoveredOrder.status,
+              recoveredAfterFailure: true,
+            },
+          });
+
+          return respond({
+            ok: true,
+            reused: false,
+            recovered: true,
+            order: toApiOrder(recoveredOrder),
+          });
         }
       }
 

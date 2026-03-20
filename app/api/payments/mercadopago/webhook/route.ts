@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   fetchMercadoPagoPaymentById,
+  refundMercadoPagoCardPayment,
   refundMercadoPagoPixPayment,
   resolvePaymentStatus,
   type MercadoPagoPaymentResponse,
@@ -11,6 +12,7 @@ type PaymentOrderRecord = {
   id: number;
   order_number: number;
   guild_id: string;
+  payment_method: "pix" | "card";
   status: string;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
@@ -27,7 +29,7 @@ type PaymentOrderRecord = {
 const LICENSE_VALIDITY_DAYS = 30;
 const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  "id, order_number, guild_id, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_qr_base64, provider_ticket_url, paid_at, expires_at, created_at";
+  "id, order_number, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_qr_base64, provider_ticket_url, paid_at, expires_at, created_at";
 
 function parsePaymentId(value: unknown) {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : null;
@@ -87,6 +89,39 @@ function getExternalReferenceOrderNumber(externalReference: string | null | unde
   const match = /^flowdesk-order-(\d+)$/i.exec(externalReference.trim());
   if (!match) return null;
   return parseOrderNumber(match[1]);
+}
+
+function resolveProviderPaymentMethodId(
+  providerPayment: MercadoPagoPaymentResponse | null | undefined,
+) {
+  if (!providerPayment) return null;
+  if (typeof providerPayment.payment_method_id === "string") {
+    const normalized = providerPayment.payment_method_id.trim().toLowerCase();
+    return normalized || null;
+  }
+  if (
+    providerPayment.point_of_interaction?.transaction_data?.qr_code ||
+    providerPayment.point_of_interaction?.transaction_data?.qr_code_base64
+  ) {
+    return "pix";
+  }
+  return null;
+}
+
+async function autoRefundProviderPayment(input: {
+  providerPaymentId: string;
+  providerPayment: MercadoPagoPaymentResponse;
+  orderPaymentMethod?: PaymentOrderRecord["payment_method"] | null;
+}) {
+  const providerMethodId = resolveProviderPaymentMethodId(input.providerPayment);
+  const isPixPayment =
+    providerMethodId === "pix" || input.orderPaymentMethod === "pix";
+
+  if (isPixPayment) {
+    return refundMercadoPagoPixPayment(input.providerPaymentId);
+  }
+
+  return refundMercadoPagoCardPayment(input.providerPaymentId);
 }
 
 function extractWebhookPaymentId(input: {
@@ -197,7 +232,11 @@ async function updateOrderFromProviderPayment(
   if (resolvedStatus === "approved") {
     const activeLicenseOrder = await getActiveLicenseOrderForGuild(order.guild_id);
     if (activeLicenseOrder && activeLicenseOrder.id !== order.id) {
-      await refundMercadoPagoPixPayment(providerPaymentId);
+      await autoRefundProviderPayment({
+        providerPaymentId,
+        providerPayment,
+        orderPaymentMethod: order.payment_method,
+      });
 
       const supabase = getSupabaseAdminClientOrThrow();
       const refundedOrderResult = await supabase
@@ -335,7 +374,11 @@ export async function POST(request: Request) {
       // Se pagamento aprovado pertence ao nosso fluxo mas nao foi vinculado,
       // estornamos automaticamente para evitar cobranca sem registro.
       if (resolvedStatus === "approved" && hintedOrderNumber) {
-        await refundMercadoPagoPixPayment(providerPaymentId);
+        await autoRefundProviderPayment({
+          providerPaymentId,
+          providerPayment,
+          orderPaymentMethod: null,
+        });
       }
 
       return NextResponse.json({

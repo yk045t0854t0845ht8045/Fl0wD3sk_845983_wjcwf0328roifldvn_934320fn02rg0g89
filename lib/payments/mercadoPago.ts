@@ -51,6 +51,8 @@ export type MercadoPagoPaymentResponse = {
   id: number | string;
   status?: string;
   status_detail?: string;
+  payment_method_id?: string | null;
+  payment_type_id?: string | null;
   external_reference?: string | null;
   metadata?: Record<string, unknown> | null;
   transaction_amount?: number;
@@ -59,8 +61,15 @@ export type MercadoPagoPaymentResponse = {
   point_of_interaction?: MercadoPagoPointOfInteraction | null;
 };
 
-function getMercadoPagoAccessTokenOrThrow() {
+function resolveMercadoPagoAccessToken() {
   const token = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+  if (typeof token !== "string") return null;
+  const normalized = token.trim();
+  return normalized || null;
+}
+
+function getMercadoPagoAccessTokenOrThrow() {
+  const token = resolveMercadoPagoAccessToken();
   if (!token) {
     throw new Error("MERCADO_PAGO_ACCESS_TOKEN nao configurado no ambiente.");
   }
@@ -100,6 +109,17 @@ export function resolveMercadoPagoCardEnvironment() {
   const token = resolveMercadoPagoCardAccessToken() || "";
 
   return token.startsWith("TEST-") ? "test" : "production";
+}
+
+function resolveMercadoPagoFetchTokens(preferCardToken: boolean) {
+  const primary = preferCardToken
+    ? resolveMercadoPagoCardAccessToken()
+    : resolveMercadoPagoAccessToken();
+  const secondary = preferCardToken
+    ? resolveMercadoPagoAccessToken()
+    : resolveMercadoPagoCardAccessToken();
+
+  return Array.from(new Set([primary, secondary].filter(Boolean))) as string[];
 }
 
 function buildRequestBody(input: CreatePixPaymentInput) {
@@ -348,41 +368,49 @@ export async function fetchMercadoPagoPaymentById(
   options?: { useCardToken?: boolean; useCardTestToken?: boolean },
 ) {
   const useCardToken = Boolean(options?.useCardToken || options?.useCardTestToken);
-  const token = useCardToken
-    ? getMercadoPagoCardAccessTokenOrThrow()
-    : getMercadoPagoAccessTokenOrThrow();
-
-  const response = await fetch(
-    `https://api.mercadopago.com/v1/payments/${encodeURIComponent(String(paymentId))}`,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      cache: "no-store",
-    },
-  );
-
-  const rawText = await response.text();
-  let payload: unknown = null;
-
-  if (rawText) {
-    try {
-      payload = JSON.parse(rawText) as unknown;
-    } catch {
-      payload = rawText;
-    }
+  const candidateTokens = resolveMercadoPagoFetchTokens(useCardToken);
+  if (candidateTokens.length === 0) {
+    throw new Error(
+      "MERCADO_PAGO_ACCESS_TOKEN/MERCADO_PAGO_CARD_ACCESS_TOKEN nao configurado no ambiente.",
+    );
   }
 
-  if (!response.ok) {
-    const providerMessage =
+  let lastProviderMessage =
+    "Falha ao consultar pagamento no Mercado Pago.";
+
+  for (const token of candidateTokens) {
+    const response = await fetch(
+      `https://api.mercadopago.com/v1/payments/${encodeURIComponent(String(paymentId))}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      },
+    );
+
+    const rawText = await response.text();
+    let payload: unknown = null;
+
+    if (rawText) {
+      try {
+        payload = JSON.parse(rawText) as unknown;
+      } catch {
+        payload = rawText;
+      }
+    }
+
+    if (response.ok) {
+      return payload as MercadoPagoPaymentResponse;
+    }
+
+    lastProviderMessage =
       parseMercadoPagoErrorMessage(payload) ||
       "Falha ao consultar pagamento no Mercado Pago.";
-
-    throw new Error(`Mercado Pago: ${providerMessage}`);
   }
 
-  return payload as MercadoPagoPaymentResponse;
+  throw new Error(`Mercado Pago: ${lastProviderMessage}`);
 }
 
 export async function refundMercadoPagoPixPayment(paymentId: string | number) {
@@ -426,12 +454,14 @@ export async function refundMercadoPagoPixPayment(paymentId: string | number) {
 
 export async function refundMercadoPagoCardPayment(paymentId: string | number) {
   const accessToken = getMercadoPagoCardAccessTokenOrThrow();
+  const idempotencyKey = crypto.randomUUID();
 
   const response = await fetch(
     `https://api.mercadopago.com/v1/payments/${encodeURIComponent(String(paymentId))}/refunds`,
     {
       method: "POST",
       headers: {
+        "X-Idempotency-Key": idempotencyKey,
         Authorization: `Bearer ${accessToken}`,
       },
       cache: "no-store",
