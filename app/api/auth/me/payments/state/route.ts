@@ -4,6 +4,7 @@ import {
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
+import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type PaymentOrderStateRecord = {
@@ -12,6 +13,7 @@ type PaymentOrderStateRecord = {
   guild_id: string;
   payment_method: "pix" | "card";
   status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
+  provider_payment_id: string | null;
   provider_status: string | null;
   provider_status_detail: string | null;
   provider_qr_code: string | null;
@@ -24,7 +26,7 @@ type PaymentOrderStateRecord = {
 const LICENSE_VALIDITY_DAYS = 30;
 const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_STATE_SELECT_COLUMNS =
-  "id, order_number, guild_id, payment_method, status, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at";
+  "id, order_number, guild_id, payment_method, status, provider_payment_id, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at";
 
 function normalizeGuildId(value: string | null) {
   if (!value) return null;
@@ -191,10 +193,46 @@ export async function GET(request: Request) {
     }
 
     const user = access.context.sessionData.authSession.user;
-    const [activeLicenseOrder, latestUserOrder] = await Promise.all([
+    let [activeLicenseOrder, latestUserOrder] = await Promise.all([
       getActiveLicenseOrderForGuild(guildId),
       getLatestUserOrderForGuild(user.id, guildId),
     ]);
+
+    const shouldReconcileLatestOrder =
+      !!latestUserOrder &&
+      !!latestUserOrder.provider_payment_id &&
+      (latestUserOrder.status === "pending" ||
+        latestUserOrder.status === "failed" ||
+        latestUserOrder.status === "expired" ||
+        latestUserOrder.status === "rejected");
+
+    if (shouldReconcileLatestOrder && latestUserOrder) {
+      try {
+        const reconciled = await reconcilePaymentOrderRecord(latestUserOrder, {
+          source: "auth_payment_state",
+        });
+        latestUserOrder = {
+          ...latestUserOrder,
+          ...reconciled.order,
+          provider_payment_id:
+            reconciled.order.provider_payment_id ??
+            latestUserOrder.provider_payment_id,
+          provider_status: reconciled.order.provider_status ?? null,
+          provider_status_detail:
+            reconciled.order.provider_status_detail ?? null,
+        };
+
+        if (
+          reconciled.changed &&
+          (reconciled.order.status === "approved" ||
+            reconciled.order.status === "cancelled")
+        ) {
+          activeLicenseOrder = await getActiveLicenseOrderForGuild(guildId);
+        }
+      } catch {
+        // melhor esforco; nao quebrar a consulta de estado por falha na reconciliacao
+      }
+    }
 
     return NextResponse.json({
       ok: true,

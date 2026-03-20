@@ -4,6 +4,7 @@ import {
   buildSavedMethods,
   extractCardSnapshot,
 } from "@/lib/payments/savedMethods";
+import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
 import {
   mergeSavedMethodsWithStored,
   toSavedMethodFromStoredRecord,
@@ -29,6 +30,7 @@ type PaymentOrderRecord = {
   status: PaymentOrderStatus;
   amount: string | number;
   currency: string;
+  provider_payment_id: string | null;
   provider_status: string | null;
   provider_status_detail: string | null;
   provider_payload: unknown;
@@ -39,7 +41,7 @@ type PaymentOrderRecord = {
 };
 
 const PAYMENT_HISTORY_SELECT_COLUMNS =
-  "id, order_number, guild_id, payment_method, status, amount, currency, provider_status, provider_status_detail, provider_payload, paid_at, expires_at, created_at, updated_at";
+  "id, order_number, guild_id, payment_method, status, amount, currency, provider_payment_id, provider_status, provider_status_detail, provider_payload, paid_at, expires_at, created_at, updated_at";
 
 function toFiniteAmount(value: string | number) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -91,9 +93,51 @@ export async function GET() {
       throw new Error(result.error.message);
     }
 
-    const orders = (result.data || []).map(toHistoryOrder);
+    let rawOrders = result.data || [];
+    const candidates = rawOrders
+      .filter(
+        (order) =>
+          !!order.provider_payment_id &&
+          (order.status === "pending" ||
+            order.status === "failed" ||
+            order.status === "expired" ||
+            order.status === "rejected"),
+      )
+      .slice(0, 4);
+
+    let reconciledAnything = false;
+    for (const order of candidates) {
+      try {
+        const reconciled = await reconcilePaymentOrderRecord(order, {
+          source: "auth_payment_history",
+        });
+        if (reconciled.changed) {
+          reconciledAnything = true;
+        }
+      } catch {
+        // nao quebrar historico por falha em reconciliacao oportunista
+      }
+    }
+
+    if (reconciledAnything) {
+      const refreshedResult = await supabase
+        .from("payment_orders")
+        .select(PAYMENT_HISTORY_SELECT_COLUMNS)
+        .eq("user_id", sessionData.authSession.user.id)
+        .order("created_at", { ascending: false })
+        .limit(500)
+        .returns<PaymentOrderRecord[]>();
+
+      if (refreshedResult.error) {
+        throw new Error(refreshedResult.error.message);
+      }
+
+      rawOrders = refreshedResult.data || [];
+    }
+
+    const orders = rawOrders.map(toHistoryOrder);
     const allMethods = buildSavedMethods(
-      (result.data || []).map((order) => ({
+      rawOrders.map((order) => ({
         payment_method: order.payment_method,
         provider_payload: order.provider_payload,
         created_at: order.created_at,

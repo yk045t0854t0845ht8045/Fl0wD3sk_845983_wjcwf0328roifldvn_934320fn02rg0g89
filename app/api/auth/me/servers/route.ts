@@ -8,6 +8,7 @@ import {
   LICENSE_VALIDITY_MS,
   resolveLicenseBaseTimestamp,
 } from "@/lib/payments/licenseStatus";
+import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type ApprovedOrderRecord = {
@@ -52,6 +53,16 @@ export async function GET() {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
+    try {
+      await reconcileRecentPaymentOrders({
+        userId: sessionData.authSession.user.id,
+        limit: 6,
+        source: "auth_servers",
+      });
+    } catch {
+      // melhor esforco; nao bloquear dashboard por reconciliacao oportunista
+    }
+
     const approvedOrdersResult = await supabase
       .from("payment_orders")
       .select("guild_id, paid_at, created_at")
