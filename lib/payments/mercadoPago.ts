@@ -30,6 +30,28 @@ type CreateCardPaymentInput = {
   deviceSessionId?: string | null;
   idempotencyKey?: string | null;
   capture?: boolean | null;
+  threeDSecureMode?: "optional" | null;
+  statementDescriptor?: string | null;
+  additionalInfo?: {
+    items?: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      category_id?: string;
+      quantity: number;
+      unit_price: number;
+    }>;
+    payer?: {
+      first_name?: string;
+      last_name?: string;
+      registration_date?: string;
+      last_purchase?: string;
+      is_first_purchase_online?: boolean;
+      address?: {
+        zip_code?: string;
+      };
+    };
+  } | null;
 };
 
 type PayerNameParts = {
@@ -59,6 +81,33 @@ export type MercadoPagoPaymentResponse = {
   date_approved?: string | null;
   date_of_expiration?: string | null;
   point_of_interaction?: MercadoPagoPointOfInteraction | null;
+};
+
+type MercadoPagoCustomerResponse = {
+  id: number | string;
+  email?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+};
+
+type MercadoPagoCustomerSearchResponse = {
+  results?: MercadoPagoCustomerResponse[];
+};
+
+export type MercadoPagoCustomerCardResponse = {
+  id: string | number;
+  customer_id?: string | number | null;
+  first_six_digits?: string | null;
+  last_four_digits?: string | null;
+  expiration_month?: number | null;
+  expiration_year?: number | null;
+  payment_method?: {
+    id?: string | null;
+    name?: string | null;
+  } | null;
+  issuer?: {
+    id?: string | number | null;
+  } | null;
 };
 
 function resolveMercadoPagoAccessToken() {
@@ -165,6 +214,9 @@ function buildCardRequestBody(input: CreateCardPaymentInput) {
     external_reference: input.externalReference,
     metadata: input.metadata,
     capture: typeof input.capture === "boolean" ? input.capture : undefined,
+    three_d_secure_mode: input.threeDSecureMode || undefined,
+    statement_descriptor: input.statementDescriptor || undefined,
+    additional_info: input.additionalInfo || undefined,
   };
 }
 
@@ -208,6 +260,21 @@ function parseMercadoPagoErrorMessage(payload: unknown) {
   }
 
   return null;
+}
+
+async function readMercadoPagoPayload(response: Response) {
+  const rawText = await response.text();
+  let payload: unknown = null;
+
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText) as unknown;
+    } catch {
+      payload = rawText;
+    }
+  }
+
+  return payload;
 }
 
 export function resolvePaymentStatus(status: string | null | undefined) {
@@ -484,6 +551,138 @@ export async function refundMercadoPagoCardPayment(paymentId: string | number) {
       parseMercadoPagoErrorMessage(payload) ||
       "Falha ao estornar validacao do cartao.";
 
+    throw new Error(`Mercado Pago: ${providerMessage}`);
+  }
+
+  return payload;
+}
+
+export async function searchMercadoPagoCustomerByEmail(email: string) {
+  const accessToken = getMercadoPagoCardAccessTokenOrThrow();
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const response = await fetch(
+    `https://api.mercadopago.com/v1/customers/search?email=${encodeURIComponent(normalizedEmail)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    },
+  );
+
+  const payload = await readMercadoPagoPayload(response);
+
+  if (!response.ok) {
+    const providerMessage =
+      parseMercadoPagoErrorMessage(payload) ||
+      "Falha ao buscar cliente no Mercado Pago.";
+    throw new Error(`Mercado Pago: ${providerMessage}`);
+  }
+
+  const results = Array.isArray(
+    (payload as MercadoPagoCustomerSearchResponse | null)?.results,
+  )
+    ? ((payload as MercadoPagoCustomerSearchResponse).results as MercadoPagoCustomerResponse[])
+    : [];
+
+  return results[0] || null;
+}
+
+export async function createMercadoPagoCustomer(input: {
+  email: string;
+  firstName: string;
+  lastName?: string | null;
+}) {
+  const accessToken = getMercadoPagoCardAccessTokenOrThrow();
+  const idempotencyKey = crypto.randomUUID();
+
+  const response = await fetch("https://api.mercadopago.com/v1/customers", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "X-Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      email: input.email.trim().toLowerCase(),
+      first_name: input.firstName,
+      last_name: input.lastName || undefined,
+    }),
+    cache: "no-store",
+  });
+
+  const payload = await readMercadoPagoPayload(response);
+
+  if (!response.ok) {
+    const providerMessage =
+      parseMercadoPagoErrorMessage(payload) ||
+      "Falha ao criar cliente no Mercado Pago.";
+    throw new Error(`Mercado Pago: ${providerMessage}`);
+  }
+
+  return payload as MercadoPagoCustomerResponse;
+}
+
+export async function createMercadoPagoCustomerCard(input: {
+  customerId: string | number;
+  token: string;
+}) {
+  const accessToken = getMercadoPagoCardAccessTokenOrThrow();
+  const idempotencyKey = crypto.randomUUID();
+
+  const response = await fetch(
+    `https://api.mercadopago.com/v1/customers/${encodeURIComponent(String(input.customerId))}/cards`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        "X-Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify({
+        token: input.token,
+      }),
+      cache: "no-store",
+    },
+  );
+
+  const payload = await readMercadoPagoPayload(response);
+
+  if (!response.ok) {
+    const providerMessage =
+      parseMercadoPagoErrorMessage(payload) ||
+      "Falha ao salvar cartao no cofre seguro do Mercado Pago.";
+    throw new Error(`Mercado Pago: ${providerMessage}`);
+  }
+
+  return payload as MercadoPagoCustomerCardResponse;
+}
+
+export async function deleteMercadoPagoCustomerCard(input: {
+  customerId: string | number;
+  cardId: string | number;
+}) {
+  const accessToken = getMercadoPagoCardAccessTokenOrThrow();
+
+  const response = await fetch(
+    `https://api.mercadopago.com/v1/customers/${encodeURIComponent(String(input.customerId))}/cards/${encodeURIComponent(String(input.cardId))}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    },
+  );
+
+  const payload = await readMercadoPagoPayload(response);
+
+  if (!response.ok) {
+    const providerMessage =
+      parseMercadoPagoErrorMessage(payload) ||
+      "Falha ao remover cartao salvo do Mercado Pago.";
     throw new Error(`Mercado Pago: ${providerMessage}`);
   }
 

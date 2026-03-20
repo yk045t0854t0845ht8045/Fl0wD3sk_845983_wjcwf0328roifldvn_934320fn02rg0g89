@@ -27,6 +27,7 @@ export type StepFourDraft = {
   cardExpiry: string;
   cardCvv: string;
   cardDocument: string;
+  cardBillingZipCode: string;
 };
 
 export type ConfigDraft = {
@@ -155,6 +156,7 @@ function sanitizeStepFourDraft(value: unknown): StepFourDraft | null {
     cardExpiry: normalizeDraftText(data.cardExpiry, 8),
     cardCvv: normalizeDraftText(data.cardCvv, 4),
     cardDocument: normalizeDraftText(data.cardDocument, 24),
+    cardBillingZipCode: normalizeDraftText(data.cardBillingZipCode, 10),
   };
 }
 
@@ -249,7 +251,8 @@ export function hasStepFourDraftValues(value: StepFourDraft | null | undefined) 
       value.cardHolderName.trim() ||
       value.cardExpiry.trim() ||
       value.cardCvv.trim() ||
-      value.cardDocument.trim(),
+      value.cardDocument.trim() ||
+      value.cardBillingZipCode.trim(),
   );
 }
 

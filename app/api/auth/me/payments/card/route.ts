@@ -33,11 +33,16 @@ type CreateCardPaymentBody = {
   guildId?: unknown;
   payerName?: unknown;
   payerDocument?: unknown;
+  billingZipCode?: unknown;
   cardToken?: unknown;
   paymentMethodId?: unknown;
   installments?: unknown;
   issuerId?: unknown;
   deviceSessionId?: unknown;
+};
+
+type AuthUserRecord = {
+  created_at: string;
 };
 
 type PaymentOrderRecord = {
@@ -99,6 +104,12 @@ function normalizePayerDocument(value: unknown) {
     normalized,
     type,
   };
+}
+
+function normalizeBillingZipCode(value: unknown) {
+  if (typeof value !== "string") return null;
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+  return /^\d{8}$/.test(digits) ? digits : null;
 }
 
 function normalizeCardToken(value: unknown) {
@@ -536,6 +547,65 @@ async function getLatestCardOrderForUserAndGuild(userId: number, guildId: string
   return result.data || null;
 }
 
+async function getRecentCardOrdersForUser(userId: number, limit = 8) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  const result = await supabase
+    .from("payment_orders")
+    .select(PAYMENT_ORDER_SELECT_COLUMNS)
+    .eq("user_id", userId)
+    .eq("payment_method", "card")
+    .order("updated_at", { ascending: false })
+    .limit(limit)
+    .returns<PaymentOrderRecord[]>();
+
+  if (result.error) {
+    throw new Error(
+      `Erro ao carregar pagamentos recentes com cartao: ${result.error.message}`,
+    );
+  }
+
+  return result.data || [];
+}
+
+async function getLatestApprovedOrderForUser(userId: number) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  const result = await supabase
+    .from("payment_orders")
+    .select(PAYMENT_ORDER_SELECT_COLUMNS)
+    .eq("user_id", userId)
+    .eq("status", "approved")
+    .order("paid_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<PaymentOrderRecord>();
+
+  if (result.error) {
+    throw new Error(
+      `Erro ao carregar ultimo pagamento aprovado: ${result.error.message}`,
+    );
+  }
+
+  return result.data || null;
+}
+
+async function getAuthUserById(userId: number) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  const result = await supabase
+    .from("auth_users")
+    .select("created_at")
+    .eq("id", userId)
+    .maybeSingle<AuthUserRecord>();
+
+  if (result.error) {
+    throw new Error(`Erro ao carregar usuario autenticado: ${result.error.message}`);
+  }
+
+  return result.data || null;
+}
+
 async function getActiveLicenseOrderForGuild(guildId: string) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -626,6 +696,7 @@ export async function POST(request: Request) {
     const guildId = normalizeGuildId(body.guildId);
     const payerName = normalizePayerName(body.payerName);
     const payerDocument = normalizePayerDocument(body.payerDocument);
+    const billingZipCode = normalizeBillingZipCode(body.billingZipCode);
     const cardToken = normalizeCardToken(body.cardToken);
     const paymentMethodId = normalizePaymentMethodId(body.paymentMethodId);
     const installments = normalizeInstallments(body.installments);
@@ -649,6 +720,13 @@ export async function POST(request: Request) {
     if (!payerDocument) {
       return respond(
         { ok: false, message: "CPF/CNPJ invalido para pagamento." },
+        { status: 400 },
+      );
+    }
+
+    if (!billingZipCode) {
+      return respond(
+        { ok: false, message: "CEP de cobranca invalido para pagamento." },
         { status: 400 },
       );
     }
@@ -718,11 +796,32 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const latestOrder = await getLatestOrderForUserAndGuild(user.id, guildId);
-    const latestCardOrder = await getLatestCardOrderForUserAndGuild(
-      user.id,
-      guildId,
-    );
+    const [latestOrder, latestCardOrder, recentCardOrders, latestApprovedOrder, authUser] = await Promise.all([
+      getLatestOrderForUserAndGuild(user.id, guildId),
+      getLatestCardOrderForUserAndGuild(user.id, guildId),
+      getRecentCardOrdersForUser(user.id),
+      getLatestApprovedOrderForUser(user.id),
+      getAuthUserById(user.id),
+    ]);
+
+    const latestMatchingGlobalCardOrder =
+      recentCardOrders.find((order) => {
+        if (order.payment_method !== "card") return false;
+        if (
+          order.payer_document &&
+          order.payer_document !== payerDocument.normalized
+        ) {
+          return false;
+        }
+        if (
+          order.payer_name &&
+          normalizeNameForComparison(order.payer_name) !==
+            normalizeNameForComparison(payerName)
+        ) {
+          return false;
+        }
+        return true;
+      }) || null;
 
     const hasRecentPendingCardOrder =
       !!latestCardOrder &&
@@ -737,6 +836,14 @@ export async function POST(request: Request) {
           latestCardOrder.created_at,
           CARD_PENDING_REUSE_WINDOW_MS,
         ));
+
+    const payerNameParts = payerName.split(/\s+/).filter(Boolean);
+    const payerFirstName = payerNameParts[0] || "Cliente";
+    const payerLastName = payerNameParts.slice(1).join(" ") || undefined;
+    const registrationDate = authUser?.created_at || null;
+    const lastApprovedPurchaseDate =
+      latestApprovedOrder?.paid_at || latestApprovedOrder?.created_at || null;
+    const isFirstPurchaseOnline = !latestApprovedOrder;
 
     if (hasRecentPendingCardOrder && latestCardOrder) {
       try {
@@ -763,7 +870,7 @@ export async function POST(request: Request) {
     }
 
     const retryCooldownSeconds = resolveCardRetryCooldownSeconds({
-      latestCardOrder,
+      latestCardOrder: latestMatchingGlobalCardOrder || latestCardOrder,
       payerDocument: payerDocument.normalized,
       payerName,
     });
@@ -910,6 +1017,30 @@ export async function POST(request: Request) {
         issuerId,
         deviceSessionId,
         idempotencyKey: `flowdesk-card-order-${createdOrder.id}`,
+        threeDSecureMode: "optional",
+        statementDescriptor: "FLOWDESK",
+        additionalInfo: {
+          items: [
+            {
+              id: `flowdesk-plan-${guildId}`,
+              title: "Flowdesk Plano Pro",
+              description: "Licenca mensal do servidor no painel Flowdesk",
+              category_id: "services",
+              quantity: 1,
+              unit_price: amount,
+            },
+          ],
+          payer: {
+            first_name: payerFirstName,
+            last_name: payerLastName,
+            registration_date: registrationDate || undefined,
+            last_purchase: lastApprovedPurchaseDate || undefined,
+            is_first_purchase_online: isFirstPurchaseOnline,
+            address: {
+              zip_code: billingZipCode,
+            },
+          },
+        },
       });
       createdProviderPayment = mercadoPagoPayment;
 
@@ -960,6 +1091,7 @@ export async function POST(request: Request) {
             channel: cardChannel,
             payer_email_source: "discord",
             payer_email_masked: maskEmail(discordPayerEmail),
+            billing_zip_code_present: true,
             device_session_id_present: Boolean(deviceSessionId),
             mercado_pago: latestProviderPayment,
             mercado_pago_initial: mercadoPagoPayment,
@@ -987,6 +1119,7 @@ export async function POST(request: Request) {
           null,
         payerEmailSource: "discord",
         payerEmailMasked: maskEmail(discordPayerEmail),
+        billingZipCodePresent: true,
         cardEnvironment,
         deviceSessionIdPresent: Boolean(deviceSessionId),
         method: "card",

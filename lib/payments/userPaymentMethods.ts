@@ -18,6 +18,8 @@ export type StoredPaymentMethodRecord = {
   verification_status_detail: string | null;
   verification_amount: string | number | null;
   verification_provider_payment_id?: string | null;
+  provider_customer_id?: string | null;
+  provider_card_id?: string | null;
   verified_at: string | null;
   last_context_guild_id: string | null;
   created_at: string;

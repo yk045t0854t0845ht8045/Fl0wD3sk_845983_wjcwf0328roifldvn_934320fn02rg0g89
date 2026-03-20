@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
@@ -11,11 +10,11 @@ import {
   resolveBrazilDocumentType,
 } from "@/lib/payments/brazilDocument";
 import {
-  cancelMercadoPagoCardPayment,
-  createMercadoPagoCardPayment,
-  fetchMercadoPagoPaymentById,
-  refundMercadoPagoCardPayment,
+  createMercadoPagoCustomer,
+  createMercadoPagoCustomerCard,
+  deleteMercadoPagoCustomerCard,
   resolveMercadoPagoCardEnvironment,
+  searchMercadoPagoCustomerByEmail,
 } from "@/lib/payments/mercadoPago";
 import { isValidSavedMethodId, parseSavedMethodId } from "@/lib/payments/savedMethods";
 import {
@@ -67,25 +66,6 @@ type GuildPlanSettingsRecord = {
   recurring_method_id: string | null;
 };
 
-type PaymentMethodVerificationRecord = {
-  id: number;
-  status: string;
-  provider_payment_id: string | null;
-  provider_status: string | null;
-  provider_status_detail: string | null;
-  verified_at: string | null;
-  refunded_at: string | null;
-};
-
-type LatestVerificationGuardRecord = {
-  id: number;
-  status: string;
-  provider_status: string | null;
-  provider_status_detail: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
 type AccessContext =
   | {
       ok: true;
@@ -116,7 +96,7 @@ const BLOCKED_CARD_DIGITS = new Set([
 const HIGH_RISK_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 
 const STORED_METHOD_SELECT_COLUMNS =
-  "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, verification_provider_payment_id, verified_at, last_context_guild_id, created_at, updated_at";
+  "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, verification_provider_payment_id, provider_customer_id, provider_card_id, verified_at, last_context_guild_id, created_at, updated_at";
 
 function normalizeGuildId(value: unknown) {
   if (typeof value !== "string") return null;
@@ -227,9 +207,33 @@ function isExpiryOutOfRange(expMonth: number | null, expYear: number | null) {
   return false;
 }
 
-function resolveVerificationAmount() {
-  const cents = crypto.randomInt(1, 100);
-  return Math.round((1 + cents / 100) * 100) / 100;
+function normalizeProviderId(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeProviderCardDigits(value: unknown, length: number) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const text = String(Math.trunc(value));
+    return new RegExp(`^\\d{${length}}$`).test(text) ? text : null;
+  }
+
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return new RegExp(`^\\d{${length}}$`).test(normalized) ? normalized : null;
+}
+
+function normalizeProviderSmallInt(value: unknown) {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return null;
 }
 
 function toApiMethod(method: StoredPaymentMethodRecord) {
@@ -239,59 +243,6 @@ function toApiMethod(method: StoredPaymentMethodRecord) {
   }
 
   return normalized;
-}
-
-function shouldCancelAuthorizedVerification(status: string | null | undefined) {
-  const normalized = (status || "").trim().toLowerCase();
-  return (
-    normalized === "authorized" ||
-    normalized === "in_process" ||
-    normalized === "pending"
-  );
-}
-
-function shouldRefundCapturedVerification(status: string | null | undefined) {
-  const normalized = (status || "").trim().toLowerCase();
-  return normalized === "approved";
-}
-
-function isVerificationApproved(status: string | null | undefined) {
-  const normalized = (status || "").trim().toLowerCase();
-  return normalized === "authorized" || normalized === "approved";
-}
-
-function isHighRiskStatusDetail(value: string | null | undefined) {
-  const normalized = (value || "").trim().toLowerCase();
-  return (
-    normalized.includes("cc_rejected_high_risk") ||
-    normalized.includes("high_risk")
-  );
-}
-
-function isDuplicatedPaymentStatusDetail(value: string | null | undefined) {
-  const normalized = (value || "").trim().toLowerCase();
-  return (
-    normalized.includes("cc_rejected_duplicated_payment") ||
-    normalized.includes("duplicated_payment") ||
-    normalized.includes("duplicated")
-  );
-}
-
-function resolveRetryAfterSecondsFromAttempt(
-  attempt: LatestVerificationGuardRecord,
-  cooldownMs: number,
-) {
-  const referenceMs =
-    Date.parse(attempt.updated_at) ||
-    Date.parse(attempt.created_at) ||
-    Date.now();
-
-  if (!Number.isFinite(referenceMs)) return null;
-
-  const remainingMs = cooldownMs - (Date.now() - referenceMs);
-  if (remainingMs <= 0) return null;
-
-  return Math.max(1, Math.ceil(remainingMs / 1000));
 }
 
 async function ensureGuildAccess(guildId: string): Promise<AccessContext> {
@@ -362,104 +313,25 @@ async function ensureGuildAccess(guildId: string): Promise<AccessContext> {
   };
 }
 
-async function createVerificationAttempt(input: {
-  userId: number;
-  guildId: string;
-  methodId: string;
-  amount: number;
-  currency: string;
-  payerName: string;
-  payerDocument: string;
-  payerDocumentType: "CPF" | "CNPJ";
-}) {
+async function getLatestProviderCustomerIdForUser(userId: number) {
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
-    .from("auth_user_payment_method_verifications")
-    .insert({
-      user_id: input.userId,
-      guild_id: input.guildId,
-      method_id: input.methodId,
-      amount: input.amount,
-      currency: input.currency,
-      payer_name: input.payerName,
-      payer_document: input.payerDocument,
-      payer_document_type: input.payerDocumentType,
-      provider_payload: {
-        source: "flowdesk_saved_method",
-      },
-    })
-    .select(
-      "id, status, provider_payment_id, provider_status, provider_status_detail, verified_at, refunded_at",
-    )
-    .single<PaymentMethodVerificationRecord>();
-
-  if (result.error || !result.data) {
-    throw new Error(
-      result.error?.message ||
-        "Falha ao iniciar validacao segura do cartao.",
-    );
-  }
-
-  return result.data;
-}
-
-async function getLatestVerificationAttemptForGuard(input: {
-  userId: number;
-  guildId: string;
-  methodId: string;
-}) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("auth_user_payment_method_verifications")
-    .select("id, status, provider_status, provider_status_detail, created_at, updated_at")
-    .eq("user_id", input.userId)
-    .eq("guild_id", input.guildId)
-    .eq("method_id", input.methodId)
+    .from("auth_user_payment_methods")
+    .select("provider_customer_id")
+    .eq("user_id", userId)
+    .not("provider_customer_id", "is", null)
     .order("updated_at", { ascending: false })
     .limit(1)
-    .maybeSingle<LatestVerificationGuardRecord>();
+    .maybeSingle<{ provider_customer_id: string | null }>();
 
   if (result.error) {
     throw new Error(
       result.error.message ||
-        "Falha ao verificar tentativas recentes de validacao do cartao.",
+        "Falha ao localizar cliente salvo do Mercado Pago.",
     );
   }
 
-  return result.data || null;
-}
-
-async function updateVerificationAttempt(
-  verificationId: number,
-  input: {
-    status: "pending" | "verified" | "failed" | "cancelled";
-    providerPaymentId?: string | null;
-    providerExternalReference?: string | null;
-    providerStatus?: string | null;
-    providerStatusDetail?: string | null;
-    providerPayload?: Record<string, unknown>;
-    verifiedAt?: string | null;
-    refundedAt?: string | null;
-  },
-) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("auth_user_payment_method_verifications")
-    .update({
-      status: input.status,
-      provider_payment_id: input.providerPaymentId ?? null,
-      provider_external_reference: input.providerExternalReference ?? null,
-      provider_status: input.providerStatus ?? null,
-      provider_status_detail: input.providerStatusDetail ?? null,
-      provider_payload: input.providerPayload || {},
-      verified_at: input.verifiedAt ?? null,
-      refunded_at: input.refundedAt ?? null,
-    })
-    .eq("id", verificationId);
-
-  if (result.error) {
-    throw new Error(result.error.message);
-  }
+  return normalizeProviderId(result.data?.provider_customer_id);
 }
 
 export async function POST(request: Request) {
@@ -662,6 +534,9 @@ export async function POST(request: Request) {
             verification_amount: existingMethod.verification_amount ?? null,
             verification_provider_payment_id:
               existingMethod.verification_provider_payment_id ?? null,
+            provider_customer_id:
+              existingMethod.provider_customer_id ?? null,
+            provider_card_id: existingMethod.provider_card_id ?? null,
             verified_at: existingMethod.verified_at || new Date().toISOString(),
             last_context_guild_id: guildId,
             is_active: true,
@@ -737,207 +612,73 @@ export async function POST(request: Request) {
       ), baseRequestContext.requestId);
     }
 
-    const latestVerificationAttempt = await getLatestVerificationAttemptForGuard({
-      userId: access.context.userId,
-      guildId,
-      methodId,
-    });
-
-    if (
-      latestVerificationAttempt &&
-      latestVerificationAttempt.status === "failed" &&
-      (isHighRiskStatusDetail(latestVerificationAttempt.provider_status_detail) ||
-        isDuplicatedPaymentStatusDetail(
-          latestVerificationAttempt.provider_status_detail,
-        ))
-    ) {
-      const retryAfterSeconds = resolveRetryAfterSecondsFromAttempt(
-        latestVerificationAttempt,
-        HIGH_RISK_RETRY_COOLDOWN_MS,
-      );
-
-      if (retryAfterSeconds) {
-        await logSecurityAuditEventSafe(auditContext, {
-          action: "payment_method_post",
-          outcome: "blocked",
-          metadata: {
-            methodId,
-            reason: "provider_high_risk_cooldown",
-            retryAfterSeconds,
-            providerStatus: latestVerificationAttempt.provider_status,
-            providerStatusDetail:
-              latestVerificationAttempt.provider_status_detail,
-          },
-        });
-
-        const response = NextResponse.json(
-          {
-            ok: false,
-            retryAfterSeconds,
-            message:
-              "O provedor marcou a ultima tentativa como sensivel ao antifraude. Aguarde alguns minutos antes de tentar novamente com este cartao, no mesmo dispositivo.",
-          },
-          { status: 429 },
-        );
-        response.headers.set("Retry-After", String(retryAfterSeconds));
-        return attachRequestId(response, baseRequestContext.requestId);
-      }
-    }
-
-    const verificationAmount = resolveVerificationAmount();
-    const verificationCurrency = "BRL";
-    const verificationAttempt = await createVerificationAttempt({
-      userId: access.context.userId,
-      guildId,
-      methodId,
-      amount: verificationAmount,
-      currency: verificationCurrency,
-      payerName,
-      payerDocument: payerDocument.normalized,
-      payerDocumentType: payerDocument.type,
-    });
-
-    const externalReference = `flowdesk-method-verify-${verificationAttempt.id}`;
-
-    let verificationPayload: Record<string, unknown> = {
-      source: "flowdesk_saved_method",
-      verificationId: verificationAttempt.id,
-      methodId,
-      guildId,
-      payerDocumentType: payerDocument.type,
-      deviceSessionIdPresent: Boolean(deviceSessionId),
-    };
-
     try {
-      const initialPayment = await createMercadoPagoCardPayment({
-        amount: verificationAmount,
-        description: `Flowdesk validacao segura ${verificationAttempt.id}`,
-        payerName,
-        payerEmail,
-        payerIdentification: {
-          type: payerDocument.type,
-          number: payerDocument.normalized,
-        },
-        externalReference,
-        metadata: {
-          flowdesk_verification_id: String(verificationAttempt.id),
-          flowdesk_user_id: String(access.context.userId),
-          flowdesk_discord_user_id: access.context.discordUserId,
-          flowdesk_guild_id: guildId,
-          flowdesk_method_id: methodId,
-          flowdesk_flow: "saved_method_validation",
-          flowdesk_verification_amount: String(verificationAmount.toFixed(2)),
-        },
-        token: cardToken,
-        paymentMethodId,
-        installments: 1,
-        issuerId,
-        deviceSessionId,
-        idempotencyKey: `flowdesk-method-verify-${verificationAttempt.id}`,
-        capture: false,
-      });
+      let providerCustomerId =
+        normalizeProviderId(existingMethod?.provider_customer_id) ||
+        (await getLatestProviderCustomerIdForUser(access.context.userId));
 
-      const providerPaymentId = String(initialPayment.id);
-      let providerPayment = initialPayment;
-
-      try {
-        const snapshot = await fetchMercadoPagoPaymentById(providerPaymentId, {
-          useCardToken: true,
-        });
-        if (snapshot && typeof snapshot === "object") {
-          providerPayment = snapshot;
-        }
-      } catch {
-        // manter retorno inicial quando o snapshot ainda nao estiver disponivel
-      }
-
-      const providerStatus = providerPayment.status || initialPayment.status || null;
-      const providerStatusDetail =
-        providerPayment.status_detail || initialPayment.status_detail || null;
-
-      verificationPayload = {
-        ...verificationPayload,
-        externalReference,
-        initialPayment,
-        providerPayment,
-      };
-
-      if (!isVerificationApproved(providerStatus)) {
-        await updateVerificationAttempt(verificationAttempt.id, {
-          status: "failed",
-          providerPaymentId,
-          providerExternalReference: externalReference,
-          providerStatus,
-          providerStatusDetail,
-          providerPayload: verificationPayload,
-        });
-
-        await logSecurityAuditEventSafe(auditContext, {
-          action: "payment_method_post",
-          outcome: "failed",
-          metadata: {
-            methodId,
-            stage: "provider_verification",
-            providerStatus,
-            providerStatusDetail,
-          },
-        });
-
-        const retryAfterSeconds =
-          isHighRiskStatusDetail(providerStatusDetail) ||
-          isDuplicatedPaymentStatusDetail(providerStatusDetail)
-            ? Math.ceil(HIGH_RISK_RETRY_COOLDOWN_MS / 1000)
-            : null;
-
-        const safeProviderMessage = isHighRiskStatusDetail(providerStatusDetail)
-          ? "O Mercado Pago sinalizou esta tentativa como risco elevado. Aguarde alguns minutos antes de tentar novamente com o mesmo cartao e no mesmo dispositivo."
-          : isDuplicatedPaymentStatusDetail(providerStatusDetail)
-            ? "O provedor identificou tentativas muito parecidas em sequencia. Aguarde alguns minutos antes de repetir a validacao deste cartao."
-            : providerStatusDetail ||
-              "O cartao nao conseguiu concluir a validacao de seguranca.";
-
-        const response = NextResponse.json(
-          {
-            ok: false,
-            retryAfterSeconds,
-            message: safeProviderMessage,
-          },
-          {
-            status:
-              retryAfterSeconds && retryAfterSeconds > 0 ? 429 : 402,
-          },
+      if (!providerCustomerId) {
+        const existingCustomer = await searchMercadoPagoCustomerByEmail(
+          payerEmail,
         );
+        providerCustomerId = normalizeProviderId(existingCustomer?.id);
+      }
 
-        if (retryAfterSeconds && retryAfterSeconds > 0) {
-          response.headers.set("Retry-After", String(retryAfterSeconds));
+      if (!providerCustomerId) {
+        try {
+          const createdCustomer = await createMercadoPagoCustomer({
+            email: payerEmail,
+            firstName: payerName.split(/\s+/)[0] || "Cliente",
+            lastName: payerName.split(/\s+/).slice(1).join(" ") || undefined,
+          });
+          providerCustomerId = normalizeProviderId(createdCustomer.id);
+        } catch (createCustomerError) {
+          const fallbackCustomer = await searchMercadoPagoCustomerByEmail(
+            payerEmail,
+          );
+          providerCustomerId = normalizeProviderId(fallbackCustomer?.id);
+
+          if (!providerCustomerId) {
+            throw createCustomerError;
+          }
         }
-
-        return attachRequestId(response, baseRequestContext.requestId);
       }
 
-      let reversalPayload: unknown = null;
-      if (shouldRefundCapturedVerification(providerStatus)) {
-        reversalPayload = await refundMercadoPagoCardPayment(providerPaymentId);
-      } else if (shouldCancelAuthorizedVerification(providerStatus)) {
-        reversalPayload = await cancelMercadoPagoCardPayment(providerPaymentId);
+      if (!providerCustomerId) {
+        throw new Error(
+          "Nao foi possivel preparar o cofre seguro do cliente no Mercado Pago.",
+        );
       }
 
-      const verifiedAt = new Date().toISOString();
-      verificationPayload = {
-        ...verificationPayload,
-        reversalPayload,
-      };
-
-      await updateVerificationAttempt(verificationAttempt.id, {
-        status: "verified",
-        providerPaymentId,
-        providerExternalReference: externalReference,
-        providerStatus,
-        providerStatusDetail,
-        providerPayload: verificationPayload,
-        verifiedAt,
-        refundedAt: verifiedAt,
+      const vaultedCard = await createMercadoPagoCustomerCard({
+        customerId: providerCustomerId,
+        token: cardToken,
       });
+
+      const providerCardId = normalizeProviderId(vaultedCard.id);
+      if (!providerCardId) {
+        throw new Error(
+          "O Mercado Pago nao retornou um identificador valido para o cartao salvo.",
+        );
+      }
+
+      const vaultedBrand =
+        typeof vaultedCard.payment_method?.id === "string"
+          ? vaultedCard.payment_method.id
+          : normalized.brand;
+      const vaultedFirstSix =
+        normalizeProviderCardDigits(vaultedCard.first_six_digits, 6) ||
+        normalized.firstSix;
+      const vaultedLastFour =
+        normalizeProviderCardDigits(vaultedCard.last_four_digits, 4) ||
+        normalized.lastFour;
+      const vaultedExpMonth =
+        normalizeProviderSmallInt(vaultedCard.expiration_month) ??
+        normalized.expMonth;
+      const vaultedExpYear =
+        normalizeProviderSmallInt(vaultedCard.expiration_year) ??
+        normalized.expYear;
+      const verifiedAt = new Date().toISOString();
 
       const upsertResult = await supabase
         .from("auth_user_payment_methods")
@@ -946,15 +687,17 @@ export async function POST(request: Request) {
             user_id: access.context.userId,
             method_id: methodId,
             nickname: nickname || null,
-            brand: normalized.brand,
-            first_six: normalized.firstSix,
-            last_four: normalized.lastFour,
-            exp_month: normalized.expMonth,
-            exp_year: normalized.expYear,
+            brand: vaultedBrand,
+            first_six: vaultedFirstSix,
+            last_four: vaultedLastFour,
+            exp_month: vaultedExpMonth,
+            exp_year: vaultedExpYear,
             verification_status: "verified",
-            verification_status_detail: providerStatusDetail,
-            verification_amount: verificationAmount,
-            verification_provider_payment_id: providerPaymentId,
+            verification_status_detail: "saved_card_vault",
+            verification_amount: null,
+            verification_provider_payment_id: null,
+            provider_customer_id: providerCustomerId,
+            provider_card_id: providerCardId,
             verified_at: verifiedAt,
             last_context_guild_id: guildId,
             is_active: true,
@@ -967,7 +710,10 @@ export async function POST(request: Request) {
         .single<StoredPaymentMethodRecord>();
 
       if (upsertResult.error || !upsertResult.data) {
-        throw new Error(upsertResult.error?.message || "Falha ao salvar metodo.");
+        throw new Error(
+          upsertResult.error?.message ||
+            "Falha ao salvar o cartao no metodo seguro.",
+        );
       }
 
       await supabase
@@ -981,30 +727,34 @@ export async function POST(request: Request) {
         outcome: "succeeded",
         metadata: {
           methodId,
-          verificationAmount,
-          verificationCurrency,
+          providerCustomerId,
+          providerCardId,
+          cardEnvironment,
+          flow: "vault_saved_card",
+          paymentMethodId,
+          issuerId,
+          deviceSessionIdPresent: Boolean(deviceSessionId),
         },
       });
 
-      return attachRequestId(NextResponse.json({
-        ok: true,
-        guildId,
-        method: toApiMethod(upsertResult.data),
-        verification: {
-          amount: verificationAmount,
-          currency: verificationCurrency,
-        },
-      }), baseRequestContext.requestId);
+      return attachRequestId(
+        NextResponse.json({
+          ok: true,
+          guildId,
+          method: toApiMethod(upsertResult.data),
+          vaulted: true,
+        }),
+        baseRequestContext.requestId,
+      );
     } catch (providerError) {
       const message =
         providerError instanceof Error
           ? providerError.message
-          : "Falha ao validar o cartao com seguranca.";
+          : "Falha ao salvar o cartao no cofre seguro.";
       const normalizedMessage = message.toLowerCase();
       const retryAfterSeconds =
         normalizedMessage.includes("cc_rejected_high_risk") ||
-        normalizedMessage.includes("high_risk") ||
-        normalizedMessage.includes("duplicated_payment")
+        normalizedMessage.includes("high_risk")
           ? Math.ceil(HIGH_RISK_RETRY_COOLDOWN_MS / 1000)
           : null;
       const responseStatus =
@@ -1013,7 +763,8 @@ export async function POST(request: Request) {
           : normalizedMessage.includes("mercado pago:") ||
               normalizedMessage.includes("cartao") ||
               normalizedMessage.includes("card") ||
-              normalizedMessage.includes("identification") ||
+              normalizedMessage.includes("customer") ||
+              normalizedMessage.includes("token") ||
               normalizedMessage.includes("documento") ||
               normalizedMessage.includes("cpf/cnpj")
             ? 400
@@ -1022,32 +773,22 @@ export async function POST(request: Request) {
       const safeProviderMessage =
         normalizedMessage.includes("cc_rejected_high_risk") ||
         normalizedMessage.includes("high_risk")
-          ? "O Mercado Pago marcou esta validacao como risco elevado. Aguarde alguns minutos e tente novamente com o mesmo dispositivo."
-          : normalizedMessage.includes("duplicated_payment")
-            ? "O provedor identificou repeticao de tentativa. Aguarde alguns minutos antes de validar este cartao novamente."
-            : message;
-
-      await updateVerificationAttempt(verificationAttempt.id, {
-        status: "failed",
-        providerStatus: "error",
-        providerStatusDetail: safeProviderMessage,
-        providerPayload: {
-          ...verificationPayload,
-          error: message,
-          normalizedError: safeProviderMessage,
-          retryAfterSeconds,
-        },
-      });
+          ? "O Mercado Pago marcou esta tentativa de salvar cartao como risco elevado. Aguarde alguns minutos e tente novamente no mesmo dispositivo."
+          : message;
 
       await logSecurityAuditEventSafe(auditContext, {
         action: "payment_method_post",
         outcome: "failed",
         metadata: {
           methodId,
-          stage: "provider_error",
+          stage: "vault_error",
           message,
           normalizedMessage: safeProviderMessage,
           retryAfterSeconds,
+          cardEnvironment,
+          paymentMethodId,
+          issuerId,
+          deviceSessionIdPresent: Boolean(deviceSessionId),
         },
       });
 
@@ -1298,6 +1039,24 @@ export async function DELETE(request: Request) {
 
     const userId = access.context.userId;
     const supabase = getSupabaseAdminClientOrThrow();
+    const existingMethodResult = await supabase
+      .from("auth_user_payment_methods")
+      .select(STORED_METHOD_SELECT_COLUMNS)
+      .eq("user_id", userId)
+      .eq("method_id", methodId)
+      .maybeSingle<StoredPaymentMethodRecord>();
+
+    if (existingMethodResult.error) {
+      throw new Error(existingMethodResult.error.message);
+    }
+
+    const existingMethod = existingMethodResult.data || null;
+    if (!existingMethod) {
+      return attachRequestId(NextResponse.json(
+        { ok: false, message: "Metodo de pagamento nao encontrado." },
+        { status: 404 },
+      ), baseRequestContext.requestId);
+    }
 
     const planSettingsResult = await supabase
       .from("guild_plan_settings")
@@ -1354,6 +1113,33 @@ export async function DELETE(request: Request) {
     }
     if (softDeleteResult.error) {
       throw new Error(softDeleteResult.error.message);
+    }
+
+    const providerCustomerId = normalizeProviderId(
+      existingMethod.provider_customer_id,
+    );
+    const providerCardId = normalizeProviderId(existingMethod.provider_card_id);
+
+    if (providerCustomerId && providerCardId) {
+      try {
+        await deleteMercadoPagoCustomerCard({
+          customerId: providerCustomerId,
+          cardId: providerCardId,
+        });
+      } catch (providerDeleteError) {
+        await logSecurityAuditEventSafe(auditContext, {
+          action: "payment_method_delete",
+          outcome: "failed",
+          metadata: {
+            methodId,
+            stage: "provider_card_delete",
+            message:
+              providerDeleteError instanceof Error
+                ? providerDeleteError.message
+                : "unknown_provider_delete_error",
+          },
+        });
+      }
     }
 
     await logSecurityAuditEventSafe(auditContext, {

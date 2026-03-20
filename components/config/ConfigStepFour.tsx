@@ -82,6 +82,9 @@ type MercadoPagoInstance = {
     securityCode: string;
     cardExpirationMonth: string;
     cardExpirationYear: string;
+    device?: {
+      id: string;
+    };
   }) => Promise<MercadoPagoCardTokenPayload>;
 };
 
@@ -127,21 +130,25 @@ type CardFormPanelProps = {
   cardExpiry: string;
   cardCvv: string;
   cardDocument: string;
+  cardBillingZipCode: string;
   cardBrand: CardBrand;
   cardNumberStatus: ValidationStatus;
   cardHolderStatus: ValidationStatus;
   cardExpiryStatus: ValidationStatus;
   cardCvvStatus: ValidationStatus;
   cardDocumentStatus: ValidationStatus;
+  cardBillingZipCodeStatus: ValidationStatus;
   onCardNumberChange: (value: string) => void;
   onCardHolderNameChange: (value: string) => void;
   onCardExpiryChange: (value: string) => void;
   onCardCvvChange: (value: string) => void;
   onCardDocumentChange: (value: string) => void;
+  onCardBillingZipCodeChange: (value: string) => void;
   onSubmit: () => void;
   onBack: () => void;
   isSubmitting: boolean;
   canSubmit: boolean;
+  cooldownMessage: string | null;
   errorMessage: string | null;
   hasInputError: boolean;
   errorAnimationTick: number;
@@ -235,6 +242,7 @@ const EMPTY_STEP_FOUR_DRAFT: StepFourDraft = {
   cardExpiry: "",
   cardCvv: "",
   cardDocument: "",
+  cardBillingZipCode: "",
 };
 
 function normalizeDraftText(value: unknown, maxLength: number) {
@@ -268,6 +276,7 @@ function buildStepFourDraft(input: Partial<StepFourDraft> | null | undefined): S
     cardExpiry: normalizeDraftText(input.cardExpiry, 8),
     cardCvv: normalizeDraftText(input.cardCvv, 4),
     cardDocument: normalizeDraftText(input.cardDocument, 24),
+    cardBillingZipCode: normalizeDraftText(input.cardBillingZipCode, 10),
   };
 }
 
@@ -538,6 +547,40 @@ function clearCheckoutStatusQuery() {
   }
 
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function resolveRetryAfterSeconds(
+  response: Response | null | undefined,
+  payload?: { retryAfterSeconds?: number | null } | null,
+) {
+  const payloadValue =
+    typeof payload?.retryAfterSeconds === "number" &&
+    Number.isFinite(payload.retryAfterSeconds) &&
+    payload.retryAfterSeconds > 0
+      ? Math.ceil(payload.retryAfterSeconds)
+      : null;
+
+  if (payloadValue) return payloadValue;
+
+  const headerValue = response?.headers.get("Retry-After");
+  if (!headerValue) return null;
+
+  const parsed = Number(headerValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.ceil(parsed);
+}
+
+function formatCooldownMessage(seconds: number | null | undefined) {
+  if (!seconds || seconds <= 0) return null;
+  if (seconds < 60) return `Aguarde ${seconds}s para tentar novamente.`;
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (!remainingSeconds) {
+    return `Aguarde ${minutes}min para tentar novamente.`;
+  }
+
+  return `Aguarde ${minutes}min ${remainingSeconds}s para tentar novamente.`;
 }
 
 function resolveCardPublicKey() {
@@ -888,6 +931,20 @@ function normalizeCardCvv(value: string) {
   return value.replace(/\D/g, "").slice(0, 4);
 }
 
+function normalizeBrazilZipDigits(value: string) {
+  return value.replace(/\D/g, "").slice(0, 8);
+}
+
+function formatBrazilZipCode(value: string) {
+  const digits = normalizeBrazilZipDigits(value);
+  if (digits.length <= 5) return digits;
+  return `${digits.slice(0, 5)}-${digits.slice(5, 8)}`;
+}
+
+function isValidBrazilZipCode(value: string) {
+  return /^\d{8}$/.test(normalizeBrazilZipDigits(value));
+}
+
 function summarizeMercadoPagoStatusDetail(
   statusDetail: string | null | undefined,
   providerStatus: string | null | undefined,
@@ -1222,21 +1279,25 @@ function CardFormPanel({
   cardExpiry,
   cardCvv,
   cardDocument,
+  cardBillingZipCode,
   cardBrand,
   cardNumberStatus,
   cardHolderStatus,
   cardExpiryStatus,
   cardCvvStatus,
   cardDocumentStatus,
+  cardBillingZipCodeStatus,
   onCardNumberChange,
   onCardHolderNameChange,
   onCardExpiryChange,
   onCardCvvChange,
   onCardDocumentChange,
+  onCardBillingZipCodeChange,
   onSubmit,
   onBack,
   isSubmitting,
   canSubmit,
+  cooldownMessage,
   errorMessage,
   hasInputError,
   errorAnimationTick,
@@ -1302,6 +1363,13 @@ function CardFormPanel({
         </div>
       </div>
 
+      <div key={`card-billing-zip-${errorAnimationTick}`} className={`mt-[10px] ${hasInputError ? "flowdesk-input-shake" : ""}`}>
+        <div className="relative">
+          <input type="text" value={cardBillingZipCode} onChange={(event) => onCardBillingZipCodeChange(event.currentTarget.value)} placeholder="CEP de cobranca" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[62px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, cardBillingZipCodeStatus)}`} inputMode="numeric" autoComplete="postal-code" aria-invalid={hasInputError} />
+          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={cardBillingZipCodeStatus} /></span>
+        </div>
+      </div>
+
       {errorMessage ? (
         <p key={`card-form-error-${errorAnimationTick}-${errorMessage}`} className="mt-[10px] flowdesk-slide-down text-left text-[12px] text-[#DB4646]">
           {errorMessage}
@@ -1311,6 +1379,12 @@ function CardFormPanel({
       <button type="button" onClick={onSubmit} disabled={!canSubmit || isSubmitting} className="mt-[16px] flex h-[56px] w-full items-center justify-center rounded-[5px] bg-[#D8D8D8] text-[20px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45">
         {isSubmitting ? <ButtonLoader size={24} /> : "Confirmar pagamento"}
       </button>
+
+      {cooldownMessage ? (
+        <p className="mt-[10px] text-center text-[12px] text-[#8E8E8E]">
+          {cooldownMessage}
+        </p>
+      ) : null}
 
       <button type="button" onClick={onBack} disabled={isSubmitting} className="mt-[12px] w-full text-center text-[12px] text-[#8E8E8E] transition-colors hover:text-[#B5B5B5] disabled:cursor-not-allowed disabled:opacity-50">
         Voltar para metodos
@@ -1458,16 +1532,23 @@ export function ConfigStepFour({
   const [cardExpiry, setCardExpiry] = useState(initialStepFourDraft.cardExpiry);
   const [cardCvv, setCardCvv] = useState(initialStepFourDraft.cardCvv);
   const [cardDocument, setCardDocument] = useState(initialStepFourDraft.cardDocument);
+  const [cardBillingZipCode, setCardBillingZipCode] = useState(
+    initialStepFourDraft.cardBillingZipCode,
+  );
   const [cardNumberStatus, setCardNumberStatus] = useState<ValidationStatus>("idle");
   const [cardHolderStatus, setCardHolderStatus] = useState<ValidationStatus>("idle");
   const [cardExpiryStatus, setCardExpiryStatus] = useState<ValidationStatus>("idle");
   const [cardCvvStatus, setCardCvvStatus] = useState<ValidationStatus>("idle");
   const [cardDocumentStatus, setCardDocumentStatus] = useState<ValidationStatus>("idle");
+  const [cardBillingZipCodeStatus, setCardBillingZipCodeStatus] =
+    useState<ValidationStatus>("idle");
   const [cardFormError, setCardFormError] = useState<string | null>(null);
   const [cardFormHasInputError, setCardFormHasInputError] = useState(false);
   const [cardFormErrorAnimationTick, setCardFormErrorAnimationTick] = useState(0);
   const [isSubmittingCard, setIsSubmittingCard] = useState(false);
   const [cardClientCooldownUntil, setCardClientCooldownUntil] = useState<number | null>(null);
+  const [cardClientCooldownRemainingSeconds, setCardClientCooldownRemainingSeconds] =
+    useState<number | null>(null);
 
   const [pixOrder, setPixOrder] = useState<PixOrder | null>(null);
   const [lastKnownOrderNumber, setLastKnownOrderNumber] = useState<number | null>(
@@ -1482,14 +1563,49 @@ export function ConfigStepFour({
   const cardBrand = useMemo(() => detectCardBrand(cardNumberDigits), [cardNumberDigits]);
   const cardExpiryDigits = useMemo(() => normalizeCardExpiryDigits(cardExpiry), [cardExpiry]);
   const cardCvvDigits = useMemo(() => normalizeCardCvv(cardCvv), [cardCvv]);
+  const cardBillingZipCodeDigits = useMemo(
+    () => normalizeBrazilZipDigits(cardBillingZipCode),
+    [cardBillingZipCode],
+  );
   const pendingPixOrderId = pixOrder?.status === "pending" ? pixOrder.id : null;
   const pendingPixOrderNumber =
     pixOrder?.status === "pending" ? pixOrder.orderNumber : null;
+  const cardCooldownMessage = useMemo(
+    () => formatCooldownMessage(cardClientCooldownRemainingSeconds),
+    [cardClientCooldownRemainingSeconds],
+  );
 
   useEffect(() => {
     latestInitialStepFourDraftRef.current = initialStepFourDraft;
     hasInitialStepFourDraftRef.current = hasInitialStepFourDraft;
   }, [hasInitialStepFourDraft, initialStepFourDraft]);
+
+  useEffect(() => {
+    if (!cardClientCooldownUntil) {
+      setCardClientCooldownRemainingSeconds(null);
+      return;
+    }
+
+    const syncRemaining = () => {
+      const nextSeconds = Math.max(
+        0,
+        Math.ceil((cardClientCooldownUntil - Date.now()) / 1000),
+      );
+      if (nextSeconds <= 0) {
+        setCardClientCooldownUntil(null);
+        setCardClientCooldownRemainingSeconds(null);
+        return;
+      }
+
+      setCardClientCooldownRemainingSeconds(nextSeconds);
+    };
+
+    syncRemaining();
+    const intervalId = window.setInterval(syncRemaining, 1000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [cardClientCooldownUntil]);
 
   useEffect(() => {
     if (!guildId) {
@@ -1503,6 +1619,7 @@ export function ConfigStepFour({
       setCardExpiry("");
       setCardCvv("");
       setCardDocument("");
+      setCardBillingZipCode("");
       setPixOrder(null);
       setLastKnownOrderNumber(null);
       setCopied(false);
@@ -1543,6 +1660,7 @@ export function ConfigStepFour({
     setCardExpiry(guildDraft.cardExpiry);
     setCardCvv(guildDraft.cardCvv);
     setCardDocument(guildDraft.cardDocument);
+    setCardBillingZipCode(guildDraft.cardBillingZipCode);
     setCardClientCooldownUntil(null);
     setLastKnownOrderNumber(guildDraft.lastKnownOrderNumber);
     setCopied(false);
@@ -1690,8 +1808,10 @@ export function ConfigStepFour({
       cardExpiry,
       cardCvv,
       cardDocument,
+      cardBillingZipCode,
     });
   }, [
+    cardBillingZipCode,
     cardCvv,
     cardDocument,
     cardExpiry,
@@ -1913,13 +2033,36 @@ export function ConfigStepFour({
     };
   }, [cardDocumentDigits]);
 
+  useEffect(() => {
+    if (!cardBillingZipCodeDigits) {
+      setCardBillingZipCodeStatus("idle");
+      return;
+    }
+
+    setCardBillingZipCodeStatus("validating");
+    const timeoutId = window.setTimeout(() => {
+      if (cardBillingZipCodeDigits.length < 8) {
+        setCardBillingZipCodeStatus("idle");
+        return;
+      }
+
+      setCardBillingZipCodeStatus(
+        isValidBrazilZipCode(cardBillingZipCodeDigits) ? "valid" : "invalid",
+      );
+    }, 220);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [cardBillingZipCodeDigits]);
+
   const canSubmitPix = useMemo(() => {
     return Boolean(guildId && pixDocumentStatus === "valid" && pixNameStatus === "valid" && !isSubmittingPix);
   }, [guildId, isSubmittingPix, pixDocumentStatus, pixNameStatus]);
 
   const canSubmitCard = useMemo(() => {
-    return Boolean(guildId && cardBrand && cardNumberStatus === "valid" && cardHolderStatus === "valid" && cardExpiryStatus === "valid" && cardCvvStatus === "valid" && cardDocumentStatus === "valid" && !isSubmittingCard);
-  }, [cardBrand, cardCvvStatus, cardDocumentStatus, cardExpiryStatus, cardHolderStatus, cardNumberStatus, guildId, isSubmittingCard]);
+    return Boolean(guildId && cardBrand && cardNumberStatus === "valid" && cardHolderStatus === "valid" && cardExpiryStatus === "valid" && cardCvvStatus === "valid" && cardDocumentStatus === "valid" && cardBillingZipCodeStatus === "valid" && !isSubmittingCard);
+  }, [cardBillingZipCodeStatus, cardBrand, cardCvvStatus, cardDocumentStatus, cardExpiryStatus, cardHolderStatus, cardNumberStatus, guildId, isSubmittingCard]);
 
   const paymentStatus = pixOrder?.status || "pending";
   const resolvedOrderNumber = pixOrder?.orderNumber || lastKnownOrderNumber || null;
@@ -2008,6 +2151,12 @@ export function ConfigStepFour({
 
   const handleCardDocumentChange = useCallback((value: string) => {
     setCardDocument(formatDocumentInput(value));
+    setCardFormHasInputError(false);
+    setCardFormError(null);
+  }, []);
+
+  const handleCardBillingZipCodeChange = useCallback((value: string) => {
+    setCardBillingZipCode(formatBrazilZipCode(value));
     setCardFormHasInputError(false);
     setCardFormError(null);
   }, []);
@@ -2137,6 +2286,13 @@ export function ConfigStepFour({
       return;
     }
 
+    if (!isValidBrazilZipCode(cardBillingZipCodeDigits)) {
+      triggerCardFormValidationError(
+        "CEP de cobranca invalido para pagamento com cartao.",
+      );
+      return;
+    }
+
     const documentType = resolveBrazilDocumentType(cardDocumentDigits);
     if (!documentType) {
       triggerCardFormValidationError(
@@ -2177,6 +2333,7 @@ export function ConfigStepFour({
       const mercadoPago = new window.MercadoPago(publicKey, {
         locale: "pt-BR",
       });
+      const deviceSessionId = resolveMercadoPagoDeviceSessionId();
 
       let tokenPayload: MercadoPagoCardTokenPayload;
       try {
@@ -2188,6 +2345,13 @@ export function ConfigStepFour({
           securityCode: cardCvvDigits,
           cardExpirationMonth: cardExpiryDigits.slice(0, 2),
           cardExpirationYear: `20${cardExpiryDigits.slice(2, 4)}`,
+          ...(deviceSessionId
+            ? {
+                device: {
+                  id: deviceSessionId,
+                },
+              }
+            : {}),
         });
       } catch (tokenizationError) {
         throw new Error(
@@ -2221,20 +2385,22 @@ export function ConfigStepFour({
           guildId,
           payerName: normalizePersonName(cardHolderName),
           payerDocument: cardDocumentDigits,
+          billingZipCode: cardBillingZipCodeDigits,
           cardToken,
           paymentMethodId,
           installments: 1,
           issuerId,
-          deviceSessionId: resolveMercadoPagoDeviceSessionId(),
+          deviceSessionId,
         }),
       });
 
       const payload = (await response.json()) as PixPaymentApiResponse;
+      const retryAfterSeconds = resolveRetryAfterSeconds(response, payload);
 
       if (!response.ok || !payload.ok || !payload.order) {
-        if (payload.retryAfterSeconds && payload.retryAfterSeconds > 0) {
+        if (retryAfterSeconds) {
           setCardClientCooldownUntil(
-            Date.now() + payload.retryAfterSeconds * 1000,
+            Date.now() + retryAfterSeconds * 1000,
           );
         }
         throw new Error(payload.message || "Falha ao processar pagamento com cartao.");
@@ -2285,7 +2451,8 @@ export function ConfigStepFour({
           normalizedMessage.includes("cvc") ||
           normalizedMessage.includes("expiration") ||
           normalizedMessage.includes("cpf/cnpj") ||
-          normalizedMessage.includes("documento"));
+          normalizedMessage.includes("documento") ||
+          normalizedMessage.includes("cep"));
 
       if (shouldFlagInputError) {
         triggerCardFormValidationError(message);
@@ -2300,6 +2467,7 @@ export function ConfigStepFour({
   }, [
     canSubmitCard,
     cardBrand,
+    cardBillingZipCodeDigits,
     cardCvvDigits,
     cardDocumentDigits,
     cardExpiryDigits,
@@ -2523,17 +2691,20 @@ export function ConfigStepFour({
           cardExpiry={cardExpiry}
           cardCvv={cardCvv}
           cardDocument={cardDocument}
+          cardBillingZipCode={cardBillingZipCode}
           cardBrand={cardBrand}
           cardNumberStatus={cardNumberStatus}
           cardHolderStatus={cardHolderStatus}
           cardExpiryStatus={cardExpiryStatus}
           cardCvvStatus={cardCvvStatus}
           cardDocumentStatus={cardDocumentStatus}
+          cardBillingZipCodeStatus={cardBillingZipCodeStatus}
           onCardNumberChange={handleCardNumberChange}
           onCardHolderNameChange={handleCardHolderChange}
           onCardExpiryChange={handleCardExpiryChange}
           onCardCvvChange={handleCardCvvChange}
           onCardDocumentChange={handleCardDocumentChange}
+          onCardBillingZipCodeChange={handleCardBillingZipCodeChange}
           onSubmit={() => {
             void handleSubmitCardPayment();
           }}
@@ -2542,11 +2713,12 @@ export function ConfigStepFour({
             setCardFormHasInputError(false);
             setView("methods");
           }}
-          isSubmitting={isSubmittingCard}
-          canSubmit={canSubmitCard}
-          errorMessage={cardFormError}
-          hasInputError={cardFormHasInputError}
-          errorAnimationTick={cardFormErrorAnimationTick}
+        isSubmitting={isSubmittingCard}
+        canSubmit={canSubmitCard}
+        cooldownMessage={cardCooldownMessage}
+        errorMessage={cardFormError}
+        hasInputError={cardFormHasInputError}
+        errorAnimationTick={cardFormErrorAnimationTick}
         />
       );
     }
@@ -2581,6 +2753,8 @@ export function ConfigStepFour({
     canSubmitCard,
     canSubmitPix,
     cardBrand,
+    cardBillingZipCode,
+    cardBillingZipCodeStatus,
     cardCvv,
     cardCvvStatus,
     cardDocument,
@@ -2594,8 +2768,10 @@ export function ConfigStepFour({
     cardHolderStatus,
     cardNumber,
     cardNumberStatus,
+    cardCooldownMessage,
     copied,
     handleCardCvvChange,
+    handleCardBillingZipCodeChange,
     handleCardDocumentChange,
     handleCardExpiryChange,
     handleCardHolderChange,
@@ -2679,17 +2855,20 @@ export function ConfigStepFour({
           cardExpiry={cardExpiry}
           cardCvv={cardCvv}
           cardDocument={cardDocument}
+          cardBillingZipCode={cardBillingZipCode}
           cardBrand={cardBrand}
           cardNumberStatus={cardNumberStatus}
           cardHolderStatus={cardHolderStatus}
           cardExpiryStatus={cardExpiryStatus}
           cardCvvStatus={cardCvvStatus}
           cardDocumentStatus={cardDocumentStatus}
+          cardBillingZipCodeStatus={cardBillingZipCodeStatus}
           onCardNumberChange={handleCardNumberChange}
           onCardHolderNameChange={handleCardHolderChange}
           onCardExpiryChange={handleCardExpiryChange}
           onCardCvvChange={handleCardCvvChange}
           onCardDocumentChange={handleCardDocumentChange}
+          onCardBillingZipCodeChange={handleCardBillingZipCodeChange}
           onSubmit={() => {
             void handleSubmitCardPayment();
           }}
@@ -2700,6 +2879,7 @@ export function ConfigStepFour({
           }}
           isSubmitting={isSubmittingCard}
           canSubmit={canSubmitCard}
+          cooldownMessage={cardCooldownMessage}
           errorMessage={cardFormError}
           hasInputError={cardFormHasInputError}
           errorAnimationTick={cardFormErrorAnimationTick}
