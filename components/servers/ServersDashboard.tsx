@@ -37,12 +37,6 @@ type ServersApiResponse = {
 type FilterOption = "all" | ManagedServerStatus;
 type ServerEditorTab = "settings" | "payments" | "methods" | "plans";
 
-const STATUS_LABEL: Record<ManagedServerStatus, string> = {
-  paid: "Pago",
-  expired: "Expirado",
-  off: "Desligado",
-};
-
 const FILTER_LABEL: Record<FilterOption, string> = {
   all: "Status",
   paid: "Pago",
@@ -305,10 +299,17 @@ export function ServersDashboard({
 
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 12000);
 
     async function loadServers() {
       try {
-        const response = await fetch("/api/auth/me/servers", { cache: "no-store" });
+        const response = await fetch("/api/auth/me/servers", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
         const payload = (await response.json()) as ServersApiResponse;
 
         if (!isMounted) return;
@@ -320,12 +321,18 @@ export function ServersDashboard({
         setServers(payload.servers || []);
       } catch (error) {
         if (!isMounted) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setErrorMessage("Tempo esgotado ao carregar servidores. Tente novamente.");
+          setServers([]);
+          return;
+        }
         setErrorMessage(
           error instanceof Error ? error.message : "Erro ao carregar servidores.",
         );
         setServers([]);
       } finally {
         if (!isMounted) return;
+        window.clearTimeout(timeoutId);
         setIsLoading(false);
       }
     }
@@ -334,6 +341,8 @@ export function ServersDashboard({
 
     return () => {
       isMounted = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
   }, []);
 

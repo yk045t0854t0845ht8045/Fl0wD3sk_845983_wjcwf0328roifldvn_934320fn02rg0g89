@@ -10,7 +10,7 @@ export default function ErrorPage({ reset }: ErrorPageProps) {
     <main className="flex min-h-screen items-center justify-center bg-black px-6">
       <section className="w-full max-w-[420px] text-center">
         <h1 className="text-[24px] font-medium text-[#D8D8D8]">
-          This page couldn't load
+          This page could not load
         </h1>
         <p className="mt-2 text-[13px] text-[#9A9A9A]">
           Reload to try again, or go back.
@@ -35,4 +35,3 @@ export default function ErrorPage({ reset }: ErrorPageProps) {
     </main>
   );
 }
-

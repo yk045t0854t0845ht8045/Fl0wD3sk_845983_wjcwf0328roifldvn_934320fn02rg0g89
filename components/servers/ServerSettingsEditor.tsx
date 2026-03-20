@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ClientErrorBoundary } from "@/components/common/ClientErrorBoundary";
 import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect";
@@ -217,18 +218,26 @@ function PaymentMethodIcon({
   alt: string;
   size: number;
 }) {
+  const fallbackSrc = "/cdn/icons/card_.png";
+  const [currentSrc, setCurrentSrc] = useState(src);
+
+  useEffect(() => {
+    setCurrentSrc(src);
+  }, [src]);
+
   return (
-    <img
-      src={src}
+    <Image
+      src={currentSrc}
       alt={alt}
       width={size}
       height={size}
       className="object-contain"
       loading="lazy"
+      unoptimized
       onError={(event) => {
-        const fallbackSrc = "/cdn/icons/card_.png";
-        if (event.currentTarget.src.endsWith(fallbackSrc)) return;
-        event.currentTarget.src = fallbackSrc;
+        const target = event.currentTarget as HTMLImageElement;
+        if (target.src.endsWith(fallbackSrc)) return;
+        setCurrentSrc(fallbackSrc);
       }}
     />
   );

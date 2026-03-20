@@ -9,6 +9,7 @@ import {
   resolveLicenseBaseTimestamp,
 } from "@/lib/payments/licenseStatus";
 import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
+import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type ApprovedOrderRecord = {
@@ -39,16 +40,20 @@ export async function GET() {
     const sessionData = await resolveSessionAccessToken();
 
     if (!sessionData?.authSession) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
+        ),
       );
     }
 
     if (!sessionData.accessToken) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Token OAuth ausente na sessao." },
         { status: 401 },
+        ),
       );
     }
 
@@ -84,10 +89,12 @@ export async function GET() {
     }
 
     if (!latestApprovedOrderByGuild.size) {
-      return NextResponse.json({
+      return applyNoStoreHeaders(
+        NextResponse.json({
         ok: true,
         servers: [],
-      });
+        }),
+      );
     }
 
     const accessibleGuilds = await getAccessibleGuildsForSession({
@@ -138,12 +145,15 @@ export async function GET() {
         return a.guildName.localeCompare(b.guildName, "pt-BR");
       });
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       servers,
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -152,6 +162,7 @@ export async function GET() {
             : "Erro ao carregar servidores gerenciados.",
       },
       { status: 500 },
+      ),
     );
   }
 }

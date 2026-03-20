@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { configStepTwoScale } from "@/components/config/configStepTwoScale";
@@ -77,6 +77,8 @@ export function ConfigStepTwo({
   onProceedToStepThree,
   onGoBackToStepOne,
 }: ConfigStepTwoProps) {
+  const latestInitialDraftRef = useRef(buildStepTwoDraft(initialDraft));
+  const hasInitialDraftValuesRef = useRef(hasStepTwoDraftValues(initialDraft));
   const [textChannelOptions, setTextChannelOptions] = useState<SelectOption[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<SelectOption[]>([]);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
@@ -87,6 +89,11 @@ export function ConfigStepTwo({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isPlanLocked = guildLicenseStatus === "expired" || guildLicenseStatus === "off";
+
+  useEffect(() => {
+    latestInitialDraftRef.current = buildStepTwoDraft(initialDraft);
+    hasInitialDraftValuesRef.current = hasStepTwoDraftValues(initialDraft);
+  }, [initialDraft]);
 
   useEffect(() => {
     if (!guildId) {
@@ -101,6 +108,10 @@ export function ConfigStepTwo({
     }
 
     let isMounted = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 12000);
     setIsLoadingChannels(true);
     setErrorMessage(null);
 
@@ -109,9 +120,11 @@ export function ConfigStepTwo({
         const [channelsResponse, settingsResponse] = await Promise.all([
           fetch(`/api/auth/me/guilds/channels?guildId=${guildId}`, {
             cache: "no-store",
+            signal: controller.signal,
           }),
           fetch(`/api/auth/me/guilds/ticket-settings?guildId=${guildId}`, {
             cache: "no-store",
+            signal: controller.signal,
           }),
         ]);
 
@@ -141,8 +154,8 @@ export function ConfigStepTwo({
             ? buildStepTwoDraft(settingsPayload.settings)
             : buildStepTwoDraft(null);
 
-        const sourceDraft = hasStepTwoDraftValues(initialDraft)
-          ? buildStepTwoDraft(initialDraft)
+        const sourceDraft = hasInitialDraftValuesRef.current
+          ? latestInitialDraftRef.current
           : fallbackSettings;
 
         const textChannelSet = new Set(nextTextOptions.map((option) => option.id));
@@ -170,6 +183,10 @@ export function ConfigStepTwo({
         );
       } catch (error) {
         if (!isMounted) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setErrorMessage("Tempo esgotado ao buscar canais do servidor. Tente novamente.");
+          return;
+        }
         setTextChannelOptions([]);
         setCategoryOptions([]);
         setErrorMessage(
@@ -179,6 +196,7 @@ export function ConfigStepTwo({
         );
       } finally {
         if (!isMounted) return;
+        window.clearTimeout(timeoutId);
         setIsLoadingChannels(false);
       }
     }
@@ -187,6 +205,8 @@ export function ConfigStepTwo({
 
     return () => {
       isMounted = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
   }, [guildId]);
 

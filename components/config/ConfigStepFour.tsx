@@ -1,7 +1,7 @@
 ﻿
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
@@ -1330,13 +1330,18 @@ function PixCheckoutPanel({
   onCopy,
   onBackToMethods,
 }: PixCheckoutPanelProps) {
-  const [isQrImageLoading, setIsQrImageLoading] = useState(true);
+  const [loadedQrImageKey, setLoadedQrImageKey] = useState<string | null>(null);
+  const [qrImageErrorKey, setQrImageErrorKey] = useState<string | null>(null);
   const qrCodeDataUri = order?.qrCodeDataUri || null;
   const qrCodeText = order?.qrCodeText || "";
-
-  useEffect(() => {
-    setIsQrImageLoading(true);
-  }, [qrCodeDataUri]);
+  const hasQrImageError = Boolean(
+    qrCodeDataUri && qrImageErrorKey === qrCodeDataUri,
+  );
+  const isQrImageLoading = Boolean(
+    qrCodeDataUri &&
+      loadedQrImageKey !== qrCodeDataUri &&
+      !hasQrImageError,
+  );
 
   return (
     <div className={className}>
@@ -1345,14 +1350,39 @@ function PixCheckoutPanel({
       <div className="mt-[25px] mb-[25px] h-[2px] w-full bg-[#242424] max-[1529px]:hidden" />
 
       <div className="relative aspect-square w-full overflow-hidden border border-[#2E2E2E] bg-[#0A0A0A]">
-        {!qrCodeDataUri || isQrImageLoading ? (
+        {isQrImageLoading ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center">
             <ButtonLoader size={34} />
           </div>
         ) : null}
 
+        {!qrCodeDataUri || hasQrImageError ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center px-6 text-center text-[12px] text-[#9A9A9A]">
+            QR Code indisponivel no momento. Tente regerar o pagamento se isso continuar.
+          </div>
+        ) : null}
+
         {qrCodeDataUri ? (
-          <Image src={qrCodeDataUri} alt="QR Code PIX" fill sizes="(max-width: 1280px) 100vw, 536px" onLoad={() => { setIsQrImageLoading(false); }} className={`object-cover transition-opacity duration-200 ${isQrImageLoading ? "opacity-0" : "opacity-100"}`} unoptimized />
+          <Image
+            key={qrCodeDataUri}
+            src={qrCodeDataUri}
+            alt="QR Code PIX"
+            fill
+            sizes="(max-width: 1280px) 100vw, 536px"
+            onLoad={() => {
+              setLoadedQrImageKey(qrCodeDataUri);
+              setQrImageErrorKey((current) =>
+                current === qrCodeDataUri ? null : current,
+              );
+            }}
+            onError={() => {
+              setQrImageErrorKey(qrCodeDataUri);
+            }}
+            className={`object-cover transition-opacity duration-200 ${
+              isQrImageLoading || hasQrImageError ? "opacity-0" : "opacity-100"
+            }`}
+            unoptimized
+          />
         ) : null}
       </div>
 
@@ -1404,6 +1434,13 @@ export function ConfigStepFour({
     () => buildStepFourDraft(initialDraft),
     [initialDraft],
   );
+  const hasInitialStepFourDraft = useMemo(
+    () => hasStepFourDraftValues(initialDraft),
+    [initialDraft],
+  );
+  const latestInitialStepFourDraftRef = useRef(initialStepFourDraft);
+  const hasInitialStepFourDraftRef = useRef(hasInitialStepFourDraft);
+  const paymentPollingInFlightRef = useRef(false);
   const [view, setView] = useState<StepFourView>(initialStepFourDraft.view);
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
 
@@ -1445,6 +1482,14 @@ export function ConfigStepFour({
   const cardBrand = useMemo(() => detectCardBrand(cardNumberDigits), [cardNumberDigits]);
   const cardExpiryDigits = useMemo(() => normalizeCardExpiryDigits(cardExpiry), [cardExpiry]);
   const cardCvvDigits = useMemo(() => normalizeCardCvv(cardCvv), [cardCvv]);
+  const pendingPixOrderId = pixOrder?.status === "pending" ? pixOrder.id : null;
+  const pendingPixOrderNumber =
+    pixOrder?.status === "pending" ? pixOrder.orderNumber : null;
+
+  useEffect(() => {
+    latestInitialStepFourDraftRef.current = initialStepFourDraft;
+    hasInitialStepFourDraftRef.current = hasInitialStepFourDraft;
+  }, [hasInitialStepFourDraft, initialStepFourDraft]);
 
   useEffect(() => {
     if (!guildId) {
@@ -1466,8 +1511,8 @@ export function ConfigStepFour({
     }
 
     const activeGuildId = guildId;
-    const guildDraft = buildStepFourDraft(initialDraft);
-    const hasStoredDraft = hasStepFourDraftValues(initialDraft);
+    const guildDraft = latestInitialStepFourDraftRef.current;
+    const hasStoredDraft = hasInitialStepFourDraftRef.current;
     const requestedPaymentMethod = readRequestedPaymentMethodFromQuery();
     const checkoutQuery = readCheckoutStatusQuery();
     const shouldLoadOrderByCode =
@@ -1662,54 +1707,72 @@ export function ConfigStepFour({
   ]);
 
   useEffect(() => {
-    if (!guildId || !pixOrder || pixOrder.status !== "pending") return;
+    if (!guildId || !pendingPixOrderId || !pendingPixOrderNumber) return;
     const activeGuildId = guildId;
-    const activeOrderCode = pixOrder.orderNumber;
-
+    const activeOrderCode = pendingPixOrderNumber;
     let isMounted = true;
+    let activeController: AbortController | null = null;
+
+    const pollLatestOrder = async () => {
+      if (paymentPollingInFlightRef.current) return;
+
+      paymentPollingInFlightRef.current = true;
+      activeController = new AbortController();
+      const timeoutId = window.setTimeout(() => {
+        activeController?.abort();
+      }, 7000);
+
+      try {
+        const queryParams = new URLSearchParams({
+          guildId: activeGuildId,
+          code: String(activeOrderCode),
+        });
+        const response = await fetch(
+          `/api/auth/me/payments/pix?${queryParams.toString()}`,
+          {
+            cache: "no-store",
+            signal: activeController.signal,
+          },
+        );
+        const payload = (await response.json()) as PixPaymentApiResponse;
+        if (!isMounted || !response.ok || !payload.ok || !payload.order) return;
+
+        setPixOrder(payload.order);
+        setLastKnownOrderNumber(payload.order.orderNumber);
+        writeCachedOrderByGuild(activeGuildId, payload.order);
+
+        if (payload.order.status && payload.order.status !== "pending") {
+          setView("methods");
+          if (payload.order.status === "approved") {
+            setMethodMessage(
+              payload.licenseActive
+                ? buildActiveLicenseMessage(payload.licenseExpiresAt)
+                : "Pagamento aprovado para este servidor.",
+            );
+            setCheckoutStatusQuery({ order: payload.order, guildId: activeGuildId });
+          } else {
+            clearCheckoutStatusQuery();
+          }
+        }
+      } catch {
+        // polling silencioso
+      } finally {
+        window.clearTimeout(timeoutId);
+        paymentPollingInFlightRef.current = false;
+      }
+    };
 
     const intervalId = window.setInterval(() => {
-      void (async () => {
-        try {
-          const queryParams = new URLSearchParams({
-            guildId: activeGuildId,
-            code: String(activeOrderCode),
-          });
-          const response = await fetch(
-            `/api/auth/me/payments/pix?${queryParams.toString()}`,
-            { cache: "no-store" },
-          );
-          const payload = (await response.json()) as PixPaymentApiResponse;
-          if (!isMounted || !response.ok || !payload.ok || !payload.order) return;
-
-          setPixOrder(payload.order);
-          setLastKnownOrderNumber(payload.order.orderNumber);
-          writeCachedOrderByGuild(activeGuildId, payload.order);
-
-          if (payload.order.status && payload.order.status !== "pending") {
-            setView("methods");
-            if (payload.order.status === "approved") {
-              setMethodMessage(
-                payload.licenseActive
-                  ? buildActiveLicenseMessage(payload.licenseExpiresAt)
-                  : "Pagamento aprovado para este servidor.",
-              );
-              setCheckoutStatusQuery({ order: payload.order, guildId: activeGuildId });
-            } else {
-              clearCheckoutStatusQuery();
-            }
-          }
-        } catch {
-          // polling silencioso
-        }
-      })();
+      void pollLatestOrder();
     }, 8000);
 
     return () => {
       isMounted = false;
+      activeController?.abort();
+      paymentPollingInFlightRef.current = false;
       window.clearInterval(intervalId);
     };
-  }, [guildId, pixOrder?.id, pixOrder?.orderNumber, pixOrder?.status]);
+  }, [guildId, pendingPixOrderId, pendingPixOrderNumber]);
 
   useEffect(() => {
     if (!documentDigits) {

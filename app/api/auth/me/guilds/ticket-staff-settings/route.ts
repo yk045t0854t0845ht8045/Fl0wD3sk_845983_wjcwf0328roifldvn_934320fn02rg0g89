@@ -6,6 +6,10 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { getGuildLicenseStatus } from "@/lib/payments/licenseStatus";
+import {
+  applyNoStoreHeaders,
+  ensureSameOriginJsonMutationRequest,
+} from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type StaffSettingsBody = {
@@ -140,9 +144,11 @@ export async function GET(request: Request) {
     const guildId = (url.searchParams.get("guildId") || "").trim();
 
     if (!isGuildId(guildId)) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Guild ID invalido." },
         { status: 400 },
+        ),
       );
     }
 
@@ -166,13 +172,16 @@ export async function GET(request: Request) {
 
     const data = result.data;
     if (!data) {
-      return NextResponse.json({
+      return applyNoStoreHeaders(
+        NextResponse.json({
         ok: true,
         settings: null,
-      });
+        }),
+      );
     }
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       settings: {
         adminRoleId: data.admin_role_id,
@@ -187,9 +196,11 @@ export async function GET(request: Request) {
           : [],
         updatedAt: data.updated_at,
       },
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -198,19 +209,27 @@ export async function GET(request: Request) {
             : "Erro ao carregar configuracoes de staff.",
       },
       { status: 500 },
+      ),
     );
   }
 }
 
 export async function POST(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) {
+    return applyNoStoreHeaders(invalidMutationResponse);
+  }
+
   try {
     let body: StaffSettingsBody = {};
     try {
       body = (await request.json()) as StaffSettingsBody;
     } catch {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Payload JSON invalido." },
         { status: 400 },
+        ),
       );
     }
 
@@ -221,20 +240,24 @@ export async function POST(request: Request) {
     const notifyRoleIds = normalizeRoleIdList(body.notifyRoleIds);
 
     if (!guildId || !adminRoleId) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Guild ID e cargo admin sao obrigatorios." },
         { status: 400 },
+        ),
       );
     }
 
     if (!claimRoleIds.length || !closeRoleIds.length || !notifyRoleIds.length) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         {
           ok: false,
           message:
             "Os cargos de assumir, fechar e notificar precisam ter pelo menos uma selecao.",
         },
         { status: 400 },
+        ),
       );
     }
 
@@ -243,12 +266,14 @@ export async function POST(request: Request) {
       closeRoleIds.length > MAX_ROLE_SELECTIONS ||
       notifyRoleIds.length > MAX_ROLE_SELECTIONS
     ) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         {
           ok: false,
           message: `Cada grupo de cargos suporta ate ${MAX_ROLE_SELECTIONS} selecoes.`,
         },
         { status: 400 },
+        ),
       );
     }
 
@@ -259,21 +284,25 @@ export async function POST(request: Request) {
 
     const licenseStatus = await getGuildLicenseStatus(guildId);
     if (licenseStatus === "expired" || licenseStatus === "off") {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         {
           ok: false,
           message:
             "Servidor com plano expirado/desligado. Renove o pagamento para editar configuracoes.",
         },
         { status: 403 },
+        ),
       );
     }
 
     const rawRoles = await fetchGuildRolesByBot(guildId);
     if (!rawRoles) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Bot nao possui acesso aos cargos deste servidor." },
         { status: 403 },
+        ),
       );
     }
 
@@ -289,9 +318,11 @@ export async function POST(request: Request) {
       closeRoleIds.some((roleId) => !validRoleIds.has(roleId)) ||
       notifyRoleIds.some((roleId) => !validRoleIds.has(roleId))
     ) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Um ou mais cargos selecionados sao invalidos." },
         { status: 400 },
+        ),
       );
     }
 
@@ -304,7 +335,8 @@ export async function POST(request: Request) {
       configuredByUserId: access.sessionData.authSession.user.id,
     });
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       settings: {
         guildId: savedSettings.guild_id,
@@ -314,9 +346,11 @@ export async function POST(request: Request) {
         notifyRoleIds: savedSettings.notify_role_ids,
         updatedAt: savedSettings.updated_at,
       },
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -325,6 +359,7 @@ export async function POST(request: Request) {
             : "Erro ao salvar configuracoes de staff.",
       },
       { status: 500 },
+      ),
     );
   }
 }

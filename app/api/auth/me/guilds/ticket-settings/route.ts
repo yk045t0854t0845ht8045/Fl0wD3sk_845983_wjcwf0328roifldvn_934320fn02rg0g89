@@ -6,6 +6,10 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { getGuildLicenseStatus } from "@/lib/payments/licenseStatus";
+import {
+  applyNoStoreHeaders,
+  ensureSameOriginJsonMutationRequest,
+} from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_CATEGORY = 4;
@@ -137,9 +141,11 @@ export async function GET(request: Request) {
     const guildId = (url.searchParams.get("guildId") || "").trim();
 
     if (!isGuildId(guildId)) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Guild ID invalido." },
         { status: 400 },
+        ),
       );
     }
 
@@ -162,13 +168,16 @@ export async function GET(request: Request) {
     }
 
     if (!result.data) {
-      return NextResponse.json({
+      return applyNoStoreHeaders(
+        NextResponse.json({
         ok: true,
         settings: null,
-      });
+        }),
+      );
     }
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       settings: {
         menuChannelId: result.data.menu_channel_id,
@@ -177,9 +186,11 @@ export async function GET(request: Request) {
         logsClosedChannelId: result.data.logs_closed_channel_id,
         updatedAt: result.data.updated_at,
       },
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -188,19 +199,27 @@ export async function GET(request: Request) {
             : "Erro ao carregar configuracoes do servidor.",
       },
       { status: 500 },
+      ),
     );
   }
 }
 
 export async function POST(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) {
+    return applyNoStoreHeaders(invalidMutationResponse);
+  }
+
   try {
     let body: TicketSettingsBody = {};
     try {
       body = (await request.json()) as TicketSettingsBody;
     } catch {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Payload JSON invalido." },
         { status: 400 },
+        ),
       );
     }
 
@@ -217,9 +236,11 @@ export async function POST(request: Request) {
       !isGuildId(logsCreatedChannelId) ||
       !isGuildId(logsClosedChannelId)
     ) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Um ou mais IDs informados sao invalidos." },
         { status: 400 },
+        ),
       );
     }
 
@@ -230,21 +251,25 @@ export async function POST(request: Request) {
 
     const licenseStatus = await getGuildLicenseStatus(guildId);
     if (licenseStatus === "expired" || licenseStatus === "off") {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         {
           ok: false,
           message:
             "Servidor com plano expirado/desligado. Renove o pagamento para editar configuracoes.",
         },
         { status: 403 },
+        ),
       );
     }
 
     const rawChannels = await fetchGuildChannelsByBot(guildId);
     if (!rawChannels) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Bot nao possui acesso aos canais deste servidor." },
         { status: 403 },
+        ),
       );
     }
 
@@ -255,30 +280,38 @@ export async function POST(request: Request) {
     const closedLogChannel = channelsById.get(logsClosedChannelId);
 
     if (!menuChannel || !isValidTextChannelType(menuChannel.type)) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Canal do menu principal invalido." },
         { status: 400 },
+        ),
       );
     }
 
     if (!ticketsCategory || ticketsCategory.type !== GUILD_CATEGORY) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Categoria de tickets invalida." },
         { status: 400 },
+        ),
       );
     }
 
     if (!createdLogChannel || !isValidTextChannelType(createdLogChannel.type)) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Canal de log de criacao invalido." },
         { status: 400 },
+        ),
       );
     }
 
     if (!closedLogChannel || !isValidTextChannelType(closedLogChannel.type)) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Canal de log de fechamento invalido." },
         { status: 400 },
+        ),
       );
     }
 
@@ -291,7 +324,8 @@ export async function POST(request: Request) {
       configuredByUserId: access.context.sessionData.authSession.user.id,
     });
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       settings: {
         guildId: savedSettings.guild_id,
@@ -301,9 +335,11 @@ export async function POST(request: Request) {
         logsClosedChannelId: savedSettings.logs_closed_channel_id,
         updatedAt: savedSettings.updated_at,
       },
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -312,6 +348,7 @@ export async function POST(request: Request) {
             : "Erro ao salvar configuracoes do servidor.",
       },
       { status: 500 },
+      ),
     );
   }
 }

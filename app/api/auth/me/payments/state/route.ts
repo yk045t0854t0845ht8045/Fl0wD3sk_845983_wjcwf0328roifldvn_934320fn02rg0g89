@@ -5,6 +5,7 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
+import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type PaymentOrderStateRecord = {
@@ -76,9 +77,11 @@ async function ensureGuildAccess(guildId: string) {
   if (!sessionData?.authSession) {
     return {
       ok: false as const,
-      response: NextResponse.json(
+      response: applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
+      ),
       ),
     };
   }
@@ -86,9 +89,11 @@ async function ensureGuildAccess(guildId: string) {
   if (!sessionData.accessToken) {
     return {
       ok: false as const,
-      response: NextResponse.json(
+      response: applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Token OAuth ausente na sessao." },
         { status: 401 },
+      ),
       ),
     };
   }
@@ -118,9 +123,11 @@ async function ensureGuildAccess(guildId: string) {
   if (!accessibleGuild && sessionData.authSession.activeGuildId !== guildId) {
     return {
       ok: false as const,
-      response: NextResponse.json(
+      response: applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Servidor nao encontrado para este usuario." },
         { status: 403 },
+      ),
       ),
     };
   }
@@ -181,9 +188,11 @@ export async function GET(request: Request) {
     const guildId = normalizeGuildId(url.searchParams.get("guildId"));
 
     if (!guildId) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Guild ID invalido." },
         { status: 400 },
+        ),
       );
     }
 
@@ -234,7 +243,8 @@ export async function GET(request: Request) {
       }
     }
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       guildId,
       activeLicense: activeLicenseOrder
@@ -244,9 +254,11 @@ export async function GET(request: Request) {
           }
         : null,
       latestOrder: latestUserOrder ? toOrderState(latestUserOrder) : null,
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -255,6 +267,7 @@ export async function GET(request: Request) {
             : "Erro ao consultar estado de pagamento do servidor.",
       },
       { status: 500 },
+      ),
     );
   }
 }

@@ -5,6 +5,7 @@ import {
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
+import { applyNoStoreHeaders } from "@/lib/security/http";
 
 type RoleOption = {
   id: string;
@@ -26,24 +27,30 @@ export async function GET(request: Request) {
     const guildId = (url.searchParams.get("guildId") || "").trim();
 
     if (!isGuildId(guildId)) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Guild ID invalido." },
         { status: 400 },
+        ),
       );
     }
 
     const sessionData = await resolveSessionAccessToken();
     if (!sessionData?.authSession) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
+        ),
       );
     }
 
     if (!sessionData.accessToken) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Token OAuth ausente na sessao." },
         { status: 401 },
+        ),
       );
     }
 
@@ -56,17 +63,21 @@ export async function GET(request: Request) {
     );
 
     if (!accessibleGuild && sessionData.authSession.activeGuildId !== guildId) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Servidor nao encontrado para este usuario." },
         { status: 403 },
+        ),
       );
     }
 
     const rawRoles = await fetchGuildRolesByBot(guildId);
     if (!rawRoles) {
-      return NextResponse.json(
+      return applyNoStoreHeaders(
+        NextResponse.json(
         { ok: false, message: "Bot nao possui acesso aos cargos deste servidor." },
         { status: 403 },
+        ),
       );
     }
 
@@ -81,16 +92,19 @@ export async function GET(request: Request) {
         })),
     );
 
-    return NextResponse.json({
+    return applyNoStoreHeaders(
+      NextResponse.json({
       ok: true,
       guild: {
         id: accessibleGuild?.id || guildId,
         name: accessibleGuild?.name || "Servidor selecionado",
       },
       roles,
-    });
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
+    return applyNoStoreHeaders(
+      NextResponse.json(
       {
         ok: false,
         message:
@@ -99,6 +113,7 @@ export async function GET(request: Request) {
             : "Erro ao listar cargos do servidor.",
       },
       { status: 500 },
+      ),
     );
   }
 }

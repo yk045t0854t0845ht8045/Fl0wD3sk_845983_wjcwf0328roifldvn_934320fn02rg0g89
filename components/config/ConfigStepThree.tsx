@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect";
@@ -70,6 +70,8 @@ export function ConfigStepThree({
   onProceedToStepFour,
   onGoBackToStepOne,
 }: ConfigStepThreeProps) {
+  const latestInitialDraftRef = useRef(buildStepThreeDraft(initialDraft));
+  const hasInitialDraftValuesRef = useRef(hasStepThreeDraftValues(initialDraft));
   const [roleOptions, setRoleOptions] = useState<SelectOption[]>([]);
   const [isLoadingRoles, setIsLoadingRoles] = useState(true);
   const [adminRoleId, setAdminRoleId] = useState<string | null>(null);
@@ -79,6 +81,11 @@ export function ConfigStepThree({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isPlanLocked = guildLicenseStatus === "expired" || guildLicenseStatus === "off";
+
+  useEffect(() => {
+    latestInitialDraftRef.current = buildStepThreeDraft(initialDraft);
+    hasInitialDraftValuesRef.current = hasStepThreeDraftValues(initialDraft);
+  }, [initialDraft]);
 
   useEffect(() => {
     if (!guildId) {
@@ -92,6 +99,10 @@ export function ConfigStepThree({
     }
 
     let isMounted = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 12000);
     setIsLoadingRoles(true);
     setErrorMessage(null);
 
@@ -100,9 +111,11 @@ export function ConfigStepThree({
         const [rolesResponse, settingsResponse] = await Promise.all([
           fetch(`/api/auth/me/guilds/roles?guildId=${guildId}`, {
             cache: "no-store",
+            signal: controller.signal,
           }),
           fetch(`/api/auth/me/guilds/ticket-staff-settings?guildId=${guildId}`, {
             cache: "no-store",
+            signal: controller.signal,
           }),
         ]);
 
@@ -122,8 +135,8 @@ export function ConfigStepThree({
             ? buildStepThreeDraft(settingsPayload.settings)
             : buildStepThreeDraft(null);
 
-        const sourceDraft = hasStepThreeDraftValues(initialDraft)
-          ? buildStepThreeDraft(initialDraft)
+        const sourceDraft = hasInitialDraftValuesRef.current
+          ? latestInitialDraftRef.current
           : fallbackDraft;
 
         const allowedRoleIds = new Set(rolesPayload.roles.map((role) => role.id));
@@ -138,6 +151,10 @@ export function ConfigStepThree({
         setNotifyRoleIds(filterRoleIdList(sourceDraft.notifyRoleIds, allowedRoleIds));
       } catch (error) {
         if (!isMounted) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setErrorMessage("Tempo esgotado ao buscar cargos do servidor. Tente novamente.");
+          return;
+        }
         setRoleOptions([]);
         setErrorMessage(
           error instanceof Error
@@ -146,6 +163,7 @@ export function ConfigStepThree({
         );
       } finally {
         if (!isMounted) return;
+        window.clearTimeout(timeoutId);
         setIsLoadingRoles(false);
       }
     }
@@ -154,6 +172,8 @@ export function ConfigStepThree({
 
     return () => {
       isMounted = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
   }, [guildId]);
 

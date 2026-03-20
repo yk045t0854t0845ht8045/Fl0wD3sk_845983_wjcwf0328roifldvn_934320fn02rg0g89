@@ -35,9 +35,10 @@ export function ConfigStepMultiSelect({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollClass = "config-step-multiselect-scroll";
   const isBlocked = disabled || loading;
+  const isDropdownOpen = isOpen && !isBlocked;
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isDropdownOpen) return;
 
     function handleOutsideClick(event: MouseEvent) {
       const target = event.target as Node;
@@ -50,13 +51,7 @@ export function ConfigStepMultiSelect({
     return () => {
       window.removeEventListener("mousedown", handleOutsideClick);
     };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (isBlocked) {
-      setIsOpen(false);
-    }
-  }, [isBlocked]);
+  }, [isDropdownOpen]);
 
   const selectedNames = useMemo(() => {
     const selectedSet = new Set(values);
@@ -138,7 +133,7 @@ export function ConfigStepMultiSelect({
                 width={configStepTwoScale.arrowSize}
                 height={configStepTwoScale.arrowSize}
                 className={
-                  isOpen
+                  isDropdownOpen
                     ? "rotate-180 transition-transform duration-300 ease-out"
                     : "rotate-0 transition-transform duration-300 ease-out"
                 }
@@ -151,13 +146,13 @@ export function ConfigStepMultiSelect({
       <div
         className={`${scrollClass} absolute left-0 right-0 z-30 overflow-y-auto border bg-[#0A0A0A] transition-all duration-200 ease-out`}
         style={{
-          marginTop: isOpen ? "8px" : "0px",
-          height: isOpen ? `${dropdownHeight}px` : "0px",
-          opacity: isOpen ? 1 : 0,
-          transform: isOpen ? "translateY(0)" : "translateY(-8px)",
-          borderColor: isOpen ? "#2E2E2E" : "transparent",
+          marginTop: isDropdownOpen ? "8px" : "0px",
+          height: isDropdownOpen ? `${dropdownHeight}px` : "0px",
+          opacity: isDropdownOpen ? 1 : 0,
+          transform: isDropdownOpen ? "translateY(0)" : "translateY(-8px)",
+          borderColor: isDropdownOpen ? "#2E2E2E" : "transparent",
           borderRadius: `${configStepTwoScale.controlRadius}px`,
-          pointerEvents: isOpen ? "auto" : "none",
+          pointerEvents: isDropdownOpen ? "auto" : "none",
         }}
       >
         {options.length ? (
