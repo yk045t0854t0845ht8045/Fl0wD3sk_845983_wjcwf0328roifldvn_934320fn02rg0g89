@@ -324,16 +324,33 @@ async function getOrderByCodeForGuild(guildId: string, orderCode: number) {
 
   const result = await supabase
     .from("payment_orders")
-    .select(PAYMENT_ORDER_SELECT_COLUMNS)
+    .select(`user_id, ${PAYMENT_ORDER_SELECT_COLUMNS}`)
     .eq("guild_id", guildId)
     .eq("order_number", orderCode)
-    .maybeSingle<PaymentOrderRecord>();
+    .maybeSingle<(PaymentOrderRecord & { user_id: number }) | null>();
 
   if (result.error) {
     throw new Error(`Erro ao carregar pedido por codigo: ${result.error.message}`);
   }
 
   return result.data || null;
+}
+
+async function getOrderByCodeForUserAndGuild(
+  userId: number,
+  guildId: string,
+  orderCode: number,
+) {
+  const order = await getOrderByCodeForGuild(guildId, orderCode);
+  if (!order) return { order: null, foreignOwner: false };
+
+  if (order.user_id !== userId) {
+    return { order: null, foreignOwner: true };
+  }
+
+  const safeOrder = { ...order } as PaymentOrderRecord & { user_id?: number };
+  delete safeOrder.user_id;
+  return { order: safeOrder as PaymentOrderRecord, foreignOwner: false };
 }
 
 async function getActiveLicenseOrderForGuild(guildId: string) {
@@ -559,18 +576,24 @@ export async function GET(request: Request) {
     }
 
     if (orderCodeFromQuery) {
-      const foundOrderByCode = await getOrderByCodeForGuild(
+      const foundOrderByCode = await getOrderByCodeForUserAndGuild(
+        sessionData.authSession.user.id,
         guildId,
         orderCodeFromQuery,
       );
-      if (!foundOrderByCode) {
+      if (!foundOrderByCode.order) {
         return NextResponse.json(
-          { ok: false, message: "Pedido nao encontrado para este servidor." },
-          { status: 404 },
+          {
+            ok: false,
+            message: foundOrderByCode.foreignOwner
+              ? "Este link de pagamento pertence a outra conta autenticada."
+              : "Pedido nao encontrado para este servidor.",
+          },
+          { status: foundOrderByCode.foreignOwner ? 403 : 404 },
         );
       }
 
-      let orderByCode = foundOrderByCode;
+      let orderByCode = foundOrderByCode.order;
       if (orderByCode.provider_payment_id) {
         try {
           orderByCode = await reconcilePixOrderFromProvider(orderByCode, "order_code");

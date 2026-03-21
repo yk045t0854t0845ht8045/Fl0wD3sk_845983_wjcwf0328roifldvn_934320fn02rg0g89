@@ -2049,7 +2049,19 @@ export function ConfigStepFour({
         const remoteOrder =
           response.ok && payload.ok && payload.order ? payload.order : null;
         if (shouldLoadOrderByCode && !remoteOrder) {
+          removeCachedOrderByGuild(activeGuildId);
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setView("methods");
+          setMethodMessage(
+            response.status === 403
+              ? payload.message ||
+                  "Este link de pagamento pertence a outra conta autenticada."
+              : payload.message ||
+                  "Este link de pagamento nao esta mais disponivel.",
+          );
           clearCheckoutStatusQuery();
+          return;
         }
 
         if (remoteOrder && remoteOrder.status === "approved") {
@@ -2148,6 +2160,17 @@ export function ConfigStepFour({
             order: fallbackCheckoutOrder,
             guildId: activeGuildId,
           });
+          return;
+        }
+
+        if (shouldLoadOrderByCode && !cachedPendingOrder && !cachedOrder) {
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setView("methods");
+          setMethodMessage(
+            "Nao foi possivel validar este link de pagamento nesta conta. Faça login na conta que iniciou o pagamento e tente novamente.",
+          );
+          clearCheckoutStatusQuery();
           return;
         }
 
