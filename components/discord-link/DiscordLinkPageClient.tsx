@@ -93,6 +93,7 @@ export function DiscordLinkPageClient({
   const syncRetryTimerRef = useRef<number | null>(null);
   const syncLinkRef = useRef<((resetState?: boolean) => Promise<void>) | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [hasLoadedAuthenticatedUser, setHasLoadedAuthenticatedUser] = useState(false);
 
   const clearRetryTimer = useCallback(() => {
     if (syncRetryTimerRef.current) {
@@ -123,6 +124,7 @@ export function DiscordLinkPageClient({
     const requestId = response.headers.get("X-Request-Id");
     const payload = (await response.json().catch(() => null)) as LinkSyncResponse | null;
     setAuthenticatedUser(payload?.authenticatedUser || null);
+    setHasLoadedAuthenticatedUser(true);
 
     if (response.status === 401) {
       setState({
@@ -299,8 +301,19 @@ export function DiscordLinkPageClient({
               o acesso ao painel e liberar automaticamente o cargo oficial no servidor de
               suporte.
             </p>
+            {!shouldHideAuthenticatedUserCard && !hasLoadedAuthenticatedUser ? (
+              <div className="mt-2 flex w-full max-w-[620px] items-center gap-3 rounded-[14px] border border-[#242424] bg-[#0A0A0A] px-4 py-3 text-left flowdesk-shimmer">
+                <div className="h-[38px] w-[38px] rounded-full bg-[#151515]" />
+                <div className="flex flex-1 flex-col gap-2">
+                  <div className="h-[12px] w-[168px] rounded-full bg-[#181818]" />
+                  <div className="h-[10px] w-[94px] rounded-full bg-[#151515]" />
+                  <div className="h-[10px] w-full max-w-[430px] rounded-full bg-[#141414]" />
+                </div>
+              </div>
+            ) : null}
+
             {authenticatedUser && !shouldHideAuthenticatedUserCard ? (
-              <div className="mt-2 flex items-center gap-3 rounded-[14px] border border-[#242424] bg-[#0A0A0A] px-4 py-3 text-left">
+              <div className="mt-2 flex w-full max-w-[620px] items-center gap-3 rounded-[14px] border border-[#242424] bg-[#0A0A0A] px-4 py-3 text-left">
                 {authenticatedUser.avatarUrl ? (
                   <Image
                     src={authenticatedUser.avatarUrl}
