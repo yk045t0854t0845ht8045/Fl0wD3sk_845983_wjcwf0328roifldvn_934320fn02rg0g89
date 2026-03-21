@@ -8,7 +8,14 @@ import {
   ensureCheckoutAccessTokenForOrder,
   PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS,
 } from "@/lib/payments/checkoutLinkSecurity";
-import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
+import {
+  resolvePaymentStatus,
+  searchMercadoPagoPaymentsByExternalReference,
+} from "@/lib/payments/mercadoPago";
+import {
+  reconcilePaymentOrderRecord,
+  reconcilePaymentOrderWithProviderPayment,
+} from "@/lib/payments/reconciliation";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
@@ -21,6 +28,7 @@ type PaymentOrderStateRecord = {
   payment_method: "pix" | "card";
   status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
   provider_payment_id: string | null;
+  provider_external_reference: string | null;
   provider_status: string | null;
   provider_status_detail: string | null;
   provider_qr_code: string | null;
@@ -37,7 +45,7 @@ const LICENSE_VALIDITY_DAYS = 30;
 const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const STALE_CARD_REDIRECT_PENDING_MS = 4 * 60 * 1000;
 const PAYMENT_STATE_SELECT_COLUMNS =
-  `id, order_number, user_id, guild_id, payment_method, status, provider_payment_id, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, user_id, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 function normalizeGuildId(value: string | null) {
   if (!value) return null;
@@ -120,6 +128,88 @@ async function finalizeStaleHostedCardPendingOrder(order: PaymentOrderStateRecor
   }
 
   return result.data || order;
+}
+
+async function reconcileHostedCardPendingOrderByExternalReference(
+  order: PaymentOrderStateRecord,
+) {
+  if (order.payment_method !== "card") return order;
+  if (order.status !== "pending") return order;
+  if (order.provider_payment_id) return order;
+
+  const externalReference =
+    order.provider_external_reference || `flowdesk-order-${order.order_number}`;
+
+  const providerPayments = await searchMercadoPagoPaymentsByExternalReference(
+    externalReference,
+    { useCardToken: true },
+  );
+
+  const matchingPayments = providerPayments.filter((payment) => {
+    const providerExternalReference =
+      typeof payment.external_reference === "string"
+        ? payment.external_reference.trim()
+        : "";
+    return providerExternalReference === externalReference;
+  });
+
+  const providerPayment =
+    matchingPayments.find(
+      (payment) => resolvePaymentStatus(payment.status) === "approved",
+    ) ||
+    matchingPayments.find(
+      (payment) => resolvePaymentStatus(payment.status) !== "pending",
+    ) ||
+    matchingPayments[0] ||
+    null;
+
+  if (!providerPayment) {
+    return order;
+  }
+
+  const reconciled = await reconcilePaymentOrderWithProviderPayment(
+    order,
+    providerPayment,
+    {
+      source: "auth_payment_state_external_reference",
+    },
+  );
+
+  return {
+    ...order,
+    ...reconciled.order,
+    provider_payment_id:
+      reconciled.order.provider_payment_id ?? order.provider_payment_id,
+    provider_external_reference:
+      reconciled.order.provider_external_reference ??
+      order.provider_external_reference,
+    provider_status: reconciled.order.provider_status ?? null,
+    provider_status_detail:
+      reconciled.order.provider_status_detail ?? null,
+  };
+}
+
+async function refreshLatestOrderIfProviderPaymentExists(
+  order: PaymentOrderStateRecord,
+) {
+  if (!order.provider_payment_id) return order;
+
+  const reconciled = await reconcilePaymentOrderRecord(order, {
+    source: "auth_payment_state_external_reference",
+  });
+
+  return {
+    ...order,
+    ...reconciled.order,
+    provider_payment_id:
+      reconciled.order.provider_payment_id ?? order.provider_payment_id,
+    provider_external_reference:
+      reconciled.order.provider_external_reference ??
+      order.provider_external_reference,
+    provider_status: reconciled.order.provider_status ?? null,
+    provider_status_detail:
+      reconciled.order.provider_status_detail ?? null,
+  };
 }
 
 async function ensureGuildAccess(guildId: string) {
@@ -273,6 +363,32 @@ export async function GET(request: Request) {
       }
     }
 
+    const shouldResolveHostedCardByExternalReference =
+      !!latestUserOrder &&
+      latestUserOrder.payment_method === "card" &&
+      latestUserOrder.status === "pending" &&
+      !latestUserOrder.provider_payment_id;
+
+    if (shouldResolveHostedCardByExternalReference && latestUserOrder) {
+      try {
+        latestUserOrder =
+          await reconcileHostedCardPendingOrderByExternalReference(
+            latestUserOrder,
+          );
+
+        if (
+          latestUserOrder.status === "approved" ||
+          latestUserOrder.status === "cancelled" ||
+          latestUserOrder.status === "rejected" ||
+          latestUserOrder.status === "failed"
+        ) {
+          activeLicenseOrder = await getActiveLicenseOrderForGuild(guildId);
+        }
+      } catch {
+        // melhor esforco; nao quebrar consulta de estado
+      }
+    }
+
     const shouldReconcileLatestOrder =
       !!latestUserOrder &&
       !!latestUserOrder.provider_payment_id &&
@@ -283,24 +399,13 @@ export async function GET(request: Request) {
 
     if (shouldReconcileLatestOrder && latestUserOrder) {
       try {
-        const reconciled = await reconcilePaymentOrderRecord(latestUserOrder, {
-          source: "auth_payment_state",
-        });
-        latestUserOrder = {
-          ...latestUserOrder,
-          ...reconciled.order,
-          provider_payment_id:
-            reconciled.order.provider_payment_id ??
-            latestUserOrder.provider_payment_id,
-          provider_status: reconciled.order.provider_status ?? null,
-          provider_status_detail:
-            reconciled.order.provider_status_detail ?? null,
-        };
+        latestUserOrder = await refreshLatestOrderIfProviderPaymentExists(
+          latestUserOrder,
+        );
 
         if (
-          reconciled.changed &&
-          (reconciled.order.status === "approved" ||
-            reconciled.order.status === "cancelled")
+          latestUserOrder.status === "approved" ||
+          latestUserOrder.status === "cancelled"
         ) {
           activeLicenseOrder = await getActiveLicenseOrderForGuild(guildId);
         }

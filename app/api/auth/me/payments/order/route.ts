@@ -6,6 +6,8 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import {
   fetchMercadoPagoPaymentById,
+  resolvePaymentStatus,
+  searchMercadoPagoPaymentsByExternalReference,
   toQrDataUri,
 } from "@/lib/payments/mercadoPago";
 import { resolvePaymentDiagnostic } from "@/lib/payments/paymentDiagnostics";
@@ -377,6 +379,50 @@ async function getLatestOrderForUserAndGuild(userId: number, guildId: string) {
   return result.data || null;
 }
 
+async function reconcileHostedCardOrderByExternalReference(
+  order: PaymentOrderRecord,
+  source: string,
+) {
+  if (order.payment_method !== "card") return order;
+  if (order.status !== "pending") return order;
+
+  const externalReference =
+    order.provider_external_reference || `flowdesk-order-${order.order_number}`;
+
+  const payments = await searchMercadoPagoPaymentsByExternalReference(
+    externalReference,
+    { useCardToken: true },
+  );
+
+  const matchingPayments = payments.filter((payment) => {
+    const providerExternalReference =
+      typeof payment.external_reference === "string"
+        ? payment.external_reference.trim()
+        : "";
+    return providerExternalReference === externalReference;
+  });
+
+  const providerPayment =
+    matchingPayments.find(
+      (payment) => resolvePaymentStatus(payment.status) === "approved",
+    ) ||
+    matchingPayments.find(
+      (payment) => resolvePaymentStatus(payment.status) !== "pending",
+    ) ||
+    matchingPayments[0] ||
+    null;
+
+  if (!providerPayment) {
+    return order;
+  }
+
+  await reconcilePaymentOrderWithProviderPayment(order, providerPayment, {
+    source,
+  });
+
+  return (await getOrderByCodeForGuild(order.guild_id, order.order_number)) || order;
+}
+
 export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);
   const respond = (body: unknown, init?: ResponseInit) =>
@@ -474,7 +520,41 @@ export async function GET(request: Request) {
       } catch {
         // melhor esforco; ainda podemos cair no estado persistido ou na reconciliacao normal
       }
-    } else if (
+    }
+
+    const shouldResolveApprovedHostedCardReturn =
+      returnStatus === "approved" &&
+      order.payment_method === "card" &&
+      order.status === "pending";
+
+    if (shouldResolveApprovedHostedCardReturn) {
+      try {
+        order = await reconcileHostedCardOrderByExternalReference(
+          order,
+          "auth_payment_order_query_approved_return",
+        );
+      } catch {
+        // melhor esforco; mantemos reconciliacao/polling seguintes
+      }
+    }
+
+    if (
+      returnStatus &&
+      order.payment_method === "card" &&
+      order.status === "pending" &&
+      !order.provider_payment_id
+    ) {
+      try {
+        order = await reconcileHostedCardOrderByExternalReference(
+          order,
+          "auth_payment_order_query_hosted_search",
+        );
+      } catch {
+        // melhor esforco; seguir com o estado persistido
+      }
+    }
+
+    if (
       returnStatus &&
       (returnStatus === "pending" ||
         returnStatus === "cancelled" ||

@@ -140,6 +140,10 @@ export type MercadoPagoCheckoutPreferenceResponse = {
   sandbox_init_point?: string | null;
 };
 
+type MercadoPagoPaymentSearchResponse = {
+  results?: MercadoPagoPaymentResponse[];
+};
+
 function normalizeMercadoPagoIsoDate(value: string | null | undefined) {
   if (!value) return null;
   const timestamp = Date.parse(value);
@@ -599,6 +603,65 @@ export async function fetchMercadoPagoPaymentById(
     lastProviderMessage =
       parseMercadoPagoErrorMessage(payload) ||
       "Falha ao consultar pagamento no Mercado Pago.";
+  }
+
+  throw new Error(`Mercado Pago: ${lastProviderMessage}`);
+}
+
+export async function searchMercadoPagoPaymentsByExternalReference(
+  externalReference: string,
+  options?: { useCardToken?: boolean; useCardTestToken?: boolean },
+) {
+  const normalizedReference = externalReference.trim();
+  if (!normalizedReference) {
+    return [] as MercadoPagoPaymentResponse[];
+  }
+
+  const useCardToken = Boolean(options?.useCardToken || options?.useCardTestToken);
+  const candidateTokens = resolveMercadoPagoFetchTokens(useCardToken);
+  if (candidateTokens.length === 0) {
+    throw new Error(
+      "MERCADO_PAGO_ACCESS_TOKEN/MERCADO_PAGO_CARD_ACCESS_TOKEN nao configurado no ambiente.",
+    );
+  }
+
+  let lastProviderMessage =
+    "Falha ao consultar pagamentos no Mercado Pago.";
+
+  for (const token of candidateTokens) {
+    const params = new URLSearchParams({
+      external_reference: normalizedReference,
+      sort: "date_created",
+      criteria: "desc",
+      limit: "10",
+    });
+
+    const response = await fetch(
+      `https://api.mercadopago.com/v1/payments/search?${params.toString()}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      },
+    );
+
+    const payload = await readMercadoPagoPayload(response);
+
+    if (response.ok) {
+      const results = Array.isArray(
+        (payload as MercadoPagoPaymentSearchResponse | null)?.results,
+      )
+        ? ((payload as MercadoPagoPaymentSearchResponse).results as MercadoPagoPaymentResponse[])
+        : [];
+
+      return results;
+    }
+
+    lastProviderMessage =
+      parseMercadoPagoErrorMessage(payload) ||
+      "Falha ao consultar pagamentos no Mercado Pago.";
   }
 
   throw new Error(`Mercado Pago: ${lastProviderMessage}`);

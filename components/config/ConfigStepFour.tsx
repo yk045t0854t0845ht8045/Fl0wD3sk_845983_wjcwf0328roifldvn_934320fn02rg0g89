@@ -2316,7 +2316,11 @@ export function ConfigStepFour({
         setPixOrder(order);
 
         if (order?.method === "card" && order.status === "pending") {
-          setMethodMessage("Pagamento com cartao em analise.");
+          setMethodMessage(
+            checkoutQuery.status === "approved"
+              ? "Confirmando pagamento aprovado com o Mercado Pago..."
+              : "Pagamento com cartao em analise.",
+          );
         }
 
         const restoredView = resolveRestoredView({
@@ -2372,7 +2376,11 @@ export function ConfigStepFour({
         if (cachedPendingOrder) {
           setLastKnownOrderNumber(cachedPendingOrder.orderNumber);
           if (cachedPendingOrder.method === "card") {
-            setMethodMessage("Pagamento com cartao em analise.");
+            setMethodMessage(
+              checkoutQuery.status === "approved"
+                ? "Confirmando pagamento aprovado com o Mercado Pago..."
+                : "Pagamento com cartao em analise.",
+            );
           }
           setView(
             resolveRestoredView({
@@ -2448,6 +2456,10 @@ export function ConfigStepFour({
     if (!guildId || !pendingPixOrderId || !pendingPixOrderNumber) return;
     const activeGuildId = guildId;
     const activeOrderCode = pendingPixOrderNumber;
+    const checkoutReturnStatus = readCheckoutStatusQuery().status;
+    const shouldUseFastCardPolling =
+      pixOrder?.method === "card" && checkoutReturnStatus === "approved";
+    const pollingIntervalMs = shouldUseFastCardPolling ? 2500 : 8000;
     let isMounted = true;
     let activeController: AbortController | null = null;
 
@@ -2507,7 +2519,11 @@ export function ConfigStepFour({
             clearCheckoutStatusQuery();
           }
         } else if (payload.order.method === "card") {
-          setMethodMessage("Pagamento com cartao em analise.");
+          setMethodMessage(
+            shouldUseFastCardPolling
+              ? "Confirmando pagamento aprovado com o Mercado Pago..."
+              : "Pagamento com cartao em analise.",
+          );
         }
       } catch {
         // polling silencioso
@@ -2517,9 +2533,11 @@ export function ConfigStepFour({
       }
     };
 
+    void pollLatestOrder();
+
     const intervalId = window.setInterval(() => {
       void pollLatestOrder();
-    }, 8000);
+    }, pollingIntervalMs);
 
     return () => {
       isMounted = false;
@@ -2533,6 +2551,7 @@ export function ConfigStepFour({
     pendingPixOrderNumber,
     pixOrder?.checkoutAccessToken,
     pixOrder?.method,
+    pixOrder?.status,
   ]);
 
   useEffect(() => {
@@ -2707,13 +2726,35 @@ export function ConfigStepFour({
 
   const paymentStatus = pixOrder?.status || "pending";
   const resolvedOrderNumber = pixOrder?.orderNumber || lastKnownOrderNumber || null;
+  const activeCheckoutQuery =
+    typeof window !== "undefined"
+      ? readCheckoutStatusQuery()
+      : {
+          code: null as number | null,
+          status: null as string | null,
+          guild: null as string | null,
+          checkoutToken: null as string | null,
+          paymentId: null as string | null,
+        };
   const orderNumberLabel = resolvedOrderNumber ? `#${resolvedOrderNumber}` : null;
   const currentPaymentStatusLabel = paymentStatusLabel(pixOrder);
   const statusVisual = resolveStatusVisual(pixOrder);
   const statusSupportCopy = resolveStatusSupportCopy(pixOrder);
   const orderDiagnostic = resolveOrderDiagnostic(pixOrder);
   const regenerateButtonLabel = resolveRegenerateButtonLabel(pixOrder);
-  const canChoosePaymentMethod = Boolean(guildId && !isLoadingOrder);
+  const isHostedCardApprovalAwaitingConfirmation = Boolean(
+    pixOrder &&
+      pixOrder.method === "card" &&
+      pixOrder.status === "pending" &&
+      activeCheckoutQuery.status === "approved",
+  );
+  const canChoosePaymentMethod = Boolean(
+    guildId &&
+      !isLoadingOrder &&
+      !isSubmittingCard &&
+      !isCancellingPendingCard &&
+      !isHostedCardApprovalAwaitingConfirmation,
+  );
   const shouldShowStatusResultPanel = Boolean(
     view === "methods" &&
       pixOrder &&
@@ -4099,9 +4140,13 @@ export function ConfigStepFour({
                   <span>Pedido:</span>
                   {orderNumberLabel ? (
                     <span className="ml-1">{orderNumberLabel}</span>
-                  ) : (
+                  ) : isLoadingOrder ? (
                     <span className="ml-2 inline-flex items-center">
                       <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
+                    </span>
+                  ) : (
+                    <span className="ml-2 text-[13px] text-[#8E8E8E]">
+                      Novo pedido
                     </span>
                   )}
                 </div>
