@@ -3,12 +3,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   hasStepFourDraftValues,
   type StepFourDraft,
   type StepFourView,
 } from "@/lib/auth/configContext";
+import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal/content";
 import {
   isValidBrazilDocument,
   normalizeBrazilDocumentDigits,
@@ -1405,7 +1407,7 @@ function resolveStatusVisual(order: PixOrder | null | undefined): StatusVisual {
     return {
       title:
         method === "card"
-          ? "Checkout cancelado, voce pode tentar novamente quando quiser"
+          ? "Checkout cancelado, Crie um novo novamente"
           : "Pagamento Cancelado, Gere outro pagamento",
       label: method === "card" ? "Checkout cancelado" : "Pagamento Cancelado",
       colorClassName: "text-[#DB4646]",
@@ -1612,7 +1614,21 @@ function CheckoutLegalText({ className }: { className: string }) {
     <p className={className}>
       O Flowdesk nao realizara renovacao automatica do pagamento em nenhum metodo, incluindo cartao e PIX. Para ativar a renovacao automatica, voce deve acessar o nosso dashboard e configurar essa opcao manualmente.
       <br />
-      Ao continuar com a confirmacao do pagamento, voce declara que concorda com nossos termos e a politica de privacidade.
+      Ao continuar com a confirmacao do pagamento, voce declara que concorda com nossos{" "}
+      <Link
+        href={TERMS_PATH}
+        className="underline decoration-[#2E2E2E] underline-offset-4 hover:text-white"
+      >
+        termos
+      </Link>{" "}
+      e a{" "}
+      <Link
+        href={PRIVACY_PATH}
+        className="underline decoration-[#2E2E2E] underline-offset-4 hover:text-white"
+      >
+        politica de privacidade
+      </Link>
+      .
     </p>
   );
 }

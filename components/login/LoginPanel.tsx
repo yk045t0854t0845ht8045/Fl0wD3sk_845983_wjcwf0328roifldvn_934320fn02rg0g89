@@ -1,11 +1,13 @@
 import Image from "next/image";
+import Link from "next/link";
 import { DiscordLoginButton } from "@/components/login/DiscordLoginButton";
 import { loginScale } from "@/components/login/loginScale";
+import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal/content";
 
 export function LoginPanel() {
   const discordInviteUrl = process.env.NEXT_PUBLIC_DISCORD_INVITE_URL || "#";
-  const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL || "#";
-  const privacyUrl = process.env.NEXT_PUBLIC_PRIVACY_URL || "#";
+  const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL || TERMS_PATH;
+  const privacyUrl = process.env.NEXT_PUBLIC_PRIVACY_URL || PRIVACY_PATH;
 
   return (
     <section className="w-full" style={{ maxWidth: `${loginScale.maxWidth}px` }}>
@@ -60,12 +62,12 @@ export function LoginPanel() {
             fontSize: `${loginScale.smallTextSize}px`,
           }}
         >
-          <a href={termsUrl} className="hover:underline">
+          <Link href={termsUrl} className="hover:underline">
             Termos
-          </a>
-          <a href={privacyUrl} className="hover:underline">
+          </Link>
+          <Link href={privacyUrl} className="hover:underline">
             Politica de Privacidade
-          </a>
+          </Link>
         </div>
       </div>
     </section>

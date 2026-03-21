@@ -23,6 +23,13 @@ type PaymentStatus =
   | "expired"
   | "failed";
 type CardBrand = "visa" | "mastercard" | "amex" | "elo" | null;
+type AddMethodFieldKey =
+  | "cardNumber"
+  | "holderName"
+  | "expiry"
+  | "cvv"
+  | "document"
+  | "nickname";
 
 type SelectOption = {
   id: string;
@@ -814,6 +821,110 @@ function isValidCardExpiry(expiry: string) {
   return true;
 }
 
+function createAddMethodTouchedFields(): Record<AddMethodFieldKey, boolean> {
+  return {
+    cardNumber: false,
+    holderName: false,
+    expiry: false,
+    cvv: false,
+    document: false,
+    nickname: false,
+  } satisfies Record<AddMethodFieldKey, boolean>;
+}
+
+function resolveAddMethodValidationErrors(input: {
+  cardDigits: string;
+  cardBrand: CardBrand;
+  holderName: string;
+  expiry: string;
+  expiryDigits: string;
+  cvvDigits: string;
+  documentDigits: string;
+  nickname: string;
+}) {
+  const errors: Record<AddMethodFieldKey, string | null> = {
+    cardNumber: null,
+    holderName: null,
+    expiry: null,
+    cvv: null,
+    document: null,
+    nickname: null,
+  };
+
+  if (!input.cardDigits) {
+    errors.cardNumber = "Digite o numero do cartao.";
+  } else if (!input.cardBrand) {
+    errors.cardNumber =
+      input.cardDigits.length >= 6
+        ? "Nao foi possivel identificar a bandeira deste cartao."
+        : "Digite o numero completo do cartao.";
+  } else {
+    const validLengths = cardNumberLengthsForBrand(input.cardBrand);
+    const minLength = Math.min(...validLengths);
+    const hasValidLength = validLengths.includes(input.cardDigits.length);
+
+    if (input.cardDigits.length < minLength) {
+      errors.cardNumber = "Digite o numero completo do cartao.";
+    } else if (!hasValidLength || !isLuhnValid(input.cardDigits)) {
+      errors.cardNumber = "Numero de cartao invalido.";
+    }
+  }
+
+  const normalizedHolderName = input.holderName.trim().replace(/\s+/g, " ");
+  if (!normalizedHolderName) {
+    errors.holderName = "Digite o nome do titular.";
+  } else if (normalizedHolderName.length < 2) {
+    errors.holderName =
+      "Digite o nome do titular como aparece no cartao.";
+  }
+
+  if (!input.expiryDigits) {
+    errors.expiry = "Digite a data de validade.";
+  } else if (input.expiryDigits.length < 4) {
+    errors.expiry = "Use o formato MM/AA.";
+  } else {
+    const month = Number(input.expiryDigits.slice(0, 2));
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      errors.expiry = "Informe um mes valido entre 01 e 12.";
+    } else if (!isValidCardExpiry(input.expiry)) {
+      errors.expiry = "Cartao expirado ou com validade invalida.";
+    }
+  }
+
+  const expectedCvvLength = input.cardBrand === "amex" ? 4 : 3;
+  if (!input.cvvDigits) {
+    errors.cvv = "Digite o CVV do cartao.";
+  } else if (input.cvvDigits.length !== expectedCvvLength) {
+    errors.cvv =
+      expectedCvvLength === 4
+        ? "Digite os 4 digitos do CVV."
+        : "Digite os 3 digitos do CVV.";
+  }
+
+  if (!input.documentDigits) {
+    errors.document = "Digite o CPF ou CNPJ do titular.";
+  } else {
+    const documentType = resolveBrazilDocumentType(input.documentDigits);
+
+    if (!documentType) {
+      errors.document =
+        input.documentDigits.length < 11 ||
+        (input.documentDigits.length > 11 && input.documentDigits.length < 14)
+          ? "Digite um CPF ou CNPJ completo."
+          : "CPF/CNPJ invalido.";
+    } else if (!isValidBrazilDocument(input.documentDigits)) {
+      errors.document =
+        documentType === "CPF" ? "CPF invalido." : "CNPJ invalido.";
+    }
+  }
+
+  if (input.nickname.trim().length > 42) {
+    errors.nickname = "O apelido pode ter no maximo 42 caracteres.";
+  }
+
+  return errors;
+}
+
 function asRecord(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -1010,6 +1121,9 @@ export function ServerSettingsEditor({
     document: "",
     nickname: "",
   });
+  const [addMethodTouchedFields, setAddMethodTouchedFields] = useState(
+    createAddMethodTouchedFields,
+  );
 
   const [isPlanLoading, setIsPlanLoading] = useState(true);
   const [isPlanSaving, setIsPlanSaving] = useState(false);
@@ -1054,6 +1168,7 @@ export function ServerSettingsEditor({
       document: "",
       nickname: "",
     });
+    setAddMethodTouchedFields(createAddMethodTouchedFields());
     setPlanError(null);
     setPlanSuccess(null);
     setIsRecurringMethodModalOpen(false);
@@ -1446,32 +1561,65 @@ export function ServerSettingsEditor({
     [addMethodForm.document],
   );
 
-  const addMethodCanSubmit = useMemo(() => {
-    const holderName = addMethodForm.holderName.trim().replace(/\s+/g, " ");
-    const nickname = addMethodForm.nickname.trim().replace(/\s+/g, " ");
-    const docType = resolveBrazilDocumentType(addMethodDocumentDigits);
-    const expectedCvvLength = addMethodCardBrand === "amex" ? 4 : 3;
-    const cardLengthValid = cardNumberLengthsForBrand(addMethodCardBrand).includes(addMethodCardDigits.length);
-
-    return Boolean(
-      addMethodCardBrand &&
-        cardLengthValid &&
-        isLuhnValid(addMethodCardDigits) &&
-        holderName.length >= 2 &&
-        isValidCardExpiry(addMethodForm.expiry) &&
-        addMethodCvvDigits.length === expectedCvvLength &&
-        docType &&
-        isValidBrazilDocument(addMethodDocumentDigits) &&
-        nickname.length <= 42,
-    );
+  const addMethodValidationErrors = useMemo(() => {
+    return resolveAddMethodValidationErrors({
+      cardDigits: addMethodCardDigits,
+      cardBrand: addMethodCardBrand,
+      holderName: addMethodForm.holderName,
+      expiry: addMethodForm.expiry,
+      expiryDigits: addMethodExpiryDigits,
+      cvvDigits: addMethodCvvDigits,
+      documentDigits: addMethodDocumentDigits,
+      nickname: addMethodForm.nickname,
+    });
   }, [
     addMethodCardBrand,
     addMethodCardDigits,
-    addMethodCvvDigits.length,
+    addMethodCvvDigits,
     addMethodDocumentDigits,
     addMethodForm.expiry,
     addMethodForm.holderName,
     addMethodForm.nickname,
+    addMethodExpiryDigits,
+  ]);
+  const addMethodVisibleErrors = useMemo(
+    () => ({
+      cardNumber: addMethodTouchedFields.cardNumber
+        ? addMethodValidationErrors.cardNumber
+        : null,
+      holderName: addMethodTouchedFields.holderName
+        ? addMethodValidationErrors.holderName
+        : null,
+      expiry: addMethodTouchedFields.expiry
+        ? addMethodValidationErrors.expiry
+        : null,
+      cvv: addMethodTouchedFields.cvv ? addMethodValidationErrors.cvv : null,
+      document: addMethodTouchedFields.document
+        ? addMethodValidationErrors.document
+        : null,
+      nickname: addMethodTouchedFields.nickname
+        ? addMethodValidationErrors.nickname
+        : null,
+    }),
+    [addMethodTouchedFields, addMethodValidationErrors],
+  );
+
+  const addMethodCanSubmit = useMemo(() => {
+    return Boolean(
+      addMethodCardDigits &&
+        addMethodForm.holderName.trim() &&
+        addMethodExpiryDigits.length === 4 &&
+        addMethodCvvDigits &&
+        addMethodDocumentDigits &&
+        Object.values(addMethodValidationErrors).every((error) => !error),
+    );
+  }, [
+    addMethodCardDigits,
+    addMethodCvvDigits,
+    addMethodDocumentDigits,
+    addMethodExpiryDigits.length,
+    addMethodForm.holderName,
+    addMethodValidationErrors,
   ]);
   const addMethodCooldownMessage = useMemo(
     () => formatCooldownMessage(addMethodClientCooldownRemainingSeconds),
@@ -1485,6 +1633,7 @@ export function ServerSettingsEditor({
       setAddMethodFlowState("idle");
       setAddMethodStatusMessage(null);
       setAddMethodError(null);
+      setAddMethodTouchedFields(createAddMethodTouchedFields());
       setShouldEnableRecurringAfterMethodAdd(
         Boolean(options?.enableRecurringAfterAdd),
       );
@@ -1500,6 +1649,7 @@ export function ServerSettingsEditor({
     setAddMethodError(null);
     setAddMethodClientCooldownUntil(null);
     setAddMethodClientCooldownRemainingSeconds(null);
+    setAddMethodTouchedFields(createAddMethodTouchedFields());
     setShouldEnableRecurringAfterMethodAdd(false);
     setIsAddMethodModalOpen(false);
   }, [isAddingMethod]);
@@ -1530,6 +1680,24 @@ export function ServerSettingsEditor({
       window.clearInterval(intervalId);
     };
   }, [addMethodClientCooldownUntil]);
+
+  const markAddMethodFieldTouched = useCallback((field: AddMethodFieldKey) => {
+    setAddMethodTouchedFields((current) =>
+      current[field] ? current : { ...current, [field]: true },
+    );
+  }, []);
+
+  const clearAddMethodRealtimeFeedback = useCallback(() => {
+    setAddMethodError(null);
+    setAddMethodFlowState((current) =>
+      current === "rejected" ? "idle" : current,
+    );
+    setAddMethodStatusMessage((current) =>
+      current && current !== "Cartao salvo e liberado para uso no sistema."
+        ? null
+        : current,
+    );
+  }, []);
 
   const canSave = Boolean(
     !locked &&
@@ -1791,7 +1959,20 @@ export function ServerSettingsEditor({
   );
 
   const handleAddMethodSubmit = useCallback(async () => {
-    if (!addMethodCanSubmit || isAddingMethod || isAddMethodSdkLoading) return;
+    if (!addMethodCanSubmit || isAddingMethod || isAddMethodSdkLoading) {
+      setAddMethodTouchedFields({
+        cardNumber: true,
+        holderName: true,
+        expiry: true,
+        cvv: true,
+        document: true,
+        nickname: true,
+      } satisfies Record<AddMethodFieldKey, boolean>);
+      setAddMethodFlowState("idle");
+      setAddMethodStatusMessage(null);
+      setAddMethodError("Revise os campos destacados para continuar.");
+      return;
+    }
     if (
       addMethodClientCooldownUntil &&
       Date.now() < addMethodClientCooldownUntil
@@ -2035,6 +2216,7 @@ export function ServerSettingsEditor({
         document: "",
         nickname: "",
       });
+      setAddMethodTouchedFields(createAddMethodTouchedFields());
       setAddMethodClientCooldownUntil(null);
       setAddMethodClientCooldownRemainingSeconds(null);
       setMethodSearch("");
@@ -2923,15 +3105,24 @@ export function ServerSettingsEditor({
                     value={addMethodForm.cardNumber}
                     onChange={(event) => {
                       const nextValue = event.currentTarget.value;
+                      markAddMethodFieldTouched("cardNumber");
+                      clearAddMethodRealtimeFeedback();
                       setAddMethodForm((current) => ({
                         ...current,
                         cardNumber: formatCardNumberInput(nextValue),
                       }));
                     }}
+                    onBlur={() => {
+                      markAddMethodFieldTouched("cardNumber");
+                    }}
                     placeholder="Numero do Cartao"
                     inputMode="numeric"
                     autoComplete="cc-number"
-                    className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 pr-[52px] text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                    className={`h-[51px] w-full rounded-[3px] border bg-[#0A0A0A] px-4 pr-[52px] text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none transition-colors ${
+                      addMethodVisibleErrors.cardNumber
+                        ? "border-[#DB4646]"
+                        : "border-[#2E2E2E]"
+                    }`}
                   />
                   <span className="pointer-events-none absolute right-3 top-1/2 inline-flex h-[26px] w-[26px] -translate-y-1/2 items-center justify-center rounded-[3px] bg-[#111111]">
                     <PaymentMethodIcon
@@ -2941,77 +3132,163 @@ export function ServerSettingsEditor({
                     />
                   </span>
                 </div>
-                <input
-                  type="text"
-                  value={addMethodForm.holderName}
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setAddMethodForm((current) => ({
-                      ...current,
-                      holderName: nextValue.slice(0, 120),
-                    }));
-                  }}
-                  placeholder="Nome do Titular"
-                  className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
-                />
+                {addMethodVisibleErrors.cardNumber ? (
+                  <p className="mt-[-4px] flowdesk-slide-down text-[12px] text-[#DB4646]">
+                    {addMethodVisibleErrors.cardNumber}
+                  </p>
+                ) : null}
 
-                <div className="grid grid-cols-2 gap-3">
+                <div>
                   <input
                     type="text"
-                    value={addMethodForm.expiry}
+                    value={addMethodForm.holderName}
                     onChange={(event) => {
                       const nextValue = event.currentTarget.value;
+                      markAddMethodFieldTouched("holderName");
+                      clearAddMethodRealtimeFeedback();
                       setAddMethodForm((current) => ({
                         ...current,
-                        expiry: formatCardExpiryInput(nextValue),
+                        holderName: nextValue.slice(0, 120),
                       }));
                     }}
-                    placeholder="Data de Validade"
-                    className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
-                  />
-                  <input
-                    type="text"
-                    value={addMethodForm.cvv}
-                    onChange={(event) => {
-                      const nextValue = event.currentTarget.value;
-                      setAddMethodForm((current) => ({
-                        ...current,
-                        cvv: normalizeCardCvvInput(nextValue),
-                      }));
+                    onBlur={() => {
+                      markAddMethodFieldTouched("holderName");
                     }}
-                    placeholder="CVV/CVC"
-                    className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
+                    placeholder="Nome do Titular"
+                    className={`h-[51px] w-full rounded-[3px] border bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none transition-colors ${
+                      addMethodVisibleErrors.holderName
+                        ? "border-[#DB4646]"
+                        : "border-[#2E2E2E]"
+                    }`}
                   />
+                  {addMethodVisibleErrors.holderName ? (
+                    <p className="mt-[8px] flowdesk-slide-down text-[12px] text-[#DB4646]">
+                      {addMethodVisibleErrors.holderName}
+                    </p>
+                  ) : null}
                 </div>
 
-                <input
-                  type="text"
-                  value={addMethodForm.document}
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    const digits = normalizeBrazilDocumentDigits(nextValue).slice(0, 14);
-                    setAddMethodForm((current) => ({
-                      ...current,
-                      document: formatDocumentInput(digits),
-                    }));
-                  }}
-                  placeholder="CPF/CNPJ"
-                  className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
-                />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <input
+                      type="text"
+                      value={addMethodForm.expiry}
+                      onChange={(event) => {
+                        const nextValue = event.currentTarget.value;
+                        markAddMethodFieldTouched("expiry");
+                        clearAddMethodRealtimeFeedback();
+                        setAddMethodForm((current) => ({
+                          ...current,
+                          expiry: formatCardExpiryInput(nextValue),
+                        }));
+                      }}
+                      onBlur={() => {
+                        markAddMethodFieldTouched("expiry");
+                      }}
+                      placeholder="Data de Validade"
+                      className={`h-[51px] w-full rounded-[3px] border bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none transition-colors ${
+                        addMethodVisibleErrors.expiry
+                          ? "border-[#DB4646]"
+                          : "border-[#2E2E2E]"
+                      }`}
+                    />
+                    {addMethodVisibleErrors.expiry ? (
+                      <p className="mt-[8px] flowdesk-slide-down text-[12px] text-[#DB4646]">
+                        {addMethodVisibleErrors.expiry}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      value={addMethodForm.cvv}
+                      onChange={(event) => {
+                        const nextValue = event.currentTarget.value;
+                        markAddMethodFieldTouched("cvv");
+                        clearAddMethodRealtimeFeedback();
+                        setAddMethodForm((current) => ({
+                          ...current,
+                          cvv: normalizeCardCvvInput(nextValue),
+                        }));
+                      }}
+                      onBlur={() => {
+                        markAddMethodFieldTouched("cvv");
+                      }}
+                      placeholder="CVV/CVC"
+                      className={`h-[51px] w-full rounded-[3px] border bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none transition-colors ${
+                        addMethodVisibleErrors.cvv
+                          ? "border-[#DB4646]"
+                          : "border-[#2E2E2E]"
+                      }`}
+                    />
+                    {addMethodVisibleErrors.cvv ? (
+                      <p className="mt-[8px] flowdesk-slide-down text-[12px] text-[#DB4646]">
+                        {addMethodVisibleErrors.cvv}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
 
-                <input
-                  type="text"
-                  value={addMethodForm.nickname}
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value;
-                    setAddMethodForm((current) => ({
-                      ...current,
-                      nickname: nextValue.slice(0, 42),
-                    }));
-                  }}
-                  placeholder="Apelido do cartao (opcional)"
-                  className="h-[51px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none"
-                />
+                <div>
+                  <input
+                    type="text"
+                    value={addMethodForm.document}
+                    onChange={(event) => {
+                      const nextValue = event.currentTarget.value;
+                      const digits = normalizeBrazilDocumentDigits(nextValue).slice(0, 14);
+                      markAddMethodFieldTouched("document");
+                      clearAddMethodRealtimeFeedback();
+                      setAddMethodForm((current) => ({
+                        ...current,
+                        document: formatDocumentInput(digits),
+                      }));
+                    }}
+                    onBlur={() => {
+                      markAddMethodFieldTouched("document");
+                    }}
+                    placeholder="CPF/CNPJ"
+                    className={`h-[51px] w-full rounded-[3px] border bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none transition-colors ${
+                      addMethodVisibleErrors.document
+                        ? "border-[#DB4646]"
+                        : "border-[#2E2E2E]"
+                    }`}
+                  />
+                  {addMethodVisibleErrors.document ? (
+                    <p className="mt-[8px] flowdesk-slide-down text-[12px] text-[#DB4646]">
+                      {addMethodVisibleErrors.document}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div>
+                  <input
+                    type="text"
+                    value={addMethodForm.nickname}
+                    onChange={(event) => {
+                      const nextValue = event.currentTarget.value;
+                      markAddMethodFieldTouched("nickname");
+                      clearAddMethodRealtimeFeedback();
+                      setAddMethodForm((current) => ({
+                        ...current,
+                        nickname: nextValue.slice(0, 42),
+                      }));
+                    }}
+                    onBlur={() => {
+                      markAddMethodFieldTouched("nickname");
+                    }}
+                    placeholder="Apelido do cartao (opcional)"
+                    className={`h-[51px] w-full rounded-[3px] border bg-[#0A0A0A] px-4 text-[16px] text-[#D8D8D8] placeholder:text-[#242424] outline-none transition-colors ${
+                      addMethodVisibleErrors.nickname
+                        ? "border-[#DB4646]"
+                        : "border-[#2E2E2E]"
+                    }`}
+                  />
+                  {addMethodVisibleErrors.nickname ? (
+                    <p className="mt-[8px] flowdesk-slide-down text-[12px] text-[#DB4646]">
+                      {addMethodVisibleErrors.nickname}
+                    </p>
+                  ) : null}
+                </div>
               </div>
             </div>
 
