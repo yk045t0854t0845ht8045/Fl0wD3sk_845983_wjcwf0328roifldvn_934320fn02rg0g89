@@ -138,6 +138,8 @@ type ServerSettingsEditorProps = {
   guildId: string;
   guildName: string;
   status: ManagedServerStatus;
+  daysUntilExpire?: number;
+  daysUntilOff?: number;
   accessMode?: "owner" | "viewer";
   allServers: Array<{
     guildId: string;
@@ -1101,6 +1103,8 @@ export function ServerSettingsEditor({
   guildId,
   guildName,
   status,
+  daysUntilExpire = 0,
+  daysUntilOff = 0,
   accessMode = "owner",
   allServers,
   initialTab = "settings",
@@ -1184,6 +1188,8 @@ export function ServerSettingsEditor({
     useState(false);
 
   const locked = status === "expired" || status === "off";
+  const renewalWindowOpen = status === "paid" && daysUntilExpire <= 3;
+  const canRenewPlan = status !== "paid" || renewalWindowOpen;
   const isViewerOnly = accessMode === "viewer";
   const settingsReadOnly = locked || isViewerOnly;
   const viewerOnlyMessage =
@@ -2566,32 +2572,32 @@ export function ServerSettingsEditor({
           padding: `${Math.max(16, serversScale.cardPadding + 4)}px`,
         }}
       >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-5 flex flex-col items-start gap-3 min-[680px]:flex-row min-[680px]:flex-wrap min-[680px]:items-center min-[680px]:justify-between">
         <div className="min-w-0">
           <p className="text-[12px] text-[#777777]">Configuracoes do servidor</p>
-          <h2 className="truncate text-[18px] font-medium text-[#D8D8D8]">{guildName}</h2>
+          <h2 className="truncate text-[19px] font-medium text-[#D8D8D8] min-[680px]:text-[18px]">{guildName}</h2>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className={`inline-flex h-[22px] items-center justify-center rounded-[3px] border px-3 text-[11px] ${headerStatus.cls}`}>
+        <div className="flex w-full flex-wrap items-center gap-2 min-[680px]:w-auto">
+          <span className={`inline-flex h-[24px] items-center justify-center rounded-[3px] border px-3 text-[11px] ${headerStatus.cls}`}>
             {headerStatus.label}
           </span>
           {isViewerOnly ? (
-            <span className="inline-flex h-[22px] items-center justify-center rounded-[3px] border border-[#5CA9FF] bg-[rgba(92,169,255,0.12)] px-3 text-[11px] text-[#8CC2FF]">
+            <span className="inline-flex h-[24px] items-center justify-center rounded-[3px] border border-[#5CA9FF] bg-[rgba(92,169,255,0.12)] px-3 text-[11px] text-[#8CC2FF]">
               Somente visualizacao
             </span>
           ) : null}
           <button
             type="button"
             onClick={onClose}
-            className="h-[32px] rounded-[3px] border border-[#2E2E2E] bg-[#111111] px-3 text-[12px] text-[#D8D8D8] transition-colors hover:bg-[#171717]"
+            className="h-[38px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#111111] px-4 text-[13px] text-[#D8D8D8] transition-colors hover:bg-[#171717] min-[480px]:w-auto min-[680px]:h-[32px] min-[680px]:px-3 min-[680px]:text-[12px]"
           >
             Fechar
           </button>
         </div>
       </div>
 
-      <div className="mb-4 flex items-center gap-2 border-b border-[#242424] pb-3">
+      <div className="thin-scrollbar mb-5 flex items-center gap-2 overflow-x-auto border-b border-[#242424] pb-3">
         {([
           ["settings", "Configurações"],
           ["payments", "Histórico de Cobrança"],
@@ -2605,7 +2611,7 @@ export function ServerSettingsEditor({
               setActiveTab(tab);
               onTabChange?.(tab);
             }}
-            className={`rounded-[3px] border px-3 py-[7px] text-[12px] transition-colors ${
+            className={`shrink-0 whitespace-nowrap rounded-[3px] border px-4 py-[9px] text-[13px] transition-colors min-[680px]:px-3 min-[680px]:py-[7px] min-[680px]:text-[12px] ${
               activeTab === tab
                 ? "border-[#D8D8D8] bg-[#D8D8D8] text-black"
                 : "border-[#2E2E2E] bg-[#0A0A0A] text-[#D8D8D8] hover:bg-[#121212]"
@@ -2621,7 +2627,7 @@ export function ServerSettingsEditor({
           className="flex w-full transition-transform duration-300 ease-out"
           style={{ transform: `translateX(-${TAB_INDEX[activeTab] * 100}%)` }}
         >
-          <div className="w-full shrink-0">
+          <div className="min-w-0 w-full shrink-0">
             {isLoading ? (
               <div className="flex h-[180px] items-center justify-center">
                 <ButtonLoader size={28} />
@@ -2655,14 +2661,14 @@ export function ServerSettingsEditor({
                   </p>
                 ) : null}
 
-                <div className="mt-4 flex flex-col gap-2">
+                <div className="mt-5 flex flex-col gap-2">
                   <button
                     type="button"
                     onClick={() => {
                       void handleSave();
                     }}
                     disabled={!canSave}
-                    className="flex h-[42px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[13px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
+                    className="flex h-[46px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[14px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45 min-[680px]:h-[42px] min-[680px]:text-[13px]"
                   >
                     {isSaving ? (
                       <ButtonLoader size={22} />
@@ -2679,7 +2685,7 @@ export function ServerSettingsEditor({
             )}
           </div>
 
-          <div className="w-full shrink-0 pl-0 min-[860px]:pl-[8px]">
+          <div className="min-w-0 w-full shrink-0 pl-0 min-[860px]:pl-[8px]">
             <div className="grid grid-cols-1 gap-3 min-[980px]:grid-cols-[1fr_auto_auto]">
               <input
                 type="text"
@@ -2687,16 +2693,16 @@ export function ServerSettingsEditor({
                 onChange={(event) => setPaymentSearch(event.currentTarget.value)}
                 disabled={isViewerOnly}
                 placeholder="Pesquisar pagamento por ID, servidor ou metodo"
-                className="h-[52px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-[50px] min-w-0 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[14px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none disabled:cursor-not-allowed disabled:opacity-50 min-[680px]:h-[52px] min-[680px]:text-[15px]"
               />
-              <select value={paymentGuildFilter} onChange={(event) => setPaymentGuildFilter(event.currentTarget.value)} disabled={isViewerOnly} className="h-[52px] min-w-[238px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50">
+              <select value={paymentGuildFilter} onChange={(event) => setPaymentGuildFilter(event.currentTarget.value)} disabled={isViewerOnly} className="h-[50px] min-w-0 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[14px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50 min-[680px]:h-[52px] min-[680px]:text-[15px] min-[980px]:min-w-[238px]">
                 {serverOptions.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.name}
                   </option>
                 ))}
               </select>
-              <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.currentTarget.value as "all" | PaymentStatus)} disabled={isViewerOnly} className="h-[52px] min-w-[213px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50">
+              <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.currentTarget.value as "all" | PaymentStatus)} disabled={isViewerOnly} className="h-[50px] min-w-0 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[14px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50 min-[680px]:h-[52px] min-[680px]:text-[15px] min-[980px]:min-w-[213px]">
                 <option value="all">Todos status</option>
                 <option value="approved">Pago</option>
                 <option value="pending">Pendente</option>
@@ -2725,10 +2731,10 @@ export function ServerSettingsEditor({
                     const methodIcon = order.method === "pix" ? "/cdn/icons/pix_.png" : cardBrandIcon(order.card?.brand || null);
                     const serverName = serverMap.get(order.guildId)?.guildName || order.guildId;
                     return (
-                      <div key={order.id} className="flex items-start justify-between gap-3 border-b border-[#1C1C1C] px-4 py-3 last:border-b-0">
+                      <div key={order.id} className="flex flex-col gap-3 border-b border-[#1C1C1C] px-4 py-4 last:border-b-0 min-[720px]:flex-row min-[720px]:items-start min-[720px]:justify-between min-[720px]:py-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-3">
-                            <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center overflow-hidden rounded-[3px] bg-[#111111]">
+                            <span className="flex h-[40px] w-[40px] shrink-0 items-center justify-center overflow-hidden rounded-[3px] bg-[#111111] min-[720px]:h-[38px] min-[720px]:w-[38px]">
                               <PaymentMethodIcon src={methodIcon} alt="Metodo" size={30} />
                             </span>
                             <div className="min-w-0">
@@ -2755,10 +2761,12 @@ export function ServerSettingsEditor({
                             <p className="mt-2 truncate text-[12px] text-[#686868]">{order.providerStatusDetail}</p>
                           ) : null}
                         </div>
-                        <div className="shrink-0 text-right">
+                        <div className="flex shrink-0 items-end justify-between gap-3 text-right min-[720px]:block">
                           <span className={`inline-flex rounded-[3px] border px-[10px] py-[4px] text-[12px] ${badge.cls}`}>{badge.label}</span>
-                          <p className="mt-1 text-[12px] text-[#777777]">{formatDateTime(order.createdAt)}</p>
-                          <p className="mt-1 text-[14px] text-[#D8D8D8]">{formatAmount(order.amount, order.currency)}</p>
+                          <div>
+                            <p className="mt-1 text-[12px] text-[#777777]">{formatDateTime(order.createdAt)}</p>
+                            <p className="mt-1 text-[14px] text-[#D8D8D8]">{formatAmount(order.amount, order.currency)}</p>
+                          </div>
                         </div>
                       </div>
                     );
@@ -2770,7 +2778,7 @@ export function ServerSettingsEditor({
             </div>
           </div>
 
-          <div className="w-full shrink-0 pl-0 min-[860px]:pl-[8px]">
+          <div className="min-w-0 w-full shrink-0 pl-0 min-[860px]:pl-[8px]">
             <div className="grid grid-cols-1 gap-3 min-[980px]:grid-cols-[1fr_auto_auto]">
               <input
                 type="text"
@@ -2778,13 +2786,13 @@ export function ServerSettingsEditor({
                 onChange={(event) => setMethodSearch(event.currentTarget.value)}
                 disabled={isViewerOnly}
                 placeholder="Pesquisar metodo por bandeira, final ou servidor"
-                className="h-[52px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-[50px] min-w-0 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[14px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none disabled:cursor-not-allowed disabled:opacity-50 min-[680px]:h-[52px] min-[680px]:text-[15px]"
               />
               <select
                 value={methodGuildFilter}
                 onChange={(event) => setMethodGuildFilter(event.currentTarget.value)}
                 disabled={isViewerOnly}
-                className="h-[52px] min-w-[238px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-[50px] min-w-0 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[14px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50 min-[680px]:h-[52px] min-[680px]:text-[15px] min-[980px]:min-w-[238px]"
               >
                 {serverOptions.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -2796,7 +2804,7 @@ export function ServerSettingsEditor({
                 value={methodStatusFilter}
                 onChange={(event) => setMethodStatusFilter(event.currentTarget.value as "all" | PaymentStatus)}
                 disabled={isViewerOnly}
-                className="h-[52px] min-w-[213px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-[50px] min-w-0 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[14px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50 min-[680px]:h-[52px] min-[680px]:text-[15px] min-[980px]:min-w-[213px]"
               >
                 <option value="all">Todos status</option>
                 <option value="approved">Pago</option>
@@ -2827,7 +2835,7 @@ export function ServerSettingsEditor({
                       method.verificationStatus,
                     );
                     return (
-                      <article key={method.id} className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-3">
+                      <article key={method.id} className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-4 min-[900px]:py-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex min-w-0 items-center gap-3">
                             <span className="flex h-[40px] w-[40px] shrink-0 items-center justify-center overflow-hidden rounded-[3px] bg-[#111111]">
@@ -2853,7 +2861,7 @@ export function ServerSettingsEditor({
                                   current === method.id ? null : method.id,
                                 );
                               }}
-                              className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[2px] text-[18px] leading-none text-[#4A4A4A] transition-colors hover:bg-[rgba(255,255,255,0.05)] hover:text-[#7A7A7A] disabled:cursor-not-allowed disabled:opacity-45"
+                              className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[2px] text-[18px] leading-none text-[#4A4A4A] transition-colors hover:bg-[rgba(255,255,255,0.05)] hover:text-[#7A7A7A] disabled:cursor-not-allowed disabled:opacity-45 min-[900px]:h-[26px] min-[900px]:w-[26px]"
                               aria-label="Abrir menu do metodo"
                             >
                               ...
@@ -2875,10 +2883,10 @@ export function ServerSettingsEditor({
                           </div>
                         </div>
 
-                        <div className="mt-3 grid grid-cols-[1fr_auto] items-end gap-2">
+                        <div className="mt-3 grid grid-cols-1 gap-2 min-[620px]:grid-cols-[1fr_auto] min-[620px]:items-end">
                           <div>
                             <p className="mb-1 text-[11px] text-[#686868]">Apelido do cartao</p>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-col gap-2 min-[520px]:flex-row min-[520px]:items-center">
                               <input
                                 type="text"
                                 value={methodNicknameDrafts[method.id] ?? ""}
@@ -2890,7 +2898,7 @@ export function ServerSettingsEditor({
                                   }));
                                 }}
                                 placeholder="Ex: Cartao principal"
-                                className="h-[33px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-2 text-[12px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none"
+                                className="h-[36px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[12px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none min-[520px]:h-[33px] min-[520px]:px-2"
                               />
                               <button
                                 type="button"
@@ -2898,7 +2906,7 @@ export function ServerSettingsEditor({
                                 onClick={() => {
                                   void handleSaveMethodNickname(method.id);
                                 }}
-                                className="inline-flex h-[33px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#121212] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-50"
+                                className="inline-flex h-[36px] w-full items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#121212] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-50 min-[520px]:h-[33px] min-[520px]:w-auto"
                               >
                                 {savingMethodNicknameId === method.id ? (
                                   <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
@@ -2909,7 +2917,7 @@ export function ServerSettingsEditor({
                             </div>
                           </div>
 
-                          <div className="flex flex-col items-end justify-between text-[12px] text-[#777777]">
+                          <div className="flex flex-col text-[12px] text-[#777777] min-[620px]:items-end">
                             <span>{method.timesUsed} uso(s)</span>
                             <span className="mt-1">
                               Validade:{" "}
@@ -2920,14 +2928,14 @@ export function ServerSettingsEditor({
                           </div>
                         </div>
 
-                        <div className="mt-2 flex items-center justify-between text-[11px] text-[#686868]">
+                        <div className="mt-2 flex flex-col gap-1 text-[11px] text-[#686868] min-[620px]:flex-row min-[620px]:items-center min-[620px]:justify-between">
                           <span>
                             Bandeira: {brandLabel}
                           </span>
                           <span>Metodo: {method.id}</span>
                         </div>
 
-                        <div className="mt-3 flex items-center justify-between text-[12px] text-[#777777]">
+                        <div className="mt-3 flex flex-col gap-1 text-[12px] text-[#777777] min-[620px]:flex-row min-[620px]:items-center min-[620px]:justify-between">
                           <span>
                             Ultimo uso: {formatDateTime(method.lastUsedAt)}
                           </span>
@@ -2957,7 +2965,7 @@ export function ServerSettingsEditor({
                 type="button"
                 onClick={() => openAddMethodModal()}
                 disabled={isViewerOnly || !cardPaymentsEnabled}
-                className={`mt-3 flex h-[46px] w-full items-center justify-center gap-3 rounded-[3px] border text-[13px] font-medium transition-colors ${
+                className={`mt-4 flex h-[48px] w-full items-center justify-center gap-3 rounded-[3px] border px-4 text-[13px] font-medium transition-colors min-[680px]:mt-3 min-[680px]:h-[46px] ${
                   cardPaymentsEnabled
                     ? "border-transparent bg-[#D8D8D8] text-black hover:opacity-90"
                     : "border-[#2E2E2E] bg-[#0A0A0A] text-[#D8D8D8] disabled:cursor-not-allowed"
@@ -2988,23 +2996,33 @@ export function ServerSettingsEditor({
             </div>
           </div>
 
-          <div className="w-full shrink-0 pl-0 min-[860px]:pl-[8px]">
+          <div className="min-w-0 w-full shrink-0 pl-0 min-[860px]:pl-[8px]">
             {isPlanLoading ? (
               <div className="flex h-[275px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A]">
                 <ButtonLoader size={28} />
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                {status !== "paid" ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-[3px] border border-[#F2C823] bg-[rgba(242,200,35,0.12)] px-3 py-3">
+                {canRenewPlan ? (
+                  <div className="flex flex-col items-start gap-3 rounded-[3px] border border-[#F2C823] bg-[rgba(242,200,35,0.12)] px-4 py-4 min-[640px]:flex-row min-[640px]:items-center min-[640px]:justify-between min-[640px]:px-3 min-[640px]:py-3">
                     <div className="min-w-0">
                       <p className="text-[14px] text-[#F2C823]">
-                        {status === "expired"
-                          ? "Plano expirado neste servidor"
-                          : "Plano desligado neste servidor"}
+                        {renewalWindowOpen
+                          ? "Renovacao antecipada disponivel neste servidor"
+                          : status === "expired"
+                            ? "Plano expirado neste servidor"
+                            : "Plano desligado neste servidor"}
                       </p>
                       <p className="mt-1 text-[11px] text-[#D6C68A]">
-                        Renove agora para reativar o Flowdesk com mais 30 dias de licenca.
+                        {renewalWindowOpen
+                          ? `Renove agora e os ${daysUntilExpire} dia${
+                              daysUntilExpire === 1 ? "" : "s"
+                            } restantes desta assinatura serao somados ao proximo ciclo de 30 dias.`
+                          : status === "expired"
+                            ? `Renove agora para reativar o Flowdesk. Os ${daysUntilOff} dia${
+                                daysUntilOff === 1 ? "" : "s"
+                              } de tolerancia em aberto nao viram bonus no proximo ciclo.`
+                            : "Renove agora para reativar o Flowdesk com mais 30 dias de licenca."}
                       </p>
                     </div>
 
@@ -3012,7 +3030,7 @@ export function ServerSettingsEditor({
                       type="button"
                       onClick={handleRenewByPix}
                       disabled={isViewerOnly}
-                      className="inline-flex h-[34px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#D8D8D8] px-4 text-[12px] font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex h-[40px] w-full items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#D8D8D8] px-4 text-[13px] font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45 min-[520px]:w-auto min-[520px]:text-[12px] min-[520px]:h-[34px]"
                     >
                       RENOVAR
                     </button>
@@ -3033,7 +3051,7 @@ export function ServerSettingsEditor({
                   </div>
 
                   <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-col gap-3 min-[640px]:flex-row min-[640px]:items-center min-[640px]:justify-between">
                       <div>
                         <p className="text-[14px] text-[#D8D8D8]">Cobranca recorrente</p>
                         <p className="mt-1 text-[11px] text-[#8E8E8E]">
@@ -3052,7 +3070,7 @@ export function ServerSettingsEditor({
                           isViewerOnly ||
                           (!cardPaymentsEnabled && !planSettings?.recurringEnabled)
                         }
-                        className={`inline-flex h-[31px] min-w-[92px] items-center justify-center rounded-[3px] border px-3 text-[12px] transition-opacity disabled:cursor-not-allowed ${
+                        className={`inline-flex h-[36px] w-full min-w-[92px] items-center justify-center rounded-[3px] border px-3 text-[12px] transition-opacity disabled:cursor-not-allowed min-[640px]:h-[31px] min-[640px]:w-auto ${
                           planSettings?.recurringEnabled
                             ? "border-[#6AE25A] bg-[rgba(106,226,90,0.2)] text-[#6AE25A]"
                             : !cardPaymentsEnabled
@@ -3079,13 +3097,13 @@ export function ServerSettingsEditor({
                   </div>
 
                   <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#090909] px-3 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-col gap-3 min-[640px]:flex-row min-[640px]:items-center min-[640px]:justify-between">
                       <p className="text-[12px] text-[#8E8E8E]">Cartao vinculado a recorrencia</p>
                       <button
                         type="button"
                         onClick={() => openAddMethodModal()}
                         disabled={isViewerOnly || !cardPaymentsEnabled}
-                        className="inline-flex h-[31px] items-center justify-center gap-2 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#111111] disabled:cursor-not-allowed disabled:opacity-55"
+                        className="inline-flex h-[36px] w-full items-center justify-center gap-2 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#111111] disabled:cursor-not-allowed disabled:opacity-55 min-[640px]:h-[31px] min-[640px]:w-auto"
                       >
                         <span>Adicionar cartao</span>
                         {!cardPaymentsEnabled ? (

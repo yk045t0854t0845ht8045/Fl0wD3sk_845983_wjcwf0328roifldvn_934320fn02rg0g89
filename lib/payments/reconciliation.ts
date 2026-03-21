@@ -10,6 +10,11 @@ import {
   isLockedByUnpaidSetupTimeout,
   UNPAID_SETUP_TIMEOUT_REFUND_STATUS_DETAIL,
 } from "@/lib/payments/setupCleanup";
+import {
+  getApprovedOrdersForGuild,
+  resolveLatestLicenseCoverageFromApprovedOrders,
+  resolveRenewalPaymentDecision,
+} from "@/lib/payments/licenseStatus";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export type ReconcilablePaymentStatus =
@@ -87,8 +92,6 @@ type ReconcileBatchSummary = {
   }>;
 };
 
-const LICENSE_VALIDITY_DAYS = 30;
-const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const DEFAULT_RECONCILE_LIMIT = 25;
 const DEFAULT_RECONCILE_STATUSES: ReconcilablePaymentStatus[] = [
   "pending",
@@ -99,27 +102,6 @@ const DEFAULT_RECONCILE_STATUSES: ReconcilablePaymentStatus[] = [
 
 export const PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS =
   "id, order_number, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_qr_base64, provider_ticket_url, paid_at, expires_at, created_at, updated_at";
-
-function resolveLicenseBaseTimestamp(order: PaymentOrderReconciliationRecord) {
-  const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
-  if (Number.isFinite(paidAtMs)) return paidAtMs;
-
-  const createdAtMs = Date.parse(order.created_at);
-  if (Number.isFinite(createdAtMs)) return createdAtMs;
-
-  return Date.now();
-}
-
-function resolveLicenseExpiresAt(order: PaymentOrderReconciliationRecord) {
-  return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
-  ).toISOString();
-}
-
-function isLicenseActiveForOrder(order: PaymentOrderReconciliationRecord) {
-  if (order.status !== "approved") return false;
-  return Date.now() < Date.parse(resolveLicenseExpiresAt(order));
-}
 
 async function createPaymentOrderEventSafe(
   paymentOrderId: number,
@@ -138,35 +120,21 @@ async function createPaymentOrderEventSafe(
   }
 }
 
-async function getActiveLicenseOrderForGuild(
+async function getLatestApprovedLicenseCoverageForGuild(
   guildId: string,
   excludedOrderId?: number,
 ) {
-  const supabase = getSupabaseAdminClientOrThrow();
-
-  const result = await supabase
-    .from("payment_orders")
-    .select(PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS)
-    .eq("guild_id", guildId)
-    .eq("status", "approved")
-    .order("paid_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(30)
-    .returns<PaymentOrderReconciliationRecord[]>();
-
-  if (result.error) {
-    throw new Error(
-      `Erro ao carregar licenca ativa para reconciliacao: ${result.error.message}`,
-    );
-  }
-
-  const orders = result.data || [];
-  return (
-    orders.find(
-      (order) =>
-        order.id !== excludedOrderId && isLicenseActiveForOrder(order),
-    ) || null
+  const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderReconciliationRecord>(
+    guildId,
+    PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS,
   );
+
+  const filteredOrders =
+    typeof excludedOrderId === "number"
+      ? approvedOrders.filter((order) => order.id !== excludedOrderId)
+      : approvedOrders;
+
+  return resolveLatestLicenseCoverageFromApprovedOrders(filteredOrders);
 }
 
 function resolveProviderPaymentMethodId(
@@ -361,12 +329,17 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       };
     }
 
-    const activeLicenseOrder = await getActiveLicenseOrderForGuild(
+    const existingCoverage = await getLatestApprovedLicenseCoverageForGuild(
       order.guild_id,
       order.id,
     );
+    const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
+    const renewalDecision = resolveRenewalPaymentDecision(
+      existingCoverage,
+      Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+    );
 
-    if (activeLicenseOrder && activeLicenseOrder.id !== order.id) {
+    if (!renewalDecision.allowed) {
       await autoRefundProviderPayment({
         providerPaymentId,
         providerPayment,
@@ -408,8 +381,8 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       await createPaymentOrderEventSafe(order.id, "provider_payment_auto_refunded", {
         source,
         providerPaymentId,
-        reason: "duplicate_active_license",
-        previousApprovedOrderNumber: activeLicenseOrder.order_number,
+        reason: renewalDecision.reason,
+        previousApprovedOrderNumber: existingCoverage?.order.order_number || null,
       });
 
       return {

@@ -16,6 +16,10 @@ import {
   reconcilePaymentOrderRecord,
   reconcilePaymentOrderWithProviderPayment,
 } from "@/lib/payments/reconciliation";
+import {
+  getApprovedOrdersForGuild,
+  resolveLatestLicenseCoverageFromApprovedOrders,
+} from "@/lib/payments/licenseStatus";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
@@ -41,8 +45,6 @@ type PaymentOrderStateRecord = {
   updated_at: string;
 };
 
-const LICENSE_VALIDITY_DAYS = 30;
-const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const STALE_CARD_REDIRECT_PENDING_MS = 4 * 60 * 1000;
 const PAYMENT_STATE_SELECT_COLUMNS =
   `id, order_number, user_id, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
@@ -51,27 +53,6 @@ function normalizeGuildId(value: string | null) {
   if (!value) return null;
   const guildId = value.trim();
   return isGuildId(guildId) ? guildId : null;
-}
-
-function resolveLicenseBaseTimestamp(order: PaymentOrderStateRecord) {
-  const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
-  if (Number.isFinite(paidAtMs)) return paidAtMs;
-
-  const createdAtMs = Date.parse(order.created_at);
-  if (Number.isFinite(createdAtMs)) return createdAtMs;
-
-  return Date.now();
-}
-
-function resolveLicenseExpiresAt(order: PaymentOrderStateRecord) {
-  return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
-  ).toISOString();
-}
-
-function isLicenseActiveForOrder(order: PaymentOrderStateRecord) {
-  if (order.status !== "approved") return false;
-  return Date.now() < Date.parse(resolveLicenseExpiresAt(order));
 }
 
 function toOrderState(
@@ -297,27 +278,12 @@ async function ensureGuildAccess(guildId: string) {
   };
 }
 
-async function getActiveLicenseOrderForGuild(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
-
-  const result = await supabase
-    .from("payment_orders")
-    .select(PAYMENT_STATE_SELECT_COLUMNS)
-    .eq("guild_id", guildId)
-    .eq("status", "approved")
-    .order("paid_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(30)
-    .returns<PaymentOrderStateRecord[]>();
-
-  if (result.error) {
-    throw new Error(
-      `Erro ao carregar licenca ativa do servidor: ${result.error.message}`,
-    );
-  }
-
-  const orders = result.data || [];
-  return orders.find((order) => isLicenseActiveForOrder(order)) || null;
+async function getLatestApprovedLicenseCoverageForGuild(guildId: string) {
+  const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderStateRecord>(
+    guildId,
+    PAYMENT_STATE_SELECT_COLUMNS,
+  );
+  return resolveLatestLicenseCoverageFromApprovedOrders(approvedOrders);
 }
 
 async function getLatestUserOrderForGuild(userId: number, guildId: string) {
@@ -365,8 +331,8 @@ export async function GET(request: Request) {
       source: "auth_payment_state",
     });
 
-    let [activeLicenseOrder, latestUserOrder] = await Promise.all([
-      getActiveLicenseOrderForGuild(guildId),
+    let [activeLicenseCoverage, latestUserOrder] = await Promise.all([
+      getLatestApprovedLicenseCoverageForGuild(guildId),
       getLatestUserOrderForGuild(user.id, guildId),
     ]);
 
@@ -412,7 +378,7 @@ export async function GET(request: Request) {
           latestUserOrder.status === "rejected" ||
           latestUserOrder.status === "failed"
         ) {
-          activeLicenseOrder = await getActiveLicenseOrderForGuild(guildId);
+          activeLicenseCoverage = await getLatestApprovedLicenseCoverageForGuild(guildId);
         }
       } catch {
         // melhor esforco; nao quebrar consulta de estado
@@ -437,7 +403,7 @@ export async function GET(request: Request) {
           latestUserOrder.status === "approved" ||
           latestUserOrder.status === "cancelled"
         ) {
-          activeLicenseOrder = await getActiveLicenseOrderForGuild(guildId);
+          activeLicenseCoverage = await getLatestApprovedLicenseCoverageForGuild(guildId);
         }
       } catch {
         // melhor esforco; nao quebrar a consulta de estado por falha na reconciliacao
@@ -452,6 +418,8 @@ export async function GET(request: Request) {
             invalidateOtherOrders: false,
           })
         : null;
+    const activeLicenseOrder =
+      activeLicenseCoverage?.status === "paid" ? activeLicenseCoverage.order : null;
     const securedActiveLicenseOrder =
       activeLicenseOrder && activeLicenseOrder.user_id === user.id
         ? await ensureCheckoutAccessTokenForOrder({
@@ -471,7 +439,7 @@ export async function GET(request: Request) {
               activeLicenseOrder,
               securedActiveLicenseOrder?.checkoutAccessToken || null,
             ),
-            licenseExpiresAt: resolveLicenseExpiresAt(activeLicenseOrder),
+            licenseExpiresAt: activeLicenseCoverage?.licenseExpiresAt || null,
           }
         : null,
       latestOrder: latestUserOrder

@@ -8,6 +8,11 @@ import {
 } from "@/lib/payments/mercadoPago";
 import { resolvePaymentDiagnostic } from "@/lib/payments/paymentDiagnostics";
 import {
+  getApprovedOrdersForGuild,
+  resolveLatestLicenseCoverageFromApprovedOrders,
+  resolveRenewalPaymentDecision,
+} from "@/lib/payments/licenseStatus";
+import {
   isLockedByUnpaidSetupTimeout,
   UNPAID_SETUP_TIMEOUT_REFUND_STATUS_DETAIL,
 } from "@/lib/payments/setupCleanup";
@@ -31,8 +36,6 @@ type PaymentOrderRecord = {
   created_at: string;
 };
 
-const LICENSE_VALIDITY_DAYS = 30;
-const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
   "id, order_number, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_qr_base64, provider_ticket_url, paid_at, expires_at, created_at";
 
@@ -59,27 +62,6 @@ function parseOrderNumber(value: unknown) {
   }
 
   return null;
-}
-
-function resolveLicenseBaseTimestamp(order: PaymentOrderRecord) {
-  const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
-  if (Number.isFinite(paidAtMs)) return paidAtMs;
-
-  const createdAtMs = Date.parse(order.created_at);
-  if (Number.isFinite(createdAtMs)) return createdAtMs;
-
-  return Date.now();
-}
-
-function resolveLicenseExpiresAt(order: PaymentOrderRecord) {
-  return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
-  ).toISOString();
-}
-
-function isLicenseActiveForOrder(order: PaymentOrderRecord) {
-  if (order.status !== "approved") return false;
-  return Date.now() < Date.parse(resolveLicenseExpiresAt(order));
 }
 
 function getMetadataOrderNumber(
@@ -192,27 +174,21 @@ async function getOrderByOrderNumber(orderNumber: number) {
   return result.data || null;
 }
 
-async function getActiveLicenseOrderForGuild(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
+async function getLatestApprovedLicenseCoverageForGuild(
+  guildId: string,
+  excludedOrderId?: number,
+) {
+  const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
+    guildId,
+    PAYMENT_ORDER_SELECT_COLUMNS,
+  );
 
-  const result = await supabase
-    .from("payment_orders")
-    .select(PAYMENT_ORDER_SELECT_COLUMNS)
-    .eq("guild_id", guildId)
-    .eq("status", "approved")
-    .order("paid_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(30)
-    .returns<PaymentOrderRecord[]>();
+  const filteredOrders =
+    typeof excludedOrderId === "number"
+      ? approvedOrders.filter((order) => order.id !== excludedOrderId)
+      : approvedOrders;
 
-  if (result.error) {
-    throw new Error(
-      `Erro ao carregar licenca ativa para webhook: ${result.error.message}`,
-    );
-  }
-
-  const orders = result.data || [];
-  return orders.find((order) => isLicenseActiveForOrder(order)) || null;
+  return resolveLatestLicenseCoverageFromApprovedOrders(filteredOrders);
 }
 
 async function updateOrderFromProviderPayment(
@@ -293,8 +269,16 @@ async function updateOrderFromProviderPayment(
       return refundedTimeoutOrderResult.data;
     }
 
-    const activeLicenseOrder = await getActiveLicenseOrderForGuild(order.guild_id);
-    if (activeLicenseOrder && activeLicenseOrder.id !== order.id) {
+    const existingCoverage = await getLatestApprovedLicenseCoverageForGuild(
+      order.guild_id,
+      order.id,
+    );
+    const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
+    const renewalDecision = resolveRenewalPaymentDecision(
+      existingCoverage,
+      Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+    );
+    if (!renewalDecision.allowed) {
       await autoRefundProviderPayment({
         providerPaymentId,
         providerPayment,
@@ -336,8 +320,8 @@ async function updateOrderFromProviderPayment(
       await createPaymentOrderEventSafe(order.id, "provider_payment_auto_refunded", {
         source: "mercado_pago_webhook",
         providerPaymentId,
-        reason: "duplicate_active_license",
-        previousApprovedOrderNumber: activeLicenseOrder.order_number,
+        reason: renewalDecision.reason,
+        previousApprovedOrderNumber: existingCoverage?.order.order_number || null,
       });
 
       return refundedOrderResult.data;

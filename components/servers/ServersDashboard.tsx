@@ -654,6 +654,8 @@ export function ServersDashboard({
               guildId={selectedServer.guildId}
               guildName={selectedServer.guildName}
               status={selectedServer.status}
+              daysUntilExpire={selectedServer.daysUntilExpire}
+              daysUntilOff={selectedServer.daysUntilOff}
               accessMode={selectedServer.accessMode}
               allServers={servers}
               initialTab={selectedEditorTabForConfig}

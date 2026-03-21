@@ -28,6 +28,12 @@ import {
   resolveUnpaidSetupEffectiveExpiresAt,
   resolveUnpaidSetupExpiresAt,
 } from "@/lib/payments/setupCleanup";
+import {
+  getApprovedOrdersForGuild,
+  resolveCoverageForApprovedOrder,
+  resolveLatestLicenseCoverageFromApprovedOrders,
+  resolveRenewalPaymentDecision,
+} from "@/lib/payments/licenseStatus";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -77,8 +83,6 @@ type PaymentOrderEventPayload = Record<string, unknown>;
 const DEFAULT_PIX_AMOUNT = 9.99;
 const DEFAULT_PIX_CURRENCY = "BRL";
 const PENDING_REUSE_WINDOW_MS = 25 * 60 * 1000;
-const LICENSE_VALIDITY_DAYS = 30;
-const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
   `id, order_number, guild_id, payment_method, status, amount, currency, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
@@ -195,27 +199,6 @@ function toApiOrder(
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
-}
-
-function resolveLicenseBaseTimestamp(order: PaymentOrderRecord) {
-  const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
-  if (Number.isFinite(paidAtMs)) return paidAtMs;
-
-  const createdAtMs = Date.parse(order.created_at);
-  if (Number.isFinite(createdAtMs)) return createdAtMs;
-
-  return Date.now();
-}
-
-function resolveLicenseExpiresAt(order: PaymentOrderRecord) {
-  return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
-  ).toISOString();
-}
-
-function isLicenseActiveForOrder(order: PaymentOrderRecord) {
-  if (order.status !== "approved") return false;
-  return Date.now() < Date.parse(resolveLicenseExpiresAt(order));
 }
 
 function parsePaymentId(value: unknown) {
@@ -376,27 +359,32 @@ async function getOrderByCodeForUserAndGuild(
   return { order, foreignOwner: false };
 }
 
-async function getActiveLicenseOrderForGuild(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
+async function getLatestApprovedLicenseCoverageForGuild(
+  guildId: string,
+  excludedOrderId?: number,
+) {
+  const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
+    guildId,
+    PAYMENT_ORDER_SELECT_COLUMNS,
+  );
 
-  const result = await supabase
-    .from("payment_orders")
-    .select(PAYMENT_ORDER_SELECT_COLUMNS)
-    .eq("guild_id", guildId)
-    .eq("status", "approved")
-    .order("paid_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(30)
-    .returns<PaymentOrderRecord[]>();
+  const filteredOrders =
+    typeof excludedOrderId === "number"
+      ? approvedOrders.filter((order) => order.id !== excludedOrderId)
+      : approvedOrders;
 
-  if (result.error) {
-    throw new Error(
-      `Erro ao carregar licenca ativa do servidor: ${result.error.message}`,
-    );
-  }
+  return resolveLatestLicenseCoverageFromApprovedOrders(filteredOrders);
+}
 
-  const orders = result.data || [];
-  return orders.find((order) => isLicenseActiveForOrder(order)) || null;
+async function getCoverageForApprovedOrder(order: PaymentOrderRecord) {
+  if (order.status !== "approved") return null;
+
+  const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
+    order.guild_id,
+    PAYMENT_ORDER_SELECT_COLUMNS,
+  );
+
+  return resolveCoverageForApprovedOrder(approvedOrders, order);
 }
 
 async function hasStoredGuildSetupConfiguration(guildId: string) {
@@ -455,8 +443,17 @@ async function reconcilePixOrderFromProvider(
     providerPayment.external_reference || order.provider_external_reference || null;
 
   if (resolvedStatus === "approved") {
-    const activeLicenseOrder = await getActiveLicenseOrderForGuild(order.guild_id);
-    if (activeLicenseOrder && activeLicenseOrder.id !== order.id) {
+    const existingCoverage = await getLatestApprovedLicenseCoverageForGuild(
+      order.guild_id,
+      order.id,
+    );
+    const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
+    const renewalDecision = resolveRenewalPaymentDecision(
+      existingCoverage,
+      Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+    );
+
+    if (!renewalDecision.allowed) {
       await refundMercadoPagoPixPayment(providerPaymentId);
 
       const supabase = getSupabaseAdminClientOrThrow();
@@ -496,8 +493,8 @@ async function reconcilePixOrderFromProvider(
       await createPaymentOrderEventSafe(order.id, "provider_payment_auto_refunded", {
         source,
         providerPaymentId,
-        reason: "duplicate_active_license",
-        previousApprovedOrderNumber: activeLicenseOrder.order_number,
+        reason: renewalDecision.reason,
+        previousApprovedOrderNumber: existingCoverage?.order.order_number || null,
       });
 
       return refundedOrderResult.data;
@@ -680,6 +677,10 @@ export async function GET(request: Request) {
         forceRotate: false,
         invalidateOtherOrders: false,
       });
+      const orderCoverage =
+        securedOrder.order.status === "approved"
+          ? await getCoverageForApprovedOrder(securedOrder.order)
+          : null;
 
       return NextResponse.json({
         ok: true,
@@ -687,8 +688,8 @@ export async function GET(request: Request) {
           securedOrder.order,
           securedOrder.checkoutAccessToken,
         ),
-        licenseActive: isLicenseActiveForOrder(securedOrder.order),
-        licenseExpiresAt: resolveLicenseExpiresAt(securedOrder.order),
+        licenseActive: orderCoverage?.status === "paid",
+        licenseExpiresAt: orderCoverage?.licenseExpiresAt || null,
         fromOrderCode: true,
       });
     }
@@ -846,12 +847,13 @@ export async function POST(request: Request) {
       source: "payment_pix_post",
     });
 
-    const activeLicenseOrder = await getActiveLicenseOrderForGuild(guildId);
-    if (activeLicenseOrder) {
+    const latestCoverage = await getLatestApprovedLicenseCoverageForGuild(guildId);
+    const renewalDecision = resolveRenewalPaymentDecision(latestCoverage);
+    if (latestCoverage && !renewalDecision.allowed) {
       const activeLicenseLink =
-        activeLicenseOrder.user_id === user.id
+        latestCoverage.order.user_id === user.id
           ? await ensureCheckoutAccessTokenForOrder({
-              order: activeLicenseOrder,
+              order: latestCoverage.order,
               forceRotate: false,
               invalidateOtherOrders: false,
             })
@@ -860,9 +862,9 @@ export async function POST(request: Request) {
         ok: true,
         blockedByActiveLicense: true,
         licenseActive: true,
-        licenseExpiresAt: resolveLicenseExpiresAt(activeLicenseOrder),
+        licenseExpiresAt: latestCoverage.licenseExpiresAt,
         order: toApiOrder(
-          activeLicenseOrder,
+          latestCoverage.order,
           activeLicenseLink?.checkoutAccessToken || null,
         ),
       });

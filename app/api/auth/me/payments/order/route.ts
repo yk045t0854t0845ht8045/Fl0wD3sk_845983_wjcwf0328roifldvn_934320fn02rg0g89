@@ -21,6 +21,10 @@ import {
   reconcilePaymentOrderRecord,
   reconcilePaymentOrderWithProviderPayment,
 } from "@/lib/payments/reconciliation";
+import {
+  getApprovedOrdersForGuild,
+  resolveCoverageForApprovedOrder,
+} from "@/lib/payments/licenseStatus";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
@@ -66,8 +70,6 @@ type PaymentOrderRecord = {
   updated_at: string;
 };
 
-const LICENSE_VALIDITY_DAYS = 30;
-const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
   `id, order_number, guild_id, payment_method, status, amount, currency, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
@@ -128,27 +130,6 @@ function maskPayerDocument(document: string | null) {
   const digits = document.replace(/\D/g, "");
   if (digits.length <= 4) return digits;
   return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
-}
-
-function resolveLicenseBaseTimestamp(order: PaymentOrderRecord) {
-  const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
-  if (Number.isFinite(paidAtMs)) return paidAtMs;
-
-  const createdAtMs = Date.parse(order.created_at);
-  if (Number.isFinite(createdAtMs)) return createdAtMs;
-
-  return Date.now();
-}
-
-function resolveLicenseExpiresAt(order: PaymentOrderRecord) {
-  return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
-  ).toISOString();
-}
-
-function isLicenseActiveForOrder(order: PaymentOrderRecord) {
-  if (order.status !== "approved") return false;
-  return Date.now() < Date.parse(resolveLicenseExpiresAt(order));
 }
 
 function toApiOrder(
@@ -379,6 +360,17 @@ async function getLatestOrderForUserAndGuild(userId: number, guildId: string) {
   return result.data || null;
 }
 
+async function getCoverageForApprovedOrder(order: PaymentOrderRecord) {
+  if (order.status !== "approved") return null;
+
+  const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
+    order.guild_id,
+    PAYMENT_ORDER_SELECT_COLUMNS,
+  );
+
+  return resolveCoverageForApprovedOrder(approvedOrders, order);
+}
+
 async function reconcileHostedCardOrderByExternalReference(
   order: PaymentOrderRecord,
   source: string,
@@ -606,12 +598,16 @@ export async function GET(request: Request) {
       forceRotate: false,
       invalidateOtherOrders: false,
     });
+    const orderCoverage =
+      securedOrder.order.status === "approved"
+        ? await getCoverageForApprovedOrder(securedOrder.order)
+        : null;
 
     return respond({
       ok: true,
       order: toApiOrder(securedOrder.order, securedOrder.checkoutAccessToken),
-      licenseActive: isLicenseActiveForOrder(securedOrder.order),
-      licenseExpiresAt: resolveLicenseExpiresAt(securedOrder.order),
+      licenseActive: orderCoverage?.status === "paid",
+      licenseExpiresAt: orderCoverage?.licenseExpiresAt || null,
       fromOrderCode: Boolean(orderCode),
     });
   } catch (error) {
