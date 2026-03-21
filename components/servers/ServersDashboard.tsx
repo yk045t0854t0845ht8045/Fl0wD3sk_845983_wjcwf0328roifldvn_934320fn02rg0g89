@@ -22,6 +22,8 @@ type ManagedServer = {
   guildName: string;
   iconUrl: string | null;
   status: ManagedServerStatus;
+  accessMode: "owner" | "viewer";
+  licenseOwnerUserId: number;
   licensePaidAt: string;
   licenseExpiresAt: string;
   graceExpiresAt: string;
@@ -652,6 +654,7 @@ export function ServersDashboard({
               guildId={selectedServer.guildId}
               guildName={selectedServer.guildName}
               status={selectedServer.status}
+              accessMode={selectedServer.accessMode}
               allServers={servers}
               initialTab={selectedEditorTabForConfig}
               onTabChange={(tab) => {
@@ -836,16 +839,18 @@ export function ServersDashboard({
                               >
                                 Copiar ID
                               </button>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleCardMenuDeactivate();
-                                }}
-                                className="block w-full px-3 py-2 text-left text-[12px] text-[#D8D8D8] transition-colors hover:bg-[#121212]"
-                              >
-                                Desativar Bot
-                              </button>
+                              {server.accessMode === "owner" ? (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleCardMenuDeactivate();
+                                  }}
+                                  className="block w-full px-3 py-2 text-left text-[12px] text-[#D8D8D8] transition-colors hover:bg-[#121212]"
+                                >
+                                  Desativar Bot
+                                </button>
+                              ) : null}
                             </div>
                           ) : null}
                         </div>

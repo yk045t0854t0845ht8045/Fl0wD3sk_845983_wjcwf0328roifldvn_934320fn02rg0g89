@@ -6,6 +6,7 @@ import {
 import {
   EXPIRED_GRACE_MS,
   LICENSE_VALIDITY_MS,
+  getLockedGuildLicenseMap,
   resolveLicenseBaseTimestamp,
 } from "@/lib/payments/licenseStatus";
 import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
@@ -98,44 +99,74 @@ export async function GET() {
       }
     }
 
-    if (!latestApprovedOrderByGuild.size) {
-      return applyNoStoreHeaders(
-        NextResponse.json({
-        ok: true,
-        servers: [],
-        }),
-      );
-    }
-
     const accessibleGuilds = await getAccessibleGuildsForSession({
       authSession: sessionData.authSession,
       accessToken: sessionData.accessToken,
     });
 
+    const lockedGuildMap = await getLockedGuildLicenseMap(
+      accessibleGuilds.map((guild) => guild.id),
+    );
+
+    if (!latestApprovedOrderByGuild.size && !lockedGuildMap.size) {
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          servers: [],
+        }),
+      );
+    }
+
     const servers = accessibleGuilds
-      .filter((guild) => latestApprovedOrderByGuild.has(guild.id))
+      .filter(
+        (guild) =>
+          latestApprovedOrderByGuild.has(guild.id) || lockedGuildMap.has(guild.id),
+      )
       .map((guild) => {
-        const approvedOrder = latestApprovedOrderByGuild.get(
-          guild.id,
-        ) as ApprovedOrderRecord;
-        const baseTimestamp = resolveLicenseBaseTimestamp(approvedOrder);
+        const ownedOrder = latestApprovedOrderByGuild.get(guild.id) || null;
+        const lockedRecord = lockedGuildMap.get(guild.id) || null;
+        const currentLicenseBelongsToViewer =
+          lockedRecord?.userId !== sessionData.authSession.user.id;
+        const isLicenseOwner = lockedRecord
+          ? !currentLicenseBelongsToViewer
+          : Boolean(ownedOrder);
+        const baseTimestamp = lockedRecord
+          ? resolveLicenseBaseTimestamp({
+              paid_at: lockedRecord?.paidAt || null,
+              created_at: lockedRecord?.createdAt || new Date().toISOString(),
+            })
+          : resolveLicenseBaseTimestamp(
+              ownedOrder || {
+                paid_at: null,
+                created_at: new Date().toISOString(),
+              },
+            );
         const licenseExpiresAtMs = baseTimestamp + LICENSE_VALIDITY_MS;
         const graceExpiresAtMs = licenseExpiresAtMs + EXPIRED_GRACE_MS;
         const nowMs = Date.now();
 
         let status: "paid" | "expired" | "off" = "off";
-        if (nowMs <= licenseExpiresAtMs) {
-          status = "paid";
-        } else if (nowMs <= graceExpiresAtMs) {
-          status = "expired";
+        if (lockedRecord) {
+          status = lockedRecord.status;
+        } else if (ownedOrder) {
+          if (nowMs <= licenseExpiresAtMs) {
+            status = "paid";
+          } else if (nowMs <= graceExpiresAtMs) {
+            status = "expired";
+          }
         }
+
+        const referencePaidAt = lockedRecord?.paidAt || ownedOrder?.paid_at || null;
+        const referenceCreatedAt = lockedRecord?.createdAt || ownedOrder?.created_at;
 
         return {
           guildId: guild.id,
           guildName: guild.name,
           iconUrl: buildGuildIconUrl(guild.id, guild.icon),
           status,
-          licensePaidAt: approvedOrder.paid_at || approvedOrder.created_at,
+          accessMode: isLicenseOwner ? "owner" : "viewer",
+          licenseOwnerUserId: lockedRecord?.userId || sessionData.authSession.user.id,
+          licensePaidAt: referencePaidAt || referenceCreatedAt,
           licenseExpiresAt: toUtcIso(licenseExpiresAtMs),
           graceExpiresAt: toUtcIso(graceExpiresAtMs),
           daysUntilExpire: daysLeft(licenseExpiresAtMs),

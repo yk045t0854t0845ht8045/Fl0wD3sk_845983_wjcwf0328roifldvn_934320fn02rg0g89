@@ -14,6 +14,7 @@ import {
   areCardPaymentsEnabled,
   CARD_RECURRING_DISABLED_MESSAGE,
 } from "@/lib/payments/cardAvailability";
+import { getLockedGuildLicenseByGuildId } from "@/lib/payments/licenseStatus";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -361,6 +362,24 @@ export async function POST(request: Request) {
       userId: access.context.sessionData.authSession.user.id,
       guildId,
     });
+
+    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
+    if (
+      lockedGuildLicense &&
+      lockedGuildLicense.userId !== access.context.sessionData.authSession.user.id
+    ) {
+      return attachRequestId(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "As funcoes financeiras deste servidor ficam disponiveis apenas para a conta responsavel pela licenca ativa.",
+          },
+          { status: 403 },
+        ),
+        baseRequestContext.requestId,
+      );
+    }
 
     const rateLimit = await enforceRequestRateLimit({
       action: "server_plan_post",

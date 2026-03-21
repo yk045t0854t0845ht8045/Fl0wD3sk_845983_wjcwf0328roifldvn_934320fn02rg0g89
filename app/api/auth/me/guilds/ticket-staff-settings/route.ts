@@ -5,7 +5,10 @@ import {
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
-import { getGuildLicenseStatus } from "@/lib/payments/licenseStatus";
+import {
+  getGuildLicenseStatus,
+  getLockedGuildLicenseByGuildId,
+} from "@/lib/payments/licenseStatus";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import {
   applyNoStoreHeaders,
@@ -287,6 +290,23 @@ export async function POST(request: Request) {
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {
       return access.response;
+    }
+
+    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
+    if (
+      lockedGuildLicense &&
+      lockedGuildLicense.userId !== access.sessionData.authSession.user.id
+    ) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Este servidor possui uma licenca ativa em outra conta administradora e esta conta esta em modo somente visualizacao.",
+          },
+          { status: 403 },
+        ),
+      );
     }
 
     const cleanupSummary = await cleanupExpiredUnpaidServerSetups({

@@ -6,9 +6,12 @@ import {
 } from "@/lib/auth/config";
 import {
   exchangeCodeForToken,
+  fetchDiscordGuilds,
   fetchDiscordUser,
 } from "@/lib/auth/discord";
+import { filterAccessibleGuilds } from "@/lib/auth/discordGuildAccess";
 import { createUserSessionFromDiscordUser } from "@/lib/auth/session";
+import { getLockedGuildLicenseMap } from "@/lib/payments/licenseStatus";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -59,6 +62,14 @@ async function hasApprovedServerForUser(userId: number) {
   }
 
   return Boolean(result.data?.id);
+}
+
+async function hasAccessibleLicensedServer(accessToken: string) {
+  const guilds = filterAccessibleGuilds(await fetchDiscordGuilds(accessToken));
+  if (!guilds.length) return false;
+
+  const lockedGuildMap = await getLockedGuildLicenseMap(guilds.map((guild) => guild.id));
+  return lockedGuildMap.size > 0;
 }
 
 export async function GET(request: NextRequest) {
@@ -133,13 +144,17 @@ export async function GET(request: NextRequest) {
       discordTokenExpiresAt,
     });
 
-    let hasApprovedServer = false;
+    let hasManagedServerAccess = false;
     try {
-      hasApprovedServer = await hasApprovedServerForUser(user.id);
+      const [hasOwnApprovedServer, hasAccessibleLicensedGuild] = await Promise.all([
+        hasApprovedServerForUser(user.id),
+        hasAccessibleLicensedServer(tokenPayload.access_token),
+      ]);
+      hasManagedServerAccess = hasOwnApprovedServer || hasAccessibleLicensedGuild;
     } catch {
-      hasApprovedServer = false;
+      hasManagedServerAccess = false;
     }
-    const successLocation = hasApprovedServer
+    const successLocation = hasManagedServerAccess
       ? `${request.nextUrl.origin}/servers`
       : buildLoginSuccessLocation(request.nextUrl.origin);
     const response = redirectWithLocation(successLocation);
@@ -165,7 +180,7 @@ export async function GET(request: NextRequest) {
       outcome: "succeeded",
       metadata: {
         redirectTo: successLocation,
-        hasApprovedServer,
+        hasManagedServerAccess,
       },
     });
     return attachRequestId(response, initialRequestContext.requestId);

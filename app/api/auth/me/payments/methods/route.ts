@@ -28,6 +28,7 @@ import {
   areCardPaymentsEnabled,
   CARD_PAYMENTS_DISABLED_MESSAGE,
 } from "@/lib/payments/cardAvailability";
+import { getLockedGuildLicenseByGuildId } from "@/lib/payments/licenseStatus";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -438,6 +439,22 @@ export async function POST(request: Request) {
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) return attachRequestId(access.response, baseRequestContext.requestId);
+
+    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
+    if (lockedGuildLicense && lockedGuildLicense.userId !== access.context.userId) {
+      return attachRequestId(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "As funcoes financeiras deste servidor ficam disponiveis apenas para a conta responsavel pela licenca ativa.",
+          },
+          { status: 403 },
+        ),
+        baseRequestContext.requestId,
+      );
+    }
+
     auditContext = extendSecurityRequestContext(baseRequestContext, {
       sessionId: access.context.sessionId,
       userId: access.context.userId,
@@ -1019,6 +1036,22 @@ export async function PATCH(request: Request) {
     const nickname = normalizePaymentMethodNickname(body.nickname);
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) return attachRequestId(access.response, baseRequestContext.requestId);
+
+    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
+    if (lockedGuildLicense && lockedGuildLicense.userId !== access.context.userId) {
+      return attachRequestId(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "As funcoes financeiras deste servidor ficam disponiveis apenas para a conta responsavel pela licenca ativa.",
+          },
+          { status: 403 },
+        ),
+        baseRequestContext.requestId,
+      );
+    }
+
     auditContext = extendSecurityRequestContext(baseRequestContext, {
       sessionId: access.context.sessionId,
       userId: access.context.userId,
@@ -1164,6 +1197,22 @@ export async function DELETE(request: Request) {
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) return attachRequestId(access.response, baseRequestContext.requestId);
+
+    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
+    if (lockedGuildLicense && lockedGuildLicense.userId !== access.context.userId) {
+      return attachRequestId(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "As funcoes financeiras deste servidor ficam disponiveis apenas para a conta responsavel pela licenca ativa.",
+          },
+          { status: 403 },
+        ),
+        baseRequestContext.requestId,
+      );
+    }
+
     auditContext = extendSecurityRequestContext(baseRequestContext, {
       sessionId: access.context.sessionId,
       userId: access.context.userId,

@@ -138,6 +138,7 @@ type ServerSettingsEditorProps = {
   guildId: string;
   guildName: string;
   status: ManagedServerStatus;
+  accessMode?: "owner" | "viewer";
   allServers: Array<{
     guildId: string;
     guildName: string;
@@ -1100,6 +1101,7 @@ export function ServerSettingsEditor({
   guildId,
   guildName,
   status,
+  accessMode = "owner",
   allServers,
   initialTab = "settings",
   onTabChange,
@@ -1182,6 +1184,12 @@ export function ServerSettingsEditor({
     useState(false);
 
   const locked = status === "expired" || status === "off";
+  const isViewerOnly = accessMode === "viewer";
+  const settingsReadOnly = locked || isViewerOnly;
+  const viewerOnlyMessage =
+    "Este servidor possui uma licenca ativa vinculada a outra conta administradora. Nesta conta o painel esta disponivel somente para visualizacao.";
+  const financialViewerMessage =
+    "As funcoes financeiras deste servidor ficam disponiveis apenas para a conta responsavel pela licenca ativa.";
   const headerStatus = statusBadge(status);
 
   useEffect(() => {
@@ -1372,6 +1380,15 @@ export function ServerSettingsEditor({
   useEffect(() => {
     let mounted = true;
     async function loadPayments() {
+      if (isViewerOnly) {
+        if (!mounted) return;
+        setOrders([]);
+        setMethods([]);
+        setPaymentsError(null);
+        setIsPaymentsLoading(false);
+        return;
+      }
+
       setIsPaymentsLoading(true);
       setPaymentsError(null);
       try {
@@ -1405,12 +1422,31 @@ export function ServerSettingsEditor({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [isViewerOnly]);
 
   useEffect(() => {
     let mounted = true;
 
     async function loadPlan() {
+      if (isViewerOnly) {
+        if (!mounted) return;
+        setPlanSettings({
+          planCode: "pro",
+          monthlyAmount: 9.99,
+          currency: "BRL",
+          recurringEnabled: false,
+          recurringMethodId: null,
+          recurringMethod: null,
+          availableMethods: [],
+          availableMethodsCount: 0,
+          createdAt: null,
+          updatedAt: null,
+        });
+        setPlanError(null);
+        setIsPlanLoading(false);
+        return;
+      }
+
       setIsPlanLoading(true);
       setPlanError(null);
       try {
@@ -1443,7 +1479,7 @@ export function ServerSettingsEditor({
     return () => {
       mounted = false;
     };
-  }, [guildId]);
+  }, [guildId, isViewerOnly]);
 
   const serverMap = useMemo(() => {
     const map = new Map<string, { guildName: string; iconUrl: string | null }>();
@@ -1674,6 +1710,14 @@ export function ServerSettingsEditor({
 
   const openAddMethodModal = useCallback(
     (options?: { enableRecurringAfterAdd?: boolean }) => {
+      if (isViewerOnly) {
+        setPaymentsError(null);
+        setMethodActionMessage(financialViewerMessage);
+        setPlanSuccess(null);
+        setPlanError(financialViewerMessage);
+        return;
+      }
+
       if (!cardPaymentsEnabled) {
         setAddMethodFlowState("idle");
         setAddMethodStatusMessage(null);
@@ -1698,7 +1742,7 @@ export function ServerSettingsEditor({
       );
       setIsAddMethodModalOpen(true);
     },
-    [cardPaymentsEnabled],
+    [cardPaymentsEnabled, financialViewerMessage, isViewerOnly],
   );
 
   const closeAddMethodModal = useCallback(() => {
@@ -1759,7 +1803,7 @@ export function ServerSettingsEditor({
   }, []);
 
   const canSave = Boolean(
-    !locked &&
+    !settingsReadOnly &&
       !isLoading &&
       !isSaving &&
       menuChannelId &&
@@ -1778,6 +1822,12 @@ export function ServerSettingsEditor({
       recurringMethodId: string | null;
       successMessage: string;
     }) => {
+      if (isViewerOnly) {
+        setPlanSuccess(null);
+        setPlanError(financialViewerMessage);
+        return null;
+      }
+
       if (isPlanSaving) return null;
 
       setIsPlanSaving(true);
@@ -1814,10 +1864,16 @@ export function ServerSettingsEditor({
         setIsPlanSaving(false);
       }
     },
-    [guildId, isPlanSaving],
+    [financialViewerMessage, guildId, isPlanSaving, isViewerOnly],
   );
 
   const handleToggleRecurring = useCallback(async () => {
+    if (isViewerOnly) {
+      setPlanSuccess(null);
+      setPlanError(financialViewerMessage);
+      return;
+    }
+
     if (!planSettings || isPlanSaving) return;
 
     if (planSettings.recurringEnabled) {
@@ -1870,9 +1926,17 @@ export function ServerSettingsEditor({
     persistPlanSettings,
     planSettings,
     recurringMethodOptions,
+    financialViewerMessage,
+    isViewerOnly,
   ]);
 
   const handleRenewByPix = useCallback(() => {
+    if (isViewerOnly) {
+      setPlanSuccess(null);
+      setPlanError(financialViewerMessage);
+      return;
+    }
+
     const params = new URLSearchParams({
       guild: guildId,
       method: "pix",
@@ -1883,7 +1947,7 @@ export function ServerSettingsEditor({
     });
 
     window.location.assign(`/config?${params.toString()}#/payment`);
-  }, [guildId]);
+  }, [financialViewerMessage, guildId, isViewerOnly]);
 
   const handleDeleteMethod = useCallback(
     async (methodId: string) => {
@@ -2345,6 +2409,12 @@ export function ServerSettingsEditor({
 
   const handleSelectRecurringMethod = useCallback(
     async (methodId: string) => {
+      if (isViewerOnly) {
+        setPlanSuccess(null);
+        setPlanError(financialViewerMessage);
+        return;
+      }
+
       if (!planSettings || isPlanSaving) return;
       if (!methodId) return;
       if (!cardPaymentsEnabled) {
@@ -2363,10 +2433,23 @@ export function ServerSettingsEditor({
         setIsRecurringMethodModalOpen(false);
       }
     },
-    [cardPaymentsEnabled, isPlanSaving, persistPlanSettings, planSettings],
+    [
+      cardPaymentsEnabled,
+      financialViewerMessage,
+      isPlanSaving,
+      isViewerOnly,
+      persistPlanSettings,
+      planSettings,
+    ],
   );
 
   const handleConfirmRecurringActivation = useCallback(async () => {
+    if (isViewerOnly) {
+      setPlanSuccess(null);
+      setPlanError(financialViewerMessage);
+      return;
+    }
+
     if (!cardPaymentsEnabled) {
       setPlanSuccess(null);
       setPlanError(CARD_RECURRING_DISABLED_MESSAGE);
@@ -2389,7 +2472,13 @@ export function ServerSettingsEditor({
     if (savedPlan) {
       setIsRecurringMethodModalOpen(false);
     }
-  }, [cardPaymentsEnabled, persistPlanSettings, recurringMethodDraftId]);
+  }, [
+    cardPaymentsEnabled,
+    financialViewerMessage,
+    isViewerOnly,
+    persistPlanSettings,
+    recurringMethodDraftId,
+  ]);
 
   const handleSave = useCallback(async () => {
     if (!canSave || !adminRoleId) return;
@@ -2487,6 +2576,11 @@ export function ServerSettingsEditor({
           <span className={`inline-flex h-[22px] items-center justify-center rounded-[3px] border px-3 text-[11px] ${headerStatus.cls}`}>
             {headerStatus.label}
           </span>
+          {isViewerOnly ? (
+            <span className="inline-flex h-[22px] items-center justify-center rounded-[3px] border border-[#5CA9FF] bg-[rgba(92,169,255,0.12)] px-3 text-[11px] text-[#8CC2FF]">
+              Somente visualizacao
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -2536,20 +2630,25 @@ export function ServerSettingsEditor({
               <>
                 <div className="grid grid-cols-1 gap-3 min-[1100px]:grid-cols-2">
                   <div className="flex flex-col gap-4">
-                    <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
                   </div>
 
                   <div className="flex flex-col gap-4">
-                    <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || locked} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
                   </div>
                 </div>
 
+                {isViewerOnly ? (
+                  <p className="mt-2 text-[11px] text-[#8CC2FF]">
+                    {viewerOnlyMessage}
+                  </p>
+                ) : null}
                 {locked ? (
                   <p className="mt-2 text-[11px] text-[#C2C2C2]">
                     Plano expirado/desligado. Renove para liberar alteracoes.
@@ -2565,7 +2664,13 @@ export function ServerSettingsEditor({
                     disabled={!canSave}
                     className="flex h-[42px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[13px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
                   >
-                    {isSaving ? <ButtonLoader size={22} /> : "Salvar configuracoes"}
+                    {isSaving ? (
+                      <ButtonLoader size={22} />
+                    ) : isViewerOnly ? (
+                      "Somente visualizacao"
+                    ) : (
+                      "Salvar configuracoes"
+                    )}
                   </button>
                   {errorMessage ? <p className="text-[11px] text-[#C2C2C2]">{errorMessage}</p> : null}
                   {successMessage ? <p className="text-[11px] text-[#9BD694]">{successMessage}</p> : null}
@@ -2580,17 +2685,18 @@ export function ServerSettingsEditor({
                 type="text"
                 value={paymentSearch}
                 onChange={(event) => setPaymentSearch(event.currentTarget.value)}
+                disabled={isViewerOnly}
                 placeholder="Pesquisar pagamento por ID, servidor ou metodo"
-                className="h-[52px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none"
+                className="h-[52px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none disabled:cursor-not-allowed disabled:opacity-50"
               />
-              <select value={paymentGuildFilter} onChange={(event) => setPaymentGuildFilter(event.currentTarget.value)} className="h-[52px] min-w-[238px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none">
+              <select value={paymentGuildFilter} onChange={(event) => setPaymentGuildFilter(event.currentTarget.value)} disabled={isViewerOnly} className="h-[52px] min-w-[238px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50">
                 {serverOptions.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.name}
                   </option>
                 ))}
               </select>
-              <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.currentTarget.value as "all" | PaymentStatus)} className="h-[52px] min-w-[213px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none">
+              <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.currentTarget.value as "all" | PaymentStatus)} disabled={isViewerOnly} className="h-[52px] min-w-[213px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50">
                 <option value="all">Todos status</option>
                 <option value="approved">Pago</option>
                 <option value="pending">Pendente</option>
@@ -2602,7 +2708,11 @@ export function ServerSettingsEditor({
             </div>
 
             <div className="mt-4 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A]">
-              {isPaymentsLoading ? (
+              {isViewerOnly ? (
+                <p className="px-4 py-8 text-center text-[15px] text-[#C2C2C2]">
+                  {financialViewerMessage}
+                </p>
+              ) : isPaymentsLoading ? (
                 <div className="flex h-[275px] items-center justify-center">
                   <ButtonLoader size={28} />
                 </div>
@@ -2666,13 +2776,15 @@ export function ServerSettingsEditor({
                 type="text"
                 value={methodSearch}
                 onChange={(event) => setMethodSearch(event.currentTarget.value)}
+                disabled={isViewerOnly}
                 placeholder="Pesquisar metodo por bandeira, final ou servidor"
-                className="h-[52px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none"
+                className="h-[52px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] placeholder:text-[#3A3A3A] outline-none disabled:cursor-not-allowed disabled:opacity-50"
               />
               <select
                 value={methodGuildFilter}
                 onChange={(event) => setMethodGuildFilter(event.currentTarget.value)}
-                className="h-[52px] min-w-[238px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none"
+                disabled={isViewerOnly}
+                className="h-[52px] min-w-[238px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {serverOptions.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -2683,7 +2795,8 @@ export function ServerSettingsEditor({
               <select
                 value={methodStatusFilter}
                 onChange={(event) => setMethodStatusFilter(event.currentTarget.value as "all" | PaymentStatus)}
-                className="h-[52px] min-w-[213px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none"
+                disabled={isViewerOnly}
+                className="h-[52px] min-w-[213px] rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 text-[15px] text-[#D8D8D8] outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="all">Todos status</option>
                 <option value="approved">Pago</option>
@@ -2696,7 +2809,11 @@ export function ServerSettingsEditor({
             </div>
 
             <div className="mt-4">
-              {isPaymentsLoading ? (
+              {isViewerOnly ? (
+                <div className="rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-8 text-center text-[15px] text-[#C2C2C2]">
+                  {financialViewerMessage}
+                </div>
+              ) : isPaymentsLoading ? (
                 <div className="flex h-[275px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A]">
                   <ButtonLoader size={28} />
                 </div>
@@ -2839,7 +2956,7 @@ export function ServerSettingsEditor({
               <button
                 type="button"
                 onClick={() => openAddMethodModal()}
-                disabled={!cardPaymentsEnabled}
+                disabled={isViewerOnly || !cardPaymentsEnabled}
                 className={`mt-3 flex h-[46px] w-full items-center justify-center gap-3 rounded-[3px] border text-[13px] font-medium transition-colors ${
                   cardPaymentsEnabled
                     ? "border-transparent bg-[#D8D8D8] text-black hover:opacity-90"
@@ -2894,7 +3011,8 @@ export function ServerSettingsEditor({
                     <button
                       type="button"
                       onClick={handleRenewByPix}
-                      className="inline-flex h-[34px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#D8D8D8] px-4 text-[12px] font-medium text-black transition-opacity hover:opacity-90"
+                      disabled={isViewerOnly}
+                      className="inline-flex h-[34px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#D8D8D8] px-4 text-[12px] font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       RENOVAR
                     </button>
@@ -2931,6 +3049,7 @@ export function ServerSettingsEditor({
                         disabled={
                           isPlanSaving ||
                           !planSettings ||
+                          isViewerOnly ||
                           (!cardPaymentsEnabled && !planSettings?.recurringEnabled)
                         }
                         className={`inline-flex h-[31px] min-w-[92px] items-center justify-center rounded-[3px] border px-3 text-[12px] transition-opacity disabled:cursor-not-allowed ${
@@ -2965,7 +3084,7 @@ export function ServerSettingsEditor({
                       <button
                         type="button"
                         onClick={() => openAddMethodModal()}
-                        disabled={!cardPaymentsEnabled}
+                        disabled={isViewerOnly || !cardPaymentsEnabled}
                         className="inline-flex h-[31px] items-center justify-center gap-2 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-3 text-[11px] text-[#D8D8D8] transition-colors hover:bg-[#111111] disabled:cursor-not-allowed disabled:opacity-55"
                       >
                         <span>Adicionar cartao</span>
@@ -2991,6 +3110,7 @@ export function ServerSettingsEditor({
                           }}
                           disabled={
                             isPlanSaving ||
+                            isViewerOnly ||
                             !planSettings?.recurringEnabled ||
                             !cardPaymentsEnabled
                           }
@@ -3039,6 +3159,11 @@ export function ServerSettingsEditor({
                     )}
                   </div>
 
+                  {isViewerOnly ? (
+                    <p className="mt-3 text-[11px] text-[#8CC2FF]">
+                      {financialViewerMessage}
+                    </p>
+                  ) : null}
                   {locked ? (
                     <p className="mt-3 text-[11px] text-[#C2C2C2]">
                       Mesmo com o servidor expirado ou desligado, voce ainda pode configurar a cobranca recorrente para reativacao automatica.

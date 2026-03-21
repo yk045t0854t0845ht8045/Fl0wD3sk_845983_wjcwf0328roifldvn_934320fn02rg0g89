@@ -96,8 +96,21 @@ type SessionAccessContext = {
   accessToken: string;
 };
 
-function filterAccessibleGuilds(guilds: DiscordGuild[]) {
+export function filterAccessibleGuilds(guilds: DiscordGuild[]) {
   return guilds.filter((guild) => hasAdminAccess(guild.permissions, guild.owner));
+}
+
+export async function getAccessibleGuildsFromAccessToken(accessToken: string) {
+  try {
+    const guilds = await fetchDiscordGuilds(accessToken);
+    return filterAccessibleGuilds(guilds);
+  } catch (error) {
+    if (error instanceof DiscordRateLimitError) {
+      return [];
+    }
+
+    throw error;
+  }
 }
 
 export async function getAccessibleGuildsForSession(
