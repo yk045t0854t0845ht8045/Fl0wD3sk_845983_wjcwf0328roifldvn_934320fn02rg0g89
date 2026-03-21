@@ -75,6 +75,12 @@ type CardRedirectApiResponse = {
   redirectUrl?: string | null;
 };
 
+type CardCancelApiResponse = {
+  ok: boolean;
+  message?: string;
+  order?: PixOrder | null;
+};
+
 type MercadoPagoCardTokenPayload = {
   id?: string;
   payment_method_id?: string;
@@ -1885,6 +1891,7 @@ export function ConfigStepFour({
   );
   const [copied, setCopied] = useState(false);
   const [isLoadingOrder, setIsLoadingOrder] = useState(true);
+  const [isCancellingPendingCard, setIsCancellingPendingCard] = useState(false);
 
   const documentDigits = useMemo(() => normalizeBrazilDocumentDigits(payerDocument), [payerDocument]);
   const cardDocumentDigits = useMemo(() => normalizeBrazilDocumentDigits(cardDocument), [cardDocument]);
@@ -2488,6 +2495,12 @@ export function ConfigStepFour({
       pixOrder &&
       (paymentStatus !== "pending" || pixOrder.method === "card"),
   );
+  const canManuallyCancelPendingCard = Boolean(
+    guildId &&
+      pixOrder &&
+      pixOrder.method === "card" &&
+      pixOrder.status === "pending",
+  );
   const statusStageKey = useMemo(() => {
     if (view === "card_form") {
       return `card-redirect-${isSubmittingCard ? "live" : "idle"}-${cardRedirectRequestKey}`;
@@ -3083,6 +3096,54 @@ export function ConfigStepFour({
     }
   }, [pixOrder?.qrCodeText]);
 
+  const handleCancelPendingCardPayment = useCallback(async () => {
+    if (!guildId || !pixOrder || pixOrder.method !== "card" || pixOrder.status !== "pending") {
+      return;
+    }
+
+    setIsCancellingPendingCard(true);
+    setMethodMessage("Cancelando checkout com cartao...");
+
+    try {
+      const response = await fetch("/api/auth/me/payments/card/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          orderNumber: pixOrder.orderNumber,
+        }),
+      });
+      const requestId = resolveResponseRequestId(response);
+      const payload = (await response.json()) as CardCancelApiResponse;
+
+      if (!response.ok || !payload.ok || !payload.order) {
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Nao foi possivel cancelar o checkout com cartao.",
+            requestId,
+          ),
+        );
+      }
+
+      removeCachedOrderByGuild(guildId);
+      setPixOrder(payload.order);
+      setLastKnownOrderNumber(payload.order.orderNumber);
+      setView("methods");
+      setMethodMessage(null);
+      setCheckoutStatusQuery({
+        order: payload.order,
+        guildId,
+      });
+    } catch (error) {
+      setMethodMessage(
+        parseUnknownErrorMessage(error) ||
+          "Nao foi possivel cancelar o checkout com cartao.",
+      );
+    } finally {
+      setIsCancellingPendingCard(false);
+    }
+  }, [guildId, pixOrder]);
+
   const handleRegeneratePayment = useCallback(() => {
     if (!guildId) return;
 
@@ -3244,14 +3305,28 @@ export function ConfigStepFour({
 
     if (shouldShowStatusResultPanel && (statusVisual.iconPath || statusVisual.useLoaderPanel)) {
       return (
-        <StatusResultPanel
-          className="mx-auto hidden w-full max-w-[536px] min-[1530px]:flex min-[1530px]:items-center min-[1530px]:justify-center min-[1530px]:self-center"
-          iconPath={statusVisual.iconPath}
-          label={currentPaymentStatusLabel}
-          useLoader={Boolean(statusVisual.useLoaderPanel)}
-          loaderColorClassName={statusVisual.colorClassName}
-          panelTone={resultPanelTone}
-        />
+        <div className="mx-auto hidden w-full max-w-[536px] min-[1530px]:block min-[1530px]:self-center">
+          <StatusResultPanel
+            className="min-[1530px]:flex min-[1530px]:items-center min-[1530px]:justify-center"
+            iconPath={statusVisual.iconPath}
+            label={currentPaymentStatusLabel}
+            useLoader={Boolean(statusVisual.useLoaderPanel)}
+            loaderColorClassName={statusVisual.colorClassName}
+            panelTone={resultPanelTone}
+          />
+          {canManuallyCancelPendingCard ? (
+            <button
+              type="button"
+              onClick={() => {
+                void handleCancelPendingCardPayment();
+              }}
+              disabled={isCancellingPendingCard}
+              className="mt-[12px] w-full text-center text-[11px] text-[#8E8E8E] transition-colors hover:text-[#BDBDBD] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isCancellingPendingCard ? "Cancelando..." : "Cancelar"}
+            </button>
+          ) : null}
+        </div>
       );
     }
 
@@ -3349,6 +3424,7 @@ export function ConfigStepFour({
       />
     );
   }, [
+    canManuallyCancelPendingCard,
     canChoosePaymentMethod,
     canSubmitCard,
     canSubmitPix,
@@ -3370,6 +3446,7 @@ export function ConfigStepFour({
     cardNumberStatus,
     cardCooldownMessage,
     copied,
+    handleCancelPendingCardPayment,
     handleCardCvvChange,
     handleCardBillingZipCodeChange,
     handleCardDocumentChange,
@@ -3382,6 +3459,7 @@ export function ConfigStepFour({
     handlePayerNameChange,
     handleSubmitCardPayment,
     handleSubmitPixPayment,
+    isCancellingPendingCard,
     isLoadingOrder,
     isSubmittingCard,
     isSubmittingPix,
@@ -3414,14 +3492,28 @@ export function ConfigStepFour({
 
     if (shouldShowStatusResultPanel && (statusVisual.iconPath || statusVisual.useLoaderPanel)) {
       return (
-        <StatusResultPanel
-          className="mt-[26px] w-full min-[1530px]:hidden"
-          iconPath={statusVisual.iconPath}
-          label={currentPaymentStatusLabel}
-          useLoader={Boolean(statusVisual.useLoaderPanel)}
-          loaderColorClassName={statusVisual.colorClassName}
-          panelTone={resultPanelTone}
-        />
+        <div className="mt-[26px] w-full min-[1530px]:hidden">
+          <StatusResultPanel
+            className=""
+            iconPath={statusVisual.iconPath}
+            label={currentPaymentStatusLabel}
+            useLoader={Boolean(statusVisual.useLoaderPanel)}
+            loaderColorClassName={statusVisual.colorClassName}
+            panelTone={resultPanelTone}
+          />
+          {canManuallyCancelPendingCard ? (
+            <button
+              type="button"
+              onClick={() => {
+                void handleCancelPendingCardPayment();
+              }}
+              disabled={isCancellingPendingCard}
+              className="mt-[12px] w-full text-center text-[11px] text-[#8E8E8E] transition-colors hover:text-[#BDBDBD] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isCancellingPendingCard ? "Cancelando..." : "Cancelar"}
+            </button>
+          ) : null}
+        </div>
       );
     }
 
