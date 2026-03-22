@@ -633,7 +633,7 @@ export function DiscordLinkPageClient({
                           )}
                         </button>
                         <span className="min-w-0">
-                          <span className="block text-[18px] leading-[1.12] font-medium text-[#D8D8D8] sm:text-[21px]">
+                          <span className="block text-[13px] leading-[1.12] font-medium text-[#D8D8D8] sm:text-[21px]">
                             Nao sou um robo
                           </span>
                         </span>
