@@ -625,14 +625,14 @@ export function DiscordLinkPageClient({
                           )}
                         </span>
                         <span className="min-w-0">
-                          <span className="block text-[23px] leading-[1.12] font-medium text-[#D8D8D8] sm:text-[27px]">
+                          <span className="block text-[20px] leading-[1.12] font-medium text-[#D8D8D8] sm:text-[24px]">
                             Nao sou um robo
                           </span>
                         </span>
                       </span>
 
                       <span className="hidden min-w-[88px] flex-col items-center gap-1 text-center sm:flex">
-                        <span className="relative h-[34px] w-[34px] shrink-0 overflow-hidden rounded-[10px] border border-[#1E1E1E] bg-[#050505]">
+                        <span className="relative h-[34px] w-[34px] shrink-0 overflow-hidden rounded-[10px] bg-[#050505]">
                           <Image
                             src="/cdn/logos/logotipo.png"
                             alt="Flowdesk"
