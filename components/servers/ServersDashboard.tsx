@@ -525,7 +525,7 @@ export function ServersDashboard({
               }}
             >
               <Image
-                src="/cdn/logos/logotipo.png"
+                src="/cdn/logos/logotipo_.svg"
                 alt="Flowdesk"
                 fill
                 sizes={`${serversScale.logoSize}px`}

@@ -149,7 +149,7 @@ export function LegalDocumentPage({ content }: LegalDocumentPageProps) {
               <div className="flex items-center gap-4">
                 <span className="relative block h-[54px] w-[54px] shrink-0">
                   <Image
-                    src="/cdn/logos/logotipo.png"
+                    src="/cdn/logos/logotipo_.svg"
                     alt="Flowdesk"
                     fill
                     sizes="54px"

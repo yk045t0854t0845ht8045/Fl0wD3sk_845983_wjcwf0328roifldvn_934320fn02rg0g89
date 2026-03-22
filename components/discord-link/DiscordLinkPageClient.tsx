@@ -522,7 +522,7 @@ export function DiscordLinkPageClient({
         <div className="mx-auto flex w-full flex-col items-center gap-7">
           <div className="relative h-[68px] w-[68px] shrink-0">
             <Image
-              src="/cdn/logos/logotipo.png"
+              src="/cdn/logos/logotipo_.svg"
               alt="Flowdesk"
               fill
               sizes="68px"
@@ -642,7 +642,7 @@ export function DiscordLinkPageClient({
                       <span className="hidden min-w-[72px] flex-col items-center gap-0.5 text-center sm:flex">
                         <span className="relative h-[28px] w-[28px] shrink-0 overflow-hidden rounded-[9px] bg-[#050505]">
                           <Image
-                            src="/cdn/logos/logotipo.png"
+                            src="/cdn/logos/logotipo_.svg"
                             alt="Flowdesk"
                             fill
                             sizes="28px"

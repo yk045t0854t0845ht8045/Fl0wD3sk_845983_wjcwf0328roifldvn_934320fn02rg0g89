@@ -4309,7 +4309,7 @@ export function ConfigStepFour({
             <div key={`header-${statusStageKey}`} className="flowdesk-stage-fade">
               <div className="flex flex-col items-center">
                 <div className="relative h-[112px] w-[112px] shrink-0">
-                  <Image src="/cdn/logos/logotipo.png" alt="Flowdesk" fill sizes="112px" className="object-contain" priority />
+                  <Image src="/cdn/logos/logotipo_.svg" alt="Flowdesk" fill sizes="112px" className="object-contain" priority />
                 </div>
 
                 <h1 className="mt-[26px] whitespace-normal text-center text-[33px] font-medium text-[#D8D8D8] min-[960px]:whitespace-nowrap">

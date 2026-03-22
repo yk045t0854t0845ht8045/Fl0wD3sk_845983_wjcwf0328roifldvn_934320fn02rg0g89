@@ -363,7 +363,7 @@ export function ConfigStepOne({
             }}
           >
             <Image
-              src="/cdn/logos/logotipo.png"
+              src="/cdn/logos/logotipo_.svg"
               alt="Flowdesk"
               fill
               sizes={`${configStepScale.logoSize}px`}
