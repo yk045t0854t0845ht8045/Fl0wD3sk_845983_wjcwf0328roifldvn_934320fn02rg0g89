@@ -1,0 +1,82 @@
+FLOWDESK SITE - REGRAS DE ESCALA E AJUSTE VISUAL
+
+1. Sempre ler este arquivo antes de alterar qualquer parte da landing page em /site.
+
+2. Regra principal atual da landing:
+   - Os valores visuais enviados pelo usuario devem ser aplicados em escala 200%.
+   - Isso vale para:
+     - largura maxima
+     - altura
+     - padding
+     - margin
+     - gap
+     - font-size
+     - tamanho de icones
+     - tamanho de logo
+     - botoes
+     - espacamentos entre blocos
+
+3. A ideia nao e mudar o layout original.
+   - E manter exatamente a mesma proporcao visual do que o usuario pediu
+   - apenas dobrando os valores para compensar a escala que ficou pequena no Figma/base inicial.
+
+4. Sempre que o usuario mandar uma medida base da landing:
+   - aplicar proporcionalmente em 200%
+   - sem quebrar o espacamento original
+   - sem reinventar a estrutura
+   - sem alterar o que o usuario editou manualmente
+
+5. Regra de seguranca de edicao:
+   - nunca sobrescrever alteracoes manuais do usuario sem necessidade
+   - se houver conflito com algo que o usuario mexeu, ajustar em cima do codigo atual
+
+6. Escopo atual desta regra:
+   - TopBetaBanner
+   - LandingHeader
+   - LandingActionButton
+   - proximos blocos da landing que o usuario pedir
+
+7. Sempre manter:
+   - visual responsivo
+   - mesma linguagem visual atual
+   - transicoes suaves
+   - consistencia entre desktop e mobile
+   - mudancas de responsividade com animacao suave
+   - evitar cortes secos quando algo some, entra ou troca de estado
+
+9. Regra de responsividade da landing:
+   - quando elementos precisarem sumir ou trocar entre desktop, tablet e mobile
+   - preferir transicoes de:
+     - opacity
+     - transform
+     - max-width
+     - margin
+   - evitar usar sumico seco como unica experiencia visual
+   - comportamento deve parecer SaaS moderno e fluido
+
+10. Lei de animacao da landing:
+   - a animacao de reveal e transicao suave e obrigatoria em todos os elementos principais
+   - isso inclui:
+     - banner do topo
+     - logo
+     - links da esquerda
+     - documentacao
+     - botoes da direita
+     - menus
+     - proximos blocos principais da landing
+   - nao deixar entrada, sumico ou troca de estado com corte seco
+   - a experiencia deve sempre parecer moderna, premium e fluida
+   - se existir duvida entre seco e animado, escolher animado com suavidade
+
+11. Regra das tags da landing:
+   - toda tag principal da landing deve seguir o mesmo padrao visual
+   - rounded-full
+   - fundo transparente
+   - borda #0E0E0E
+   - texto em #B7B7B7
+   - efeito sutil de luz correndo pela borda
+   - sem cortes secos na entrada ou no efeito
+
+8. Quando o usuario disser que um valor esta "padrao", considerar:
+   - aplicar o valor pedido com a regra de escala 200%
+   - a menos que ele diga explicitamente para usar valor literal

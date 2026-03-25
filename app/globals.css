@@ -85,6 +85,38 @@ body {
   animation: flowdesk-slide-down 180ms ease-out;
 }
 
+@keyframes flowdesk-backdrop-fade {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+.flowdesk-backdrop-fade {
+  animation: flowdesk-backdrop-fade 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes flowdesk-sheet-up {
+  0% {
+    opacity: 0;
+    transform: translateY(44px) scale(0.985);
+    filter: blur(6px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.flowdesk-sheet-up {
+  animation: flowdesk-sheet-up 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @keyframes flowdesk-fade-up-soft {
   0% {
     opacity: 0;
@@ -198,4 +230,167 @@ body {
     rgba(255, 255, 255, 0) 100%
   );
   animation: flowdesk-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes flowdesk-landing-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+    filter: blur(8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.flowdesk-landing-reveal {
+  opacity: 0;
+  transform: translateY(14px) scale(0.985);
+  filter: blur(8px);
+  transition:
+    opacity 620ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 620ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 620ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--flowdesk-reveal-delay, 0ms);
+  will-change: transform, opacity, filter;
+}
+
+.flowdesk-landing-reveal[data-flowdesk-visible="true"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+}
+
+.flowdesk-landing-soft-motion {
+  transition:
+    opacity 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    max-width 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    gap 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform, width, height, max-width, margin, padding, gap;
+}
+
+@property --flowdesk-tag-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes flowdesk-tag-border-flow {
+  from {
+    --flowdesk-tag-angle: 0deg;
+  }
+
+  to {
+    --flowdesk-tag-angle: 360deg;
+  }
+}
+
+.flowdesk-tag-border-core,
+.flowdesk-tag-border-glow {
+  animation: flowdesk-tag-border-flow 6.8s linear infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.flowdesk-tag-border-core {
+  background: conic-gradient(
+    from var(--flowdesk-tag-angle),
+    rgba(255, 255, 255, 0) 0deg,
+    rgba(255, 255, 255, 0) 294deg,
+    rgba(255, 255, 255, 0.02) 308deg,
+    rgba(255, 255, 255, 0.12) 320deg,
+    rgba(255, 255, 255, 0.46) 330deg,
+    rgba(255, 255, 255, 0.98) 339deg,
+    rgba(255, 255, 255, 0.42) 344deg,
+    rgba(255, 255, 255, 0.14) 349deg,
+    rgba(255, 255, 255, 0.04) 354deg,
+    rgba(255, 255, 255, 0) 360deg
+  );
+}
+
+.flowdesk-tag-border-glow {
+  opacity: 0.92;
+  filter: blur(7px);
+  background: conic-gradient(
+    from var(--flowdesk-tag-angle),
+    rgba(255, 255, 255, 0) 0deg,
+    rgba(255, 255, 255, 0) 296deg,
+    rgba(255, 255, 255, 0.02) 312deg,
+    rgba(255, 255, 255, 0.08) 324deg,
+    rgba(255, 255, 255, 0.2) 333deg,
+    rgba(255, 255, 255, 0.72) 340deg,
+    rgba(255, 255, 255, 0.18) 346deg,
+    rgba(255, 255, 255, 0.04) 352deg,
+    rgba(255, 255, 255, 0) 360deg
+  );
+}
+
+@keyframes flowdesk-logo-marquee {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+
+  to {
+    transform: translate3d(var(--flowdesk-logo-loop-distance, -50%), 0, 0);
+  }
+}
+
+.flowdesk-logo-marquee-track {
+  animation: flowdesk-logo-marquee var(--flowdesk-logo-loop-duration, 30s) linear infinite;
+  will-change: transform;
+}
+
+.flowdesk-logo-loop-hover:hover .flowdesk-logo-marquee-track {
+  animation-play-state: paused;
+}
+
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+.lenis.lenis-scrolling iframe {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flowdesk-landing-reveal {
+    opacity: 1;
+    filter: none;
+    transform: none;
+    transition: none;
+  }
+
+  .flowdesk-landing-soft-motion {
+    transition: none;
+  }
+
+  .flowdesk-tag-border-core,
+  .flowdesk-tag-border-glow {
+    animation: none;
+  }
+
+  .flowdesk-logo-marquee-track {
+    animation: none;
+  }
 }

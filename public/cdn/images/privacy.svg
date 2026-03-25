@@ -1,0 +1,22 @@
+<svg width="553" height="553" viewBox="0 0 553 553" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g filter="url(#filter0_f_264_26)">
+<circle cx="276.5" cy="276.5" r="76.5" fill="#0062FF" fill-opacity="0.5"/>
+</g>
+<foreignObject x="175.8" y="131.8" width="199.902" height="164.126"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(6.35px);height:100%;width:100%"></div></foreignObject><path data-figma-bg-blur-radius="12.7" d="M362.502 283.215C362.335 276.215 362.5 280 362.502 252C362.504 223.997 340.167 215.686 328.5 215.02L327.5 192.52C322.7 153.32 291.167 144.52 276 145.02C238.4 145.42 226.333 176.853 225 192.52L224.5 215.02C196.5 219.42 189.167 241.52 189 252.02V283.215" stroke="url(#paint0_linear_264_26)" stroke-opacity="0.08"/>
+<path d="M308 214H245L245.504 189.961C249.133 166.359 267.512 160.822 276.248 161.004C298.021 161.441 306.152 180.491 307.496 189.961L308 214Z" stroke="url(#paint1_linear_264_26)" stroke-opacity="0.08"/>
+<defs>
+<filter id="filter0_f_264_26" x="0" y="0" width="553" height="553" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+<feGaussianBlur stdDeviation="100" result="effect1_foregroundBlur_264_26"/>
+</filter>
+<linearGradient id="paint0_linear_264_26" x1="189" y1="214.107" x2="362.507" y2="214.107" gradientUnits="userSpaceOnUse">
+<stop stop-color="#DADADA"/>
+<stop offset="1" stop-color="#C1C1C1"/>
+</linearGradient>
+<linearGradient id="paint1_linear_264_26" x1="245" y1="187.5" x2="308" y2="187.5" gradientUnits="userSpaceOnUse">
+<stop stop-color="#DADADA"/>
+<stop offset="1" stop-color="#C1C1C1"/>
+</linearGradient>
+</defs>
+</svg>
