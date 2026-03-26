@@ -377,6 +377,24 @@ export async function createUserTeamForUser(input: {
     throw new Error("Selecione pelo menos um servidor para vincular a equipe.");
   }
 
+  const existingGuildLinksResult = await supabase
+    .from("auth_user_team_servers")
+    .select("guild_id")
+    .in("guild_id", guildIds)
+    .returns<Array<{ guild_id: string }>>();
+
+  if (existingGuildLinksResult.error) {
+    throw new Error(existingGuildLinksResult.error.message);
+  }
+
+  const alreadyLinkedGuildIds = uniqueStrings(
+    (existingGuildLinksResult.data || []).map((row) => row.guild_id),
+  );
+
+  if (alreadyLinkedGuildIds.length) {
+    throw new Error("Um ou mais servidores selecionados ja estao vinculados a outra equipe.");
+  }
+
   const memberDiscordIds = normalizeDiscordIds(input.memberDiscordIds).filter(
     (discordUserId) => discordUserId !== input.discordUserId,
   );
@@ -397,49 +415,64 @@ export async function createUserTeamForUser(input: {
 
   const teamId = insertTeamResult.data.id;
 
-  const teamServersResult = await supabase
-    .from("auth_user_team_servers")
-    .insert(
-      guildIds.map((guildId) => ({
-        team_id: teamId,
-        guild_id: guildId,
-      })),
-    );
-
-  if (teamServersResult.error) {
-    throw new Error(teamServersResult.error.message);
-  }
-
-  if (memberDiscordIds.length) {
-    const existingUsersResult = await supabase
-      .from("auth_users")
-      .select("id, discord_user_id")
-      .in("discord_user_id", memberDiscordIds)
-      .returns<AuthUserLookupRow[]>();
-
-    if (existingUsersResult.error) {
-      throw new Error(existingUsersResult.error.message);
-    }
-
-    const authUserByDiscordId = new Map(
-      (existingUsersResult.data || []).map((user) => [user.discord_user_id, user.id]),
-    );
-
-    const membersInsertResult = await supabase
-      .from("auth_user_team_members")
+  try {
+    const teamServersResult = await supabase
+      .from("auth_user_team_servers")
       .insert(
-        memberDiscordIds.map((discordUserId) => ({
+        guildIds.map((guildId) => ({
           team_id: teamId,
-          invited_discord_user_id: discordUserId,
-          invited_auth_user_id: authUserByDiscordId.get(discordUserId) || null,
-          invited_by_user_id: input.authUserId,
-          status: "pending" as const,
+          guild_id: guildId,
         })),
       );
 
-    if (membersInsertResult.error) {
-      throw new Error(membersInsertResult.error.message);
+    if (teamServersResult.error) {
+      throw new Error(
+        teamServersResult.error.message.includes("duplicate")
+          ? "Um ou mais servidores selecionados ja estao vinculados a outra equipe."
+          : teamServersResult.error.message,
+      );
     }
+
+    if (memberDiscordIds.length) {
+      const existingUsersResult = await supabase
+        .from("auth_users")
+        .select("id, discord_user_id")
+        .in("discord_user_id", memberDiscordIds)
+        .returns<AuthUserLookupRow[]>();
+
+      if (existingUsersResult.error) {
+        throw new Error(existingUsersResult.error.message);
+      }
+
+      const authUserByDiscordId = new Map(
+        (existingUsersResult.data || []).map((user) => [user.discord_user_id, user.id]),
+      );
+
+      const membersInsertResult = await supabase
+        .from("auth_user_team_members")
+        .insert(
+          memberDiscordIds.map((discordUserId) => ({
+            team_id: teamId,
+            invited_discord_user_id: discordUserId,
+            invited_auth_user_id: authUserByDiscordId.get(discordUserId) || null,
+            invited_by_user_id: input.authUserId,
+            status: "pending" as const,
+          })),
+        );
+
+      if (membersInsertResult.error) {
+        throw new Error(membersInsertResult.error.message);
+      }
+    }
+  } catch (error) {
+    await supabase
+      .from("auth_user_teams")
+      .delete()
+      .eq("id", teamId);
+
+    throw error instanceof Error
+      ? error
+      : new Error("Nao foi possivel concluir a criacao da equipe.");
   }
 
   return teamId;

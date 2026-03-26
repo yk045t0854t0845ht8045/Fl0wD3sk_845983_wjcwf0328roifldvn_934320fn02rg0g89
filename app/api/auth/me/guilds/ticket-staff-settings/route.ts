@@ -8,9 +8,13 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import {
   getGuildLicenseStatus,
-  getLockedGuildLicenseByGuildId,
 } from "@/lib/payments/licenseStatus";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
+import {
+  createServerSaveDiagnosticContext,
+  recordServerSaveDiagnostic,
+  resolveServerSaveAccessMode,
+} from "@/lib/servers/serverSaveDiagnostics";
 import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
@@ -149,7 +153,11 @@ async function ensureGuildAccess(guildId: string) {
 
   return {
     ok: true as const,
-    sessionData,
+    context: {
+      sessionData,
+      accessibleGuild,
+      hasTeamAccess,
+    },
   };
 }
 
@@ -173,7 +181,7 @@ export async function GET(request: Request) {
     }
 
     await cleanupExpiredUnpaidServerSetups({
-      userId: access.sessionData.authSession.user.id,
+      userId: access.context.sessionData.authSession.user.id,
       guildId,
       source: "guild_ticket_staff_settings_get",
     });
@@ -241,11 +249,19 @@ export async function POST(request: Request) {
     return applyNoStoreHeaders(invalidMutationResponse);
   }
 
+  let diagnostic = createServerSaveDiagnosticContext("ticket_staff_settings");
+
   try {
     let body: StaffSettingsBody = {};
     try {
       body = (await request.json()) as StaffSettingsBody;
     } catch {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Payload JSON invalido.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Payload JSON invalido." },
@@ -259,8 +275,18 @@ export async function POST(request: Request) {
     const claimRoleIds = normalizeRoleIdList(body.claimRoleIds);
     const closeRoleIds = normalizeRoleIdList(body.closeRoleIds);
     const notifyRoleIds = normalizeRoleIdList(body.notifyRoleIds);
+    diagnostic = createServerSaveDiagnosticContext(
+      "ticket_staff_settings",
+      guildId || undefined,
+    );
 
     if (!guildId || !adminRoleId) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Guild ID e cargo admin sao obrigatorios.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Guild ID e cargo admin sao obrigatorios." },
@@ -270,6 +296,12 @@ export async function POST(request: Request) {
     }
 
     if (!claimRoleIds.length || !closeRoleIds.length || !notifyRoleIds.length) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Os grupos de cargos precisam de ao menos uma selecao.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         {
@@ -287,6 +319,12 @@ export async function POST(request: Request) {
       closeRoleIds.length > MAX_ROLE_SELECTIONS ||
       notifyRoleIds.length > MAX_ROLE_SELECTIONS
     ) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: `Cada grupo suporta ate ${MAX_ROLE_SELECTIONS} selecoes.`,
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         {
@@ -303,44 +341,50 @@ export async function POST(request: Request) {
       return access.response;
     }
 
-    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
-    if (
-      lockedGuildLicense &&
-      lockedGuildLicense.userId !== access.sessionData.authSession.user.id
-    ) {
+    const authUserId = access.context.sessionData.authSession.user.id;
+    const accessMode = resolveServerSaveAccessMode({
+      accessibleGuild: access.context.accessibleGuild,
+      hasTeamAccess: access.context.hasTeamAccess,
+    });
+    const canManageServer = Boolean(
+      access.context.accessibleGuild?.owner || access.context.hasTeamAccess,
+    );
+    if (!canManageServer) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        outcome: "view_only",
+        httpStatus: 403,
+        detail: "Conta em modo somente visualizacao.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
           {
             ok: false,
             message:
-              "Este servidor possui uma licenca ativa em outra conta administradora e esta conta esta em modo somente visualizacao.",
+              "Esta conta esta em modo somente visualizacao para este servidor.",
           },
           { status: 403 },
         ),
       );
     }
 
-    const cleanupSummary = await cleanupExpiredUnpaidServerSetups({
-      userId: access.sessionData.authSession.user.id,
-      guildId,
-      source: "guild_ticket_staff_settings_post",
-    });
-
-    if (cleanupSummary.cleanedGuildIds.includes(guildId)) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-        {
-          ok: false,
-          message:
-            "A configuracao desse servidor expirou apos 30 minutos sem pagamento. Recomece a ativacao para continuar.",
-        },
-        { status: 409 },
-        ),
-      );
+    let licenseStatus = await getGuildLicenseStatus(guildId);
+    if (licenseStatus !== "paid") {
+      licenseStatus = await getGuildLicenseStatus(guildId, { forceFresh: true });
     }
 
-    const licenseStatus = await getGuildLicenseStatus(guildId);
     if (licenseStatus === "expired" || licenseStatus === "off") {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "license_blocked",
+        httpStatus: 403,
+        detail: "Servidor com plano expirado ou desligado para edicao.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         {
@@ -353,8 +397,50 @@ export async function POST(request: Request) {
       );
     }
 
+    if (licenseStatus === "not_paid") {
+      const cleanupSummary = await cleanupExpiredUnpaidServerSetups({
+        userId: authUserId,
+        guildId,
+        source: "guild_ticket_staff_settings_post",
+      });
+
+      if (cleanupSummary.cleanedGuildIds.includes(guildId)) {
+        recordServerSaveDiagnostic({
+          context: diagnostic,
+          authUserId,
+          accessMode,
+          licenseStatus,
+          outcome: "cleanup_expired",
+          httpStatus: 409,
+          detail: "Setup expirado apos 30 minutos sem pagamento.",
+          meta: {
+            cleanedGuildCount: cleanupSummary.cleanedGuildIds.length,
+          },
+        });
+        return applyNoStoreHeaders(
+          NextResponse.json(
+          {
+            ok: false,
+            message:
+              "A configuracao desse servidor expirou apos 30 minutos sem pagamento. Recomece a ativacao para continuar.",
+          },
+          { status: 409 },
+          ),
+        );
+      }
+    }
+
     const rawRoles = await fetchGuildRolesByBot(guildId);
     if (!rawRoles) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "bot_access_missing",
+        httpStatus: 403,
+        detail: "Bot sem acesso aos cargos do servidor.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Bot nao possui acesso aos cargos deste servidor." },
@@ -375,6 +461,18 @@ export async function POST(request: Request) {
       closeRoleIds.some((roleId) => !validRoleIds.has(roleId)) ||
       notifyRoleIds.some((roleId) => !validRoleIds.has(roleId))
     ) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "validation_failed",
+        httpStatus: 400,
+        detail: "Um ou mais cargos selecionados sao invalidos.",
+        meta: {
+          availableRoleCount: validRoleIds.size,
+        },
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Um ou mais cargos selecionados sao invalidos." },
@@ -389,7 +487,20 @@ export async function POST(request: Request) {
       claimRoleIds,
       closeRoleIds,
       notifyRoleIds,
-      configuredByUserId: access.sessionData.authSession.user.id,
+      configuredByUserId: authUserId,
+    });
+
+    recordServerSaveDiagnostic({
+      context: diagnostic,
+      authUserId,
+      accessMode,
+      licenseStatus,
+      outcome: "saved",
+      httpStatus: 200,
+      detail: "Configuracoes de staff salvas com sucesso.",
+      meta: {
+        roleCount: rawRoles.length,
+      },
     });
 
     return applyNoStoreHeaders(
@@ -406,6 +517,15 @@ export async function POST(request: Request) {
       }),
     );
   } catch (error) {
+    recordServerSaveDiagnostic({
+      context: diagnostic,
+      outcome: "failed",
+      httpStatus: 500,
+      detail:
+        error instanceof Error
+          ? error.message
+          : "Erro ao salvar configuracoes de staff.",
+    });
     return applyNoStoreHeaders(
       NextResponse.json(
       {

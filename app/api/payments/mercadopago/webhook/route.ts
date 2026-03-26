@@ -9,6 +9,7 @@ import {
 import { resolvePaymentDiagnostic } from "@/lib/payments/paymentDiagnostics";
 import {
   getApprovedOrdersForGuild,
+  invalidateGuildLicenseCaches,
   resolveLatestLicenseCoverageFromApprovedOrders,
   resolveRenewalPaymentDecision,
 } from "@/lib/payments/licenseStatus";
@@ -266,6 +267,7 @@ async function updateOrderFromProviderPayment(
         },
       );
 
+      invalidateGuildLicenseCaches(order.guild_id);
       return refundedTimeoutOrderResult.data;
     }
 
@@ -324,6 +326,7 @@ async function updateOrderFromProviderPayment(
         previousApprovedOrderNumber: existingCoverage?.order.order_number || null,
       });
 
+      invalidateGuildLicenseCaches(order.guild_id);
       return refundedOrderResult.data;
     }
   }
@@ -372,6 +375,7 @@ async function updateOrderFromProviderPayment(
     diagnosticCategory: diagnostic.category,
   });
 
+  invalidateGuildLicenseCaches(order.guild_id);
   return updatedOrderResult.data;
 }
 

@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   BadgePercent,
   BarChart3,
@@ -39,6 +39,15 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import type { ManagedServer, ManagedServerStatus } from "@/lib/servers/managedServers";
+import { prefetchServerDashboardSettings } from "@/lib/servers/serverDashboardSettingsClient";
+import {
+  readCachedManagedServers,
+  readManagedServersMemoryCache,
+  readCachedTeamsSnapshot,
+  readTeamsSnapshotMemoryCache,
+  storeCachedManagedServers,
+  storeCachedTeamsSnapshot,
+} from "@/lib/servers/serversWorkspaceClientCache";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
 
 type ServersWorkspaceProps = {
@@ -114,22 +123,11 @@ type SidebarItem = {
 const SIDEBAR_SECTIONS: SidebarItem[][] = [
   [
     { label: "Projetos", kind: "overview", tab: null, searchAliases: ["overview", "servidores", "dashboard", "inicio"] },
-    { label: "Configuracoes", kind: "settings", tab: "settings", searchAliases: ["config", "setup", "painel", "ticket", "tickets"] },
-    { label: "Pagamentos", kind: "payments", tab: "payments", searchAliases: ["financeiro", "cobranca", "pix", "cartao", "payment"] },
-    { label: "Metodos", kind: "methods", tab: "methods", searchAliases: ["metodos", "metodos de pagamento", "formas", "checkout"] },
-    { label: "Planos", kind: "plans", tab: "plans", searchAliases: ["pricing", "assinatura", "licenca", "licenças"] },
   ],
   [
-    { label: "Analytics", kind: "analytics", disabled: true, searchAliases: ["analise", "metricas", "insights", "dados"] },
-    { label: "Integracoes", kind: "integrations", disabled: true, chevron: true, searchAliases: ["integracoes", "apps", "plugins", "webhook", "discord"] },
-    { label: "Storage", kind: "storage", disabled: true, searchAliases: ["armazenamento", "dados", "backup"] },
-  ],
-  [
-    { label: "Suporte", kind: "support", disabled: true, searchAliases: ["ajuda", "help", "atendimento", "suporte"] },
-    { label: "Settings", kind: "preferences", disabled: true, chevron: true, searchAliases: ["preferencias", "ajustes", "conta"] },
+    { label: "Ticket", kind: "settings", tab: "settings", searchAliases: ["config", "setup", "painel", "ticket", "tickets", "canais", "cargos", "staff"] },
   ],
 ];
-
 const shellClass =
   "rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] shadow-[0_24px_80px_rgba(0,0,0,0.38)]";
 
@@ -137,6 +135,10 @@ const sidebarShellClass =
   "relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
 
 const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
+const editorPanelRevealClass =
+  "origin-top transform-gpu transition-[opacity,transform,filter] duration-[620ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[flowdesk-visible=false]:translate-y-[18px] data-[flowdesk-visible=false]:scale-[0.985] data-[flowdesk-visible=false]:opacity-0 data-[flowdesk-visible=true]:translate-y-0 data-[flowdesk-visible=true]:scale-100 data-[flowdesk-visible=true]:opacity-100";
+const workspacePaneRevealClass =
+  "transform-gpu transition-[opacity,transform,filter] duration-[620ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[flowdesk-visible=false]:translate-y-[14px] data-[flowdesk-visible=false]:scale-[0.992] data-[flowdesk-visible=false]:opacity-0 data-[flowdesk-visible=true]:translate-y-0 data-[flowdesk-visible=true]:scale-100 data-[flowdesk-visible=true]:opacity-100";
 
 const TEAM_ICON_OPTIONS = [
   {
@@ -227,6 +229,18 @@ function formatDateLabel(rawDate: string) {
   }).format(timestamp);
 }
 
+function normalizeWorkspaceGuildIdFromPath(pathname: string | null) {
+  if (!pathname) return null;
+  const match = pathname.match(/^\/servers\/(\d{10,25})\/?$/);
+  return match ? match[1] : null;
+}
+
+function normalizeComparablePath(value: string) {
+  if (!value) return "/";
+  if (value === "/") return value;
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
 function statusStyle(status: ManagedServerStatus) {
   if (status === "paid") {
     return {
@@ -258,17 +272,17 @@ function statusStyle(status: ManagedServerStatus) {
 }
 
 function statusDescription(server: ManagedServer) {
-  if (server.status === "paid") return `Renovacao ativa • expira em ${server.daysUntilExpire} dias`;
-  if (server.status === "expired") return `Licenca expirada • restam ${server.daysUntilOff} dias`;
-  return "Bot desligado • retorna imediatamente apos pagamento";
+  if (server.status === "paid") return `Renovacao ativa â€¢ expira em ${server.daysUntilExpire} dias`;
+  if (server.status === "expired") return `Licenca expirada â€¢ restam ${server.daysUntilOff} dias`;
+  return "Bot desligado â€¢ retorna imediatamente apos pagamento";
 }
 
 function serverMetaLabel(server: ManagedServer) {
   return server.accessMode === "owner"
-    ? `Dono da licenca • renovado em ${formatDateLabel(server.licensePaidAt)}`
+    ? `Dono da licenca â€¢ renovado em ${formatDateLabel(server.licensePaidAt)}`
     : server.canManage
-      ? `Gestao por equipe • valido ate ${formatDateLabel(server.licenseExpiresAt)}`
-      : `Acesso de visualizacao • valido ate ${formatDateLabel(server.licenseExpiresAt)}`;
+      ? `Gestao por equipe â€¢ valido ate ${formatDateLabel(server.licenseExpiresAt)}`
+      : `Acesso de visualizacao â€¢ valido ate ${formatDateLabel(server.licenseExpiresAt)}`;
 }
 
 function serverAccessBadgeLabel(server: ManagedServer) {
@@ -740,7 +754,7 @@ function ServerGridCard({
             {statusDescription(server)}
           </p>
           <p className="mt-[10px] text-[14px] leading-[1.45] text-[#8C8C8C]">
-            {formatDateLabel(server.licensePaidAt)} • {serverLicenseScopeLabel(server)}
+            {formatDateLabel(server.licensePaidAt)} â€¢ {serverLicenseScopeLabel(server)}
           </p>
         </div>
       </article>
@@ -758,8 +772,19 @@ export function ServersWorkspace({
   initialPendingInvites = null,
 }: ServersWorkspaceProps) {
   const router = useRouter();
-  const [servers, setServers] = useState<ManagedServer[]>(initialServers ?? []);
-  const [isLoading, setIsLoading] = useState(initialServers === null);
+  const pathname = usePathname();
+  const workspaceCacheKey = `${currentAccount.authUserId}:${currentAccount.discordUserId}`;
+  const initialServersSnapshot =
+    initialServers ?? readManagedServersMemoryCache(workspaceCacheKey);
+  const initialTeamsSnapshot =
+    initialTeams
+      ? {
+          teams: initialTeams,
+          pendingInvites: initialPendingInvites ?? [],
+        }
+      : readTeamsSnapshotMemoryCache(workspaceCacheKey);
+  const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [isLoading, setIsLoading] = useState(initialServersSnapshot === null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -769,11 +794,11 @@ export function ServersWorkspace({
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [copiedGuildId, setCopiedGuildId] = useState<string | null>(null);
   const [openCardMenuGuildId, setOpenCardMenuGuildId] = useState<string | null>(null);
-  const [teams, setTeams] = useState<UserTeam[]>(initialTeams ?? []);
+  const [teams, setTeams] = useState<UserTeam[]>(initialTeamsSnapshot?.teams ?? []);
   const [pendingTeamInvites, setPendingTeamInvites] = useState<PendingTeamInvite[]>(
-    initialPendingInvites ?? [],
+    initialTeamsSnapshot?.pendingInvites ?? [],
   );
-  const [isTeamsLoading, setIsTeamsLoading] = useState(initialTeams === null);
+  const [isTeamsLoading, setIsTeamsLoading] = useState(initialTeamsSnapshot === null);
   const [teamsErrorMessage, setTeamsErrorMessage] = useState<string | null>(null);
   const [isTeamMenuOpen, setIsTeamMenuOpen] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
@@ -800,11 +825,45 @@ export function ServersWorkspace({
   const mobileProfileMenuRef = useRef<HTMLDivElement | null>(null);
   const desktopSidebarSearchInputRef = useRef<HTMLInputElement | null>(null);
   const mobileSidebarSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const lastServersRecoveryAtRef = useRef(0);
+  const selectedServerRecoveryRef = useRef<{
+    guildId: string | null;
+    attempts: number;
+  }>({ guildId: null, attempts: 0 });
+  const [serversReloadToken, setServersReloadToken] = useState(0);
+  const [teamsReloadToken, setTeamsReloadToken] = useState(0);
+  const previousRouteGuildIdRef = useRef<string | null>(null);
+
+  const routeGuildId = useMemo(
+    () => normalizeWorkspaceGuildIdFromPath(pathname),
+    [pathname],
+  );
+
+  const requestServersReload = useCallback((options?: { silent?: boolean }) => {
+    setErrorMessage(null);
+    if (!(options?.silent && servers.length > 0)) {
+      setIsLoading(true);
+    }
+    setServersReloadToken((current) => current + 1);
+  }, [servers.length]);
+
+  const requestTeamsReload = useCallback((options?: { silent?: boolean }) => {
+    setTeamsErrorMessage(null);
+    if (!(options?.silent && (teams.length > 0 || pendingTeamInvites.length > 0))) {
+      setIsTeamsLoading(true);
+    }
+    setTeamsReloadToken((current) => current + 1);
+  }, [pendingTeamInvites.length, teams.length]);
 
   const applyTeamsSnapshot = useCallback(
     (payload: TeamsApiResponse, preferredTeamId: number | null = null) => {
       const nextTeams = payload.teams || [];
       const nextPendingInvites = payload.pendingInvites || [];
+      storeCachedTeamsSnapshot(
+        workspaceCacheKey,
+        nextTeams,
+        nextPendingInvites,
+      );
       setTeams(nextTeams);
       setPendingTeamInvites(nextPendingInvites);
       setSelectedTeamId((current) => {
@@ -817,7 +876,7 @@ export function ServersWorkspace({
         return null;
       });
     },
-    [],
+    [workspaceCacheKey],
   );
 
   useEffect(() => {
@@ -845,43 +904,191 @@ export function ServersWorkspace({
 
   useEffect(() => {
     if (initialServers !== null) {
+      storeCachedManagedServers(workspaceCacheKey, initialServers);
+      return;
+    }
+
+    const cachedServers = readCachedManagedServers(workspaceCacheKey);
+    if (!cachedServers) {
+      return;
+    }
+
+    setServers(cachedServers);
+    setErrorMessage(null);
+    setIsLoading(false);
+  }, [initialServers, workspaceCacheKey]);
+
+  useEffect(() => {
+    if (initialTeams !== null) {
+      storeCachedTeamsSnapshot(
+        workspaceCacheKey,
+        initialTeams,
+        initialPendingInvites ?? [],
+      );
+      return;
+    }
+
+    const cachedTeamsSnapshot = readCachedTeamsSnapshot(workspaceCacheKey);
+    if (!cachedTeamsSnapshot) {
+      return;
+    }
+
+    setTeams(cachedTeamsSnapshot.teams);
+    setPendingTeamInvites(cachedTeamsSnapshot.pendingInvites);
+    setTeamsErrorMessage(null);
+    setIsTeamsLoading(false);
+  }, [initialPendingInvites, initialTeams, workspaceCacheKey]);
+
+  useEffect(() => {
+    if (initialServers !== null) {
       return;
     }
 
     let isMounted = true;
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+    let activeController: AbortController | null = null;
+    let activeTimeoutId: number | null = null;
+    let retryTimeoutId: number | null = null;
+    let requestAttempt = 0;
+    let isRequestInFlight = false;
+    let hasTriggeredRefresh = false;
+
+    function clearActiveTimeout() {
+      if (activeTimeoutId !== null) {
+        window.clearTimeout(activeTimeoutId);
+        activeTimeoutId = null;
+      }
+    }
+
+    function clearRetryTimeout() {
+      if (retryTimeoutId !== null) {
+        window.clearTimeout(retryTimeoutId);
+        retryTimeoutId = null;
+      }
+    }
+
+    function scheduleRetry(reason: "abort" | "network" | "online") {
+      if (!isMounted) return;
+
+      requestAttempt += 1;
+      setErrorMessage(null);
+      setIsLoading(true);
+
+      if (requestAttempt >= 3 && !hasTriggeredRefresh) {
+        hasTriggeredRefresh = true;
+        router.refresh();
+      }
+
+      const retryDelayMs =
+        reason === "online"
+          ? 120
+          : reason === "abort"
+            ? Math.min(1200 * requestAttempt, 5000)
+            : Math.min(900 * requestAttempt, 5000);
+
+      clearRetryTimeout();
+      retryTimeoutId = window.setTimeout(() => {
+        if (!isMounted) return;
+        void loadServers();
+      }, retryDelayMs);
+    }
 
     async function loadServers() {
+      if (isRequestInFlight || !isMounted) {
+        return;
+      }
+
+      isRequestInFlight = true;
+      clearRetryTimeout();
+      const controller = new AbortController();
+      activeController = controller;
+      clearActiveTimeout();
+      activeTimeoutId = window.setTimeout(() => controller.abort(), 12000);
+
       try {
         const response = await fetch("/api/auth/me/servers", { cache: "no-store", signal: controller.signal });
         const payload = (await response.json()) as ServersApiResponse;
         if (!isMounted) return;
-        if (!response.ok || !payload.ok) throw new Error(payload.message || "Falha ao carregar servidores.");
-        setServers(payload.servers || []);
+        if (!response.ok || !payload.ok) {
+          const message = payload.message || "Falha ao carregar servidores.";
+          if (response.status === 401 || response.status === 403) {
+            throw Object.assign(new Error(message), { cause: "non_retryable" });
+          }
+          throw new Error(message);
+        }
+        requestAttempt = 0;
+        hasTriggeredRefresh = false;
+        const nextServers = payload.servers || [];
+        storeCachedManagedServers(workspaceCacheKey, nextServers);
+        setServers(nextServers);
+        setErrorMessage(null);
+        setIsLoading(false);
       } catch (error) {
         if (!isMounted) return;
-        if (error instanceof DOMException && error.name === "AbortError") {
-          setErrorMessage("Tempo esgotado ao carregar servidores. Tente novamente.");
+        const isAbortError = error instanceof DOMException && error.name === "AbortError";
+        const isNonRetryable =
+          error instanceof Error &&
+          "cause" in error &&
+          error.cause === "non_retryable";
+
+        if (isNonRetryable) {
+          setErrorMessage(error instanceof Error ? error.message : "Erro ao carregar servidores.");
           setServers([]);
+          setIsLoading(false);
           return;
         }
-        setErrorMessage(error instanceof Error ? error.message : "Erro ao carregar servidores.");
-        setServers([]);
+
+        scheduleRetry(isAbortError ? "abort" : "network");
       } finally {
-        if (!isMounted) return;
-        window.clearTimeout(timeoutId);
-        setIsLoading(false);
+        isRequestInFlight = false;
+        clearActiveTimeout();
+        if (activeController === controller) {
+          activeController = null;
+        }
       }
     }
 
+    function handleOnline() {
+      if (!isMounted) return;
+      if (isRequestInFlight) return;
+      scheduleRetry("online");
+    }
+
+    window.addEventListener("online", handleOnline);
     void loadServers();
     return () => {
       isMounted = false;
-      window.clearTimeout(timeoutId);
-      controller.abort();
+      window.removeEventListener("online", handleOnline);
+      clearRetryTimeout();
+      clearActiveTimeout();
+      activeController?.abort();
     };
-  }, [initialServers]);
+  }, [initialServers, router, serversReloadToken, workspaceCacheKey]);
+
+  useEffect(() => {
+    setSelectedGuildIdForConfig((current) => {
+      if (current === routeGuildId) {
+        return current;
+      }
+      return routeGuildId;
+    });
+    setSelectedEditorTabForConfig("settings");
+  }, [routeGuildId]);
+
+  useEffect(() => {
+    const previousRouteGuildId = previousRouteGuildIdRef.current;
+
+    if (previousRouteGuildId && !routeGuildId && servers.length > 0) {
+      requestServersReload({ silent: true });
+      requestTeamsReload({ silent: true });
+    }
+
+    previousRouteGuildIdRef.current = routeGuildId;
+  }, [
+    requestServersReload,
+    requestTeamsReload,
+    routeGuildId,
+    servers.length,
+  ]);
 
   useEffect(() => {
     if (initialTeams !== null) {
@@ -889,9 +1096,65 @@ export function ServersWorkspace({
     }
 
     let isMounted = true;
-    const controller = new AbortController();
+    let activeController: AbortController | null = null;
+    let activeTimeoutId: number | null = null;
+    let retryTimeoutId: number | null = null;
+    let requestAttempt = 0;
+    let isRequestInFlight = false;
+    let hasTriggeredRefresh = false;
+
+    function clearActiveTimeout() {
+      if (activeTimeoutId !== null) {
+        window.clearTimeout(activeTimeoutId);
+        activeTimeoutId = null;
+      }
+    }
+
+    function clearRetryTimeout() {
+      if (retryTimeoutId !== null) {
+        window.clearTimeout(retryTimeoutId);
+        retryTimeoutId = null;
+      }
+    }
+
+    function scheduleRetry(reason: "abort" | "network" | "online") {
+      if (!isMounted) return;
+
+      requestAttempt += 1;
+      setTeamsErrorMessage(null);
+      setIsTeamsLoading(true);
+
+      if (requestAttempt >= 3 && !hasTriggeredRefresh) {
+        hasTriggeredRefresh = true;
+        router.refresh();
+      }
+
+      const retryDelayMs =
+        reason === "online"
+          ? 180
+          : reason === "abort"
+            ? Math.min(1200 * requestAttempt, 4500)
+            : Math.min(900 * requestAttempt, 4500);
+
+      clearRetryTimeout();
+      retryTimeoutId = window.setTimeout(() => {
+        if (!isMounted) return;
+        void loadTeams();
+      }, retryDelayMs);
+    }
 
     async function loadTeams() {
+      if (isRequestInFlight || !isMounted) {
+        return;
+      }
+
+      isRequestInFlight = true;
+      clearRetryTimeout();
+      const controller = new AbortController();
+      activeController = controller;
+      clearActiveTimeout();
+      activeTimeoutId = window.setTimeout(() => controller.abort(), 12000);
+
       try {
         const response = await fetch("/api/auth/me/teams", {
           cache: "no-store",
@@ -900,28 +1163,124 @@ export function ServersWorkspace({
         const payload = (await response.json()) as TeamsApiResponse;
         if (!isMounted) return;
         if (!response.ok || !payload.ok) {
-          throw new Error(payload.message || "Falha ao carregar equipes.");
+          const message = payload.message || "Falha ao carregar equipes.";
+          if (response.status === 401 || response.status === 403) {
+            throw Object.assign(new Error(message), { cause: "non_retryable" });
+          }
+          throw new Error(message);
         }
+        requestAttempt = 0;
+        hasTriggeredRefresh = false;
         applyTeamsSnapshot(payload);
+        setTeamsErrorMessage(null);
+        setIsTeamsLoading(false);
       } catch (error) {
         if (!isMounted) return;
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setTeamsErrorMessage(
-          error instanceof Error ? error.message : "Erro ao carregar equipes.",
-        );
+        const isAbortError = error instanceof DOMException && error.name === "AbortError";
+        const isNonRetryable =
+          error instanceof Error &&
+          "cause" in error &&
+          error.cause === "non_retryable";
+
+        if (isNonRetryable) {
+          setTeamsErrorMessage(
+            error instanceof Error ? error.message : "Erro ao carregar equipes.",
+          );
+          setIsTeamsLoading(false);
+          return;
+        }
+
+        scheduleRetry(isAbortError ? "abort" : "network");
       } finally {
-        if (!isMounted) return;
-        setIsTeamsLoading(false);
+        isRequestInFlight = false;
+        clearActiveTimeout();
+        if (activeController === controller) {
+          activeController = null;
+        }
       }
     }
 
+    function handleOnline() {
+      if (!isMounted) return;
+      if (isRequestInFlight) return;
+      scheduleRetry("online");
+    }
+
+    window.addEventListener("online", handleOnline);
     void loadTeams();
 
     return () => {
       isMounted = false;
-      controller.abort();
+      window.removeEventListener("online", handleOnline);
+      clearRetryTimeout();
+      clearActiveTimeout();
+      activeController?.abort();
     };
-  }, [applyTeamsSnapshot, initialTeams]);
+  }, [applyTeamsSnapshot, initialTeams, router, teamsReloadToken]);
+
+  useEffect(() => {
+    if (initialServers !== null || initialTeams !== null) {
+      return;
+    }
+
+    function shouldRecoverDashboardState() {
+      if (!pathname?.startsWith("/servers")) return false;
+      if (isLoading || isTeamsLoading) return false;
+      if (errorMessage || teamsErrorMessage) return false;
+      if (servers.length > 0 || teams.length > 0) return false;
+      return true;
+    }
+
+    function recoverDashboardState(force = false) {
+      if (!shouldRecoverDashboardState()) return;
+
+      const now = Date.now();
+      if (!force && now - lastServersRecoveryAtRef.current < 5000) {
+        return;
+      }
+
+      lastServersRecoveryAtRef.current = now;
+      requestServersReload();
+      requestTeamsReload();
+    }
+
+    function handlePageShow() {
+      recoverDashboardState(true);
+    }
+
+    function handleWindowFocus() {
+      recoverDashboardState();
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        recoverDashboardState();
+      }
+    }
+
+    recoverDashboardState();
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [
+    errorMessage,
+    initialServers,
+    initialTeams,
+    isLoading,
+    isTeamsLoading,
+    pathname,
+    requestServersReload,
+    requestTeamsReload,
+    servers.length,
+    teams.length,
+    teamsErrorMessage,
+  ]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -1049,12 +1408,20 @@ export function ServersWorkspace({
     () => teams.find((team) => team.id === selectedTeamId) || null,
     [selectedTeamId, teams],
   );
+  const linkedGuildIdsInTeams = useMemo(
+    () => new Set(teams.flatMap((team) => team.linkedGuildIds)),
+    [teams],
+  );
   const teamServerOptions = useMemo(
     () =>
       [...servers].sort((a, b) =>
         a.guildName.localeCompare(b.guildName, "pt-BR"),
       ),
     [servers],
+  );
+  const availableTeamServerOptions = useMemo(
+    () => teamServerOptions.filter((server) => !linkedGuildIdsInTeams.has(server.guildId)),
+    [linkedGuildIdsInTeams, teamServerOptions],
   );
   const visibleServers = useMemo(() => {
     if (!selectedTeam) return servers;
@@ -1086,16 +1453,48 @@ export function ServersWorkspace({
       .filter((section) => section.length > 0);
   }, [normalizedSidebarQuery]);
   const activeTeamServerCount = visibleServers.length;
+  const isCreateTeamNextDisabled =
+    isCreatingTeam ||
+    (createTeamStep === "name" && createTeamName.trim().length < 3) ||
+    (createTeamStep === "servers" && !createTeamServerIds.length);
+
+  useEffect(() => {
+    if (
+      Boolean(selectedGuildIdForConfig) ||
+      isLoading ||
+      errorMessage ||
+      !filteredServers.length
+    ) {
+      return;
+    }
+
+    const guildIdsToWarm = filteredServers
+      .slice(0, 3)
+      .map((server) => server.guildId);
+
+    const timeoutId = window.setTimeout(() => {
+      guildIdsToWarm.forEach((guildId) => {
+        void prefetchServerDashboardSettings(guildId);
+      });
+    }, 140);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [errorMessage, filteredServers, isLoading, selectedGuildIdForConfig]);
 
   const buildServerConfigUrl = useCallback((guildId: string, tab: ServerEditorTab) => {
+    void tab;
     const encodedGuildId = encodeURIComponent(guildId);
-    return tab === "settings" ? `/servers/${encodedGuildId}` : `/servers/${encodedGuildId}?tab=${encodeURIComponent(tab)}`;
+    return `/servers/${encodedGuildId}/`;
   }, []);
 
   const navigateToUrl = useCallback((nextUrl: string, mode: "push" | "replace" = "push") => {
     if (typeof window === "undefined") return;
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    if (currentUrl === nextUrl) return;
+    const comparableCurrentUrl = normalizeComparablePath(currentUrl);
+    const comparableNextUrl = normalizeComparablePath(nextUrl);
+    if (comparableCurrentUrl === comparableNextUrl) return;
     if (mode === "replace") router.replace(nextUrl, { scroll: false });
     else router.push(nextUrl, { scroll: false });
   }, [router]);
@@ -1344,6 +1743,7 @@ export function ServersWorkspace({
   );
 
   const handleOpenServerConfig = useCallback((guildId: string, tab: ServerEditorTab = "settings") => {
+    void prefetchServerDashboardSettings(guildId);
     setSelectedGuildIdForConfig(guildId);
     setSelectedEditorTabForConfig(tab);
     setErrorMessage(null);
@@ -1351,33 +1751,65 @@ export function ServersWorkspace({
   }, [buildServerConfigUrl, navigateToUrl]);
 
   const prefetchServerConfig = useCallback((guildId: string, tab: ServerEditorTab = "settings") => {
+    void prefetchServerDashboardSettings(guildId);
     router.prefetch(buildServerConfigUrl(guildId, tab));
   }, [buildServerConfigUrl, router]);
 
   const selectedServer = useMemo(() => servers.find((server) => server.guildId === selectedGuildIdForConfig) || null, [selectedGuildIdForConfig, servers]);
   const isEditingServer = Boolean(selectedGuildIdForConfig);
-  const shouldShowEditorSkeleton = Boolean(selectedGuildIdForConfig) && isLoading && !selectedServer;
+  const shouldShowEditorSkeleton =
+    Boolean(selectedGuildIdForConfig) && (isLoading || (!selectedServer && !errorMessage));
+  const shouldShowEditorUnavailableState =
+    Boolean(selectedGuildIdForConfig) &&
+    !selectedServer &&
+    !isLoading &&
+    Boolean(errorMessage || servers.length > 0);
+  const shouldShowEditorHeaderSkeleton =
+    Boolean(selectedGuildIdForConfig) && !selectedServer;
 
   useEffect(() => {
-    if (!selectedGuildIdForConfig) return;
-    if (visibleServers.some((server) => server.guildId === selectedGuildIdForConfig)) {
+    if (!selectedGuildIdForConfig) {
+      selectedServerRecoveryRef.current = { guildId: null, attempts: 0 };
       return;
     }
-    setSelectedGuildIdForConfig(null);
-    setSelectedEditorTabForConfig("settings");
-    navigateToUrl("/servers", "replace");
-  }, [navigateToUrl, selectedGuildIdForConfig, visibleServers]);
 
-  useEffect(() => {
-    if (isLoading || !selectedGuildIdForConfig || selectedServer) return;
-    setSelectedGuildIdForConfig(null);
-    setSelectedEditorTabForConfig("settings");
-    navigateToUrl("/servers", "replace");
-  }, [isLoading, navigateToUrl, selectedGuildIdForConfig, selectedServer]);
+    if (selectedServer) {
+      selectedServerRecoveryRef.current = {
+        guildId: selectedGuildIdForConfig,
+        attempts: 0,
+      };
+      return;
+    }
 
-  const panelTitle = isEditingServer ? "Servidor selecionado" : viewMode === "overview" ? "Overview" : "Servidores em lista";
+    if (isLoading) {
+      return;
+    }
+
+    if (selectedServerRecoveryRef.current.guildId !== selectedGuildIdForConfig) {
+      selectedServerRecoveryRef.current = {
+        guildId: selectedGuildIdForConfig,
+        attempts: 0,
+      };
+    }
+
+    if (selectedServerRecoveryRef.current.attempts >= 2) {
+      return;
+    }
+
+    selectedServerRecoveryRef.current = {
+      guildId: selectedGuildIdForConfig,
+      attempts: selectedServerRecoveryRef.current.attempts + 1,
+    };
+    requestServersReload();
+  }, [isLoading, requestServersReload, selectedGuildIdForConfig, selectedServer]);
+
+  const panelTitle = isEditingServer
+    ? `Servidor ${selectedServer?.guildName || ""}`.trim()
+    : viewMode === "overview"
+      ? "Overview"
+      : "Servidores em lista";
   const panelDescription = isEditingServer
-    ? "Gerencie configuracoes, pagamentos, metodos e planos sem perder o contexto visual da plataforma."
+    ? "Gerencie tickets, canais e cargos do servidor em um fluxo unico, mais limpo e mais atual."
     : viewMode === "overview"
       ? selectedTeam
         ? `Servidores vinculados a equipe ${selectedTeam.name}, com visao mais limpa para moderacao, licencas e operacao do painel.`
@@ -1388,7 +1820,7 @@ export function ServersWorkspace({
   const teamSummaryLabel = isTeamsLoading
     ? "Carregando equipes..."
     : selectedTeam
-      ? `${selectedTeam.memberCount} membro(s) • ${selectedTeam.linkedGuildIds.length} servidor(es)`
+      ? `${selectedTeam.memberCount} membro(s) â€¢ ${selectedTeam.linkedGuildIds.length} servidor(es)`
       : teams.length
         ? `${teams.length} equipe(s) disponivel(is)`
         : pendingTeamInvites.length
@@ -1501,7 +1933,7 @@ export function ServersWorkspace({
                             {team.name}
                           </span>
                           <span className="mt-[5px] block truncate text-[11px] leading-none text-[#666666]">
-                            {team.memberCount} membro(s) • {team.linkedGuildIds.length} servidor(es)
+                            {team.memberCount} membro(s) â€¢ {team.linkedGuildIds.length} servidor(es)
                           </span>
                           </span>
                         </span>
@@ -1617,7 +2049,7 @@ export function ServersWorkspace({
                       if (isOverview) {
                         setSelectedGuildIdForConfig(null);
                         setSelectedEditorTabForConfig("settings");
-                        navigateToUrl("/servers", "push");
+                        navigateToUrl("/servers/", "push");
                         return;
                       }
                       if (!selectedServer || !item.tab) return;
@@ -1840,8 +2272,30 @@ export function ServersWorkspace({
             <LandingReveal delay={120}>
               <div className="relative z-[700] flex flex-col gap-[18px]">
                 <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
-                  <div><LandingGlowTag className="px-[24px]">Central de servidores</LandingGlowTag><h1 className="mt-[18px] bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-[1.02] font-normal tracking-[-0.05em] text-transparent md:text-[42px]">{panelTitle}</h1><p className="mt-[14px] max-w-[760px] text-[14px] leading-[1.55] text-[#7D7D7D] md:text-[15px]">{panelDescription}</p></div>
-                  {!isEditingServer ? <LandingActionButton href="/config/#/step/1" variant="light" className="h-[44px] rounded-[14px] px-[18px] text-[15px]"><span className="inline-flex items-center gap-[10px]"><PlusIcon />Add New</span></LandingActionButton> : null}
+                  <div>
+                    {shouldShowEditorHeaderSkeleton ? (
+                      <div className="space-y-[14px]" aria-hidden="true">
+                        <div className="flowdesk-shimmer h-[42px] w-[210px] rounded-full bg-[#111111]" />
+                        <div className="flowdesk-shimmer h-[42px] w-[min(460px,78vw)] max-w-full rounded-[18px] bg-[#131313]" />
+                        <div className="flowdesk-shimmer h-[14px] w-[min(620px,82vw)] max-w-full rounded-[12px] bg-[#111111]" />
+                      </div>
+                    ) : (
+                      <>
+                        <LandingGlowTag className="px-[24px]">
+                          {isEditingServer ? "Configurando servidor" : "Central de servidores"}
+                        </LandingGlowTag>
+                        <h1 className="mt-[18px] bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-[1.02] font-normal tracking-[-0.05em] text-transparent md:text-[42px]">
+                          {panelTitle}
+                        </h1>
+                        <p className="mt-[14px] max-w-[760px] text-[14px] leading-[1.55] text-[#7D7D7D] md:text-[15px]">
+                          {panelDescription}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  {!isEditingServer ? (
+                    <LandingActionButton href="/config/#/step/1" variant="light" className="h-[44px] rounded-[14px] px-[18px] text-[15px]"><span className="inline-flex items-center gap-[10px]"><PlusIcon />Add New</span></LandingActionButton>
+                  ) : null}
                 </div>
                 {!isEditingServer ? (
                   <div
@@ -1939,17 +2393,58 @@ export function ServersWorkspace({
             <div className="relative z-[10] mt-[22px]">
               {selectedServer ? (
                 <LandingReveal delay={180}>
-                  <div className="space-y-[18px]">
-                    <div className={`${shellClass} px-[18px] py-[18px]`}><div className="flex flex-col gap-[14px] md:flex-row md:items-center md:justify-between"><div><p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">Servidor em edicao</p><h2 className="mt-[10px] text-[28px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">{selectedServer.guildName}</h2></div><LandingActionButton href="/servers" variant="dark" className="h-[42px] rounded-[12px] px-[18px] text-[15px]" onClick={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); navigateToUrl("/servers", "push"); }}>Voltar para a lista</LandingActionButton></div></div>
-                    <ServerSettingsEditor guildId={selectedServer.guildId} guildName={selectedServer.guildName} status={selectedServer.status} daysUntilExpire={selectedServer.daysUntilExpire} daysUntilOff={selectedServer.daysUntilOff} accessMode={selectedServer.accessMode} canManage={selectedServer.canManage} allServers={servers} initialTab={selectedEditorTabForConfig} onTabChange={(tab) => { setSelectedEditorTabForConfig(tab); navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab), "replace"); }} standalone onClose={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); navigateToUrl("/servers", "push"); }} />
+                  <div key={selectedServer.guildId} className={editorPanelRevealClass}>
+                    <ServerSettingsEditor guildId={selectedServer.guildId} guildName={selectedServer.guildName} status={selectedServer.status} daysUntilExpire={selectedServer.daysUntilExpire} daysUntilOff={selectedServer.daysUntilOff} accessMode={selectedServer.accessMode} canManage={selectedServer.canManage} allServers={servers} initialTab={selectedEditorTabForConfig} onTabChange={(tab) => { setSelectedEditorTabForConfig(tab); navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab), "replace"); }} standalone onClose={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); navigateToUrl("/servers/", "push"); }} />
                   </div>
                 </LandingReveal>
               ) : shouldShowEditorSkeleton ? (
-                <LandingReveal delay={180}><ServerSettingsEditorSkeleton standalone /></LandingReveal>
+                <LandingReveal delay={180}>
+                  <div className={editorPanelRevealClass}>
+                    <ServerSettingsEditorSkeleton standalone />
+                  </div>
+                </LandingReveal>
+              ) : shouldShowEditorUnavailableState ? (
+                <LandingReveal delay={180}>
+                  <div className={`${editorPanelRevealClass} ${shellClass} px-[22px] py-[24px]`}>
+                    <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[20px] py-[20px]">
+                      <p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">
+                        Servidor
+                      </p>
+                      <h2 className="mt-[12px] text-[24px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">
+                        Nao foi possivel abrir este servidor agora
+                      </h2>
+                      <p className="mt-[12px] max-w-[720px] text-[14px] leading-[1.6] text-[#7D7D7D]">
+                        {errorMessage || "Estamos tentando recuperar os dados deste servidor. Voce pode tentar novamente sem sair da configuracao."}
+                      </p>
+                      <div className="mt-[18px] flex flex-wrap items-center gap-[12px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            requestServersReload();
+                          }}
+                          className="inline-flex h-[46px] items-center justify-center rounded-[12px] bg-[#F3F3F3] px-6 text-[15px] font-medium text-[#101010] transition-colors hover:bg-white"
+                        >
+                          Tentar novamente
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedGuildIdForConfig(null);
+                            setSelectedEditorTabForConfig("settings");
+                            navigateToUrl("/servers/", "replace");
+                          }}
+                          className="inline-flex h-[46px] items-center justify-center rounded-[12px] border border-[#181818] bg-[#101010] px-6 text-[15px] font-medium text-[#B7B7B7] transition-colors hover:border-[#222222] hover:bg-[#141414] hover:text-[#E5E5E5]"
+                        >
+                          Voltar aos projetos
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </LandingReveal>
               ) : (
                 <LandingReveal delay={180}>
                   {viewMode === "overview" ? (
-                    <div>
+                    <div className={workspacePaneRevealClass}>
                       <div className="mb-[18px] flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">Projetos</p>
@@ -1999,7 +2494,7 @@ export function ServersWorkspace({
                       )}
                     </div>
                   ) : (
-                    <div className={`${shellClass} overflow-visible`}>
+                    <div className={`${shellClass} ${workspacePaneRevealClass} overflow-visible`}>
                       <div className="border-b border-[#141414] px-[18px] py-[18px]"><div className="flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">Projetos</p><h2 className="mt-[10px] text-[26px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">{selectedTeam ? `Servidores da equipe ${selectedTeam.name}` : "Todos os servidores"}</h2></div><p className="text-[13px] leading-[1.5] text-[#6F6F6F]">{filteredServers.length} resultado(s) exibidos de {activeTeamServerCount} servidor(es).</p></div></div>
                       {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} onDeactivate={handleCardMenuDeactivate} />)}</div> : <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{selectedTeam ? "Nenhum servidor vinculado ou encontrado para essa equipe." : "Nenhum servidor encontrado para esse filtro."}</div>}
                     </div>
@@ -2011,18 +2506,18 @@ export function ServersWorkspace({
         </div>
       </main>
       {isCreateTeamModalOpen ? (
-        <div className="fixed inset-0 z-[140] flex items-center justify-center px-[18px] py-[28px]">
+        <div className="fixed inset-0 z-[5000] isolate flex items-center justify-center px-[18px] py-[28px]">
           <button
             type="button"
             aria-label="Fechar modal de equipe"
-            className="absolute inset-0 bg-[rgba(0,0,0,0.78)]"
+            className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[5px]"
             onClick={() => {
               setIsCreateTeamModalOpen(false);
               setIsMemberSubmodalOpen(false);
               setTeamActionError(null);
             }}
           />
-          <div className="relative z-10 w-full max-w-[760px]">
+          <div className="relative z-[10] w-full max-w-[760px]">
             <div className="relative overflow-hidden rounded-[32px] bg-transparent px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]">
               <span
                 aria-hidden="true"
@@ -2039,10 +2534,6 @@ export function ServersWorkspace({
               <span
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]"
-              />
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[180px] rounded-t-[31px] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0.02)_32%,transparent_76%)]"
               />
               <div className="relative z-10">
                 <div className="flex flex-col gap-[14px] sm:flex-row sm:items-start sm:justify-between">
@@ -2067,7 +2558,7 @@ export function ServersWorkspace({
                     className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
                     aria-label="Fechar modal"
                   >
-                    <span className="text-[18px] leading-none">×</span>
+                    <span className="text-[18px] leading-none">Ã—</span>
                   </button>
                 </div>
 
@@ -2136,8 +2627,13 @@ export function ServersWorkspace({
                           {createTeamServerIds.length} selecionado(s)
                         </span>
                       </div>
+                      {!availableTeamServerOptions.length && teamServerOptions.length ? (
+                        <p className="mb-[10px] text-[12px] leading-[1.5] text-[#676767]">
+                          Todos os servidores disponiveis no painel ja estao vinculados a outra equipe.
+                        </p>
+                      ) : null}
                       <div className="max-h-[360px] space-y-[8px] overflow-y-auto pr-[4px]">
-                        {teamServerOptions.length ? teamServerOptions.map((server) => {
+                        {availableTeamServerOptions.length ? availableTeamServerOptions.map((server) => {
                           const isChecked = createTeamServerIds.includes(server.guildId);
                           return (
                             <label
@@ -2246,7 +2742,7 @@ export function ServersWorkspace({
                                 className="inline-flex items-center gap-[8px] rounded-full border border-[#171717] bg-[#121212] px-[10px] py-[7px] text-[12px] leading-none text-[#C4C4C4] transition-colors hover:border-[#242424] hover:text-[#F0F0F0]"
                               >
                                 <span>{discordId}</span>
-                                <span className="text-[13px] leading-none text-[#777777]">×</span>
+                                <span className="text-[13px] leading-none text-[#777777]">Ã—</span>
                               </button>
                             ))}
                           </div>
@@ -2312,24 +2808,28 @@ export function ServersWorkspace({
                       void handleCreateTeam();
                     }}
                     disabled={
-                      isCreatingTeam ||
-                      (createTeamStep === "name" && createTeamName.trim().length < 3) ||
-                      (createTeamStep === "servers" && !createTeamServerIds.length)
+                      isCreateTeamNextDisabled
                     }
                     className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold disabled:cursor-not-allowed disabled:opacity-75"
                   >
                     <span
                       aria-hidden="true"
-                      className="absolute inset-0 rounded-[12px] bg-[#111111] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+                      className={`absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985] ${
+                        isCreateTeamNextDisabled ? "bg-[#111111]" : "bg-[#F3F3F3]"
+                      }`}
                     />
-                    <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#B7B7B7]">
+                    <span
+                      className={`relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none ${
+                        isCreateTeamNextDisabled ? "text-[#B7B7B7]" : "text-[#111111]"
+                      }`}
+                    >
                       {isCreatingTeam ? (
                         <span className="relative inline-flex items-center justify-center">
                           <span className="invisible">
                             {createTeamStep === "members" ? "Criar equipe" : "Proximo"}
                           </span>
                           <span className="absolute inset-0 flex items-center justify-center">
-                            <ButtonLoader size={16} colorClassName="text-[#B7B7B7]" />
+                            <ButtonLoader size={16} colorClassName={isCreateTeamNextDisabled ? "text-[#B7B7B7]" : "text-[#111111]"} />
                           </span>
                         </span>
                       ) : (
@@ -2343,17 +2843,17 @@ export function ServersWorkspace({
           </div>
 
           {isMemberSubmodalOpen ? (
-            <div className="absolute inset-0 z-20 flex items-center justify-center p-[16px]">
+            <div className="absolute inset-0 z-[30] flex items-center justify-center p-[16px]">
               <button
                 type="button"
                 aria-label="Fechar submodal de membros"
-                className="absolute inset-0 bg-[rgba(0,0,0,0.62)]"
+                className="absolute inset-0 bg-[rgba(0,0,0,0.72)] backdrop-blur-[4px]"
                 onClick={() => {
                   setIsMemberSubmodalOpen(false);
                   setTeamActionError(null);
                 }}
               />
-              <div className="relative z-10 w-full max-w-[520px] overflow-hidden rounded-[26px] border border-[#151515] bg-[#070707] p-[18px] shadow-[0_24px_70px_rgba(0,0,0,0.5)]">
+              <div className="relative z-[40] w-full max-w-[520px] overflow-hidden rounded-[26px] border border-[#151515] bg-[#070707] p-[18px] shadow-[0_24px_70px_rgba(0,0,0,0.5)]">
                 <div className="flex items-start justify-between gap-[14px]">
                   <div>
                     <p className="text-[12px] uppercase tracking-[0.16em] text-[#666666]">
@@ -2372,7 +2872,7 @@ export function ServersWorkspace({
                     className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-[12px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
                     aria-label="Fechar submodal"
                   >
-                    <span className="text-[18px] leading-none">×</span>
+                    <span className="text-[18px] leading-none">Ã—</span>
                   </button>
                 </div>
 
@@ -2447,3 +2947,4 @@ export function ServersWorkspace({
     </div>
   );
 }
+

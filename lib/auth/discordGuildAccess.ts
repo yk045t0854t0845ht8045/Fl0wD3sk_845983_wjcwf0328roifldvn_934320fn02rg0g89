@@ -16,6 +16,9 @@ import { getAcceptedTeamGuildIdsForUser } from "@/lib/teams/userTeams";
 const DISCORD_ADMINISTRATOR = BigInt(8);
 const DISCORD_MANAGE_GUILD = BigInt(32);
 const GUILD_CACHE_TTL_MS = 30 * 60 * 1000;
+const BOT_RESOURCE_FRESH_TTL_MS = 25 * 1000;
+const BOT_RESOURCE_STALE_TTL_MS = 5 * 60 * 1000;
+const BOT_RESOURCE_RETRY_DELAYS_MS = [180, 420, 900];
 
 export type DiscordGuildChannel = {
   id: string;
@@ -33,6 +36,21 @@ export type DiscordGuildRole = {
   position: number;
   managed: boolean;
 };
+
+type BotResourceCacheEntry<T> = {
+  timestamp: number;
+  value: T;
+};
+
+const botGuildSummaryCache = new Map<string, BotResourceCacheEntry<BotGuildSummary>>();
+const botGuildChannelsCache = new Map<
+  string,
+  BotResourceCacheEntry<DiscordGuildChannel[]>
+>();
+const botGuildRolesCache = new Map<
+  string,
+  BotResourceCacheEntry<DiscordGuildRole[]>
+>();
 
 export function isGuildId(value: string) {
   return /^\d{10,25}$/.test(value);
@@ -62,6 +80,39 @@ function isGuildCacheFresh(cachedAt: string | null) {
   const timestamp = new Date(cachedAt).getTime();
   if (!Number.isFinite(timestamp)) return false;
   return Date.now() - timestamp < GUILD_CACHE_TTL_MS;
+}
+
+function readBotResourceCache<T>(
+  cache: Map<string, BotResourceCacheEntry<T>>,
+  cacheKey: string,
+  maxAgeMs: number,
+) {
+  const cached = cache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > maxAgeMs) {
+    cache.delete(cacheKey);
+    return null;
+  }
+  return cached.value;
+}
+
+function writeBotResourceCache<T>(
+  cache: Map<string, BotResourceCacheEntry<T>>,
+  cacheKey: string,
+  value: T,
+) {
+  cache.set(cacheKey, {
+    timestamp: Date.now(),
+    value,
+  });
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sanitizeDiscordBotFailureMessage(resourceLabel: string) {
+  return `Nao foi possivel sincronizar ${resourceLabel} do Discord agora. Tente novamente em instantes.`;
 }
 
 export async function resolveSessionAccessToken() {
@@ -172,38 +223,113 @@ function resolveBotToken() {
   return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || null;
 }
 
+async function fetchDiscordBotJsonWithRetry<T>(
+  input: {
+    url: string;
+    botToken: string;
+    resourceLabel: string;
+  },
+) {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= BOT_RESOURCE_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch(input.url, {
+        headers: {
+          Authorization: `Bot ${input.botToken}`,
+        },
+        cache: "no-store",
+      });
+
+      if (response.status === 404 || response.status === 403) {
+        return null;
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        const isRetryable = response.status >= 500 || response.status === 429;
+
+        if (isRetryable && attempt < BOT_RESOURCE_RETRY_DELAYS_MS.length) {
+          await sleep(BOT_RESOURCE_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+
+        throw new Error(
+          `Falha ao buscar ${input.resourceLabel} do servidor: ${text}`,
+        );
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt < BOT_RESOURCE_RETRY_DELAYS_MS.length) {
+        await sleep(BOT_RESOURCE_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(sanitizeDiscordBotFailureMessage(input.resourceLabel));
+}
+
 export async function fetchGuildSummaryByBot(guildId: string): Promise<BotGuildSummary | null> {
   const botToken = resolveBotToken();
   if (!botToken) {
     return null;
   }
 
-  const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-    headers: {
-      Authorization: `Bot ${botToken}`,
-    },
-    cache: "no-store",
-  });
-
-  if (response.status === 404 || response.status === 403) {
-    return null;
+  const freshCached = readBotResourceCache(
+    botGuildSummaryCache,
+    guildId,
+    BOT_RESOURCE_FRESH_TTL_MS,
+  );
+  if (freshCached) {
+    return freshCached;
   }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Falha ao buscar resumo do servidor: ${text}`);
-  }
+  const staleCached = readBotResourceCache(
+    botGuildSummaryCache,
+    guildId,
+    BOT_RESOURCE_STALE_TTL_MS,
+  );
 
-  const payload = (await response.json()) as Partial<DiscordGuild>;
-  if (typeof payload.id !== "string" || typeof payload.name !== "string") {
-    return null;
-  }
+  try {
+    const payload = await fetchDiscordBotJsonWithRetry<Partial<DiscordGuild>>({
+      url: `https://discord.com/api/v10/guilds/${guildId}`,
+      botToken,
+      resourceLabel: "resumo",
+    });
 
-  return {
-    id: payload.id,
-    name: payload.name,
-    icon: typeof payload.icon === "string" ? payload.icon : null,
-  };
+    if (!payload) {
+      return null;
+    }
+
+    if (typeof payload.id !== "string" || typeof payload.name !== "string") {
+      return null;
+    }
+
+    const summary = {
+      id: payload.id,
+      name: payload.name,
+      icon: typeof payload.icon === "string" ? payload.icon : null,
+    };
+
+    writeBotResourceCache(botGuildSummaryCache, guildId, summary);
+    return summary;
+  } catch (error) {
+    if (staleCached) {
+      return staleCached;
+    }
+
+    console.error("discord bot summary fetch failed", {
+      guildId,
+      error,
+    });
+
+    throw new Error(sanitizeDiscordBotFailureMessage("o resumo"));
+  }
 }
 
 export async function fetchGuildChannelsByBot(guildId: string) {
@@ -212,23 +338,46 @@ export async function fetchGuildChannelsByBot(guildId: string) {
     throw new Error("DISCORD_BOT_TOKEN nao configurado no ambiente do site.");
   }
 
-  const response = await fetch(`https://discord.com/api/guilds/${guildId}/channels`, {
-    headers: {
-      Authorization: `Bot ${botToken}`,
-    },
-    cache: "no-store",
-  });
-
-  if (response.status === 404 || response.status === 403) {
-    return null;
+  const freshCached = readBotResourceCache(
+    botGuildChannelsCache,
+    guildId,
+    BOT_RESOURCE_FRESH_TTL_MS,
+  );
+  if (freshCached) {
+    return freshCached;
   }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Falha ao buscar canais do servidor: ${text}`);
-  }
+  const staleCached = readBotResourceCache(
+    botGuildChannelsCache,
+    guildId,
+    BOT_RESOURCE_STALE_TTL_MS,
+  );
 
-  return (await response.json()) as DiscordGuildChannel[];
+  try {
+    const payload = await fetchDiscordBotJsonWithRetry<DiscordGuildChannel[]>({
+      url: `https://discord.com/api/v10/guilds/${guildId}/channels`,
+      botToken,
+      resourceLabel: "canais",
+    });
+
+    if (!payload) {
+      return null;
+    }
+
+    writeBotResourceCache(botGuildChannelsCache, guildId, payload);
+    return payload;
+  } catch (error) {
+    if (staleCached) {
+      return staleCached;
+    }
+
+    console.error("discord bot channels fetch failed", {
+      guildId,
+      error,
+    });
+
+    throw new Error(sanitizeDiscordBotFailureMessage("os canais"));
+  }
 }
 
 export async function fetchGuildRolesByBot(guildId: string) {
@@ -237,23 +386,46 @@ export async function fetchGuildRolesByBot(guildId: string) {
     throw new Error("DISCORD_BOT_TOKEN nao configurado no ambiente do site.");
   }
 
-  const response = await fetch(`https://discord.com/api/guilds/${guildId}/roles`, {
-    headers: {
-      Authorization: `Bot ${botToken}`,
-    },
-    cache: "no-store",
-  });
-
-  if (response.status === 404 || response.status === 403) {
-    return null;
+  const freshCached = readBotResourceCache(
+    botGuildRolesCache,
+    guildId,
+    BOT_RESOURCE_FRESH_TTL_MS,
+  );
+  if (freshCached) {
+    return freshCached;
   }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Falha ao buscar cargos do servidor: ${text}`);
-  }
+  const staleCached = readBotResourceCache(
+    botGuildRolesCache,
+    guildId,
+    BOT_RESOURCE_STALE_TTL_MS,
+  );
 
-  return (await response.json()) as DiscordGuildRole[];
+  try {
+    const payload = await fetchDiscordBotJsonWithRetry<DiscordGuildRole[]>({
+      url: `https://discord.com/api/v10/guilds/${guildId}/roles`,
+      botToken,
+      resourceLabel: "cargos",
+    });
+
+    if (!payload) {
+      return null;
+    }
+
+    writeBotResourceCache(botGuildRolesCache, guildId, payload);
+    return payload;
+  } catch (error) {
+    if (staleCached) {
+      return staleCached;
+    }
+
+    console.error("discord bot roles fetch failed", {
+      guildId,
+      error,
+    });
+
+    throw new Error(sanitizeDiscordBotFailureMessage("os cargos"));
+  }
 }
 
 export function buildBotInviteUrl(guildId: string) {

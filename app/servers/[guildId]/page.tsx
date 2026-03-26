@@ -11,22 +11,13 @@ type ServersByGuildPageProps = {
   }>;
 };
 
-function takeFirstQueryValue(value: string | string[] | undefined) {
-  if (Array.isArray(value)) return value[0] || null;
-  return value || null;
-}
-
 function normalizeGuildId(value: string | null) {
   if (!value) return null;
   const guildId = value.trim();
   return /^\d{10,25}$/.test(guildId) ? guildId : null;
 }
 
-function normalizeServerTab(value: string | null) {
-  const normalized = (value || "").trim().toLowerCase();
-  if (normalized === "payments") return "payments" as const;
-  if (normalized === "methods") return "methods" as const;
-  if (normalized === "plans") return "plans" as const;
+function normalizeServerTab() {
   return "settings" as const;
 }
 
@@ -50,11 +41,13 @@ export default async function ServersByGuildPage({
   const safeGuildId = normalizeGuildId(routeParams.guildId);
 
   if (!safeGuildId) {
-    redirect("/servers");
+    redirect("/servers/");
   }
 
-  const query = searchParams ? await searchParams : {};
-  const tab = normalizeServerTab(takeFirstQueryValue(query.tab));
+  if (searchParams) {
+    await searchParams;
+  }
+  const tab = normalizeServerTab();
 
   return (
     <ServersWorkspace

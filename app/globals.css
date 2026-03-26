@@ -25,6 +25,35 @@ body {
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a #070707;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a #070707;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #070707;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #1d1d1d 0%, #2f2f2f 100%);
+  border-radius: 999px;
+  border: 2px solid #070707;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #2a2a2a 0%, #3b3b3b 100%);
+}
+
 .thin-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: #2e2e2e transparent;
@@ -41,6 +70,30 @@ body {
 .thin-scrollbar::-webkit-scrollbar-thumb {
   background-color: #2e2e2e;
   border-radius: 999px;
+}
+
+.flowdesk-selectmenu-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a #080808;
+}
+
+.flowdesk-selectmenu-scrollbar::-webkit-scrollbar {
+  width: 7px;
+}
+
+.flowdesk-selectmenu-scrollbar::-webkit-scrollbar-track {
+  background: #080808;
+  border-radius: 999px;
+}
+
+.flowdesk-selectmenu-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #1f1f1f 0%, #313131 100%);
+  border-radius: 999px;
+  border: 1px solid #080808;
+}
+
+.flowdesk-selectmenu-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #2a2a2a 0%, #3a3a3a 100%);
 }
 
 @keyframes flowdesk-input-shake {
@@ -102,8 +155,8 @@ body {
 @keyframes flowdesk-sheet-up {
   0% {
     opacity: 0;
-    transform: translateY(44px) scale(0.985);
-    filter: blur(6px);
+    transform: translateY(58px) scale(0.982);
+    filter: blur(8px);
   }
 
   100% {
@@ -114,7 +167,25 @@ body {
 }
 
 .flowdesk-sheet-up {
-  animation: flowdesk-sheet-up 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: flowdesk-sheet-up 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes flowdesk-sheet-down {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(54px) scale(0.986);
+    filter: blur(8px);
+  }
+}
+
+.flowdesk-sheet-down {
+  animation: flowdesk-sheet-down 360ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 @keyframes flowdesk-fade-up-soft {

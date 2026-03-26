@@ -9,6 +9,17 @@ export const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 export const EXPIRED_GRACE_MS = EXPIRED_GRACE_DAYS * 24 * 60 * 60 * 1000;
 export const LICENSE_RENEWAL_WINDOW_MS =
   LICENSE_RENEWAL_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const LICENSE_STATUS_CACHE_TTL_MS = 12_000;
+const LOCKED_GUILD_LICENSE_CACHE_TTL_MS = 12_000;
+
+type CacheEntry<TValue> = {
+  expiresAtMs: number;
+  value: TValue;
+};
+
+type LicenseStatusQueryOptions = {
+  forceFresh?: boolean;
+};
 
 type ApprovedOrderRecord = {
   paid_at: string | null;
@@ -52,6 +63,61 @@ export type LockedGuildLicenseRecord = {
   graceExpiresAt: string;
   renewalWindowStartsAt: string;
 };
+
+const guildLicenseStatusCache = new Map<
+  string,
+  CacheEntry<GuildLicenseStatus>
+>();
+const guildLicenseStatusInflight = new Map<string, Promise<GuildLicenseStatus>>();
+const lockedGuildLicenseCache = new Map<
+  string,
+  CacheEntry<LockedGuildLicenseRecord | null>
+>();
+const lockedGuildLicenseInflight = new Map<
+  string,
+  Promise<LockedGuildLicenseRecord | null>
+>();
+
+function readCacheEntry<TValue>(
+  cache: Map<string, CacheEntry<TValue>>,
+  key: string,
+): TValue | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAtMs <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+
+  return cached.value;
+}
+
+function writeCacheEntry<TValue>(
+  cache: Map<string, CacheEntry<TValue>>,
+  key: string,
+  value: TValue,
+  ttlMs: number,
+) {
+  cache.set(key, {
+    value,
+    expiresAtMs: Date.now() + ttlMs,
+  });
+}
+
+export function invalidateGuildLicenseCaches(guildId?: string) {
+  if (typeof guildId === "string" && guildId.trim().length > 0) {
+    guildLicenseStatusCache.delete(guildId);
+    guildLicenseStatusInflight.delete(guildId);
+    lockedGuildLicenseCache.delete(guildId);
+    lockedGuildLicenseInflight.delete(guildId);
+    return;
+  }
+
+  guildLicenseStatusCache.clear();
+  guildLicenseStatusInflight.clear();
+  lockedGuildLicenseCache.clear();
+  lockedGuildLicenseInflight.clear();
+}
 
 export function resolveLicenseBaseTimestamp(order: ApprovedOrderRecord) {
   const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
@@ -379,38 +445,113 @@ export async function getLatestApprovedOrderForGuild(guildId: string) {
   return orders[0] || null;
 }
 
-export async function getGuildLicenseStatus(guildId: string) {
-  const approvedOrders = await getApprovedOrdersForGuild<ApprovedOrderRecord>(
-    guildId,
-    "paid_at, created_at",
-  );
-  return resolveGuildLicenseStatusFromApprovedOrders(approvedOrders);
-}
+export async function getGuildLicenseStatus(
+  guildId: string,
+  options?: LicenseStatusQueryOptions,
+) {
+  const normalizedGuildId = guildId.trim();
+  if (!options?.forceFresh) {
+    const cached = readCacheEntry(guildLicenseStatusCache, normalizedGuildId);
+    if (cached) return cached;
 
-export async function getLockedGuildLicenseByGuildId(guildId: string) {
-  const approvedOrders = await getApprovedOrdersForGuild<ApprovedOrderWithUserRecord>(
-    guildId,
-    "guild_id, user_id, paid_at, created_at",
-  );
-  const latestCoverage = resolveLatestLicenseCoverageFromApprovedOrders(
-    approvedOrders,
-  );
-  if (!latestCoverage) return null;
-  if (latestCoverage.status !== "paid" && latestCoverage.status !== "expired") {
-    return null;
+    const inflight = guildLicenseStatusInflight.get(normalizedGuildId);
+    if (inflight) {
+      return inflight;
+    }
   }
 
-  return {
-    guildId: latestCoverage.order.guild_id,
-    userId: latestCoverage.order.user_id,
-    status: latestCoverage.status,
-    paidAt: latestCoverage.order.paid_at,
-    createdAt: latestCoverage.order.created_at,
-    licenseStartsAt: latestCoverage.licenseStartsAt,
-    licenseExpiresAt: latestCoverage.licenseExpiresAt,
-    graceExpiresAt: latestCoverage.graceExpiresAt,
-    renewalWindowStartsAt: latestCoverage.renewalWindowStartsAt,
-  } satisfies LockedGuildLicenseRecord;
+  const loadPromise = getApprovedOrdersForGuild<ApprovedOrderRecord>(
+    normalizedGuildId,
+    "paid_at, created_at",
+  )
+    .then((approvedOrders) => {
+      const resolvedStatus =
+        resolveGuildLicenseStatusFromApprovedOrders(approvedOrders);
+      writeCacheEntry(
+        guildLicenseStatusCache,
+        normalizedGuildId,
+        resolvedStatus,
+        LICENSE_STATUS_CACHE_TTL_MS,
+      );
+      return resolvedStatus;
+    })
+    .finally(() => {
+      guildLicenseStatusInflight.delete(normalizedGuildId);
+    });
+
+  guildLicenseStatusInflight.set(normalizedGuildId, loadPromise);
+  return loadPromise;
+}
+
+export async function getLockedGuildLicenseByGuildId(
+  guildId: string,
+  options?: LicenseStatusQueryOptions,
+) {
+  const normalizedGuildId = guildId.trim();
+  if (!options?.forceFresh) {
+    const cached = readCacheEntry(lockedGuildLicenseCache, normalizedGuildId);
+    if (cached !== null) {
+      return cached;
+    }
+
+    if (lockedGuildLicenseCache.has(normalizedGuildId)) {
+      return null;
+    }
+
+    const inflight = lockedGuildLicenseInflight.get(normalizedGuildId);
+    if (inflight) {
+      return inflight;
+    }
+  }
+
+  const loadPromise = getApprovedOrdersForGuild<ApprovedOrderWithUserRecord>(
+    normalizedGuildId,
+    "guild_id, user_id, paid_at, created_at",
+  )
+    .then((approvedOrders) => {
+      const latestCoverage = resolveLatestLicenseCoverageFromApprovedOrders(
+        approvedOrders,
+      );
+      const resolvedStatus = latestCoverage ? latestCoverage.status : "not_paid";
+
+      const lockedLicense =
+        !latestCoverage ||
+        (latestCoverage.status !== "paid" &&
+          latestCoverage.status !== "expired")
+          ? null
+          : ({
+              guildId: latestCoverage.order.guild_id,
+              userId: latestCoverage.order.user_id,
+              status: latestCoverage.status,
+              paidAt: latestCoverage.order.paid_at,
+              createdAt: latestCoverage.order.created_at,
+              licenseStartsAt: latestCoverage.licenseStartsAt,
+              licenseExpiresAt: latestCoverage.licenseExpiresAt,
+              graceExpiresAt: latestCoverage.graceExpiresAt,
+              renewalWindowStartsAt: latestCoverage.renewalWindowStartsAt,
+            } satisfies LockedGuildLicenseRecord);
+
+      writeCacheEntry(
+        guildLicenseStatusCache,
+        normalizedGuildId,
+        resolvedStatus,
+        LICENSE_STATUS_CACHE_TTL_MS,
+      );
+      writeCacheEntry(
+        lockedGuildLicenseCache,
+        normalizedGuildId,
+        lockedLicense,
+        LOCKED_GUILD_LICENSE_CACHE_TTL_MS,
+      );
+
+      return lockedLicense;
+    })
+    .finally(() => {
+      lockedGuildLicenseInflight.delete(normalizedGuildId);
+    });
+
+  lockedGuildLicenseInflight.set(normalizedGuildId, loadPromise);
+  return loadPromise;
 }
 
 export async function getLockedGuildLicenseMap(guildIds: string[]) {
@@ -428,10 +569,22 @@ export async function getLockedGuildLicenseMap(guildIds: string[]) {
     const latestCoverage = resolveLatestLicenseCoverageFromApprovedOrders(orders);
     if (!latestCoverage) continue;
     if (latestCoverage.status !== "paid" && latestCoverage.status !== "expired") {
+      writeCacheEntry(
+        guildLicenseStatusCache,
+        guildId,
+        latestCoverage.status,
+        LICENSE_STATUS_CACHE_TTL_MS,
+      );
+      writeCacheEntry(
+        lockedGuildLicenseCache,
+        guildId,
+        null,
+        LOCKED_GUILD_LICENSE_CACHE_TTL_MS,
+      );
       continue;
     }
 
-    lockedMap.set(guildId, {
+    const lockedLicense = {
       guildId,
       userId: latestCoverage.order.user_id,
       status: latestCoverage.status,
@@ -441,7 +594,21 @@ export async function getLockedGuildLicenseMap(guildIds: string[]) {
       licenseExpiresAt: latestCoverage.licenseExpiresAt,
       graceExpiresAt: latestCoverage.graceExpiresAt,
       renewalWindowStartsAt: latestCoverage.renewalWindowStartsAt,
-    });
+    } satisfies LockedGuildLicenseRecord;
+
+    lockedMap.set(guildId, lockedLicense);
+    writeCacheEntry(
+      guildLicenseStatusCache,
+      guildId,
+      latestCoverage.status,
+      LICENSE_STATUS_CACHE_TTL_MS,
+    );
+    writeCacheEntry(
+      lockedGuildLicenseCache,
+      guildId,
+      lockedLicense,
+      LOCKED_GUILD_LICENSE_CACHE_TTL_MS,
+    );
   }
 
   return lockedMap;

@@ -2,11 +2,18 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { ClientErrorBoundary } from "@/components/common/ClientErrorBoundary";
 import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect";
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { serversScale } from "@/components/servers/serversScale";
+import {
+  getServerDashboardSettings,
+  readCachedServerDashboardSettings,
+} from "@/lib/servers/serverDashboardSettingsClient";
+import type { ServerDashboardSettingsPayload } from "@/lib/servers/serverDashboardSettingsClient";
 import {
   isValidBrazilDocument,
   normalizeBrazilDocumentDigits,
@@ -40,6 +47,17 @@ type AddMethodFieldKey =
 type SelectOption = {
   id: string;
   name: string;
+};
+
+type ServerSettingsDraft = {
+  menuChannelId: string | null;
+  ticketsCategoryId: string | null;
+  logsCreatedChannelId: string | null;
+  logsClosedChannelId: string | null;
+  adminRoleId: string | null;
+  claimRoleIds: string[];
+  closeRoleIds: string[];
+  notifyRoleIds: string[];
 };
 
 type PaymentOrder = {
@@ -174,10 +192,32 @@ function normalizeBrandValue(value: unknown) {
   return value.trim().toLowerCase();
 }
 
-function statusBadge(status: ManagedServerStatus) {
-  if (status === "paid") return { label: "Pago", cls: "border-[#6AE25A] bg-[rgba(106,226,90,0.2)] text-[#6AE25A]" };
-  if (status === "expired") return { label: "Expirado", cls: "border-[#F2C823] bg-[rgba(242,200,35,0.2)] text-[#F2C823]" };
-  return { label: "Desligado", cls: "border-[#DB4646] bg-[rgba(219,70,70,0.2)] text-[#DB4646]" };
+function normalizeDraftIds(values: string[]) {
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeServerSettingsDraft(
+  draft: ServerSettingsDraft,
+): ServerSettingsDraft {
+  return {
+    menuChannelId: draft.menuChannelId,
+    ticketsCategoryId: draft.ticketsCategoryId,
+    logsCreatedChannelId: draft.logsCreatedChannelId,
+    logsClosedChannelId: draft.logsClosedChannelId,
+    adminRoleId: draft.adminRoleId,
+    claimRoleIds: normalizeDraftIds(draft.claimRoleIds),
+    closeRoleIds: normalizeDraftIds(draft.closeRoleIds),
+    notifyRoleIds: normalizeDraftIds(draft.notifyRoleIds),
+  };
+}
+
+function areServerSettingsDraftsEqual(
+  left: ServerSettingsDraft | null,
+  right: ServerSettingsDraft | null,
+) {
+  if (!left || !right) return left === right;
+
+  return JSON.stringify(normalizeServerSettingsDraft(left)) === JSON.stringify(normalizeServerSettingsDraft(right));
 }
 
 function orderStatusBadge(status: PaymentStatus) {
@@ -1110,17 +1150,24 @@ export function ServerSettingsEditor({
   canManage,
   allServers,
   initialTab = "settings",
-  onTabChange,
+  onTabChange: _onTabChange,
   onClose,
   standalone = false,
 }: ServerSettingsEditorProps) {
   const cardPaymentsEnabled = areCardPaymentsEnabled();
-  const [activeTab, setActiveTab] = useState<EditorTab>(initialTab);
+  const showServerFinancialPanels = false;
+  const [activeTab, setActiveTab] = useState<EditorTab>("settings");
+  void _onTabChange;
+  void onClose;
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showSaveSuccessBar, setShowSaveSuccessBar] = useState(false);
+  const [isPortalMounted, setIsPortalMounted] = useState(false);
+  const [isSaveBarRendered, setIsSaveBarRendered] = useState(false);
+  const [isSaveBarExiting, setIsSaveBarExiting] = useState(false);
 
   const [textChannelOptions, setTextChannelOptions] = useState<SelectOption[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<SelectOption[]>([]);
@@ -1135,6 +1182,8 @@ export function ServerSettingsEditor({
   const [claimRoleIds, setClaimRoleIds] = useState<string[]>([]);
   const [closeRoleIds, setCloseRoleIds] = useState<string[]>([]);
   const [notifyRoleIds, setNotifyRoleIds] = useState<string[]>([]);
+  const [savedSettingsDraft, setSavedSettingsDraft] =
+    useState<ServerSettingsDraft | null>(null);
 
   const [isPaymentsLoading, setIsPaymentsLoading] = useState(true);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
@@ -1198,10 +1247,93 @@ export function ServerSettingsEditor({
     "Neste acesso o painel esta disponivel somente para visualizacao.";
   const financialViewerMessage =
     "As funcoes financeiras deste servidor ficam disponiveis apenas para a conta responsavel pela licenca ativa.";
-  const headerStatus = statusBadge(status);
+
+  const applyDashboardSettingsPayload = useCallback(
+    (payload: ServerDashboardSettingsPayload) => {
+      const text = payload.channels.text.map((channel) => ({
+        id: channel.id,
+        name: `# ${channel.name}`,
+      }));
+      const categories = payload.channels.categories.map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+      }));
+      const roleList = payload.roles as SelectOption[];
+
+      setTextChannelOptions(text);
+      setCategoryOptions(categories);
+      setRoleOptions(roleList);
+
+      const textSet = new Set(text.map((item) => item.id));
+      const categorySet = new Set(categories.map((item) => item.id));
+      const roleSet = new Set(roleList.map((item) => item.id));
+
+      const nextMenuChannelId =
+        payload.ticketSettings?.menuChannelId &&
+        textSet.has(payload.ticketSettings.menuChannelId)
+          ? payload.ticketSettings.menuChannelId
+          : null;
+      const nextTicketsCategoryId =
+        payload.ticketSettings?.ticketsCategoryId &&
+        categorySet.has(payload.ticketSettings.ticketsCategoryId)
+          ? payload.ticketSettings.ticketsCategoryId
+          : null;
+      const nextLogsCreatedChannelId =
+        payload.ticketSettings?.logsCreatedChannelId &&
+        textSet.has(payload.ticketSettings.logsCreatedChannelId)
+          ? payload.ticketSettings.logsCreatedChannelId
+          : null;
+      const nextLogsClosedChannelId =
+        payload.ticketSettings?.logsClosedChannelId &&
+        textSet.has(payload.ticketSettings.logsClosedChannelId)
+          ? payload.ticketSettings.logsClosedChannelId
+          : null;
+
+      const nextAdminRoleId =
+        payload.staffSettings?.adminRoleId &&
+        roleSet.has(payload.staffSettings.adminRoleId)
+          ? payload.staffSettings.adminRoleId
+          : null;
+      const nextClaimRoleIds = Array.isArray(payload.staffSettings?.claimRoleIds)
+          ? payload.staffSettings.claimRoleIds.filter((id) => roleSet.has(id))
+          : [];
+      const nextCloseRoleIds = Array.isArray(payload.staffSettings?.closeRoleIds)
+          ? payload.staffSettings.closeRoleIds.filter((id) => roleSet.has(id))
+          : [];
+      const nextNotifyRoleIds = Array.isArray(payload.staffSettings?.notifyRoleIds)
+          ? payload.staffSettings.notifyRoleIds.filter((id) => roleSet.has(id))
+          : [];
+
+      setMenuChannelId(nextMenuChannelId);
+      setTicketsCategoryId(nextTicketsCategoryId);
+      setLogsCreatedChannelId(nextLogsCreatedChannelId);
+      setLogsClosedChannelId(nextLogsClosedChannelId);
+      setAdminRoleId(nextAdminRoleId);
+      setClaimRoleIds(nextClaimRoleIds);
+      setCloseRoleIds(nextCloseRoleIds);
+      setNotifyRoleIds(nextNotifyRoleIds);
+      setSavedSettingsDraft(
+        normalizeServerSettingsDraft({
+          menuChannelId: nextMenuChannelId,
+          ticketsCategoryId: nextTicketsCategoryId,
+          logsCreatedChannelId: nextLogsCreatedChannelId,
+          logsClosedChannelId: nextLogsClosedChannelId,
+          adminRoleId: nextAdminRoleId,
+          claimRoleIds: nextClaimRoleIds,
+          closeRoleIds: nextCloseRoleIds,
+          notifyRoleIds: nextNotifyRoleIds,
+        }),
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
-    setActiveTab(initialTab);
+    setActiveTab("settings");
+    setSavedSettingsDraft(null);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setShowSaveSuccessBar(false);
     setPaymentGuildFilter(guildId);
     setPaymentSearch("");
     setPaymentStatusFilter("all");
@@ -1315,65 +1447,55 @@ export function ServerSettingsEditor({
 
   useEffect(() => {
     let mounted = true;
-    async function loadSettings() {
-      setIsLoading(true);
-      setErrorMessage(null);
-      try {
-        const [channelsRes, ticketRes, rolesRes, staffRes] = await Promise.all([
-          fetch(`/api/auth/me/guilds/channels?guildId=${guildId}`, { cache: "no-store" }),
-          fetch(`/api/auth/me/guilds/ticket-settings?guildId=${guildId}`, { cache: "no-store" }),
-          fetch(`/api/auth/me/guilds/roles?guildId=${guildId}`, { cache: "no-store" }),
-          fetch(`/api/auth/me/guilds/ticket-staff-settings?guildId=${guildId}`, { cache: "no-store" }),
-        ]);
+    const controller = new AbortController();
 
-        const channels = await channelsRes.json();
-        const ticket = await ticketRes.json();
-        const roles = await rolesRes.json();
-        const staff = await staffRes.json();
+    async function loadSettings() {
+      const cachedPayload = readCachedServerDashboardSettings(guildId);
+
+      if (cachedPayload) {
+        applyDashboardSettingsPayload(cachedPayload);
+        setErrorMessage(null);
+        setIsLoading(false);
+      } else {
+        setIsLoading(true);
+        setErrorMessage(null);
+      }
+
+      try {
+        const payload = await getServerDashboardSettings(guildId, {
+          signal: controller.signal,
+          preferCache: !cachedPayload,
+        });
 
         if (!mounted) return;
-        if (!channelsRes.ok || !channels.ok || !channels.channels) {
-          throw new Error(channels.message || "Falha ao carregar canais.");
-        }
-        if (!rolesRes.ok || !roles.ok || !roles.roles) {
-          throw new Error(roles.message || "Falha ao carregar cargos.");
-        }
-
-        const text = channels.channels.text.map((c: { id: string; name: string }) => ({ id: c.id, name: `# ${c.name}` }));
-        const cats = channels.channels.categories.map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }));
-        const roleList = roles.roles as SelectOption[];
-        setTextChannelOptions(text);
-        setCategoryOptions(cats);
-        setRoleOptions(roleList);
-
-        const textSet = new Set(text.map((item: SelectOption) => item.id));
-        const catSet = new Set(cats.map((item: SelectOption) => item.id));
-        const roleSet = new Set(roleList.map((item: SelectOption) => item.id));
-
-        const ticketSettings = ticketRes.ok && ticket.ok ? ticket.settings : null;
-        const staffSettings = staffRes.ok && staff.ok ? staff.settings : null;
-
-        setMenuChannelId(ticketSettings?.menuChannelId && textSet.has(ticketSettings.menuChannelId) ? ticketSettings.menuChannelId : null);
-        setTicketsCategoryId(ticketSettings?.ticketsCategoryId && catSet.has(ticketSettings.ticketsCategoryId) ? ticketSettings.ticketsCategoryId : null);
-        setLogsCreatedChannelId(ticketSettings?.logsCreatedChannelId && textSet.has(ticketSettings.logsCreatedChannelId) ? ticketSettings.logsCreatedChannelId : null);
-        setLogsClosedChannelId(ticketSettings?.logsClosedChannelId && textSet.has(ticketSettings.logsClosedChannelId) ? ticketSettings.logsClosedChannelId : null);
-
-        setAdminRoleId(staffSettings?.adminRoleId && roleSet.has(staffSettings.adminRoleId) ? staffSettings.adminRoleId : null);
-        setClaimRoleIds(Array.isArray(staffSettings?.claimRoleIds) ? staffSettings.claimRoleIds.filter((id: string) => roleSet.has(id)) : []);
-        setCloseRoleIds(Array.isArray(staffSettings?.closeRoleIds) ? staffSettings.closeRoleIds.filter((id: string) => roleSet.has(id)) : []);
-        setNotifyRoleIds(Array.isArray(staffSettings?.notifyRoleIds) ? staffSettings.notifyRoleIds.filter((id: string) => roleSet.has(id)) : []);
+        applyDashboardSettingsPayload(payload);
+        setErrorMessage(null);
       } catch (error) {
         if (!mounted) return;
-        setErrorMessage(error instanceof Error ? error.message : "Erro ao carregar configuracoes.");
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        if (!cachedPayload) {
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Erro ao carregar configuracoes.",
+          );
+        }
       } finally {
-        if (mounted) setIsLoading(false);
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     }
+
     void loadSettings();
+
     return () => {
       mounted = false;
+      controller.abort();
     };
-  }, [guildId]);
+  }, [applyDashboardSettingsPayload, guildId]);
 
   useEffect(() => {
     setMethodNicknameDrafts((current) => {
@@ -1388,6 +1510,15 @@ export function ServerSettingsEditor({
   useEffect(() => {
     let mounted = true;
     async function loadPayments() {
+      if (!showServerFinancialPanels) {
+        if (!mounted) return;
+        setOrders([]);
+        setMethods([]);
+        setPaymentsError(null);
+        setIsPaymentsLoading(false);
+        return;
+      }
+
       if (isViewerOnly) {
         if (!mounted) return;
         setOrders([]);
@@ -1430,12 +1561,20 @@ export function ServerSettingsEditor({
     return () => {
       mounted = false;
     };
-  }, [isViewerOnly]);
+  }, [isViewerOnly, showServerFinancialPanels]);
 
   useEffect(() => {
     let mounted = true;
 
     async function loadPlan() {
+      if (!showServerFinancialPanels) {
+        if (!mounted) return;
+        setPlanSettings(null);
+        setPlanError(null);
+        setIsPlanLoading(false);
+        return;
+      }
+
       if (isViewerOnly) {
         if (!mounted) return;
         setPlanSettings({
@@ -1487,7 +1626,7 @@ export function ServerSettingsEditor({
     return () => {
       mounted = false;
     };
-  }, [guildId, isViewerOnly]);
+  }, [guildId, isViewerOnly, showServerFinancialPanels]);
 
   const serverMap = useMemo(() => {
     const map = new Map<string, { guildName: string; iconUrl: string | null }>();
@@ -1823,6 +1962,117 @@ export function ServerSettingsEditor({
       closeRoleIds.length &&
       notifyRoleIds.length,
   );
+
+  const currentSettingsDraft = useMemo(
+    () =>
+      normalizeServerSettingsDraft({
+        menuChannelId,
+        ticketsCategoryId,
+        logsCreatedChannelId,
+        logsClosedChannelId,
+        adminRoleId,
+        claimRoleIds,
+        closeRoleIds,
+        notifyRoleIds,
+      }),
+    [
+      adminRoleId,
+      claimRoleIds,
+      closeRoleIds,
+      logsClosedChannelId,
+      logsCreatedChannelId,
+      menuChannelId,
+      notifyRoleIds,
+      ticketsCategoryId,
+    ],
+  );
+
+  const hasLoadedSettingsDraft = !isLoading && savedSettingsDraft !== null;
+  const hasUnsavedChanges = useMemo(
+    () =>
+      hasLoadedSettingsDraft &&
+      !areServerSettingsDraftsEqual(currentSettingsDraft, savedSettingsDraft),
+    [currentSettingsDraft, hasLoadedSettingsDraft, savedSettingsDraft],
+  );
+
+  const canResetSettings = Boolean(
+    !settingsReadOnly && !isLoading && !isSaving && hasUnsavedChanges && savedSettingsDraft,
+  );
+
+  const canPersistSettings = Boolean(canSave && hasUnsavedChanges);
+  const showFloatingSaveBar =
+    activeTab === "settings" &&
+    !settingsReadOnly &&
+    hasLoadedSettingsDraft &&
+    (hasUnsavedChanges || isSaving || showSaveSuccessBar);
+  const showSaveBarActions = !showSaveSuccessBar || hasUnsavedChanges || isSaving;
+  const showInlineMessages = Boolean(
+    isViewerOnly || locked || errorMessage,
+  );
+  const saveActionVisualEnabled = canPersistSettings || isSaving;
+  const floatingSaveBarTitle = showSaveSuccessBar && !hasUnsavedChanges && !isSaving
+    ? "Configuracoes salvas com sucesso."
+    : isSaving
+    ? "Salvando alteracoes do servidor..."
+    : errorMessage
+      ? "Nao foi possivel salvar agora"
+      : !canPersistSettings && hasUnsavedChanges
+        ? "Complete os campos obrigatorios para continuar"
+        : "Cuidado — voce tem alteracoes que nao foram salvas!";
+  const floatingSaveBarDescription = showSaveSuccessBar && !hasUnsavedChanges && !isSaving
+    ? "Tudo ficou sincronizado e o painel ja esta atualizado para a equipe."
+    : isSaving
+    ? "Estamos sincronizando canais e cargos deste servidor com o painel."
+    : errorMessage
+      ? errorMessage
+      : !canPersistSettings && hasUnsavedChanges
+        ? "Preencha todos os campos de ticket e staff para liberar o salvamento."
+        : "Revise os campos abaixo e confirme para manter a operacao deste servidor atualizada.";
+
+  useEffect(() => {
+    setIsPortalMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (hasUnsavedChanges && successMessage) {
+      setSuccessMessage(null);
+    }
+    if (hasUnsavedChanges && showSaveSuccessBar) {
+      setShowSaveSuccessBar(false);
+    }
+  }, [hasUnsavedChanges, showSaveSuccessBar, successMessage]);
+
+  useEffect(() => {
+    if (!showSaveSuccessBar) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setShowSaveSuccessBar(false);
+    }, 1800);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [showSaveSuccessBar]);
+
+  useEffect(() => {
+    if (showFloatingSaveBar) {
+      setIsSaveBarRendered(true);
+      setIsSaveBarExiting(false);
+      return;
+    }
+
+    if (!isSaveBarRendered) return;
+
+    setIsSaveBarExiting(true);
+    const timeoutId = window.setTimeout(() => {
+      setIsSaveBarRendered(false);
+      setIsSaveBarExiting(false);
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isSaveBarRendered, showFloatingSaveBar]);
 
   const persistPlanSettings = useCallback(
     async (input: {
@@ -2488,8 +2738,23 @@ export function ServerSettingsEditor({
     recurringMethodDraftId,
   ]);
 
+  const handleResetSettings = useCallback(() => {
+    if (!savedSettingsDraft || !canResetSettings) return;
+
+    setMenuChannelId(savedSettingsDraft.menuChannelId);
+    setTicketsCategoryId(savedSettingsDraft.ticketsCategoryId);
+    setLogsCreatedChannelId(savedSettingsDraft.logsCreatedChannelId);
+    setLogsClosedChannelId(savedSettingsDraft.logsClosedChannelId);
+    setAdminRoleId(savedSettingsDraft.adminRoleId);
+    setClaimRoleIds(savedSettingsDraft.claimRoleIds);
+    setCloseRoleIds(savedSettingsDraft.closeRoleIds);
+    setNotifyRoleIds(savedSettingsDraft.notifyRoleIds);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+  }, [canResetSettings, savedSettingsDraft]);
+
   const handleSave = useCallback(async () => {
-    if (!canSave || !adminRoleId) return;
+    if (!canPersistSettings || !adminRoleId) return;
     setIsSaving(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -2523,7 +2788,9 @@ export function ServerSettingsEditor({
       const staff = await staffRes.json();
       if (!ticketRes.ok || !ticket.ok) throw new Error(ticket.message || "Falha ao salvar canais.");
       if (!staffRes.ok || !staff.ok) throw new Error(staff.message || "Falha ao salvar staff.");
+      setSavedSettingsDraft(currentSettingsDraft);
       setSuccessMessage("Configuracoes salvas com sucesso.");
+      setShowSaveSuccessBar(true);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Erro ao salvar configuracoes.");
     } finally {
@@ -2531,14 +2798,16 @@ export function ServerSettingsEditor({
     }
   }, [
     adminRoleId,
-    canSave,
+    canPersistSettings,
     claimRoleIds,
     closeRoleIds,
+    currentSettingsDraft,
     guildId,
     logsClosedChannelId,
     logsCreatedChannelId,
     menuChannelId,
     notifyRoleIds,
+    setSavedSettingsDraft,
     ticketsCategoryId,
   ]);
 
@@ -2546,14 +2815,12 @@ export function ServerSettingsEditor({
     <ClientErrorBoundary
       fallback={
         <section
-          className="flowdesk-fade-up-soft border border-[#2E2E2E] bg-[#0A0A0A]"
+          className="flowdesk-fade-up-soft"
           style={{
             marginTop: standalone ? "0px" : `${serversScale.cardsTopSpacing}px`,
-            borderRadius: `${serversScale.cardRadius}px`,
-            padding: `${Math.max(16, serversScale.cardPadding + 4)}px`,
           }}
         >
-          <div className="flex min-h-[220px] items-center justify-center text-center">
+          <div className="rounded-[24px] border border-[#161616] bg-[#090909] px-[22px] py-[28px] text-center">
             <div>
               <p className="text-[16px] text-[#D8D8D8]">
                 Nao foi possivel carregar as configuracoes deste servidor.
@@ -2567,121 +2834,91 @@ export function ServerSettingsEditor({
       }
     >
       <section
-        className="flowdesk-fade-up-soft border border-[#2E2E2E] bg-[#0A0A0A]"
+        className="flowdesk-fade-up-soft"
         style={{
           marginTop: standalone ? "0px" : `${serversScale.cardsTopSpacing}px`,
-          borderRadius: `${serversScale.cardRadius}px`,
-          padding: `${Math.max(16, serversScale.cardPadding + 4)}px`,
         }}
       >
-      <div className="mb-5 flex flex-col items-start gap-3 min-[680px]:flex-row min-[680px]:flex-wrap min-[680px]:items-center min-[680px]:justify-between">
-        <div className="min-w-0">
-          <p className="text-[12px] text-[#777777]">Configuracoes do servidor</p>
-          <h2 className="truncate text-[19px] font-medium text-[#D8D8D8] min-[680px]:text-[18px]">{guildName}</h2>
-        </div>
-
-        <div className="flex w-full flex-wrap items-center gap-2 min-[680px]:w-auto">
-          <span className={`inline-flex h-[24px] items-center justify-center rounded-[3px] border px-3 text-[11px] ${headerStatus.cls}`}>
-            {headerStatus.label}
-          </span>
-          {isViewerOnly ? (
-            <span className="inline-flex h-[24px] items-center justify-center rounded-[3px] border border-[#5CA9FF] bg-[rgba(92,169,255,0.12)] px-3 text-[11px] text-[#8CC2FF]">
-              Somente visualizacao
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-[38px] w-full rounded-[3px] border border-[#2E2E2E] bg-[#111111] px-4 text-[13px] text-[#D8D8D8] transition-colors hover:bg-[#171717] min-[480px]:w-auto min-[680px]:h-[32px] min-[680px]:px-3 min-[680px]:text-[12px]"
-          >
-            Fechar
-          </button>
-        </div>
-      </div>
-
-      <div className="thin-scrollbar mb-5 flex items-center gap-2 overflow-x-auto border-b border-[#242424] pb-3">
-        {([
-          ["settings", "Configurações"],
-          ["payments", "Histórico de Cobrança"],
-          ["methods", "Métodos"],
-          ["plans", "Planos"],
-        ] as const).map(([tab, label]) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => {
-              setActiveTab(tab);
-              onTabChange?.(tab);
-            }}
-            className={`shrink-0 whitespace-nowrap rounded-[3px] border px-4 py-[9px] text-[13px] transition-colors min-[680px]:px-3 min-[680px]:py-[7px] min-[680px]:text-[12px] ${
-              activeTab === tab
-                ? "border-[#D8D8D8] bg-[#D8D8D8] text-black"
-                : "border-[#2E2E2E] bg-[#0A0A0A] text-[#D8D8D8] hover:bg-[#121212]"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="overflow-hidden">
+      <div className="overflow-x-hidden overflow-y-visible">
         <div
           className="flex w-full transition-transform duration-300 ease-out"
           style={{ transform: `translateX(-${TAB_INDEX[activeTab] * 100}%)` }}
         >
           <div className="min-w-0 w-full shrink-0">
             {isLoading ? (
-              <div className="flex h-[180px] items-center justify-center">
-                <ButtonLoader size={28} />
-              </div>
+              <ServerSettingsEditorSkeleton standalone />
             ) : (
               <>
-                <div className="grid grid-cols-1 gap-3 min-[1100px]:grid-cols-2">
-                  <div className="flex flex-col gap-4">
-                    <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                <div className={`space-y-[18px] ${showFloatingSaveBar ? "pb-[112px]" : ""}`}>
+                  <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                    <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
+                      <div>
+                        <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Ticket</p>
+                        <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                          Configuracao de canais
+                        </h3>
+                        <p className="mt-[10px] max-w-[720px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                          Defina o canal principal, a categoria dos tickets e os logs que sustentam a operacao do servidor.
+                        </p>
+                      </div>
+                      <span className="inline-flex h-[30px] items-center justify-center rounded-full border border-[#151515] bg-[#0B0B0B] px-[12px] text-[11px] uppercase tracking-[0.16em] text-[#686868]">
+                        Canais
+                      </span>
+                    </div>
+
+                    <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                      <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                      <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                      <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                      <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    </div>
                   </div>
 
-                  <div className="flex flex-col gap-4">
-                    <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                  <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                    <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
+                      <div>
+                        <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Ticket</p>
+                        <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                          Permissoes e cargos
+                        </h3>
+                        <p className="mt-[10px] max-w-[720px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                          Controle quem administra, assume, fecha e recebe notificacoes dos tickets dentro do painel.
+                        </p>
+                      </div>
+                      <span className="inline-flex h-[30px] items-center justify-center rounded-full border border-[#151515] bg-[#0B0B0B] px-[12px] text-[11px] uppercase tracking-[0.16em] text-[#686868]">
+                        Staff
+                      </span>
+                    </div>
+
+                    <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                      <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                      <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                      <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                      <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                    </div>
                   </div>
-                </div>
 
-                {isViewerOnly ? (
-                  <p className="mt-2 text-[11px] text-[#8CC2FF]">
-                    {viewerOnlyMessage}
-                  </p>
-                ) : null}
-                {locked ? (
-                  <p className="mt-2 text-[11px] text-[#C2C2C2]">
-                    Plano expirado/desligado. Renove para liberar alteracoes.
-                  </p>
-                ) : null}
-
-                <div className="mt-5 flex flex-col gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void handleSave();
-                    }}
-                    disabled={!canSave}
-                    className="flex h-[46px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[14px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45 min-[680px]:h-[42px] min-[680px]:text-[13px]"
-                  >
-                    {isSaving ? (
-                      <ButtonLoader size={22} />
-                    ) : isViewerOnly ? (
-                      "Somente visualizacao"
-                    ) : (
-                      "Salvar configuracoes"
-                    )}
-                  </button>
-                  {errorMessage ? <p className="text-[11px] text-[#C2C2C2]">{errorMessage}</p> : null}
-                  {successMessage ? <p className="text-[11px] text-[#9BD694]">{successMessage}</p> : null}
+                  {showInlineMessages ? (
+                    <div className="pt-[2px]">
+                      <div className="max-w-[720px] space-y-[8px]">
+                        {isViewerOnly ? (
+                          <p className="text-[12px] leading-[1.55] text-[#8CC2FF]">
+                            {viewerOnlyMessage}
+                          </p>
+                        ) : null}
+                        {locked ? (
+                          <p className="text-[12px] leading-[1.55] text-[#C2C2C2]">
+                            Plano expirado ou desligado. Renove a licenca na configuracao da conta para liberar alteracoes novamente.
+                          </p>
+                        ) : null}
+                        {errorMessage ? (
+                          <p className="text-[12px] leading-[1.55] text-[#D98A8A]">
+                            {errorMessage}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </>
             )}
@@ -3203,6 +3440,117 @@ export function ServerSettingsEditor({
           </div>
         </div>
       </div>
+
+      {isPortalMounted && isSaveBarRendered
+        ? createPortal(
+            <div className="pointer-events-none fixed inset-x-0 bottom-[22px] z-[170] flex justify-center px-4 md:px-6 lg:px-8 xl:pl-[358px] xl:pr-[42px]">
+              <div className="w-full max-w-[1220px]">
+                <div
+                  className={`pointer-events-auto relative w-full overflow-hidden rounded-[26px] shadow-[0_26px_90px_rgba(0,0,0,0.48)] backdrop-blur-[18px] ${
+                    isSaveBarExiting ? "flowdesk-sheet-down" : "flowdesk-sheet-up"
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 rounded-[26px] border border-[#0E0E0E]"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[26px]"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[26px]"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-[1px] rounded-[25px] bg-[#070707]"
+                  />
+
+                  <div className="relative z-10 flex flex-col gap-[16px] px-[18px] py-[16px] sm:px-[22px] sm:py-[18px] xl:flex-row xl:items-center xl:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[16px] leading-[1.2] font-medium tracking-[-0.03em] text-[#D8D8D8]">
+                        {floatingSaveBarTitle}
+                      </p>
+                      <p className="mt-[8px] max-w-[680px] text-[13px] leading-[1.55] text-[#7F7F7F]">
+                        {floatingSaveBarDescription}
+                      </p>
+                    </div>
+
+                    {showSaveBarActions ? (
+                      <div className="flex shrink-0 flex-col-reverse gap-[10px] sm:flex-row sm:items-center">
+                        <button
+                          type="button"
+                          onClick={handleResetSettings}
+                          disabled={!canResetSettings}
+                          className={`group relative inline-flex h-[46px] items-center justify-center overflow-hidden whitespace-nowrap rounded-[12px] px-6 text-[15px] leading-none font-semibold transition-colors ${
+                            canResetSettings ? "" : "cursor-not-allowed"
+                          }`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`absolute inset-0 rounded-[12px] border transition-colors ${
+                              canResetSettings
+                                ? "border-[#1B1B1B] bg-[#111111]"
+                                : "border-[#151515] bg-[#0E0E0E]"
+                            }`}
+                          />
+                          <span
+                            className={`relative z-10 inline-flex items-center justify-center whitespace-nowrap ${
+                              canResetSettings ? "text-[#D0D0D0]" : "text-[#666666]"
+                            }`}
+                          >
+                            Redefinir
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleSave();
+                          }}
+                          disabled={!canPersistSettings}
+                          className={`group relative inline-flex h-[46px] items-center justify-center overflow-hidden whitespace-nowrap rounded-[12px] px-6 text-[15px] leading-none font-semibold ${
+                            canPersistSettings ? "" : "cursor-not-allowed"
+                          }`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out ${
+                              saveActionVisualEnabled
+                                ? "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]"
+                                : "bg-[#111111]"
+                            }`}
+                          />
+                          <span
+                            className={`relative z-10 inline-flex items-center justify-center whitespace-nowrap transition-opacity ${
+                              saveActionVisualEnabled ? "text-[#282828]" : "text-[#B7B7B7]"
+                            } ${isSaving ? "opacity-0" : "opacity-100"}`}
+                          >
+                            Salvar alteracoes
+                          </span>
+                          {isSaving ? (
+                            <span className="absolute inset-0 z-20 inline-flex items-center justify-center">
+                              <ButtonLoader
+                                size={20}
+                                colorClassName={saveActionVisualEnabled ? "text-[#282828]" : "text-[#B7B7B7]"}
+                              />
+                            </span>
+                          ) : null}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="inline-flex h-[40px] shrink-0 items-center justify-center rounded-full border border-[rgba(155,214,148,0.28)] bg-[rgba(155,214,148,0.08)] px-[14px] text-[12px] font-medium text-[#9BD694]">
+                        Tudo sincronizado
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {isRecurringMethodModalOpen ? (
         <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/75 px-4 py-6">

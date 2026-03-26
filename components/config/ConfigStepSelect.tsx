@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { configStepTwoScale } from "@/components/config/configStepTwoScale";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
@@ -32,8 +33,14 @@ export function ConfigStepSelect({
   controlHeightPx,
 }: ConfigStepSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [dropdownRect, setDropdownRect] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const scrollClass = "config-step-select-scroll";
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const isBlocked = disabled || loading;
   const isDropdownOpen = isOpen && !isBlocked;
 
@@ -42,7 +49,10 @@ export function ConfigStepSelect({
 
     function handleOutsideClick(event: MouseEvent) {
       const target = event.target as Node;
-      if (!containerRef.current?.contains(target)) {
+      if (
+        !containerRef.current?.contains(target) &&
+        !dropdownRef.current?.contains(target)
+      ) {
         setIsOpen(false);
       }
     }
@@ -50,6 +60,30 @@ export function ConfigStepSelect({
     window.addEventListener("mousedown", handleOutsideClick);
     return () => {
       window.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [isDropdownOpen]);
+
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+
+    function syncDropdownRect() {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      setDropdownRect({
+        top: rect.bottom + 8,
+        left: rect.left,
+        width: rect.width,
+      });
+    }
+
+    syncDropdownRect();
+    window.addEventListener("resize", syncDropdownRect);
+    window.addEventListener("scroll", syncDropdownRect, true);
+
+    return () => {
+      window.removeEventListener("resize", syncDropdownRect);
+      window.removeEventListener("scroll", syncDropdownRect, true);
     };
   }, [isDropdownOpen]);
 
@@ -64,15 +98,19 @@ export function ConfigStepSelect({
   const dropdownHeight = visibleRows * configStepTwoScale.optionHeight;
 
   return (
-    <div ref={containerRef} className="relative w-full">
+    <div
+      ref={containerRef}
+      className={`relative w-full ${isDropdownOpen ? "z-[260]" : "z-[1]"}`}
+    >
       <p
-        className="mb-2 font-medium text-[#D8D8D8]"
+        className="mb-[10px] font-medium tracking-[-0.02em] text-[#A7A7A7]"
         style={{ fontSize: `${configStepTwoScale.labelSize}px` }}
       >
         {label}
       </p>
 
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => {
           if (isBlocked) return;
@@ -80,14 +118,14 @@ export function ConfigStepSelect({
         }}
         disabled={isBlocked}
         aria-busy={loading}
-        className={`flex w-full border border-[#2E2E2E] bg-[#0A0A0A] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
+        className={`flex w-full border border-[#141414] bg-[#080808] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
           loading ? "justify-center" : "items-center"
         }`}
         style={{
           height: `${controlHeightPx ?? configStepTwoScale.controlHeight}px`,
-          borderRadius: `${configStepTwoScale.controlRadius}px`,
-          paddingLeft: `${configStepTwoScale.controlSidePadding}px`,
-          paddingRight: `${Math.max(8, configStepTwoScale.controlSidePadding - 4)}px`,
+          borderRadius: `16px`,
+          paddingLeft: `14px`,
+          paddingRight: `12px`,
         }}
       >
         {loading ? (
@@ -95,7 +133,7 @@ export function ConfigStepSelect({
         ) : (
           <>
             <span
-              className={`truncate pr-2 ${selectedOption ? "text-[#D8D8D8]" : "text-[#242424]"}`}
+              className={`truncate pr-3 ${selectedOption ? "text-[#D5D5D5]" : "text-[#5A5A5A]"}`}
               style={{ fontSize: `${configStepTwoScale.controlTextSize}px` }}
             >
               {selectedOption ? selectedOption.name : placeholder}
@@ -124,71 +162,56 @@ export function ConfigStepSelect({
         )}
       </button>
 
-      <div
-        className={`${scrollClass} absolute left-0 right-0 z-30 overflow-y-auto border bg-[#0A0A0A] transition-all duration-200 ease-out`}
-        style={{
-          marginTop: isDropdownOpen ? "8px" : "0px",
-          height: isDropdownOpen ? `${dropdownHeight}px` : "0px",
-          opacity: isDropdownOpen ? 1 : 0,
-          transform: isDropdownOpen ? "translateY(0)" : "translateY(-8px)",
-          borderColor: isDropdownOpen ? "#2E2E2E" : "transparent",
-          borderRadius: `${configStepTwoScale.controlRadius}px`,
-          pointerEvents: isDropdownOpen ? "auto" : "none",
-        }}
-      >
-        {options.length ? (
-          options.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => {
-                onChange(option.id);
-                setIsOpen(false);
-              }}
-              className={`flex w-full items-center px-[14px] text-left transition-colors ${
-                value === option.id
-                  ? "bg-[#111111] text-[#D8D8D8]"
-                  : "text-[#D8D8D8] hover:bg-[#111111]"
-              }`}
+      {isDropdownOpen && dropdownRect
+        ? createPortal(
+            <div
+              ref={dropdownRef}
+              className="flowdesk-selectmenu-scrollbar flowdesk-scale-in-soft fixed z-[420] overflow-y-auto overscroll-contain border bg-[#080808] shadow-[0_24px_64px_rgba(0,0,0,0.5)] backdrop-blur-[12px] transition-all duration-200 ease-out"
               style={{
-                height: `${configStepTwoScale.optionHeight}px`,
-                fontSize: `${configStepTwoScale.optionTextSize}px`,
+                top: `${dropdownRect.top}px`,
+                left: `${dropdownRect.left}px`,
+                width: `${dropdownRect.width}px`,
+                height: `${dropdownHeight}px`,
+                opacity: 1,
+                transform: "translateY(0)",
+                borderColor: "#141414",
+                borderRadius: `16px`,
               }}
             >
-              {option.name}
-            </button>
-          ))
-        ) : (
-          <div
-            className="flex h-full items-center justify-center px-4 text-center text-[#D8D8D8]"
-            style={{ fontSize: `${configStepTwoScale.optionTextSize}px` }}
-          >
-            Nenhuma opcao disponivel
-          </div>
-        )}
-      </div>
-
-      <style jsx>{`
-        .${scrollClass} {
-          scrollbar-width: thin;
-          scrollbar-color: #2e2e2e #0a0a0a;
-        }
-
-        .${scrollClass}::-webkit-scrollbar {
-          width: 6px;
-        }
-
-        .${scrollClass}::-webkit-scrollbar-track {
-          background: #0a0a0a;
-          border-radius: 999px;
-        }
-
-        .${scrollClass}::-webkit-scrollbar-thumb {
-          background: #2e2e2e;
-          border-radius: 999px;
-          border: 1px solid #0a0a0a;
-        }
-      `}</style>
+              {options.length ? (
+                options.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => {
+                      onChange(option.id);
+                      setIsOpen(false);
+                    }}
+                    className={`mx-[6px] my-[4px] flex w-[calc(100%-12px)] items-center rounded-[12px] px-[14px] text-left transition-colors ${
+                      value === option.id
+                        ? "bg-[#101010] text-[#E1E1E1]"
+                        : "text-[#B5B5B5] hover:bg-[#101010] hover:text-[#E1E1E1]"
+                    }`}
+                    style={{
+                      height: `${configStepTwoScale.optionHeight}px`,
+                      fontSize: `${configStepTwoScale.optionTextSize}px`,
+                    }}
+                  >
+                    {option.name}
+                  </button>
+                ))
+              ) : (
+                <div
+                  className="flex h-full items-center justify-center px-4 text-center text-[#8A8A8A]"
+                  style={{ fontSize: `${configStepTwoScale.optionTextSize}px` }}
+                >
+                  Nenhuma opcao disponivel
+                </div>
+              )}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

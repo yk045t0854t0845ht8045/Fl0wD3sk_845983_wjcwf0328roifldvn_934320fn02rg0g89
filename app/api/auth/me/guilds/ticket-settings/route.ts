@@ -8,9 +8,13 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import {
   getGuildLicenseStatus,
-  getLockedGuildLicenseByGuildId,
 } from "@/lib/payments/licenseStatus";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
+import {
+  createServerSaveDiagnosticContext,
+  recordServerSaveDiagnostic,
+  resolveServerSaveAccessMode,
+} from "@/lib/servers/serverSaveDiagnostics";
 import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
@@ -31,6 +35,8 @@ type TicketSettingsBody = {
 
 type GuildAccessContext = {
   sessionData: NonNullable<Awaited<ReturnType<typeof resolveSessionAccessToken>>>;
+  accessibleGuild: Awaited<ReturnType<typeof assertUserAdminInGuildOrNull>>;
+  hasTeamAccess: boolean;
 };
 
 function getTrimmedId(value: unknown) {
@@ -142,6 +148,8 @@ async function ensureGuildAccess(guildId: string) {
     ok: true as const,
     context: {
       sessionData,
+      accessibleGuild,
+      hasTeamAccess,
     } satisfies GuildAccessContext,
   };
 }
@@ -231,11 +239,19 @@ export async function POST(request: Request) {
     return applyNoStoreHeaders(invalidMutationResponse);
   }
 
+  let diagnostic = createServerSaveDiagnosticContext("ticket_settings");
+
   try {
     let body: TicketSettingsBody = {};
     try {
       body = (await request.json()) as TicketSettingsBody;
     } catch {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Payload JSON invalido.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Payload JSON invalido." },
@@ -249,6 +265,7 @@ export async function POST(request: Request) {
     const ticketsCategoryId = getTrimmedId(body.ticketsCategoryId);
     const logsCreatedChannelId = getTrimmedId(body.logsCreatedChannelId);
     const logsClosedChannelId = getTrimmedId(body.logsClosedChannelId);
+    diagnostic = createServerSaveDiagnosticContext("ticket_settings", guildId);
 
     if (
       !isGuildId(guildId) ||
@@ -257,6 +274,12 @@ export async function POST(request: Request) {
       !isGuildId(logsCreatedChannelId) ||
       !isGuildId(logsClosedChannelId)
     ) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Um ou mais IDs informados sao invalidos.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Um ou mais IDs informados sao invalidos." },
@@ -270,44 +293,50 @@ export async function POST(request: Request) {
       return access.response;
     }
 
-    const lockedGuildLicense = await getLockedGuildLicenseByGuildId(guildId);
-    if (
-      lockedGuildLicense &&
-      lockedGuildLicense.userId !== access.context.sessionData.authSession.user.id
-    ) {
+    const authUserId = access.context.sessionData.authSession.user.id;
+    const accessMode = resolveServerSaveAccessMode({
+      accessibleGuild: access.context.accessibleGuild,
+      hasTeamAccess: access.context.hasTeamAccess,
+    });
+    const canManageServer = Boolean(
+      access.context.accessibleGuild?.owner || access.context.hasTeamAccess,
+    );
+    if (!canManageServer) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        outcome: "view_only",
+        httpStatus: 403,
+        detail: "Conta em modo somente visualizacao.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
           {
             ok: false,
             message:
-              "Este servidor possui uma licenca ativa em outra conta administradora e esta conta esta em modo somente visualizacao.",
+              "Esta conta esta em modo somente visualizacao para este servidor.",
           },
           { status: 403 },
         ),
       );
     }
 
-    const cleanupSummary = await cleanupExpiredUnpaidServerSetups({
-      userId: access.context.sessionData.authSession.user.id,
-      guildId,
-      source: "guild_ticket_settings_post",
-    });
-
-    if (cleanupSummary.cleanedGuildIds.includes(guildId)) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-        {
-          ok: false,
-          message:
-            "A configuracao desse servidor expirou apos 30 minutos sem pagamento. Recomece a ativacao para continuar.",
-        },
-        { status: 409 },
-        ),
-      );
+    let licenseStatus = await getGuildLicenseStatus(guildId);
+    if (licenseStatus !== "paid") {
+      licenseStatus = await getGuildLicenseStatus(guildId, { forceFresh: true });
     }
 
-    const licenseStatus = await getGuildLicenseStatus(guildId);
     if (licenseStatus === "expired" || licenseStatus === "off") {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "license_blocked",
+        httpStatus: 403,
+        detail: "Servidor com plano expirado ou desligado para edicao.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         {
@@ -320,8 +349,50 @@ export async function POST(request: Request) {
       );
     }
 
+    if (licenseStatus === "not_paid") {
+      const cleanupSummary = await cleanupExpiredUnpaidServerSetups({
+        userId: authUserId,
+        guildId,
+        source: "guild_ticket_settings_post",
+      });
+
+      if (cleanupSummary.cleanedGuildIds.includes(guildId)) {
+        recordServerSaveDiagnostic({
+          context: diagnostic,
+          authUserId,
+          accessMode,
+          licenseStatus,
+          outcome: "cleanup_expired",
+          httpStatus: 409,
+          detail: "Setup expirado apos 30 minutos sem pagamento.",
+          meta: {
+            cleanedGuildCount: cleanupSummary.cleanedGuildIds.length,
+          },
+        });
+        return applyNoStoreHeaders(
+          NextResponse.json(
+          {
+            ok: false,
+            message:
+              "A configuracao desse servidor expirou apos 30 minutos sem pagamento. Recomece a ativacao para continuar.",
+          },
+          { status: 409 },
+          ),
+        );
+      }
+    }
+
     const rawChannels = await fetchGuildChannelsByBot(guildId);
     if (!rawChannels) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "bot_access_missing",
+        httpStatus: 403,
+        detail: "Bot sem acesso aos canais do servidor.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Bot nao possui acesso aos canais deste servidor." },
@@ -337,6 +408,15 @@ export async function POST(request: Request) {
     const closedLogChannel = channelsById.get(logsClosedChannelId);
 
     if (!menuChannel || !isValidTextChannelType(menuChannel.type)) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "validation_failed",
+        httpStatus: 400,
+        detail: "Canal do menu principal invalido.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Canal do menu principal invalido." },
@@ -346,6 +426,15 @@ export async function POST(request: Request) {
     }
 
     if (!ticketsCategory || ticketsCategory.type !== GUILD_CATEGORY) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "validation_failed",
+        httpStatus: 400,
+        detail: "Categoria de tickets invalida.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Categoria de tickets invalida." },
@@ -355,6 +444,15 @@ export async function POST(request: Request) {
     }
 
     if (!createdLogChannel || !isValidTextChannelType(createdLogChannel.type)) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "validation_failed",
+        httpStatus: 400,
+        detail: "Canal de log de criacao invalido.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Canal de log de criacao invalido." },
@@ -364,6 +462,15 @@ export async function POST(request: Request) {
     }
 
     if (!closedLogChannel || !isValidTextChannelType(closedLogChannel.type)) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "validation_failed",
+        httpStatus: 400,
+        detail: "Canal de log de fechamento invalido.",
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Canal de log de fechamento invalido." },
@@ -378,7 +485,20 @@ export async function POST(request: Request) {
       ticketsCategoryId,
       logsCreatedChannelId,
       logsClosedChannelId,
-      configuredByUserId: access.context.sessionData.authSession.user.id,
+      configuredByUserId: authUserId,
+    });
+
+    recordServerSaveDiagnostic({
+      context: diagnostic,
+      authUserId,
+      accessMode,
+      licenseStatus,
+      outcome: "saved",
+      httpStatus: 200,
+      detail: "Configuracoes do servidor salvas com sucesso.",
+      meta: {
+        channelCount: rawChannels.length,
+      },
     });
 
     return applyNoStoreHeaders(
@@ -395,6 +515,15 @@ export async function POST(request: Request) {
       }),
     );
   } catch (error) {
+    recordServerSaveDiagnostic({
+      context: diagnostic,
+      outcome: "failed",
+      httpStatus: 500,
+      detail:
+        error instanceof Error
+          ? error.message
+          : "Erro ao salvar configuracoes do servidor.",
+    });
     return applyNoStoreHeaders(
       NextResponse.json(
       {
