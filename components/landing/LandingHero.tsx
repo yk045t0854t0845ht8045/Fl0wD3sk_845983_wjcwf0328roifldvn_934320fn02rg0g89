@@ -416,7 +416,7 @@ export function LandingHero() {
                     href={DOCUMENTATION_HREF}
                     className="underline decoration-[rgba(218,218,218,0.72)] underline-offset-[4px] transition-colors duration-200 hover:text-[#DADADA]"
                   >
-                    Documentacao
+                    Docs
                   </a>
                   .
                 </span>

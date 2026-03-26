@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { ServersDashboard } from "@/components/servers/ServersDashboard";
+import { ServersWorkspace } from "@/components/servers/ServersWorkspace";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 
 type ServersPageProps = {
@@ -46,5 +46,7 @@ export default async function ServersPage({ searchParams }: ServersPageProps) {
     redirect(`/servers/${legacyGuildId}?tab=${legacyTab}`);
   }
 
-  return <ServersDashboard displayName={user.display_name} />;
+  return (
+    <ServersWorkspace displayName={user.display_name} />
+  );
 }

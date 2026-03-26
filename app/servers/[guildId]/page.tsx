@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { ServersDashboard } from "@/components/servers/ServersDashboard";
+import { ServersWorkspace } from "@/components/servers/ServersWorkspace";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 
 type ServersByGuildPageProps = {
@@ -51,11 +51,10 @@ export default async function ServersByGuildPage({
   const tab = normalizeServerTab(takeFirstQueryValue(query.tab));
 
   return (
-    <ServersDashboard
+    <ServersWorkspace
       displayName={user.display_name}
       initialGuildId={safeGuildId}
       initialTab={tab}
     />
   );
 }
-

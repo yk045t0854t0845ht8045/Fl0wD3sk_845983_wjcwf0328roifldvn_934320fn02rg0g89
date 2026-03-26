@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Image from "next/image";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
-import { loginScale } from "@/components/login/loginScale";
 
 type DiscordLoginButtonProps = {
   href: string;
@@ -17,10 +16,9 @@ export function DiscordLoginButton({ href }: DiscordLoginButtonProps) {
 
     setLoading(true);
 
-    // Exibe o loader por 2 segundos antes de iniciar o fluxo OAuth.
-    setTimeout(() => {
+    window.setTimeout(() => {
       window.location.assign(href);
-    }, 2000);
+    }, 1200);
   }
 
   return (
@@ -29,27 +27,30 @@ export function DiscordLoginButton({ href }: DiscordLoginButtonProps) {
       onClick={handleClick}
       disabled={loading}
       aria-busy={loading}
-      className="flex w-full items-center justify-center gap-[4px] border border-[#2E2E2E] bg-[#0A0A0A] font-medium text-[#D8D8D8] transition-colors hover:border-[#3A3A3A] disabled:cursor-not-allowed"
-      style={{
-        height: `${loginScale.buttonHeight}px`,
-        borderRadius: `${loginScale.buttonRadius}px`,
-        fontSize: `${loginScale.buttonTextSize}px`,
-      }}
+      className="group relative inline-flex h-[52px] w-full items-center justify-center overflow-hidden rounded-[14px] px-6 text-[16px] leading-none font-semibold disabled:cursor-not-allowed"
     >
-      {loading ? (
-        <ButtonLoader size={loginScale.buttonLoaderSize} />
-      ) : (
-        <>
-          <Image
-            src="/cdn/logos/dc_buttom.png"
-            alt="Discord"
-            width={loginScale.buttonIconSize}
-            height={loginScale.buttonIconSize}
-            priority
-          />
-          <span>Continue com Discord</span>
-        </>
-      )}
+      <span
+        aria-hidden="true"
+        className="absolute inset-0 rounded-[14px] bg-[linear-gradient(180deg,#0062FF_0%,#0153D5_100%)] transition-transform duration-200 ease-out group-hover:scale-[1.015] group-active:scale-[0.992]"
+      />
+
+      <span className="relative z-10 inline-flex items-center justify-center gap-[12px] text-white">
+        {loading ? (
+          <ButtonLoader size={22} colorClassName="text-white" />
+        ) : (
+          <>
+            <Image
+              src="/cdn/icons/discord-login.svg"
+              alt="Discord"
+              width={20}
+              height={20}
+              className="h-[20px] w-auto shrink-0"
+              priority
+            />
+            <span>Continuar com Discord</span>
+          </>
+        )}
+      </span>
     </button>
   );
 }
