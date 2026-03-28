@@ -8,12 +8,21 @@ import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
+import { TicketMessageBuilder } from "@/components/servers/TicketMessageBuilder";
 import { serversScale } from "@/components/servers/serversScale";
 import {
   getServerDashboardSettings,
   readCachedServerDashboardSettings,
 } from "@/lib/servers/serverDashboardSettingsClient";
 import type { ServerDashboardSettingsPayload } from "@/lib/servers/serverDashboardSettingsClient";
+import {
+  countTicketPanelFunctionButtons,
+  createDefaultTicketPanelLayout,
+  normalizeTicketPanelLayout,
+  ticketPanelLayoutHasAtMostOneFunctionButton,
+  ticketPanelLayoutHasRequiredParts,
+  type TicketPanelLayout,
+} from "@/lib/servers/ticketPanelBuilder";
 import {
   isValidBrazilDocument,
   normalizeBrazilDocumentDigits,
@@ -28,6 +37,7 @@ import {
 
 type ManagedServerStatus = "paid" | "expired" | "off";
 type EditorTab = "settings" | "payments" | "methods" | "plans";
+type ServerSettingsSection = "overview" | "message";
 type PaymentStatus =
   | "pending"
   | "approved"
@@ -54,6 +64,7 @@ type ServerSettingsDraft = {
   ticketsCategoryId: string | null;
   logsCreatedChannelId: string | null;
   logsClosedChannelId: string | null;
+  panelLayout: TicketPanelLayout;
   adminRoleId: string | null;
   claimRoleIds: string[];
   closeRoleIds: string[];
@@ -166,6 +177,7 @@ type ServerSettingsEditorProps = {
     iconUrl: string | null;
   }>;
   initialTab?: EditorTab;
+  settingsSection?: ServerSettingsSection;
   onTabChange?: (tab: EditorTab) => void;
   onClose: () => void;
   standalone?: boolean;
@@ -204,6 +216,7 @@ function normalizeServerSettingsDraft(
     ticketsCategoryId: draft.ticketsCategoryId,
     logsCreatedChannelId: draft.logsCreatedChannelId,
     logsClosedChannelId: draft.logsClosedChannelId,
+    panelLayout: normalizeTicketPanelLayout(draft.panelLayout),
     adminRoleId: draft.adminRoleId,
     claimRoleIds: normalizeDraftIds(draft.claimRoleIds),
     closeRoleIds: normalizeDraftIds(draft.closeRoleIds),
@@ -1150,6 +1163,7 @@ export function ServerSettingsEditor({
   canManage,
   allServers,
   initialTab = "settings",
+  settingsSection = "overview",
   onTabChange: _onTabChange,
   onClose,
   standalone = false,
@@ -1162,6 +1176,7 @@ export function ServerSettingsEditor({
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSendingEmbed, setIsSendingEmbed] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showSaveSuccessBar, setShowSaveSuccessBar] = useState(false);
@@ -1177,6 +1192,9 @@ export function ServerSettingsEditor({
   const [ticketsCategoryId, setTicketsCategoryId] = useState<string | null>(null);
   const [logsCreatedChannelId, setLogsCreatedChannelId] = useState<string | null>(null);
   const [logsClosedChannelId, setLogsClosedChannelId] = useState<string | null>(null);
+  const [panelLayout, setPanelLayout] = useState<TicketPanelLayout>(
+    createDefaultTicketPanelLayout(),
+  );
 
   const [adminRoleId, setAdminRoleId] = useState<string | null>(null);
   const [claimRoleIds, setClaimRoleIds] = useState<string[]>([]);
@@ -1184,6 +1202,7 @@ export function ServerSettingsEditor({
   const [notifyRoleIds, setNotifyRoleIds] = useState<string[]>([]);
   const [savedSettingsDraft, setSavedSettingsDraft] =
     useState<ServerSettingsDraft | null>(null);
+  const [isStaffCardCollapsed, setIsStaffCardCollapsed] = useState(true);
 
   const [isPaymentsLoading, setIsPaymentsLoading] = useState(true);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
@@ -1288,6 +1307,10 @@ export function ServerSettingsEditor({
         textSet.has(payload.ticketSettings.logsClosedChannelId)
           ? payload.ticketSettings.logsClosedChannelId
           : null;
+      const nextPanelLayout = normalizeTicketPanelLayout(
+        payload.ticketSettings?.panelLayout,
+        payload.ticketSettings || undefined,
+      );
 
       const nextAdminRoleId =
         payload.staffSettings?.adminRoleId &&
@@ -1308,6 +1331,7 @@ export function ServerSettingsEditor({
       setTicketsCategoryId(nextTicketsCategoryId);
       setLogsCreatedChannelId(nextLogsCreatedChannelId);
       setLogsClosedChannelId(nextLogsClosedChannelId);
+      setPanelLayout(nextPanelLayout);
       setAdminRoleId(nextAdminRoleId);
       setClaimRoleIds(nextClaimRoleIds);
       setCloseRoleIds(nextCloseRoleIds);
@@ -1318,6 +1342,7 @@ export function ServerSettingsEditor({
           ticketsCategoryId: nextTicketsCategoryId,
           logsCreatedChannelId: nextLogsCreatedChannelId,
           logsClosedChannelId: nextLogsClosedChannelId,
+          panelLayout: nextPanelLayout,
           adminRoleId: nextAdminRoleId,
           claimRoleIds: nextClaimRoleIds,
           closeRoleIds: nextCloseRoleIds,
@@ -1334,6 +1359,7 @@ export function ServerSettingsEditor({
     setErrorMessage(null);
     setSuccessMessage(null);
     setShowSaveSuccessBar(false);
+    setPanelLayout(createDefaultTicketPanelLayout());
     setPaymentGuildFilter(guildId);
     setPaymentSearch("");
     setPaymentStatusFilter("all");
@@ -1957,10 +1983,24 @@ export function ServerSettingsEditor({
       ticketsCategoryId &&
       logsCreatedChannelId &&
       logsClosedChannelId &&
+      panelLayout.length &&
+      ticketPanelLayoutHasRequiredParts(panelLayout) &&
+      ticketPanelLayoutHasAtMostOneFunctionButton(panelLayout) &&
       adminRoleId &&
       claimRoleIds.length &&
       closeRoleIds.length &&
       notifyRoleIds.length,
+  );
+
+  const canSendEmbed = Boolean(
+    !settingsReadOnly &&
+      !isLoading &&
+      !isSaving &&
+      !isSendingEmbed &&
+      menuChannelId &&
+      panelLayout.length &&
+      ticketPanelLayoutHasRequiredParts(panelLayout) &&
+      ticketPanelLayoutHasAtMostOneFunctionButton(panelLayout),
   );
 
   const currentSettingsDraft = useMemo(
@@ -1970,6 +2010,7 @@ export function ServerSettingsEditor({
         ticketsCategoryId,
         logsCreatedChannelId,
         logsClosedChannelId,
+        panelLayout,
         adminRoleId,
         claimRoleIds,
         closeRoleIds,
@@ -1983,6 +2024,7 @@ export function ServerSettingsEditor({
       logsCreatedChannelId,
       menuChannelId,
       notifyRoleIds,
+      panelLayout,
       ticketsCategoryId,
     ],
   );
@@ -1999,6 +2041,11 @@ export function ServerSettingsEditor({
     !settingsReadOnly && !isLoading && !isSaving && hasUnsavedChanges && savedSettingsDraft,
   );
 
+  const functionButtonCount = countTicketPanelFunctionButtons(panelLayout);
+  const hasTooManyFunctionButtons = functionButtonCount > 1;
+  const isTicketMessageLayoutInvalid =
+    !ticketPanelLayoutHasRequiredParts(panelLayout) ||
+    hasTooManyFunctionButtons;
   const canPersistSettings = Boolean(canSave && hasUnsavedChanges);
   const showFloatingSaveBar =
     activeTab === "settings" &&
@@ -2009,29 +2056,51 @@ export function ServerSettingsEditor({
   const showInlineMessages = Boolean(
     isViewerOnly || locked || errorMessage,
   );
+  const showInvalidTicketSaveState =
+    settingsSection === "message" &&
+    hasUnsavedChanges &&
+    !isSaving &&
+    !showSaveSuccessBar &&
+    isTicketMessageLayoutInvalid;
+  const showSaveBarSuccessState =
+    showSaveSuccessBar &&
+    !hasUnsavedChanges &&
+    !isSaving;
   const saveActionVisualEnabled = canPersistSettings || isSaving;
-  const floatingSaveBarTitle = showSaveSuccessBar && !hasUnsavedChanges && !isSaving
+  const floatingSaveBarTitle = showSaveBarSuccessState
     ? "Configuracoes salvas com sucesso."
     : isSaving
     ? "Salvando alteracoes do servidor..."
     : errorMessage
       ? "Nao foi possivel salvar agora"
-      : !canPersistSettings && hasUnsavedChanges
-        ? "Complete os campos obrigatorios para continuar"
-        : "Cuidado — voce tem alteracoes que nao foram salvas!";
-  const floatingSaveBarDescription = showSaveSuccessBar && !hasUnsavedChanges && !isSaving
+      : showInvalidTicketSaveState
+        ? hasTooManyFunctionButtons
+          ? "Existe mais de um botao funcional no embed"
+          : "Nao da para salvar uma mensagem vazia"
+        : !canPersistSettings && hasUnsavedChanges
+          ? "Complete os campos obrigatorios para continuar"
+          : "Cuidado — voce tem alteracoes que nao foram salvas!";
+  const floatingSaveBarDescription = showSaveBarSuccessState
     ? "Tudo ficou sincronizado e o painel ja esta atualizado para a equipe."
     : isSaving
     ? "Estamos sincronizando canais e cargos deste servidor com o painel."
-    : errorMessage
+      : errorMessage
       ? errorMessage
-      : !canPersistSettings && hasUnsavedChanges
-        ? "Preencha todos os campos de ticket e staff para liberar o salvamento."
-        : "Revise os campos abaixo e confirme para manter a operacao deste servidor atualizada.";
+      : showInvalidTicketSaveState
+        ? hasTooManyFunctionButtons
+          ? "Deixe apenas um botao funcional para abrir o ticket. Botoes de link podem continuar em quantidade livre."
+          : "Adicione pelo menos um conteudo com texto e uma acao no builder antes de salvar. Enquanto a mensagem estiver sem nada, essa barra continua em alerta."
+        : !canPersistSettings && hasUnsavedChanges
+          ? "Preencha todos os campos de ticket e staff para liberar o salvamento."
+          : "Revise os campos abaixo e confirme para manter a operacao deste servidor atualizada.";
 
   useEffect(() => {
     setIsPortalMounted(true);
   }, []);
+
+  useEffect(() => {
+    setIsStaffCardCollapsed(true);
+  }, [guildId]);
 
   useEffect(() => {
     if (hasUnsavedChanges && successMessage) {
@@ -2745,6 +2814,7 @@ export function ServerSettingsEditor({
     setTicketsCategoryId(savedSettingsDraft.ticketsCategoryId);
     setLogsCreatedChannelId(savedSettingsDraft.logsCreatedChannelId);
     setLogsClosedChannelId(savedSettingsDraft.logsClosedChannelId);
+    setPanelLayout(savedSettingsDraft.panelLayout);
     setAdminRoleId(savedSettingsDraft.adminRoleId);
     setClaimRoleIds(savedSettingsDraft.claimRoleIds);
     setCloseRoleIds(savedSettingsDraft.closeRoleIds);
@@ -2769,6 +2839,7 @@ export function ServerSettingsEditor({
             ticketsCategoryId,
             logsCreatedChannelId,
             logsClosedChannelId,
+            panelLayout,
           }),
         }),
         fetch("/api/auth/me/guilds/ticket-staff-settings", {
@@ -2807,9 +2878,42 @@ export function ServerSettingsEditor({
     logsCreatedChannelId,
     menuChannelId,
     notifyRoleIds,
+    panelLayout,
     setSavedSettingsDraft,
     ticketsCategoryId,
   ]);
+
+  const handleSendEmbed = useCallback(async () => {
+    if (!canSendEmbed || !menuChannelId) return;
+
+    setIsSendingEmbed(true);
+    setErrorMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/me/guilds/ticket-panel-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          menuChannelId,
+          panelLayout,
+        }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Falha ao enviar o embed do ticket.");
+      }
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Erro ao enviar o embed do ticket.",
+      );
+    } finally {
+      setIsSendingEmbed(false);
+    }
+  }, [canSendEmbed, guildId, menuChannelId, panelLayout]);
 
   return (
     <ClientErrorBoundary
@@ -2850,53 +2954,94 @@ export function ServerSettingsEditor({
             ) : (
               <>
                 <div className={`space-y-[18px] ${showFloatingSaveBar ? "pb-[112px]" : ""}`}>
-                  <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
-                    <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
-                      <div>
-                        <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Ticket</p>
-                        <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
-                          Configuracao de canais
-                        </h3>
-                        <p className="mt-[10px] max-w-[720px] text-[14px] leading-[1.6] text-[#7B7B7B]">
-                          Defina o canal principal, a categoria dos tickets e os logs que sustentam a operacao do servidor.
-                        </p>
+                  {settingsSection === "overview" ? (
+                    <>
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Ticket</p>
+                            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Configuracao de canais
+                            </h3>
+                            <p className="mt-[10px] max-w-[720px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                              Defina o canal principal, a categoria dos tickets e os logs que sustentam a operacao do servidor.
+                            </p>
+                          </div>
+                          <span className="inline-flex h-[30px] items-center justify-center rounded-full border border-[#151515] bg-[#0B0B0B] px-[12px] text-[11px] uppercase tracking-[0.16em] text-[#686868]">
+                            Canais
+                          </span>
+                        </div>
+
+                        <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                          <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                          <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                          <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                          <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                        </div>
                       </div>
-                      <span className="inline-flex h-[30px] items-center justify-center rounded-full border border-[#151515] bg-[#0B0B0B] px-[12px] text-[11px] uppercase tracking-[0.16em] text-[#686868]">
-                        Canais
-                      </span>
-                    </div>
 
-                    <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
-                      <ConfigStepSelect label="Canal do menu principal de tickets" placeholder="Escolha o canal" options={textChannelOptions} value={menuChannelId} onChange={setMenuChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                      <ConfigStepSelect label="Categoria onde os tickets serao abertos" placeholder="Escolha uma categoria" options={categoryOptions} value={ticketsCategoryId} onChange={setTicketsCategoryId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                      <ConfigStepSelect label="Canal de logs de criacao" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsCreatedChannelId} onChange={setLogsCreatedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                      <ConfigStepSelect label="Canal de logs de fechamento" placeholder="Escolha o canal de logs" options={textChannelOptions} value={logsClosedChannelId} onChange={setLogsClosedChannelId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    </div>
-                  </div>
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <button
+                          type="button"
+                          onClick={() => setIsStaffCardCollapsed((current) => !current)}
+                          className="group flex w-full items-start justify-between gap-[16px] text-left"
+                          aria-expanded={!isStaffCardCollapsed}
+                          aria-controls="server-staff-settings-panel"
+                        >
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Ticket</p>
+                            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Permissoes e cargos
+                            </h3>
+                            <p className="mt-[10px] max-w-[720px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                              Controle quem administra, assume, fecha e recebe notificacoes dos tickets dentro do painel.
+                            </p>
+                          </div>
 
-                  <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
-                    <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
-                      <div>
-                        <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Ticket</p>
-                        <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
-                          Permissoes e cargos
-                        </h3>
-                        <p className="mt-[10px] max-w-[720px] text-[14px] leading-[1.6] text-[#7B7B7B]">
-                          Controle quem administra, assume, fecha e recebe notificacoes dos tickets dentro do painel.
-                        </p>
+                          <span className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[14px] border border-[#1A1A1A] bg-[#0D0D0D] text-[#B9B9B9] transition-colors duration-200 group-hover:border-[#2A2A2A] group-hover:bg-[#111111] group-hover:text-[#F0F0F0]">
+                            <svg
+                              viewBox="0 0 20 20"
+                              aria-hidden="true"
+                              className={`h-[18px] w-[18px] transition-transform duration-300 ease-out ${
+                                isStaffCardCollapsed ? "rotate-0" : "rotate-180"
+                              }`}
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.1"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M5.5 7.75 10 12.25l4.5-4.5" />
+                            </svg>
+                          </span>
+                        </button>
+
+                        {!isStaffCardCollapsed ? (
+                          <div
+                            id="server-staff-settings-panel"
+                            className="mt-[18px] flowdesk-fade-up-soft"
+                          >
+                            <div className="grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                              <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                              <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                              <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                              <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                      <span className="inline-flex h-[30px] items-center justify-center rounded-full border border-[#151515] bg-[#0B0B0B] px-[12px] text-[11px] uppercase tracking-[0.16em] text-[#686868]">
-                        Staff
-                      </span>
-                    </div>
-
-                    <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
-                      <ConfigStepSelect label="Cargo administrador do ticket" placeholder="Escolha o cargo" options={roleOptions} value={adminRoleId} onChange={setAdminRoleId} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                      <ConfigStepMultiSelect label="Cargos que podem assumir tickets" placeholder="Escolha os cargos" options={roleOptions} values={claimRoleIds} onChange={setClaimRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                      <ConfigStepMultiSelect label="Cargos que podem fechar tickets" placeholder="Escolha os cargos" options={roleOptions} values={closeRoleIds} onChange={setCloseRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                      <ConfigStepMultiSelect label="Cargos que podem enviar notificacao" placeholder="Escolha os cargos" options={roleOptions} values={notifyRoleIds} onChange={setNotifyRoleIds} disabled={isSaving || settingsReadOnly} controlHeightPx={serverSettingsControlHeight} />
-                    </div>
-                  </div>
+                    </>
+                  ) : (
+                    <TicketMessageBuilder
+                      guildId={guildId}
+                      value={panelLayout}
+                      onChange={setPanelLayout}
+                      disabled={isSaving || isSendingEmbed || settingsReadOnly}
+                      canSendEmbed={canSendEmbed}
+                      isSendingEmbed={isSendingEmbed}
+                      onSendEmbed={handleSendEmbed}
+                    />
+                  )}
 
                   {showInlineMessages ? (
                     <div className="pt-[2px]">
@@ -3448,19 +3593,37 @@ export function ServerSettingsEditor({
                 <div
                   className={`pointer-events-auto relative w-full overflow-hidden rounded-[26px] shadow-[0_26px_90px_rgba(0,0,0,0.48)] backdrop-blur-[18px] ${
                     isSaveBarExiting ? "flowdesk-sheet-down" : "flowdesk-sheet-up"
-                  }`}
+                  } ${showInvalidTicketSaveState ? "flowdesk-savebar-shake-soft" : ""}`}
                 >
                   <span
                     aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 rounded-[26px] border border-[#0E0E0E]"
+                    className={`pointer-events-none absolute inset-0 rounded-[26px] border ${
+                      showInvalidTicketSaveState
+                        ? "border-[rgba(219,70,70,0.38)]"
+                        : showSaveBarSuccessState
+                          ? "border-[rgba(106,226,90,0.34)]"
+                          : "border-[#0E0E0E]"
+                    }`}
                   />
                   <span
                     aria-hidden="true"
-                    className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[26px]"
+                    className={`pointer-events-none absolute inset-[-2px] rounded-[26px] ${
+                      showInvalidTicketSaveState
+                        ? "flowdesk-tag-border-glow-danger"
+                        : showSaveBarSuccessState
+                          ? "flowdesk-tag-border-glow-success"
+                        : "flowdesk-tag-border-glow"
+                    }`}
                   />
                   <span
                     aria-hidden="true"
-                    className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[26px]"
+                    className={`pointer-events-none absolute inset-[-1px] rounded-[26px] ${
+                      showInvalidTicketSaveState
+                        ? "flowdesk-tag-border-core-danger"
+                        : showSaveBarSuccessState
+                          ? "flowdesk-tag-border-core-success"
+                        : "flowdesk-tag-border-core"
+                    }`}
                   />
                   <span
                     aria-hidden="true"

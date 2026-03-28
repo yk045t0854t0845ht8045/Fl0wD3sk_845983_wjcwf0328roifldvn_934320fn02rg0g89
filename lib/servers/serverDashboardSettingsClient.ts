@@ -1,5 +1,7 @@
 "use client";
 
+import type { TicketPanelLayout } from "@/lib/servers/ticketPanelBuilder";
+
 type SelectOption = {
   id: string;
   name: string;
@@ -21,6 +23,10 @@ type ServerDashboardSettingsPayload = {
     ticketsCategoryId: string | null;
     logsCreatedChannelId: string | null;
     logsClosedChannelId: string | null;
+    panelLayout: TicketPanelLayout;
+    panelTitle: string;
+    panelDescription: string;
+    panelButtonLabel: string;
     updatedAt: string | null;
   } | null;
   staffSettings: {

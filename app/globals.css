@@ -404,6 +404,115 @@ html {
   );
 }
 
+.flowdesk-tag-border-core-danger,
+.flowdesk-tag-border-glow-danger {
+  animation: flowdesk-tag-border-flow 5.4s linear infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.flowdesk-tag-border-core-danger {
+  background: conic-gradient(
+    from var(--flowdesk-tag-angle),
+    rgba(219, 70, 70, 0) 0deg,
+    rgba(219, 70, 70, 0) 294deg,
+    rgba(219, 70, 70, 0.03) 308deg,
+    rgba(219, 70, 70, 0.14) 320deg,
+    rgba(219, 70, 70, 0.5) 330deg,
+    rgba(255, 126, 126, 0.96) 339deg,
+    rgba(219, 70, 70, 0.42) 344deg,
+    rgba(219, 70, 70, 0.14) 349deg,
+    rgba(219, 70, 70, 0.05) 354deg,
+    rgba(219, 70, 70, 0) 360deg
+  );
+}
+
+.flowdesk-tag-border-glow-danger {
+  opacity: 0.96;
+  filter: blur(7px);
+  background: conic-gradient(
+    from var(--flowdesk-tag-angle),
+    rgba(219, 70, 70, 0) 0deg,
+    rgba(219, 70, 70, 0) 296deg,
+    rgba(219, 70, 70, 0.03) 312deg,
+    rgba(219, 70, 70, 0.12) 324deg,
+    rgba(219, 70, 70, 0.24) 333deg,
+    rgba(255, 126, 126, 0.72) 340deg,
+    rgba(219, 70, 70, 0.24) 346deg,
+    rgba(219, 70, 70, 0.06) 352deg,
+    rgba(219, 70, 70, 0) 360deg
+  );
+}
+
+.flowdesk-tag-border-core-success,
+.flowdesk-tag-border-glow-success {
+  animation: flowdesk-tag-border-flow 5.8s linear infinite;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.flowdesk-tag-border-core-success {
+  background: conic-gradient(
+    from var(--flowdesk-tag-angle),
+    rgba(106, 226, 90, 0) 0deg,
+    rgba(106, 226, 90, 0) 294deg,
+    rgba(106, 226, 90, 0.03) 308deg,
+    rgba(106, 226, 90, 0.14) 320deg,
+    rgba(106, 226, 90, 0.44) 330deg,
+    rgba(171, 255, 162, 0.96) 339deg,
+    rgba(106, 226, 90, 0.4) 344deg,
+    rgba(106, 226, 90, 0.14) 349deg,
+    rgba(106, 226, 90, 0.05) 354deg,
+    rgba(106, 226, 90, 0) 360deg
+  );
+}
+
+.flowdesk-tag-border-glow-success {
+  opacity: 0.96;
+  filter: blur(7px);
+  background: conic-gradient(
+    from var(--flowdesk-tag-angle),
+    rgba(106, 226, 90, 0) 0deg,
+    rgba(106, 226, 90, 0) 296deg,
+    rgba(106, 226, 90, 0.03) 312deg,
+    rgba(106, 226, 90, 0.12) 324deg,
+    rgba(106, 226, 90, 0.24) 333deg,
+    rgba(171, 255, 162, 0.72) 340deg,
+    rgba(106, 226, 90, 0.24) 346deg,
+    rgba(106, 226, 90, 0.06) 352deg,
+    rgba(106, 226, 90, 0) 360deg
+  );
+}
+
+@keyframes flowdesk-savebar-shake-soft {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  18% {
+    transform: translate3d(-5px, 0, 0);
+  }
+
+  36% {
+    transform: translate3d(4px, 0, 0);
+  }
+
+  54% {
+    transform: translate3d(-3px, 0, 0);
+  }
+
+  72% {
+    transform: translate3d(2px, 0, 0);
+  }
+}
+
+.flowdesk-savebar-shake-soft {
+  animation:
+    flowdesk-sheet-up 460ms cubic-bezier(0.16, 1, 0.3, 1) both,
+    flowdesk-savebar-shake-soft 520ms ease-in-out 120ms 1;
+}
+
 @keyframes flowdesk-logo-marquee {
   from {
     transform: translate3d(0, 0, 0);
@@ -524,7 +633,11 @@ html.lenis body {
   }
 
   .flowdesk-tag-border-core,
-  .flowdesk-tag-border-glow {
+  .flowdesk-tag-border-glow,
+  .flowdesk-tag-border-core-danger,
+  .flowdesk-tag-border-glow-danger,
+  .flowdesk-tag-border-core-success,
+  .flowdesk-tag-border-glow-success {
     animation: none;
   }
 
@@ -539,6 +652,10 @@ html.lenis body {
 
   .flowdesk-header-menu-track-next,
   .flowdesk-header-menu-track-prev {
+    animation: none;
+  }
+
+  .flowdesk-savebar-shake-soft {
     animation: none;
   }
 }

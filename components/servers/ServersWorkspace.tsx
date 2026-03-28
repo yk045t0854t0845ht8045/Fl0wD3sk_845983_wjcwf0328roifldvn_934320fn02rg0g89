@@ -61,12 +61,14 @@ type ServersWorkspaceProps = {
   };
   initialGuildId?: string | null;
   initialTab?: "settings" | "payments" | "methods" | "plans";
+  initialSettingsSection?: ServerSettingsSection;
   initialServers?: ManagedServer[] | null;
   initialTeams?: UserTeam[] | null;
   initialPendingInvites?: PendingTeamInvite[] | null;
 };
 
 type ServerEditorTab = "settings" | "payments" | "methods" | "plans";
+type ServerSettingsSection = "overview" | "message";
 type FilterOption = "all" | ManagedServerStatus;
 type ViewMode = "overview" | "list";
 type CreateTeamStep = "name" | "servers" | "members";
@@ -103,30 +105,56 @@ const FILTER_LABEL: Record<FilterOption, string> = {
 
 type SidebarItem = {
   label: string;
-  kind:
-    | "overview"
-    | "settings"
-    | "payments"
-    | "methods"
-    | "plans"
-    | "analytics"
-    | "integrations"
-    | "storage"
-    | "support"
-    | "preferences";
+  kind: "overview" | "settings";
   tab?: ServerEditorTab | null;
+  settingsSection?: ServerSettingsSection | null;
   disabled?: boolean;
   chevron?: boolean;
   searchAliases?: string[];
 };
 
-const SIDEBAR_SECTIONS: SidebarItem[][] = [
-  [
-    { label: "Projetos", kind: "overview", tab: null, searchAliases: ["overview", "servidores", "dashboard", "inicio"] },
-  ],
-  [
-    { label: "Ticket", kind: "settings", tab: "settings", searchAliases: ["config", "setup", "painel", "ticket", "tickets", "canais", "cargos", "staff"] },
-  ],
+const PROJECTS_SIDEBAR_ITEMS: SidebarItem[] = [
+  {
+    label: "Projetos",
+    kind: "overview",
+    tab: null,
+    searchAliases: ["overview", "servidores", "dashboard", "inicio"],
+  },
+];
+
+const TICKET_SIDEBAR_ITEMS: SidebarItem[] = [
+  {
+    label: "Visao geral",
+    kind: "settings",
+    tab: "settings",
+    settingsSection: "overview",
+    searchAliases: [
+      "ticket",
+      "tickets",
+      "config",
+      "setup",
+      "canais",
+      "cargos",
+      "staff",
+      "visao geral",
+      "painel",
+    ],
+  },
+  {
+    label: "Mensagem do ticket",
+    kind: "settings",
+    tab: "settings",
+    settingsSection: "message",
+    searchAliases: [
+      "mensagem",
+      "embed",
+      "painel principal",
+      "titulo",
+      "descricao",
+      "botao",
+      "ticket",
+    ],
+  },
 ];
 const shellClass =
   "rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] shadow-[0_24px_80px_rgba(0,0,0,0.38)]";
@@ -229,10 +257,40 @@ function formatDateLabel(rawDate: string) {
   }).format(timestamp);
 }
 
-function normalizeWorkspaceGuildIdFromPath(pathname: string | null) {
-  if (!pathname) return null;
-  const match = pathname.match(/^\/servers\/(\d{10,25})\/?$/);
-  return match ? match[1] : null;
+function parseWorkspaceRoute(pathname: string | null): {
+  guildId: string | null;
+  tab: ServerEditorTab;
+  settingsSection: ServerSettingsSection;
+} {
+  const fallback = {
+    guildId: null,
+    tab: "settings" as const,
+    settingsSection: "overview" as const,
+  };
+
+  if (!pathname) return fallback;
+
+  const bareMatch = pathname.match(/^\/servers\/(\d{10,25})\/?$/);
+  if (bareMatch) {
+    return {
+      guildId: bareMatch[1],
+      tab: "settings",
+      settingsSection: "overview",
+    };
+  }
+
+  const ticketSectionMatch = pathname.match(
+    /^\/servers\/(\d{10,25})\/tickets?\/(overview|message)\/?$/,
+  );
+  if (ticketSectionMatch) {
+    return {
+      guildId: ticketSectionMatch[1],
+      tab: "settings",
+      settingsSection: ticketSectionMatch[2] as ServerSettingsSection,
+    };
+  }
+
+  return fallback;
 }
 
 function normalizeComparablePath(value: string) {
@@ -767,6 +825,7 @@ export function ServersWorkspace({
   currentAccount,
   initialGuildId = null,
   initialTab = "settings",
+  initialSettingsSection = "overview",
   initialServers = null,
   initialTeams = null,
   initialPendingInvites = null,
@@ -818,6 +877,9 @@ export function ServersWorkspace({
   const [acceptingTeamId, setAcceptingTeamId] = useState<number | null>(null);
   const [selectedGuildIdForConfig, setSelectedGuildIdForConfig] = useState<string | null>(initialGuildId);
   const [selectedEditorTabForConfig, setSelectedEditorTabForConfig] = useState<ServerEditorTab>(initialTab);
+  const [selectedSettingsSectionForConfig, setSelectedSettingsSectionForConfig] =
+    useState<ServerSettingsSection>(initialSettingsSection);
+  const [isTicketSidebarOpen, setIsTicketSidebarOpen] = useState(true);
   const statusRef = useRef<HTMLDivElement | null>(null);
   const desktopTeamMenuRef = useRef<HTMLDivElement | null>(null);
   const mobileTeamMenuRef = useRef<HTMLDivElement | null>(null);
@@ -834,10 +896,8 @@ export function ServersWorkspace({
   const [teamsReloadToken, setTeamsReloadToken] = useState(0);
   const previousRouteGuildIdRef = useRef<string | null>(null);
 
-  const routeGuildId = useMemo(
-    () => normalizeWorkspaceGuildIdFromPath(pathname),
-    [pathname],
-  );
+  const routeState = useMemo(() => parseWorkspaceRoute(pathname), [pathname]);
+  const routeGuildId = routeState.guildId;
 
   const requestServersReload = useCallback((options?: { silent?: boolean }) => {
     setErrorMessage(null);
@@ -1071,8 +1131,9 @@ export function ServersWorkspace({
       }
       return routeGuildId;
     });
-    setSelectedEditorTabForConfig("settings");
-  }, [routeGuildId]);
+    setSelectedEditorTabForConfig(routeState.tab);
+    setSelectedSettingsSectionForConfig(routeState.settingsSection);
+  }, [routeGuildId, routeState.settingsSection, routeState.tab]);
 
   useEffect(() => {
     const previousRouteGuildId = previousRouteGuildIdRef.current;
@@ -1436,27 +1497,50 @@ export function ServersWorkspace({
       .sort((a, b) => (a.score !== b.score ? b.score - a.score : a.server.guildName.localeCompare(b.server.guildName, "pt-BR")))
       .map((item) => item.server);
   }, [normalizedQuery, visibleServers, statusFilter]);
-  const filteredSidebarSections = useMemo(() => {
-    if (!normalizedSidebarQuery) return SIDEBAR_SECTIONS;
+  const filteredProjectsSidebarItems = useMemo(() => {
+    if (!normalizedSidebarQuery) return PROJECTS_SIDEBAR_ITEMS;
 
-    return SIDEBAR_SECTIONS
-      .map((section) =>
-        section
-          .map((item) => {
-            const haystack = [item.label, ...(item.searchAliases || [])].join(" ");
-            return { item, score: getSearchScore(haystack, normalizedSidebarQuery) };
-          })
-          .filter((entry) => entry.score > 0)
-          .sort((a, b) => (a.score !== b.score ? b.score - a.score : a.item.label.localeCompare(b.item.label, "pt-BR")))
-          .map((entry) => entry.item),
+    return PROJECTS_SIDEBAR_ITEMS
+      .map((item) => {
+        const haystack = [item.label, ...(item.searchAliases || [])].join(" ");
+        return { item, score: getSearchScore(haystack, normalizedSidebarQuery) };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) =>
+        a.score !== b.score
+          ? b.score - a.score
+          : a.item.label.localeCompare(b.item.label, "pt-BR"),
       )
-      .filter((section) => section.length > 0);
+      .map((entry) => entry.item);
+  }, [normalizedSidebarQuery]);
+
+  const filteredTicketSidebarItems = useMemo(() => {
+    if (!normalizedSidebarQuery) return TICKET_SIDEBAR_ITEMS;
+
+    return TICKET_SIDEBAR_ITEMS
+      .map((item) => {
+        const haystack = [item.label, ...(item.searchAliases || [])].join(" ");
+        return { item, score: getSearchScore(haystack, normalizedSidebarQuery) };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) =>
+        a.score !== b.score
+          ? b.score - a.score
+          : a.item.label.localeCompare(b.item.label, "pt-BR"),
+      )
+      .map((entry) => entry.item);
   }, [normalizedSidebarQuery]);
   const activeTeamServerCount = visibleServers.length;
   const isCreateTeamNextDisabled =
     isCreatingTeam ||
     (createTeamStep === "name" && createTeamName.trim().length < 3) ||
     (createTeamStep === "servers" && !createTeamServerIds.length);
+
+  useEffect(() => {
+    if (selectedGuildIdForConfig || normalizedSidebarQuery) {
+      setIsTicketSidebarOpen(true);
+    }
+  }, [normalizedSidebarQuery, selectedGuildIdForConfig]);
 
   useEffect(() => {
     if (
@@ -1483,9 +1567,24 @@ export function ServersWorkspace({
     };
   }, [errorMessage, filteredServers, isLoading, selectedGuildIdForConfig]);
 
-  const buildServerConfigUrl = useCallback((guildId: string, tab: ServerEditorTab) => {
-    void tab;
+  const buildServerConfigUrl = useCallback((
+    guildId: string,
+    tab: ServerEditorTab,
+    settingsSection: ServerSettingsSection = "overview",
+    options?: { explicitSection?: boolean },
+  ) => {
+    if (tab !== "settings") {
+      const encodedGuildId = encodeURIComponent(guildId);
+      return `/servers/${encodedGuildId}/`;
+    }
+
     const encodedGuildId = encodeURIComponent(guildId);
+    if (settingsSection === "message") {
+      return `/servers/${encodedGuildId}/tickets/message/`;
+    }
+    if (options?.explicitSection) {
+      return `/servers/${encodedGuildId}/tickets/overview/`;
+    }
     return `/servers/${encodedGuildId}/`;
   }, []);
 
@@ -1746,6 +1845,7 @@ export function ServersWorkspace({
     void prefetchServerDashboardSettings(guildId);
     setSelectedGuildIdForConfig(guildId);
     setSelectedEditorTabForConfig(tab);
+    setSelectedSettingsSectionForConfig("overview");
     setErrorMessage(null);
     navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
   }, [buildServerConfigUrl, navigateToUrl]);
@@ -2032,55 +2132,124 @@ export function ServersWorkspace({
       </div>
 
       <div className="mt-[14px] flex-1 overflow-y-auto pr-[2px]">
-        {filteredSidebarSections.length ? filteredSidebarSections.map((section, sectionIndex) => (
-          <div key={sectionIndex} className={sectionIndex === 0 ? "" : "mt-[12px] border-t border-[#121212] pt-[12px]"}>
-            <div className="space-y-[4px]">
-              {section.map((item) => {
-                const isOverview = item.tab === null;
-                const isActive = isOverview ? !isEditingServer : Boolean(item.tab && selectedEditorTabForConfig === item.tab && isEditingServer);
-                const isDisabled = item.disabled || Boolean(!isOverview && item.tab && !selectedServer);
+        {filteredProjectsSidebarItems.length || filteredTicketSidebarItems.length ? (
+          <>
+            {filteredProjectsSidebarItems.length ? (
+              <div className="space-y-[4px]">
+                {filteredProjectsSidebarItems.map((item) => {
+                  const isActive = !isEditingServer;
 
-                return (
-                  <button
-                    key={item.label}
-                    type="button"
-                    onClick={() => {
-                      if (isDisabled) return;
-                      if (isOverview) {
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => {
                         setSelectedGuildIdForConfig(null);
                         setSelectedEditorTabForConfig("settings");
+                        setSelectedSettingsSectionForConfig("overview");
                         navigateToUrl("/servers/", "push");
-                        return;
-                      }
-                      if (!selectedServer || !item.tab) return;
-                      setSelectedGuildIdForConfig(selectedServer.guildId);
-                      setSelectedEditorTabForConfig(item.tab);
-                      navigateToUrl(buildServerConfigUrl(selectedServer.guildId, item.tab), "replace");
-                    }}
-                    disabled={isDisabled}
-                    className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
-                      isActive
-                        ? "bg-[#1E1E1E] text-[#F0F0F0]"
-                        : isDisabled
-                          ? "text-[#585858]"
+                      }}
+                      className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                        isActive
+                          ? "bg-[#1E1E1E] text-[#F0F0F0]"
                           : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                      }`}
+                    >
+                      <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isActive ? "text-[#F0F0F0]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
+                        <SidebarNavIcon kind={item.kind} active={isActive} />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {filteredTicketSidebarItems.length ? (
+              <div className="mt-[12px] border-t border-[#121212] pt-[12px]">
+                <button
+                  type="button"
+                  onClick={() => setIsTicketSidebarOpen((current) => !current)}
+                  className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                    isEditingServer && selectedEditorTabForConfig === "settings"
+                      ? "bg-[#1E1E1E] text-[#F0F0F0]"
+                      : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                  }`}
+                >
+                  <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isEditingServer && selectedEditorTabForConfig === "settings" ? "text-[#F0F0F0]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
+                    <SidebarNavIcon kind="settings" active={isEditingServer && selectedEditorTabForConfig === "settings"} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
+                    Ticket
+                  </span>
+                  <span
+                    className={`transition-transform duration-200 ${
+                      isTicketSidebarOpen || normalizedSidebarQuery
+                        ? "rotate-180 text-[#C9C9C9]"
+                        : "rotate-0 text-[#6F6F6F] group-hover:text-[#BEBEBE]"
                     }`}
                   >
-                    <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isActive ? "text-[#F0F0F0]" : isDisabled ? "text-[#4A4A4A]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
-                      <SidebarNavIcon kind={item.kind} active={isActive} />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">{item.label}</span>
-                    {item.chevron ? (
-                      <span className={`${isDisabled ? "text-[#4C4C4C]" : "text-[#686868] group-hover:text-[#BEBEBE]"}`}>
-                        <SidebarChevronRightIcon />
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )) : (
+                    <SidebarDropdownChevronIcon />
+                  </span>
+                </button>
+
+                {isTicketSidebarOpen || normalizedSidebarQuery ? (
+                  <div className="mt-[6px] space-y-[4px] pl-[12px]">
+                    {filteredTicketSidebarItems.map((item) => {
+                      const isDisabled = item.disabled || !selectedServer || !item.tab;
+                      const isActive =
+                        Boolean(
+                          item.tab &&
+                            selectedEditorTabForConfig === item.tab &&
+                            selectedSettingsSectionForConfig === item.settingsSection &&
+                            isEditingServer,
+                        );
+
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => {
+                            if (isDisabled || !selectedServer || !item.tab) return;
+                            setSelectedGuildIdForConfig(selectedServer.guildId);
+                            setSelectedEditorTabForConfig(item.tab);
+                            setSelectedSettingsSectionForConfig(
+                              item.settingsSection || "overview",
+                            );
+                            navigateToUrl(
+                              buildServerConfigUrl(
+                                selectedServer.guildId,
+                                item.tab,
+                                item.settingsSection || "overview",
+                                { explicitSection: true },
+                              ),
+                              "replace",
+                            );
+                          }}
+                          disabled={isDisabled}
+                          className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
+                            isActive
+                              ? "bg-[#1A1A1A] text-[#F0F0F0]"
+                              : isDisabled
+                                ? "text-[#585858]"
+                                : "text-[#AFAFAF] hover:bg-[#101010] hover:text-[#E3E3E3]"
+                          }`}
+                        >
+                          <span className={`inline-flex h-[20px] w-[20px] items-center justify-center ${isActive ? "text-[#F0F0F0]" : isDisabled ? "text-[#4A4A4A]" : "text-[#7F7F7F] group-hover:text-[#DADADA]"}`}>
+                            <SidebarNavIcon kind={item.kind} active={isActive} />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        ) : (
           <div className="rounded-[18px] border border-[#131313] bg-[#080808] px-[14px] py-[16px]">
             <p className="text-[13px] leading-[1.55] text-[#767676]">
               Nenhuma area encontrada para essa busca.
@@ -2394,7 +2563,7 @@ export function ServersWorkspace({
               {selectedServer ? (
                 <LandingReveal delay={180}>
                   <div key={selectedServer.guildId} className={editorPanelRevealClass}>
-                    <ServerSettingsEditor guildId={selectedServer.guildId} guildName={selectedServer.guildName} status={selectedServer.status} daysUntilExpire={selectedServer.daysUntilExpire} daysUntilOff={selectedServer.daysUntilOff} accessMode={selectedServer.accessMode} canManage={selectedServer.canManage} allServers={servers} initialTab={selectedEditorTabForConfig} onTabChange={(tab) => { setSelectedEditorTabForConfig(tab); navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab), "replace"); }} standalone onClose={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); navigateToUrl("/servers/", "push"); }} />
+                    <ServerSettingsEditor guildId={selectedServer.guildId} guildName={selectedServer.guildName} status={selectedServer.status} daysUntilExpire={selectedServer.daysUntilExpire} daysUntilOff={selectedServer.daysUntilOff} accessMode={selectedServer.accessMode} canManage={selectedServer.canManage} allServers={servers} initialTab={selectedEditorTabForConfig} settingsSection={selectedSettingsSectionForConfig} onTabChange={(tab) => { setSelectedEditorTabForConfig(tab); navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab, selectedSettingsSectionForConfig, { explicitSection: selectedSettingsSectionForConfig !== "overview" || pathname?.includes("/tickets/overview/") }), "replace"); }} standalone onClose={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); setSelectedSettingsSectionForConfig("overview"); navigateToUrl("/servers/", "push"); }} />
                   </div>
                 </LandingReveal>
               ) : shouldShowEditorSkeleton ? (
@@ -2431,6 +2600,7 @@ export function ServersWorkspace({
                           onClick={() => {
                             setSelectedGuildIdForConfig(null);
                             setSelectedEditorTabForConfig("settings");
+                            setSelectedSettingsSectionForConfig("overview");
                             navigateToUrl("/servers/", "replace");
                           }}
                           className="inline-flex h-[46px] items-center justify-center rounded-[12px] border border-[#181818] bg-[#101010] px-6 text-[15px] font-medium text-[#B7B7B7] transition-colors hover:border-[#222222] hover:bg-[#141414] hover:text-[#E5E5E5]"

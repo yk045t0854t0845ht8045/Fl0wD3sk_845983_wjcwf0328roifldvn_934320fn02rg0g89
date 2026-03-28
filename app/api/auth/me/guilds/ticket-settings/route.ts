@@ -16,6 +16,13 @@ import {
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
 import {
+  ticketPanelLayoutHasAtMostOneFunctionButton,
+  deriveLegacyTicketPanelFields,
+  normalizeTicketPanelLayout,
+  ticketPanelLayoutHasRequiredParts,
+  type TicketPanelLayout,
+} from "@/lib/servers/ticketPanelBuilder";
+import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
@@ -24,6 +31,9 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 const GUILD_CATEGORY = 4;
 const GUILD_TEXT = 0;
 const GUILD_ANNOUNCEMENT = 5;
+const PANEL_TITLE_MAX_LENGTH = 80;
+const PANEL_DESCRIPTION_MAX_LENGTH = 400;
+const PANEL_BUTTON_LABEL_MAX_LENGTH = 40;
 
 type TicketSettingsBody = {
   guildId?: unknown;
@@ -31,6 +41,10 @@ type TicketSettingsBody = {
   ticketsCategoryId?: unknown;
   logsCreatedChannelId?: unknown;
   logsClosedChannelId?: unknown;
+  panelLayout?: unknown;
+  panelTitle?: unknown;
+  panelDescription?: unknown;
+  panelButtonLabel?: unknown;
 };
 
 type GuildAccessContext = {
@@ -40,6 +54,10 @@ type GuildAccessContext = {
 };
 
 function getTrimmedId(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getTrimmedText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
@@ -55,6 +73,10 @@ async function upsertTicketSettingsWithRetry(input: {
   ticketsCategoryId: string;
   logsCreatedChannelId: string;
   logsClosedChannelId: string;
+  panelLayout: TicketPanelLayout;
+  panelTitle: string;
+  panelDescription: string;
+  panelButtonLabel: string;
   configuredByUserId: number;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
@@ -71,12 +93,16 @@ async function upsertTicketSettingsWithRetry(input: {
           tickets_category_id: input.ticketsCategoryId,
           logs_created_channel_id: input.logsCreatedChannelId,
           logs_closed_channel_id: input.logsClosedChannelId,
+          panel_layout: input.panelLayout,
+          panel_title: input.panelTitle,
+          panel_description: input.panelDescription,
+          panel_button_label: input.panelButtonLabel,
           configured_by_user_id: input.configuredByUserId,
         },
         { onConflict: "guild_id" },
       )
       .select(
-        "guild_id, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, updated_at",
+        "guild_id, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
       )
       .single();
 
@@ -187,7 +213,7 @@ export async function GET(request: Request) {
     const result = await supabase
       .from("guild_ticket_settings")
       .select(
-        "menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, updated_at",
+        "menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
       )
       .eq("guild_id", guildId)
       .maybeSingle();
@@ -213,6 +239,14 @@ export async function GET(request: Request) {
         ticketsCategoryId: result.data.tickets_category_id,
         logsCreatedChannelId: result.data.logs_created_channel_id,
         logsClosedChannelId: result.data.logs_closed_channel_id,
+        panelLayout: normalizeTicketPanelLayout(result.data.panel_layout, {
+          panelTitle: result.data.panel_title,
+          panelDescription: result.data.panel_description,
+          panelButtonLabel: result.data.panel_button_label,
+        }),
+        panelTitle: result.data.panel_title,
+        panelDescription: result.data.panel_description,
+        panelButtonLabel: result.data.panel_button_label,
         updatedAt: result.data.updated_at,
       },
       }),
@@ -265,6 +299,13 @@ export async function POST(request: Request) {
     const ticketsCategoryId = getTrimmedId(body.ticketsCategoryId);
     const logsCreatedChannelId = getTrimmedId(body.logsCreatedChannelId);
     const logsClosedChannelId = getTrimmedId(body.logsClosedChannelId);
+    const panelLayout = normalizeTicketPanelLayout(body.panelLayout, {
+      panelTitle: getTrimmedText(body.panelTitle),
+      panelDescription: getTrimmedText(body.panelDescription),
+      panelButtonLabel: getTrimmedText(body.panelButtonLabel),
+    });
+    const { panelTitle, panelDescription, panelButtonLabel } =
+      deriveLegacyTicketPanelFields(panelLayout);
     diagnostic = createServerSaveDiagnosticContext("ticket_settings", guildId);
 
     if (
@@ -283,6 +324,55 @@ export async function POST(request: Request) {
       return applyNoStoreHeaders(
         NextResponse.json(
         { ok: false, message: "Um ou mais IDs informados sao invalidos." },
+        { status: 400 },
+        ),
+      );
+    }
+
+    if (
+      !panelLayout.length ||
+      !ticketPanelLayoutHasRequiredParts(panelLayout) ||
+      !ticketPanelLayoutHasAtMostOneFunctionButton(panelLayout) ||
+      !panelTitle ||
+      !panelDescription ||
+      !panelButtonLabel
+    ) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "O layout da mensagem do ticket esta vazio ou invalido.",
+      });
+      return applyNoStoreHeaders(
+        NextResponse.json(
+        {
+          ok: false,
+          message:
+            "Adicione pelo menos um conteudo com texto e uma acao valida na mensagem do ticket. O embed tambem aceita apenas um botao funcional.",
+        },
+        { status: 400 },
+        ),
+      );
+    }
+
+    if (
+      panelTitle.length > PANEL_TITLE_MAX_LENGTH ||
+      panelDescription.length > PANEL_DESCRIPTION_MAX_LENGTH ||
+      panelButtonLabel.length > PANEL_BUTTON_LABEL_MAX_LENGTH
+    ) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Mensagem principal excedeu o limite de caracteres.",
+      });
+      return applyNoStoreHeaders(
+        NextResponse.json(
+        {
+          ok: false,
+          message:
+            "A mensagem principal do ticket excedeu o limite permitido de caracteres.",
+        },
         { status: 400 },
         ),
       );
@@ -485,6 +575,10 @@ export async function POST(request: Request) {
       ticketsCategoryId,
       logsCreatedChannelId,
       logsClosedChannelId,
+      panelLayout,
+      panelTitle,
+      panelDescription,
+      panelButtonLabel,
       configuredByUserId: authUserId,
     });
 
@@ -510,6 +604,14 @@ export async function POST(request: Request) {
         ticketsCategoryId: savedSettings.tickets_category_id,
         logsCreatedChannelId: savedSettings.logs_created_channel_id,
         logsClosedChannelId: savedSettings.logs_closed_channel_id,
+        panelLayout: normalizeTicketPanelLayout(savedSettings.panel_layout, {
+          panelTitle: savedSettings.panel_title,
+          panelDescription: savedSettings.panel_description,
+          panelButtonLabel: savedSettings.panel_button_label,
+        }),
+        panelTitle: savedSettings.panel_title,
+        panelDescription: savedSettings.panel_description,
+        panelButtonLabel: savedSettings.panel_button_label,
         updatedAt: savedSettings.updated_at,
       },
       }),

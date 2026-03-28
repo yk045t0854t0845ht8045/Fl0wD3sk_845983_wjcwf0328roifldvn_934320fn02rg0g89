@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { GuildLicenseStatus } from "@/lib/payments/licenseStatus";
 
-export type ServerSaveRouteName = "ticket_settings" | "ticket_staff_settings";
+export type ServerSaveRouteName = "ticket_settings" | "ticket_staff_settings" | "ticket_panel_dispatch";
 export type ServerSaveAccessMode = "owner" | "team" | "viewer" | "unknown";
 export type ServerSaveOutcome =
   | "payload_invalid"

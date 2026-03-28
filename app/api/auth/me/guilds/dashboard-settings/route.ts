@@ -9,6 +9,7 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { applyNoStoreHeaders } from "@/lib/security/http";
+import { normalizeTicketPanelLayout } from "@/lib/servers/ticketPanelBuilder";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_CATEGORY = 4;
@@ -133,11 +134,11 @@ export async function GET(request: Request) {
     const [rawChannels, rawRoles, ticketResult, staffResult] = await Promise.all([
       fetchGuildChannelsByBot(guildId),
       fetchGuildRolesByBot(guildId),
-      supabase
-        .from("guild_ticket_settings")
-        .select(
-          "menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, updated_at",
-        )
+        supabase
+          .from("guild_ticket_settings")
+          .select(
+            "menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
+          )
         .eq("guild_id", guildId)
         .maybeSingle(),
       supabase
@@ -235,6 +236,17 @@ export async function GET(request: Request) {
               ticketsCategoryId: ticketResult.data.tickets_category_id,
               logsCreatedChannelId: ticketResult.data.logs_created_channel_id,
               logsClosedChannelId: ticketResult.data.logs_closed_channel_id,
+              panelLayout: normalizeTicketPanelLayout(
+                ticketResult.data.panel_layout,
+                {
+                  panelTitle: ticketResult.data.panel_title,
+                  panelDescription: ticketResult.data.panel_description,
+                  panelButtonLabel: ticketResult.data.panel_button_label,
+                },
+              ),
+              panelTitle: ticketResult.data.panel_title,
+              panelDescription: ticketResult.data.panel_description,
+              panelButtonLabel: ticketResult.data.panel_button_label,
               updatedAt: ticketResult.data.updated_at,
             }
           : null,
