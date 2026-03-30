@@ -5,12 +5,12 @@ import { ConfigStepOne } from "@/components/config/ConfigStepOne";
 import { ConfigStepTwo } from "@/components/config/ConfigStepTwo";
 import { ConfigStepThree } from "@/components/config/ConfigStepThree";
 import { ConfigStepFour } from "@/components/config/ConfigStepFour";
-import { ConfigLogoutButton } from "@/components/config/ConfigLogoutButton";
 import {
   ConfigServerSwitcher,
   type ConfigGuildItem,
 } from "@/components/config/ConfigServerSwitcher";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import type { PlanBillingPeriodCode, PlanCode } from "@/lib/plans/catalog";
 import type {
   ConfigDraft,
   ConfigStep,
@@ -32,6 +32,9 @@ import {
 
 type ConfigFlowProps = {
   displayName: string;
+  initialPlanCode: PlanCode;
+  initialBillingPeriodCode?: PlanBillingPeriodCode;
+  hasExplicitInitialPlan?: boolean;
 };
 
 type ConfigContextPatch = {
@@ -265,12 +268,29 @@ function setStepHash(step: ConfigStep) {
 
   const url = new URL(window.location.href);
   url.hash = targetHash;
-  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history.replaceState(
+    null,
+    "",
+    buildConfigUrlWithHashRoute(url.pathname, url.search, url.hash),
+  );
 
   // Fallback extra para navegadores/estados que nao refletirem o replaceState de hash.
   if (normalizeStepHash(window.location.hash) !== normalizeStepHash(targetHash)) {
     window.location.hash = targetHash.replace(/^#/, "");
   }
+}
+
+function buildConfigUrlWithHashRoute(
+  pathname: string,
+  search: string,
+  hash: string,
+) {
+  const normalizedPathname =
+    hash.startsWith("#/") && pathname !== "/" && !pathname.endsWith("/")
+      ? `${pathname}/`
+      : pathname;
+
+  return `${normalizedPathname}${search}${hash}`;
 }
 
 function normalizePaymentStatusForQuery(status: string | null | undefined) {
@@ -324,7 +344,11 @@ function updateCheckoutStatusQuery(
     }
   }
 
-  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history.replaceState(
+    null,
+    "",
+    buildConfigUrlWithHashRoute(url.pathname, url.search, url.hash),
+  );
 }
 
 function resolvePreferredStepForGuild(draft: ConfigDraft, guildId: string): ConfigStep {
@@ -340,10 +364,14 @@ function resolvePreferredStepForGuild(draft: ConfigDraft, guildId: string): Conf
   return 1;
 }
 
-export function ConfigFlow({ displayName }: ConfigFlowProps) {
+export function ConfigFlow({
+  displayName,
+  initialPlanCode,
+  initialBillingPeriodCode = "monthly",
+  hasExplicitInitialPlan = false,
+}: ConfigFlowProps) {
   const [currentStep, setCurrentStep] = useState<ConfigStep>(1);
   const [isTransitioningStep, setIsTransitioningStep] = useState(false);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(null);
   const [configDraft, setConfigDraft] = useState<ConfigDraft>(createEmptyConfigDraft());
   const [isConfigContextLoading, setIsConfigContextLoading] = useState(true);
@@ -909,22 +937,6 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     [setAndSyncContext],
   );
 
-  const handleLogout = useCallback(async () => {
-    if (isLoggingOut) return;
-
-    setIsLoggingOut(true);
-
-    try {
-      await fetch("/api/auth/logout", {
-        method: "POST",
-      });
-    } finally {
-      window.sessionStorage.removeItem(CONFIG_CONTEXT_STORAGE_KEY);
-      window.sessionStorage.removeItem(LEGACY_GUILD_STORAGE_KEY);
-      window.location.assign("/login");
-    }
-  }, [isLoggingOut]);
-
   const stepTwoDraft = useMemo(() => {
     if (!selectedGuildId) return null;
 
@@ -950,7 +962,6 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     if (!selectedGuildId) return "not_paid" as const;
     return managedServerStatusByGuild[selectedGuildId] || "not_paid";
   }, [managedServerStatusByGuild, selectedGuildId]);
-
   const stepContent = useMemo(() => {
     if (isConfigContextLoading && currentStep !== 1) {
       return (
@@ -965,6 +976,9 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
         <ConfigStepFour
           displayName={displayName}
           guildId={selectedGuildId}
+          initialPlanCode={initialPlanCode}
+          initialBillingPeriodCode={initialBillingPeriodCode}
+          hasExplicitInitialPlan={hasExplicitInitialPlan}
           initialDraft={stepFourDraft}
           onDraftChange={handleStepFourDraftChange}
         />
@@ -1016,8 +1030,11 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
     handleProceedToStepThree,
     handleProceedToStepTwo,
     handleStepFourDraftChange,
+    hasExplicitInitialPlan,
     handleStepThreeDraftChange,
     handleStepTwoDraftChange,
+    initialBillingPeriodCode,
+    initialPlanCode,
     isConfigContextLoading,
     selectedGuildId,
     selectedGuildLicenseStatus,
@@ -1028,7 +1045,7 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
 
   return (
     <>
-      {currentStep !== 1 ? (
+      {currentStep !== 1 && currentStep !== 4 ? (
         <ConfigServerSwitcher
           guilds={availableGuilds}
           selectedGuildId={selectedGuildId}
@@ -1040,16 +1057,7 @@ export function ConfigFlow({ displayName }: ConfigFlowProps) {
         />
       ) : null}
 
-      <div className={currentStep !== 1 ? "max-[960px]:pt-[92px]" : undefined}>
-        {stepContent}
-      </div>
-
-      <ConfigLogoutButton
-        onClick={() => {
-          void handleLogout();
-        }}
-        disabled={isLoggingOut}
-      />
+      <div>{stepContent}</div>
 
       {isTransitioningStep ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black">

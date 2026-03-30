@@ -24,17 +24,23 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+import {
+  DEFAULT_PLAN_BILLING_PERIOD_CODE,
+  DEFAULT_PLAN_CODE,
+  getAllPlanPricingDefinitions,
+  getAvailableBillingPeriodsForPlan,
+  normalizePlanBillingPeriodCode,
+  normalizePlanCode,
+  resolvePlanDefinition,
+  resolvePlanPricing,
+} from "@/lib/plans/catalog";
+import {
+  getGuildPlanSettingsRecord,
+  getUserPlanState,
+  type GuildPlanSettingsRecord,
+  type UserPlanStateRecord,
+} from "@/lib/plans/state";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
-
-type GuildPlanSettingsRecord = {
-  plan_code: string;
-  monthly_amount: string | number;
-  currency: string;
-  recurring_enabled: boolean;
-  recurring_method_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
 
 type HiddenMethodRecord = {
   method_id: string;
@@ -59,13 +65,10 @@ type SavedMethodSummary = {
 
 type UpdatePlanBody = {
   guildId?: unknown;
+  planCode?: unknown;
   recurringEnabled?: unknown;
   recurringMethodId?: unknown;
 };
-
-const DEFAULT_PLAN_CODE = "pro";
-const DEFAULT_MONTHLY_AMOUNT = 9.99;
-const DEFAULT_CURRENCY = "BRL";
 
 function normalizeGuildId(value: unknown) {
   if (typeof value !== "string") return null;
@@ -74,9 +77,10 @@ function normalizeGuildId(value: unknown) {
 }
 
 function toFiniteAmount(value: string | number) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : DEFAULT_MONTHLY_AMOUNT;
+  const fallbackAmount = resolvePlanDefinition(DEFAULT_PLAN_CODE).price;
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallbackAmount;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : DEFAULT_MONTHLY_AMOUNT;
+  return Number.isFinite(parsed) ? parsed : fallbackAmount;
 }
 
 function normalizeRecurringEnabled(value: unknown) {
@@ -89,6 +93,16 @@ function normalizeRecurringMethodId(value: unknown) {
   if (!isValidSavedMethodId(value)) return null;
   if (typeof value !== "string") return null;
   return value.trim();
+}
+
+function normalizeRequestedPlanCode(value: unknown) {
+  if (typeof value !== "string") return null;
+  return normalizePlanCode(value, DEFAULT_PLAN_CODE);
+}
+
+function normalizeRequestedBillingPeriodCode(value: unknown) {
+  if (typeof value !== "string") return null;
+  return normalizePlanBillingPeriodCode(value, DEFAULT_PLAN_BILLING_PERIOD_CODE);
 }
 
 async function ensureGuildAccess(guildId: string) {
@@ -220,37 +234,61 @@ async function getAvailableSavedMethodsForUser(userId: number) {
   });
 }
 
-async function getGuildPlanSettings(userId: number, guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("guild_plan_settings")
-    .select("plan_code, monthly_amount, currency, recurring_enabled, recurring_method_id, created_at, updated_at")
-    .eq("user_id", userId)
-    .eq("guild_id", guildId)
-    .maybeSingle<GuildPlanSettingsRecord>();
-
-  if (result.error) {
-    throw new Error(`Erro ao carregar plano do servidor: ${result.error.message}`);
-  }
-
-  return result.data || null;
-}
-
 function toPlanResponse(input: {
   settings: GuildPlanSettingsRecord | null;
+  userPlanState: UserPlanStateRecord | null;
+  requestedPlanCode?: string | null;
+  requestedBillingPeriodCode?: string | null;
   recurringMethodId: string | null;
   recurringMethod: SavedMethodSummary | null;
   availableMethods: SavedMethodSummary[];
   availableMethodsCount: number;
 }) {
   const settings = input.settings;
+  const userPlanState = input.userPlanState;
+  const resolvedPlan = resolvePlanPricing(
+    input.requestedPlanCode ||
+      settings?.plan_code ||
+      userPlanState?.plan_code ||
+      DEFAULT_PLAN_CODE,
+    input.requestedBillingPeriodCode || DEFAULT_PLAN_BILLING_PERIOD_CODE,
+  );
+  const shouldReuseStoredPlanSettings = Boolean(
+    settings && settings.plan_code === resolvedPlan.code,
+  );
+
   return {
-    planCode: settings?.plan_code || DEFAULT_PLAN_CODE,
-    monthlyAmount: settings ? toFiniteAmount(settings.monthly_amount) : DEFAULT_MONTHLY_AMOUNT,
-    currency: settings?.currency || DEFAULT_CURRENCY,
-    recurringEnabled: settings?.recurring_enabled || false,
-    recurringMethodId: input.recurringMethodId,
-    recurringMethod: input.recurringMethod
+    planCode: resolvedPlan.code,
+    planName: resolvedPlan.name,
+    billingPeriodCode: resolvedPlan.billingPeriodCode,
+    billingPeriodLabel: resolvedPlan.billingPeriodLabel,
+    billingPeriodMonths: resolvedPlan.billingPeriodMonths,
+    monthlyAmount: resolvedPlan.monthlyAmount,
+    compareMonthlyAmount: resolvedPlan.compareMonthlyAmount,
+    baseTotalAmount: resolvedPlan.baseTotalAmount,
+    totalAmount: resolvedPlan.totalAmount,
+    compareTotalAmount: resolvedPlan.compareTotalAmount,
+    currency: shouldReuseStoredPlanSettings
+      ? settings?.currency || resolvedPlan.currency
+      : resolvedPlan.currency,
+    billingCycleDays: resolvedPlan.billingCycleDays,
+    billingLabel: resolvedPlan.billingLabel,
+    totalLabel: resolvedPlan.totalLabel,
+    checkoutPeriodLabel: resolvedPlan.checkoutPeriodLabel,
+    renewalLabel: resolvedPlan.renewalLabel,
+    cycleDiscountPercent: resolvedPlan.cycleDiscountPercent,
+    cycleBadge: resolvedPlan.cycleBadge,
+    isTrial: resolvedPlan.isTrial,
+    entitlements: {
+      ...resolvedPlan.entitlements,
+    },
+    description: resolvedPlan.description,
+    features: resolvedPlan.features,
+    recurringEnabled: shouldReuseStoredPlanSettings
+      ? settings?.recurring_enabled || false
+      : false,
+    recurringMethodId: shouldReuseStoredPlanSettings ? input.recurringMethodId : null,
+    recurringMethod: shouldReuseStoredPlanSettings && input.recurringMethod
       ? {
           id: input.recurringMethod.id,
           brand: input.recurringMethod.brand,
@@ -272,8 +310,65 @@ function toPlanResponse(input: {
       nickname: method.nickname || null,
     })),
     availableMethodsCount: input.availableMethodsCount,
-    createdAt: settings?.created_at || null,
-    updatedAt: settings?.updated_at || null,
+    availablePlans: getAllPlanPricingDefinitions(
+      input.requestedBillingPeriodCode || DEFAULT_PLAN_BILLING_PERIOD_CODE,
+    ).map((plan) => ({
+      code: plan.code,
+      name: plan.name,
+      badge: plan.badge,
+      description: plan.description,
+      billingPeriodCode: plan.billingPeriodCode,
+      billingPeriodLabel: plan.billingPeriodLabel,
+      billingPeriodMonths: plan.billingPeriodMonths,
+      monthlyAmount: plan.monthlyAmount,
+      compareMonthlyAmount: plan.compareMonthlyAmount,
+      baseTotalAmount: plan.baseTotalAmount,
+      totalAmount: plan.totalAmount,
+      compareTotalAmount: plan.compareTotalAmount,
+      currency: plan.currency,
+      billingCycleDays: plan.billingCycleDays,
+      billingLabel: plan.billingLabel,
+      totalLabel: plan.totalLabel,
+      checkoutPeriodLabel: plan.checkoutPeriodLabel,
+      renewalLabel: plan.renewalLabel,
+      cycleDiscountPercent: plan.cycleDiscountPercent,
+      cycleBadge: plan.cycleBadge,
+      isTrial: plan.isTrial,
+      entitlements: {
+        ...plan.entitlements,
+      },
+      features: plan.features,
+    })),
+    availableBillingPeriods: getAvailableBillingPeriodsForPlan(resolvedPlan.code).map(
+      (period) => ({
+        code: period.code,
+        slug: period.slug,
+        label: period.label,
+        durationLabel: period.durationLabel,
+        months: period.months,
+        billingCycleDays: period.billingCycleDays,
+        extraDiscountPercent: period.extraDiscountPercent,
+      }),
+    ),
+    accountPlan: userPlanState
+      ? {
+          planCode: userPlanState.plan_code,
+          planName: userPlanState.plan_name,
+          status: userPlanState.status,
+          amount: toFiniteAmount(userPlanState.amount),
+          currency: userPlanState.currency,
+          billingCycleDays: userPlanState.billing_cycle_days,
+          maxLicensedServers: userPlanState.max_licensed_servers,
+          maxActiveTickets: userPlanState.max_active_tickets,
+          maxAutomations: userPlanState.max_automations,
+          maxMonthlyActions: userPlanState.max_monthly_actions,
+          activatedAt: userPlanState.activated_at,
+          expiresAt: userPlanState.expires_at,
+          lastPaymentGuildId: userPlanState.last_payment_guild_id,
+        }
+      : null,
+    createdAt: shouldReuseStoredPlanSettings ? settings?.created_at || null : null,
+    updatedAt: shouldReuseStoredPlanSettings ? settings?.updated_at || null : null,
   };
 }
 
@@ -293,9 +388,14 @@ export async function GET(request: Request) {
     if (!access.ok) return attachRequestId(access.response, requestContext.requestId);
 
     const userId = access.context.sessionData.authSession.user.id;
-    const [settings, savedMethods] = await Promise.all([
-      getGuildPlanSettings(userId, guildId),
+    const requestedPlanCode = normalizeRequestedPlanCode(url.searchParams.get("planCode"));
+    const requestedBillingPeriodCode = normalizeRequestedBillingPeriodCode(
+      url.searchParams.get("billingPeriodCode"),
+    );
+    const [settings, savedMethods, userPlanState] = await Promise.all([
+      getGuildPlanSettingsRecord(userId, guildId),
       getAvailableSavedMethodsForUser(userId),
+      getUserPlanState(userId),
     ]);
 
     const recurringMethodId = settings?.recurring_method_id || null;
@@ -309,6 +409,9 @@ export async function GET(request: Request) {
       guildId,
       plan: toPlanResponse({
         settings,
+        userPlanState,
+        requestedPlanCode,
+        requestedBillingPeriodCode,
         recurringMethodId,
         recurringMethod,
         availableMethods: savedMethods,
@@ -348,6 +451,7 @@ export async function POST(request: Request) {
     }
 
     const guildId = normalizeGuildId(body.guildId);
+    const requestedPlanCode = normalizeRequestedPlanCode(body.planCode);
     const recurringEnabled = normalizeRecurringEnabled(body.recurringEnabled);
     const recurringMethodId = normalizeRecurringMethodId(body.recurringMethodId);
 
@@ -451,12 +555,20 @@ export async function POST(request: Request) {
 
     const userId = access.context.sessionData.authSession.user.id;
     const supabase = getSupabaseAdminClientOrThrow();
-    const [existingSettings, savedMethods] = await Promise.all([
-      getGuildPlanSettings(userId, guildId),
+    const [existingSettings, savedMethods, userPlanState] = await Promise.all([
+      getGuildPlanSettingsRecord(userId, guildId),
       getAvailableSavedMethodsForUser(userId),
+      getUserPlanState(userId),
     ]);
 
     const savedMethodMap = new Map(savedMethods.map((method) => [method.id, method]));
+
+    const resolvedPlan = resolvePlanDefinition(
+      requestedPlanCode ||
+        existingSettings?.plan_code ||
+        userPlanState?.plan_code ||
+        DEFAULT_PLAN_CODE,
+    );
 
     let resolvedRecurringMethodId: string | null =
       existingSettings?.recurring_method_id || null;
@@ -499,9 +611,9 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           guild_id: guildId,
-          plan_code: DEFAULT_PLAN_CODE,
-          monthly_amount: DEFAULT_MONTHLY_AMOUNT,
-          currency: DEFAULT_CURRENCY,
+          plan_code: resolvedPlan.code,
+          monthly_amount: resolvedPlan.price,
+          currency: resolvedPlan.currency,
           recurring_enabled: recurringEnabled,
           recurring_method_id: resolvedRecurringMethodId,
         },
@@ -535,6 +647,7 @@ export async function POST(request: Request) {
       guildId,
       plan: toPlanResponse({
         settings: upsertResult.data,
+        userPlanState,
         recurringMethodId: resolvedRecurringMethodId,
         recurringMethod,
         availableMethods: savedMethods,

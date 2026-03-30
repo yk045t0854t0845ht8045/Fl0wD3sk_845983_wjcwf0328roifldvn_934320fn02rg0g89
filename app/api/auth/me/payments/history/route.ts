@@ -25,6 +25,7 @@ type PaymentMethod = "pix" | "card";
 type PaymentOrderRecord = {
   id: number;
   order_number: number;
+  user_id: number;
   guild_id: string;
   payment_method: PaymentMethod;
   status: PaymentOrderStatus;
@@ -48,7 +49,7 @@ type PaymentOrderEventRecord = {
 };
 
 const PAYMENT_HISTORY_SELECT_COLUMNS =
-  "id, order_number, guild_id, payment_method, status, amount, currency, provider_payment_id, provider_status, provider_status_detail, provider_payload, paid_at, expires_at, created_at, updated_at";
+  "id, order_number, user_id, guild_id, payment_method, status, amount, currency, provider_payment_id, provider_status, provider_status_detail, provider_payload, paid_at, expires_at, created_at, updated_at";
 
 const PAYMENT_HISTORY_EVENT_SELECT_COLUMNS =
   "payment_order_id, event_type, event_payload, created_at";

@@ -20,6 +20,7 @@ type ConfigStepMultiSelectProps = {
   disabled?: boolean;
   loading?: boolean;
   controlHeightPx?: number;
+  variant?: "default" | "immersive";
 };
 
 export function ConfigStepMultiSelect({
@@ -31,6 +32,7 @@ export function ConfigStepMultiSelect({
   disabled = false,
   loading = false,
   controlHeightPx,
+  variant = "default",
 }: ConfigStepMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownRect, setDropdownRect] = useState<{
@@ -43,6 +45,8 @@ export function ConfigStepMultiSelect({
   const dropdownRef = useRef<HTMLDivElement | null>(null);
   const isBlocked = disabled || loading;
   const isDropdownOpen = isOpen && !isBlocked;
+  const isImmersive = variant === "immersive";
+  const shouldRenderLabel = Boolean(String(label || "").trim()) && !isImmersive;
 
   useEffect(() => {
     if (!isDropdownOpen) return;
@@ -105,6 +109,34 @@ export function ConfigStepMultiSelect({
     configStepTwoScale.maxVisibleOptions,
   );
   const dropdownHeight = visibleRows * configStepTwoScale.optionHeight;
+  const labelClassName = isImmersive
+    ? "mb-[12px] text-[11px] font-medium tracking-[0.18em] uppercase text-[#6E6E6E]"
+    : "mb-[10px] font-medium tracking-[-0.02em] text-[#A7A7A7]";
+  const triggerClassName = isImmersive
+    ? `flex w-full border border-[#181818] bg-[linear-gradient(180deg,#0D0D0D_0%,#080808_100%)] text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-[border-color,background-color,box-shadow] disabled:cursor-not-allowed disabled:opacity-65 ${
+        loading ? "justify-center" : "items-center hover:border-[#242424]"
+      }`
+    : `flex w-full border border-[#141414] bg-[#080808] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
+        loading ? "justify-center" : "items-center"
+      }`;
+  const triggerPaddingLeft = isImmersive ? 16 : 14;
+  const triggerPaddingRight = isImmersive ? 14 : 12;
+  const triggerRadius = isImmersive ? 18 : 16;
+  const dropdownClassName = isImmersive
+    ? "flowdesk-selectmenu-scrollbar flowdesk-scale-in-soft fixed z-[420] overflow-y-auto overscroll-contain border border-[#1A1A1A] bg-[#070707] shadow-[0_28px_80px_rgba(0,0,0,0.56)] backdrop-blur-[16px] transition-all duration-200 ease-out"
+    : "flowdesk-selectmenu-scrollbar flowdesk-scale-in-soft fixed z-[420] overflow-y-auto overscroll-contain border bg-[#080808] shadow-[0_24px_64px_rgba(0,0,0,0.5)] backdrop-blur-[12px] transition-all duration-200 ease-out";
+  const optionClassName = (selected: boolean) =>
+    isImmersive
+      ? `mx-[6px] my-[4px] flex w-[calc(100%-12px)] items-center gap-3 rounded-[14px] border px-[14px] text-left transition-colors ${
+          selected
+            ? "border-[rgba(128,184,255,0.22)] bg-[rgba(16,23,34,0.92)] text-[#EAF2FF]"
+            : "border-transparent text-[#BABABA] hover:border-[#1E1E1E] hover:bg-[#101010] hover:text-[#E7E7E7]"
+        }`
+      : `mx-[6px] my-[4px] flex w-[calc(100%-12px)] items-center gap-3 rounded-[12px] px-[14px] text-left transition-colors ${
+          selected
+            ? "bg-[#101010] text-[#E1E1E1]"
+            : "text-[#B5B5B5] hover:bg-[#101010] hover:text-[#E1E1E1]"
+        }`;
 
   function toggleValue(roleId: string) {
     const isSelected = values.includes(roleId);
@@ -121,12 +153,11 @@ export function ConfigStepMultiSelect({
       ref={containerRef}
       className={`relative w-full ${isDropdownOpen ? "z-[260]" : "z-[1]"}`}
     >
-      <p
-        className="mb-[10px] font-medium tracking-[-0.02em] text-[#A7A7A7]"
-        style={{ fontSize: `${configStepTwoScale.labelSize}px` }}
-      >
-        {label}
-      </p>
+      {shouldRenderLabel ? (
+        <p className={labelClassName} style={{ fontSize: `${configStepTwoScale.labelSize}px` }}>
+          {label}
+        </p>
+      ) : null}
 
       <button
         ref={triggerRef}
@@ -137,14 +168,12 @@ export function ConfigStepMultiSelect({
         }}
         disabled={isBlocked}
         aria-busy={loading}
-        className={`flex w-full border border-[#141414] bg-[#080808] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-65 ${
-          loading ? "justify-center" : "items-center"
-        }`}
+        className={triggerClassName}
         style={{
           height: `${controlHeightPx ?? configStepTwoScale.controlHeight}px`,
-          borderRadius: `16px`,
-          paddingLeft: `14px`,
-          paddingRight: `12px`,
+          borderRadius: `${triggerRadius}px`,
+          paddingLeft: `${triggerPaddingLeft}px`,
+          paddingRight: `${triggerPaddingRight}px`,
         }}
       >
         {loading ? (
@@ -152,7 +181,15 @@ export function ConfigStepMultiSelect({
         ) : (
           <>
             <span
-              className={`truncate pr-3 ${selectedNames.length ? "text-[#D5D5D5]" : "text-[#5A5A5A]"}`}
+              className={`truncate pr-3 ${
+                selectedNames.length
+                  ? isImmersive
+                    ? "text-[#EFEFEF]"
+                    : "text-[#D5D5D5]"
+                  : isImmersive
+                    ? "text-[#616161]"
+                    : "text-[#5A5A5A]"
+              }`}
               style={{ fontSize: `${configStepTwoScale.controlTextSize}px` }}
             >
               {selectedLabel}
@@ -185,7 +222,7 @@ export function ConfigStepMultiSelect({
         ? createPortal(
             <div
               ref={dropdownRef}
-              className="flowdesk-selectmenu-scrollbar flowdesk-scale-in-soft fixed z-[420] overflow-y-auto overscroll-contain border bg-[#080808] shadow-[0_24px_64px_rgba(0,0,0,0.5)] backdrop-blur-[12px] transition-all duration-200 ease-out"
+              className={dropdownClassName}
               style={{
                 top: `${dropdownRect.top}px`,
                 left: `${dropdownRect.left}px`,
@@ -193,8 +230,8 @@ export function ConfigStepMultiSelect({
                 height: `${dropdownHeight}px`,
                 opacity: 1,
                 transform: "translateY(0)",
-                borderColor: "#141414",
-                borderRadius: `16px`,
+                borderColor: isImmersive ? "#1A1A1A" : "#141414",
+                borderRadius: `${triggerRadius}px`,
               }}
             >
               {options.length ? (
@@ -206,11 +243,7 @@ export function ConfigStepMultiSelect({
                       key={option.id}
                       type="button"
                       onClick={() => toggleValue(option.id)}
-                      className={`mx-[6px] my-[4px] flex w-[calc(100%-12px)] items-center gap-3 rounded-[12px] px-[14px] text-left transition-colors ${
-                        selected
-                          ? "bg-[#101010] text-[#E1E1E1]"
-                          : "text-[#B5B5B5] hover:bg-[#101010] hover:text-[#E1E1E1]"
-                      }`}
+                      className={optionClassName(selected)}
                       style={{
                         height: `${configStepTwoScale.optionHeight}px`,
                         fontSize: `${configStepTwoScale.optionTextSize}px`,

@@ -22,6 +22,15 @@ import {
   cleanupExpiredUnpaidServerSetups,
   resolveUnpaidSetupExpiresAt,
 } from "@/lib/payments/setupCleanup";
+import { resolveDiscountPricing } from "@/lib/payments/discountPricing";
+import {
+  buildConfigCheckoutPath,
+  type PlanPricingDefinition,
+} from "@/lib/plans/catalog";
+import {
+  resolveEffectivePlanSelection,
+  syncUserPlanStateFromOrder,
+} from "@/lib/plans/state";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -34,6 +43,10 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreateCardRedirectBody = {
   guildId?: unknown;
+  planCode?: unknown;
+  billingPeriodCode?: unknown;
+  couponCode?: unknown;
+  giftCardCode?: unknown;
   renew?: unknown;
   returnTarget?: unknown;
   returnGuildId?: unknown;
@@ -45,10 +58,17 @@ type PaymentOrderRecord = {
   order_number: number;
   user_id: number;
   guild_id: string;
-  payment_method: "pix" | "card";
+  payment_method: "pix" | "card" | "trial";
   status: string;
   amount: string | number;
   currency: string;
+  plan_code: string;
+  plan_name: string;
+  plan_billing_cycle_days: number;
+  plan_max_licensed_servers: number;
+  plan_max_active_tickets: number;
+  plan_max_automations: number;
+  plan_max_monthly_actions: number;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
   provider_payload: unknown;
@@ -66,13 +86,12 @@ type CheckoutRedirectPayload = {
   source?: string | null;
 };
 
-const DEFAULT_AMOUNT = 9.99;
 const DEFAULT_CURRENCY = "BRL";
 const CHECKOUT_REDIRECT_REUSE_WINDOW_MS = 20 * 60 * 1000;
 const LICENSE_VALIDITY_DAYS = 30;
 const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  `id, order_number, user_id, guild_id, payment_method, status, amount, currency, provider_payment_id, provider_external_reference, provider_payload, paid_at, created_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, user_id, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, provider_payment_id, provider_external_reference, provider_payload, paid_at, created_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 const SERVER_TABS = new Set(["settings", "payments", "methods", "plans"]);
 
 function normalizeGuildId(value: unknown) {
@@ -116,17 +135,37 @@ function shouldForwardSessionEmailToHostedCardCheckout() {
 }
 
 function resolveAmount() {
-  const rawValue = process.env.MERCADO_PAGO_PIX_AMOUNT;
-  if (!rawValue) return DEFAULT_AMOUNT;
-
-  const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AMOUNT;
-
-  return Math.round(parsed * 100) / 100;
+  return 0;
 }
 
 function resolveCurrency() {
   return process.env.MERCADO_PAGO_PIX_CURRENCY || DEFAULT_CURRENCY;
+}
+
+function parseAmount(amount: string | number) {
+  if (typeof amount === "number") return amount;
+  const numeric = Number(amount);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+async function resolveCheckoutPlanForGuild(input: {
+  userId: number;
+  guildId: string;
+  requestedPlanCode?: unknown;
+  requestedBillingPeriodCode?: unknown;
+}) {
+  const { plan } = await resolveEffectivePlanSelection({
+    userId: input.userId,
+    guildId: input.guildId,
+    preferredPlanCode: input.requestedPlanCode,
+    preferredBillingPeriodCode: input.requestedBillingPeriodCode,
+  });
+
+  return {
+    plan,
+    amount: Math.max(0, Math.round(plan.totalAmount * 100) / 100),
+    currency: plan.currency || resolveCurrency(),
+  };
 }
 
 function resolveLicenseBaseTimestamp(order: PaymentOrderRecord) {
@@ -140,8 +179,14 @@ function resolveLicenseBaseTimestamp(order: PaymentOrderRecord) {
 }
 
 function resolveLicenseExpiresAt(order: PaymentOrderRecord) {
+  const cycleDays =
+    typeof order.plan_billing_cycle_days === "number" &&
+    Number.isFinite(order.plan_billing_cycle_days) &&
+    order.plan_billing_cycle_days > 0
+      ? order.plan_billing_cycle_days
+      : LICENSE_VALIDITY_DAYS;
   return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
+    resolveLicenseBaseTimestamp(order) + cycleDays * 24 * 60 * 60 * 1000,
   ).toISOString();
 }
 
@@ -180,12 +225,20 @@ function buildConfigReturnUrl(input: {
   orderNumber: number;
   guildId: string;
   checkoutToken: string;
+  planCode: PlanPricingDefinition["code"];
+  billingPeriodCode: PlanPricingDefinition["billingPeriodCode"];
   renew: boolean;
   returnTarget: "servers" | null;
   returnGuildId: string | null;
   returnTab: string | null;
 }) {
-  const url = new URL("/config", input.origin);
+  const url = new URL(
+    buildConfigCheckoutPath({
+      planCode: input.planCode,
+      billingPeriodCode: input.billingPeriodCode,
+    }),
+    input.origin,
+  );
   url.searchParams.set("status", input.status);
   url.searchParams.set("code", String(input.orderNumber));
   url.searchParams.set("guild", input.guildId);
@@ -386,6 +439,7 @@ async function createDraftOrderForCheckout(input: {
   amount: number;
   currency: string;
   cardChannel: string;
+  plan: PlanPricingDefinition;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
   const createdOrderResult = await supabase
@@ -397,6 +451,13 @@ async function createDraftOrderForCheckout(input: {
       status: "pending",
       amount: input.amount,
       currency: input.currency,
+      plan_code: input.plan.code,
+      plan_name: input.plan.name,
+      plan_billing_cycle_days: input.plan.billingCycleDays,
+      plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
+      plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
+      plan_max_automations: input.plan.entitlements.maxAutomations,
+      plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
       provider: "mercado_pago",
       expires_at: resolveUnpaidSetupExpiresAt(),
       provider_payload: {
@@ -404,6 +465,14 @@ async function createDraftOrderForCheckout(input: {
         step: 4,
         channel: input.cardChannel,
         precreated: true,
+        plan: {
+          code: input.plan.code,
+          name: input.plan.name,
+          billingCycleDays: input.plan.billingCycleDays,
+          entitlements: {
+            ...input.plan.entitlements,
+          },
+        },
       },
     })
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -550,8 +619,32 @@ export async function POST(request: Request) {
       );
     }
 
-    const amount = resolveAmount();
-    const currency = resolveCurrency();
+    const checkoutPlan = await resolveCheckoutPlanForGuild({
+      userId: user.id,
+      guildId,
+      requestedPlanCode: body.planCode,
+      requestedBillingPeriodCode: body.billingPeriodCode,
+    });
+
+    if (checkoutPlan.plan.isTrial) {
+      return respond(
+        {
+          ok: false,
+          message:
+            "O plano gratuito e ativado sem checkout hospedado. Use a ativacao gratuita na tela de pagamento.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const pricing = await resolveDiscountPricing({
+      baseAmount: checkoutPlan.amount,
+      currency: checkoutPlan.currency,
+      couponCode: typeof body.couponCode === "string" ? body.couponCode : null,
+      giftCardCode: typeof body.giftCardCode === "string" ? body.giftCardCode : null,
+    });
+    const amount = pricing.totalAmount;
+    const currency = pricing.currency;
     const cardEnvironment = resolveMercadoPagoCardEnvironment();
     const cardChannel =
       cardEnvironment === "production" ? "card_redirect_production" : "card_redirect_test";
@@ -561,7 +654,12 @@ export async function POST(request: Request) {
     const reusableRedirectUrl =
       reusableCheckoutToken && latestOrder ? resolveReusableRedirectUrl(latestOrder) : null;
 
-    if (reusableRedirectUrl && latestOrder) {
+    if (
+      reusableRedirectUrl &&
+      latestOrder &&
+      latestOrder.plan_code === checkoutPlan.plan.code &&
+      parseAmount(latestOrder.amount) === amount
+    ) {
       await logSecurityAuditEventSafe(auditContext, {
         action: "payment_card_redirect_post",
         outcome: "succeeded",
@@ -608,6 +706,13 @@ export async function POST(request: Request) {
           status: "pending",
           amount,
           currency,
+          plan_code: checkoutPlan.plan.code,
+          plan_name: checkoutPlan.plan.name,
+          plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
+          plan_max_licensed_servers: checkoutPlan.plan.entitlements.maxLicensedServers,
+          plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
+          plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
+          plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
           expires_at: resolveUnpaidSetupExpiresAt(latestOrder.created_at),
           provider_external_reference: null,
           provider_payload: {
@@ -615,6 +720,15 @@ export async function POST(request: Request) {
             step: 4,
             channel: cardChannel,
             reusedDraft: true,
+            pricing,
+            plan: {
+              code: checkoutPlan.plan.code,
+              name: checkoutPlan.plan.name,
+              billingCycleDays: checkoutPlan.plan.billingCycleDays,
+              entitlements: {
+                ...checkoutPlan.plan.entitlements,
+              },
+            },
           },
         })
         .eq("id", latestOrder.id)
@@ -641,6 +755,7 @@ export async function POST(request: Request) {
         amount,
         currency,
         cardChannel,
+        plan: checkoutPlan.plan,
       });
     }
 
@@ -669,6 +784,8 @@ export async function POST(request: Request) {
       orderNumber: createdOrder.order_number,
       guildId,
       checkoutToken,
+      planCode: checkoutPlan.plan.code,
+      billingPeriodCode: checkoutPlan.plan.billingPeriodCode,
       renew,
       returnTarget,
       returnGuildId,
@@ -680,6 +797,8 @@ export async function POST(request: Request) {
       orderNumber: createdOrder.order_number,
       guildId,
       checkoutToken,
+      planCode: checkoutPlan.plan.code,
+      billingPeriodCode: checkoutPlan.plan.billingPeriodCode,
       renew,
       returnTarget,
       returnGuildId,
@@ -691,6 +810,8 @@ export async function POST(request: Request) {
       orderNumber: createdOrder.order_number,
       guildId,
       checkoutToken,
+      planCode: checkoutPlan.plan.code,
+      billingPeriodCode: checkoutPlan.plan.billingPeriodCode,
       renew,
       returnTarget,
       returnGuildId,
@@ -700,8 +821,8 @@ export async function POST(request: Request) {
     const preference = await createMercadoPagoCardCheckoutPreference({
       amount,
       currency,
-      title: "Flowdesk Plano Pro",
-      description: `Licenca mensal do servidor ${guildId} no painel Flowdesk`,
+      title: checkoutPlan.plan.name,
+      description: `Assinatura ${checkoutPlan.plan.name} para o servidor ${guildId} no painel Flowdesk`,
       externalReference,
       payerEmail,
       payerName: user.display_name || user.global_name || user.username,
@@ -716,8 +837,21 @@ export async function POST(request: Request) {
         flowdesk_user_id: String(user.id),
         flowdesk_discord_user_id: user.discord_user_id,
         flowdesk_guild_id: guildId,
+        flowdesk_plan_code: checkoutPlan.plan.code,
+        flowdesk_plan_name: checkoutPlan.plan.name,
         flowdesk_payment_channel: cardChannel,
         flowdesk_checkout_surface: "config_step_4_card_redirect",
+        flowdesk_pricing_total: String(pricing.totalAmount),
+        ...(pricing.coupon?.code
+          ? {
+              flowdesk_coupon_code: pricing.coupon.code,
+            }
+          : {}),
+        ...(pricing.giftCard?.code
+          ? {
+              flowdesk_gift_card_code: pricing.giftCard.code,
+            }
+          : {}),
       },
       idempotencyKey: `flowdesk-card-redirect-order-${createdOrder.id}`,
     });
@@ -741,6 +875,15 @@ export async function POST(request: Request) {
           step: 4,
           channel: cardChannel,
           checkoutMode: "redirect",
+          pricing,
+          plan: {
+            code: checkoutPlan.plan.code,
+            name: checkoutPlan.plan.name,
+            billingCycleDays: checkoutPlan.plan.billingCycleDays,
+            entitlements: {
+              ...checkoutPlan.plan.entitlements,
+            },
+          },
           checkoutPreferenceId: preference.id,
           checkoutRedirectUrl: redirectUrl,
           checkoutEnvironment: cardEnvironment,
@@ -773,6 +916,10 @@ export async function POST(request: Request) {
         preferenceId: preference.id,
       },
     });
+
+    if (updatedOrderResult.data.status === "approved") {
+      await syncUserPlanStateFromOrder(updatedOrderResult.data);
+    }
 
     return respond({
       ok: true,

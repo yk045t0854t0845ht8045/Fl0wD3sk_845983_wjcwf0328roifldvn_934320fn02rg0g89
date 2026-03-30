@@ -29,6 +29,9 @@ type PaymentOrderRecord = {
   status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
   amount: string | number;
   currency: string;
+  plan_code: string;
+  plan_name: string;
+  plan_billing_cycle_days: number;
   payer_name: string | null;
   payer_document: string | null;
   payer_document_type: "CPF" | "CNPJ" | null;
@@ -46,7 +49,7 @@ type PaymentOrderRecord = {
 };
 
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  "id, order_number, guild_id, payment_method, status, amount, currency, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, created_at, updated_at";
+  "id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, created_at, updated_at";
 
 function normalizeGuildId(value: unknown) {
   if (typeof value !== "string") return null;
@@ -88,6 +91,9 @@ function toApiOrder(record: PaymentOrderRecord) {
     status: record.status,
     amount: parseAmount(record.amount),
     currency: record.currency,
+    planCode: record.plan_code,
+    planName: record.plan_name,
+    planBillingCycleDays: record.plan_billing_cycle_days,
     payerName: record.payer_name,
     payerDocumentMasked: maskPayerDocument(record.payer_document),
     payerDocumentType: record.payer_document_type,

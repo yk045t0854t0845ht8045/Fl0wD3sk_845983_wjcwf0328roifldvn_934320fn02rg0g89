@@ -30,6 +30,11 @@ import {
   resolveUnpaidSetupEffectiveExpiresAt,
   resolveUnpaidSetupExpiresAt,
 } from "@/lib/payments/setupCleanup";
+import type { PlanPricingDefinition } from "@/lib/plans/catalog";
+import {
+  resolveEffectivePlanSelection,
+  syncUserPlanStateFromOrder,
+} from "@/lib/plans/state";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -42,6 +47,8 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreateCardPaymentBody = {
   guildId?: unknown;
+  planCode?: unknown;
+  billingPeriodCode?: unknown;
   payerName?: unknown;
   payerDocument?: unknown;
   billingZipCode?: unknown;
@@ -59,11 +66,19 @@ type AuthUserRecord = {
 type PaymentOrderRecord = {
   id: number;
   order_number: number;
+  user_id: number;
   guild_id: string;
-  payment_method: "pix" | "card";
+  payment_method: "pix" | "card" | "trial";
   status: string;
   amount: string | number;
   currency: string;
+  plan_code: string | null;
+  plan_name: string | null;
+  plan_billing_cycle_days: number | null;
+  plan_max_licensed_servers: number | null;
+  plan_max_active_tickets: number | null;
+  plan_max_automations: number | null;
+  plan_max_monthly_actions: number | null;
   payer_name: string | null;
   payer_document: string | null;
   payer_document_type: "CPF" | "CNPJ" | null;
@@ -89,7 +104,7 @@ const CARD_PENDING_REUSE_WINDOW_MS = 15 * 60 * 1000;
 const LICENSE_VALIDITY_DAYS = 30;
 const LICENSE_VALIDITY_MS = LICENSE_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  "id, order_number, guild_id, payment_method, status, amount, currency, payer_name, payer_document, payer_document_type, provider_payment_id, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, created_at, updated_at";
+  "id, order_number, user_id, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_type, provider_payment_id, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, created_at, updated_at";
 
 function normalizeGuildId(value: unknown) {
   if (typeof value !== "string") return null;
@@ -273,8 +288,14 @@ function resolveLicenseBaseTimestamp(order: PaymentOrderRecord) {
 }
 
 function resolveLicenseExpiresAt(order: PaymentOrderRecord) {
+  const cycleDays =
+    typeof order.plan_billing_cycle_days === "number" &&
+    Number.isFinite(order.plan_billing_cycle_days) &&
+    order.plan_billing_cycle_days > 0
+      ? order.plan_billing_cycle_days
+      : LICENSE_VALIDITY_DAYS;
   return new Date(
-    resolveLicenseBaseTimestamp(order) + LICENSE_VALIDITY_MS,
+    resolveLicenseBaseTimestamp(order) + cycleDays * 24 * 60 * 60 * 1000,
   ).toISOString();
 }
 
@@ -297,6 +318,26 @@ function resolveCurrency() {
   return process.env.MERCADO_PAGO_PIX_CURRENCY || DEFAULT_CURRENCY;
 }
 
+async function resolveCheckoutPlanForGuild(input: {
+  userId: number;
+  guildId: string;
+  requestedPlanCode?: unknown;
+  requestedBillingPeriodCode?: unknown;
+}) {
+  const { plan } = await resolveEffectivePlanSelection({
+    userId: input.userId,
+    guildId: input.guildId,
+    preferredPlanCode: input.requestedPlanCode,
+    preferredBillingPeriodCode: input.requestedBillingPeriodCode,
+  });
+
+  return {
+    plan,
+    amount: Math.max(0, Math.round(plan.totalAmount * 100) / 100),
+    currency: plan.currency || resolveCurrency(),
+  };
+}
+
 function toApiOrder(record: PaymentOrderRecord) {
   const qrDataUri = toQrDataUri(record.provider_qr_base64);
 
@@ -308,6 +349,9 @@ function toApiOrder(record: PaymentOrderRecord) {
     status: record.status,
     amount: parseAmount(record.amount),
     currency: record.currency,
+    planCode: record.plan_code,
+    planName: record.plan_name,
+    planBillingCycleDays: record.plan_billing_cycle_days,
     payerName: record.payer_name,
     payerDocumentMasked: maskPayerDocument(record.payer_document),
     payerDocumentType: record.payer_document_type,
@@ -717,6 +761,7 @@ async function createDraftOrderForCheckout(input: {
   amount: number;
   currency: string;
   cardChannel: string;
+  plan: PlanPricingDefinition;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -729,6 +774,13 @@ async function createDraftOrderForCheckout(input: {
       status: "pending",
       amount: input.amount,
       currency: input.currency,
+      plan_code: input.plan.code,
+      plan_name: input.plan.name,
+      plan_billing_cycle_days: input.plan.billingCycleDays,
+      plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
+      plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
+      plan_max_automations: input.plan.entitlements.maxAutomations,
+      plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
       provider: "mercado_pago",
       expires_at: resolveUnpaidSetupExpiresAt(),
       provider_payload: {
@@ -736,6 +788,14 @@ async function createDraftOrderForCheckout(input: {
         step: 4,
         channel: input.cardChannel,
         precreated: true,
+        plan: {
+          code: input.plan.code,
+          name: input.plan.name,
+          billingCycleDays: input.plan.billingCycleDays,
+          entitlements: {
+            ...input.plan.entitlements,
+          },
+        },
       },
     })
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -1023,8 +1083,26 @@ export async function POST(request: Request) {
       return response;
     }
 
-    const amount = resolveAmount();
-    const currency = resolveCurrency();
+    const checkoutPlan = await resolveCheckoutPlanForGuild({
+      userId: user.id,
+      guildId,
+      requestedPlanCode: body.planCode,
+      requestedBillingPeriodCode: body.billingPeriodCode,
+    });
+
+    if (checkoutPlan.plan.isTrial) {
+      return respond(
+        {
+          ok: false,
+          message:
+            "O plano gratuito e ativado sem cartao. Use a acao de ativacao gratuita na tela de pagamento.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const amount = checkoutPlan.amount;
+    const currency = checkoutPlan.currency;
     const cardEnvironment = resolveMercadoPagoCardEnvironment();
     const cardChannel =
       cardEnvironment === "production" ? "card_production" : "card_test";
@@ -1043,6 +1121,13 @@ export async function POST(request: Request) {
           status: "pending",
           amount,
           currency,
+          plan_code: checkoutPlan.plan.code,
+          plan_name: checkoutPlan.plan.name,
+          plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
+          plan_max_licensed_servers: checkoutPlan.plan.entitlements.maxLicensedServers,
+          plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
+          plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
+          plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
           expires_at: resolveUnpaidSetupExpiresAt(latestOrder.created_at),
           payer_name: payerName,
           payer_document: payerDocument.normalized,
@@ -1052,6 +1137,27 @@ export async function POST(request: Request) {
           provider_qr_code: null,
           provider_qr_base64: null,
           provider_ticket_url: null,
+          provider_payload: {
+            source: "flowdesk_checkout",
+            step: 4,
+            channel: cardChannel,
+            pricing: {
+              baseAmount: amount,
+              subtotalAmount: amount,
+              totalAmount: amount,
+              currency,
+              coupon: null,
+              giftCard: null,
+            },
+            plan: {
+              code: checkoutPlan.plan.code,
+              name: checkoutPlan.plan.name,
+              billingCycleDays: checkoutPlan.plan.billingCycleDays,
+              entitlements: {
+                ...checkoutPlan.plan.entitlements,
+              },
+            },
+          },
         })
         .eq("id", latestOrder.id)
         .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -1076,6 +1182,7 @@ export async function POST(request: Request) {
         amount,
         currency,
         cardChannel,
+        plan: checkoutPlan.plan,
       });
 
       const preparedOrderResult = await supabase
@@ -1115,7 +1222,7 @@ export async function POST(request: Request) {
     try {
       const mercadoPagoPayment = await createMercadoPagoCardPayment({
         amount,
-        description: `Flowdesk plano do servidor #${createdOrder.order_number}`,
+        description: `${checkoutPlan.plan.name} #${createdOrder.order_number}`,
         payerName,
         payerEmail: discordPayerEmail,
         payerIdentification: {
@@ -1132,6 +1239,8 @@ export async function POST(request: Request) {
           flowdesk_user_id: String(user.id),
           flowdesk_discord_user_id: user.discord_user_id,
           flowdesk_guild_id: guildId,
+          flowdesk_plan_code: checkoutPlan.plan.code,
+          flowdesk_plan_name: checkoutPlan.plan.name,
           flowdesk_payment_channel: cardChannel,
           flowdesk_checkout_surface: "config_step_4_card",
         },
@@ -1148,8 +1257,8 @@ export async function POST(request: Request) {
           items: [
             {
               id: `flowdesk-plan-${guildId}`,
-              title: "Flowdesk Plano Pro",
-              description: `Licenca mensal do servidor ${guildId} no painel Flowdesk`,
+              title: checkoutPlan.plan.name,
+              description: `${checkoutPlan.plan.checkoutPeriodLabel} para o servidor ${guildId} no painel Flowdesk`,
               category_id: "services",
               quantity: 1,
               unit_price: amount,
@@ -1272,6 +1381,10 @@ export async function POST(request: Request) {
           status: updatedOrderResult.data.status,
         },
       });
+
+      if (updatedOrderResult.data.status === "approved") {
+        await syncUserPlanStateFromOrder(updatedOrderResult.data);
+      }
 
       const apiOrder = toApiOrder(updatedOrderResult.data);
       const retryAfterSeconds =
@@ -1407,6 +1520,10 @@ export async function POST(request: Request) {
               recoveredAfterFailure: true,
             },
           });
+
+          if (recoveredOrder.status === "approved") {
+            await syncUserPlanStateFromOrder(recoveredOrder);
+          }
 
           return respond({
             ok: true,

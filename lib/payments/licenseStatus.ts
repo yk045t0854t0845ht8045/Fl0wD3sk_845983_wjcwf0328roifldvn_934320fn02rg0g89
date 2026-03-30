@@ -36,6 +36,7 @@ export type LicenseApprovedOrderRecord = ApprovedOrderRecord & {
   order_number?: number;
   guild_id?: string;
   user_id?: number;
+  plan_billing_cycle_days?: number | null;
 };
 
 export type ResolvedLicenseCoverage<
@@ -129,6 +130,17 @@ export function resolveLicenseBaseTimestamp(order: ApprovedOrderRecord) {
   return Date.now();
 }
 
+function resolveLicenseValidityMs(order: LicenseApprovedOrderRecord) {
+  const cycleDays =
+    typeof order.plan_billing_cycle_days === "number" &&
+    Number.isFinite(order.plan_billing_cycle_days) &&
+    order.plan_billing_cycle_days > 0
+      ? order.plan_billing_cycle_days
+      : LICENSE_VALIDITY_DAYS;
+
+  return cycleDays * 24 * 60 * 60 * 1000;
+}
+
 export function resolveLicenseCoverageForApprovedOrders<
   TOrder extends LicenseApprovedOrderRecord,
 >(approvedOrders: TOrder[], nowMs = Date.now()) {
@@ -173,7 +185,7 @@ export function resolveLicenseCoverageForApprovedOrders<
       }
     }
 
-    const licenseExpiresAtMs = licenseStartsAtMs + LICENSE_VALIDITY_MS;
+    const licenseExpiresAtMs = licenseStartsAtMs + resolveLicenseValidityMs(order);
     const graceExpiresAtMs = licenseExpiresAtMs + EXPIRED_GRACE_MS;
     const renewalWindowStartsAtMs =
       licenseExpiresAtMs - LICENSE_RENEWAL_WINDOW_MS;

@@ -1,13 +1,16 @@
 ﻿
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   hasStepFourDraftValues,
   type StepFourDraft,
+  type StepFourPaymentRail,
+  type StepFourPhase,
   type StepFourView,
 } from "@/lib/auth/configContext";
 import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal/content";
@@ -25,15 +28,36 @@ import {
   CARD_PAYMENTS_COMING_SOON_BADGE,
   CARD_PAYMENTS_DISABLED_MESSAGE,
 } from "@/lib/payments/cardAvailability";
+import {
+  buildConfigCheckoutPath,
+  DEFAULT_PLAN_BILLING_PERIOD_CODE,
+  DEFAULT_PLAN_CODE,
+  formatPlanUsageLimit,
+  getAllPlanPricingDefinitions,
+  getAvailableBillingPeriodsForPlan,
+  isPlanBillingPeriodCode,
+  isPlanCode,
+  normalizePlanBillingPeriodCode,
+  normalizePlanCode,
+  resolvePlanPricing,
+  type PlanBillingPeriodCode,
+  type PlanBillingPeriodDefinition,
+  type PlanCode,
+  type PlanPricingDefinition,
+} from "@/lib/plans/catalog";
 
 type ConfigStepFourProps = {
   displayName: string;
   guildId: string | null;
+  initialPlanCode: PlanCode;
+  initialBillingPeriodCode?: PlanBillingPeriodCode;
+  hasExplicitInitialPlan?: boolean;
   initialDraft?: StepFourDraft | null;
   onDraftChange?: (guildId: string, draft: StepFourDraft) => void;
 };
 
 type PaymentMethod = "pix" | "card";
+type CheckoutRail = StepFourPaymentRail;
 type ValidationStatus = "idle" | "validating" | "valid" | "invalid";
 type CardBrand = "visa" | "mastercard" | "amex" | "elo" | null;
 
@@ -41,10 +65,13 @@ type PixOrder = {
   id: number;
   orderNumber: number;
   guildId: string;
-  method: "pix" | "card";
+  method: "pix" | "card" | "trial";
   status: string;
   amount: number;
   currency: string;
+  planCode?: string | null;
+  planName?: string | null;
+  planBillingCycleDays?: number | null;
   payerName: string | null;
   payerDocumentMasked: string | null;
   payerDocumentType: "CPF" | "CNPJ" | null;
@@ -132,10 +159,14 @@ declare global {
 
 type MethodSelectorPanelProps = {
   className: string;
-  onChooseMethod: (method: PaymentMethod) => void;
+  onChoosePix: () => void;
+  onSelectHostedRail: (rail: Exclude<CheckoutRail, "pix">) => void;
   methodMessage: string | null;
   canInteract: boolean;
   cardEnabled: boolean;
+  selectedRail: CheckoutRail | null;
+  showHeader?: boolean;
+  showLegalText?: boolean;
 };
 
 type PixFormPanelProps = {
@@ -202,6 +233,172 @@ type StatusResultPanelProps = {
   loaderColorClassName?: string;
   panelTone?: "neutral" | "live" | "success";
 };
+
+type DiscountPreviewApiResponse = {
+  ok: boolean;
+  message?: string;
+  preview?: {
+    baseAmount: number;
+    currency: string;
+    coupon: {
+      code: string;
+      label: string;
+      amount: number;
+      valid: boolean;
+      message: string | null;
+    } | null;
+    giftCard: {
+      code: string;
+      label: string;
+      amount: number;
+      valid: boolean;
+      message: string | null;
+    } | null;
+    subtotalAmount: number;
+    totalAmount: number;
+  };
+};
+
+type PlanSummary = PlanPricingDefinition;
+type BillingPeriodOption = PlanBillingPeriodDefinition;
+
+type PlanApiResponse = {
+  ok: boolean;
+  message?: string;
+  plan?: {
+    planCode: PlanCode;
+    planName: string;
+    billingPeriodCode: PlanBillingPeriodCode;
+    billingPeriodLabel: string;
+    billingPeriodMonths: number;
+    monthlyAmount: number;
+    compareMonthlyAmount: number;
+    baseTotalAmount: number;
+    totalAmount: number;
+    compareTotalAmount: number;
+    currency: string;
+    billingCycleDays: number;
+    billingLabel: string;
+    totalLabel: string;
+    checkoutPeriodLabel: string;
+    renewalLabel: string;
+    cycleDiscountPercent: number;
+    cycleBadge: string | null;
+    isTrial: boolean;
+    entitlements: PlanSummary["entitlements"];
+    description: string;
+    features: string[];
+    recurringEnabled: boolean;
+    recurringMethodId: string | null;
+    availablePlans: PlanSummary[];
+    accountPlan: {
+      planCode: PlanCode;
+      planName: string;
+      status: string;
+      amount: number;
+      currency: string;
+      billingCycleDays: number;
+      maxLicensedServers: number;
+      maxActiveTickets: number;
+      maxAutomations: number;
+      maxMonthlyActions: number;
+      activatedAt: string | null;
+      expiresAt: string | null;
+      lastPaymentGuildId: string | null;
+    } | null;
+    availableBillingPeriods?: BillingPeriodOption[];
+  };
+};
+
+function resolvePlanSummary(
+  planCode: PlanCode,
+  billingPeriodCode: PlanBillingPeriodCode,
+  availablePlans: PlanSummary[],
+) {
+  return (
+    availablePlans.find(
+      (plan) =>
+        plan.code === planCode && plan.billingPeriodCode === billingPeriodCode,
+    ) || resolvePlanPricing(planCode, billingPeriodCode)
+  );
+}
+
+function CompactPlanSelect({
+  plans,
+  selectedPlanCode,
+  onSelectPlan,
+  disabled,
+}: {
+  plans: PlanSummary[];
+  selectedPlanCode: PlanCode;
+  onSelectPlan: (planCode: PlanCode) => void;
+  disabled: boolean;
+}) {
+  const selectedPlan =
+    plans.find((plan) => plan.code === selectedPlanCode) || null;
+  const selectWidth = `${Math.max((selectedPlan?.name.length || 12) + 9, 20)}ch`;
+
+  return (
+    <div className="inline-flex" style={{ width: selectWidth }}>
+      <ConfigStepSelect
+        label=""
+        placeholder="Selecionar plano"
+        options={plans.map((plan) => ({
+          id: plan.code,
+          name: plan.name,
+        }))}
+        value={selectedPlanCode}
+        onChange={(value) => onSelectPlan(value as PlanCode)}
+        disabled={disabled}
+        loading={false}
+        controlHeightPx={56}
+        variant="immersive"
+      />
+    </div>
+  );
+}
+
+function BillingPeriodSwitcher({
+  periods,
+  selectedBillingPeriodCode,
+  onSelectBillingPeriod,
+  disabled,
+  className,
+}: {
+  periods: BillingPeriodOption[];
+  selectedBillingPeriodCode: PlanBillingPeriodCode;
+  onSelectBillingPeriod: (billingPeriodCode: PlanBillingPeriodCode) => void;
+  disabled: boolean;
+  className?: string;
+}) {
+  const selectedPeriod =
+    periods.find((period) => period.code === selectedBillingPeriodCode) || null;
+  const selectWidth = `${Math.max((selectedPeriod?.label.length || 9) + 6, 14)}ch`;
+
+  return (
+    <div
+      className={`inline-flex max-w-full ${className || ""}`}
+      style={{ width: selectWidth }}
+    >
+      <ConfigStepSelect
+        label=""
+        placeholder="Selecionar periodo"
+        options={periods.map((period) => ({
+          id: period.code,
+          name: period.label,
+        }))}
+        value={selectedBillingPeriodCode}
+        onChange={(value) =>
+          onSelectBillingPeriod(value as PlanBillingPeriodCode)
+        }
+        disabled={disabled || periods.length <= 1}
+        loading={false}
+        controlHeightPx={46}
+        variant="immersive"
+      />
+    </div>
+  );
+}
 
 const ELO_PREFIXES = [
   "401178",
@@ -280,10 +477,24 @@ const CHECKOUT_STATUS_QUERY_KEYS = [
 
 const EMPTY_STEP_FOUR_DRAFT: StepFourDraft = {
   visited: false,
+  phase: "cart",
   view: "methods",
+  selectedRail: null,
+  selectedPlanCode: DEFAULT_PLAN_CODE,
+  selectedBillingPeriodCode: DEFAULT_PLAN_BILLING_PERIOD_CODE,
   lastKnownOrderNumber: null,
+  couponCode: "",
+  giftCardCode: "",
   payerDocument: "",
   payerName: "",
+  billingFullName: "",
+  billingEmail: "",
+  billingCountry: "Brasil",
+  billingPostalCode: "",
+  billingRegion: "",
+  billingCity: "",
+  billingAddressLine1: "",
+  billingAddressLine2: "",
   cardNumber: "",
   cardHolderName: "",
   cardExpiry: "",
@@ -297,8 +508,18 @@ function normalizeDraftText(value: unknown, maxLength: number) {
   return value.slice(0, maxLength);
 }
 
-function buildStepFourDraft(input: Partial<StepFourDraft> | null | undefined): StepFourDraft {
-  if (!input) return EMPTY_STEP_FOUR_DRAFT;
+function buildStepFourDraft(
+  input: Partial<StepFourDraft> | null | undefined,
+  fallbackPlanCode: PlanCode = DEFAULT_PLAN_CODE,
+  fallbackBillingPeriodCode: PlanBillingPeriodCode = DEFAULT_PLAN_BILLING_PERIOD_CODE,
+): StepFourDraft {
+  if (!input) {
+    return {
+      ...EMPTY_STEP_FOUR_DRAFT,
+      selectedPlanCode: fallbackPlanCode,
+      selectedBillingPeriodCode: fallbackBillingPeriodCode,
+    };
+  }
 
   const view: StepFourView =
     input.view === "pix_form" ||
@@ -309,15 +530,38 @@ function buildStepFourDraft(input: Partial<StepFourDraft> | null | undefined): S
 
   return {
     visited: Boolean(input.visited),
+    phase: input.phase === "checkout" ? "checkout" : "cart",
     view,
+    selectedRail:
+      input.selectedRail === "pix" ||
+      input.selectedRail === "google_pay" ||
+      input.selectedRail === "nupay" ||
+      input.selectedRail === "paypal"
+        ? input.selectedRail
+        : null,
+    selectedPlanCode: normalizePlanCode(input.selectedPlanCode, fallbackPlanCode),
+    selectedBillingPeriodCode: normalizePlanBillingPeriodCode(
+      input.selectedBillingPeriodCode,
+      fallbackBillingPeriodCode,
+    ),
     lastKnownOrderNumber:
       typeof input.lastKnownOrderNumber === "number" &&
       Number.isInteger(input.lastKnownOrderNumber) &&
       input.lastKnownOrderNumber > 0
         ? input.lastKnownOrderNumber
         : null,
+    couponCode: normalizeDraftText(input.couponCode, 64),
+    giftCardCode: normalizeDraftText(input.giftCardCode, 64),
     payerDocument: normalizeDraftText(input.payerDocument, 24),
     payerName: normalizeDraftText(input.payerName, 120),
+    billingFullName: normalizeDraftText(input.billingFullName, 120),
+    billingEmail: normalizeDraftText(input.billingEmail, 160),
+    billingCountry: normalizeDraftText(input.billingCountry, 80) || "Brasil",
+    billingPostalCode: normalizeDraftText(input.billingPostalCode, 16),
+    billingRegion: normalizeDraftText(input.billingRegion, 80),
+    billingCity: normalizeDraftText(input.billingCity, 80),
+    billingAddressLine1: normalizeDraftText(input.billingAddressLine1, 160),
+    billingAddressLine2: normalizeDraftText(input.billingAddressLine2, 160),
     cardNumber: normalizeDraftText(input.cardNumber, 32),
     cardHolderName: normalizeDraftText(input.cardHolderName, 120),
     cardExpiry: normalizeDraftText(input.cardExpiry, 8),
@@ -362,11 +606,44 @@ function isCachedPixOrder(value: unknown): value is PixOrder {
     typeof data.id === "number" &&
     typeof data.orderNumber === "number" &&
     typeof data.guildId === "string" &&
-    (data.method === "pix" || data.method === "card") &&
+    (data.method === "pix" || data.method === "card" || data.method === "trial") &&
     typeof data.status === "string" &&
     typeof data.amount === "number" &&
     typeof data.currency === "string"
   );
+}
+
+function replaceCurrentPlanPath(
+  planCode: PlanCode,
+  billingPeriodCode: PlanBillingPeriodCode,
+) {
+  if (typeof window === "undefined") return;
+
+  const url = new URL(window.location.href);
+  const nextPathname = buildConfigCheckoutPath({
+    planCode,
+    billingPeriodCode,
+  });
+  if (url.pathname === nextPathname) return;
+
+  window.history.replaceState(
+    null,
+    "",
+    buildConfigUrlWithHashRoute(nextPathname, url.search, url.hash),
+  );
+}
+
+function buildConfigUrlWithHashRoute(
+  pathname: string,
+  search: string,
+  hash: string,
+) {
+  const normalizedPathname =
+    hash.startsWith("#/") && pathname !== "/" && !pathname.endsWith("/")
+      ? `${pathname}/`
+      : pathname;
+
+  return `${normalizedPathname}${search}${hash}`;
 }
 
 function readCachedOrderByGuild(guildId: string): PixOrder | null {
@@ -568,6 +845,64 @@ function buildActiveLicenseMessage(licenseExpiresAt: string | null | undefined) 
   return "Licenca ativa para este servidor. Pagamento bloqueado ate o fim do periodo.";
 }
 
+function roundMoney(amount: number) {
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100) / 100;
+}
+
+function formatMoney(amount: number, currency = "BRL") {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+  }).format(roundMoney(amount));
+}
+
+function buildFallbackDiscountPreview(input: {
+  baseAmount: number;
+  currency: string;
+}): NonNullable<DiscountPreviewApiResponse["preview"]> {
+  return {
+    baseAmount: input.baseAmount,
+    currency: input.currency,
+    coupon: null,
+    giftCard: null,
+    subtotalAmount: input.baseAmount,
+    totalAmount: input.baseAmount,
+  };
+}
+
+function resolveCheckoutRailLabel(rail: CheckoutRail | null) {
+  switch (rail) {
+    case "pix":
+      return "PIX";
+    case "google_pay":
+      return "Google Pay";
+    case "nupay":
+      return "NuPay";
+    case "paypal":
+      return "PayPal";
+    default:
+      return "Selecione um metodo";
+  }
+}
+
+function formatPromoCountdown(targetTimestamp: number) {
+  const remainingMs = Math.max(0, targetTimestamp - Date.now());
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return {
+    days: String(days).padStart(2, "0"),
+    hours: String(hours).padStart(2, "0"),
+    minutes: String(minutes).padStart(2, "0"),
+    seconds: String(seconds).padStart(2, "0"),
+  };
+}
+
 function readCheckoutStatusQuery() {
   if (typeof window === "undefined") {
     return {
@@ -684,7 +1019,11 @@ function setCheckoutStatusQuery(input: {
   url.searchParams.delete("paymentId");
   url.searchParams.delete("collection_id");
 
-  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history.replaceState(
+    null,
+    "",
+    buildConfigUrlWithHashRoute(url.pathname, url.search, url.hash),
+  );
 }
 
 function buildPaymentOrderLookupUrl(input: {
@@ -727,7 +1066,11 @@ function clearCheckoutStatusQuery() {
     url.searchParams.delete(key);
   }
 
-  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  window.history.replaceState(
+    null,
+    "",
+    buildConfigUrlWithHashRoute(url.pathname, url.search, url.hash),
+  );
 }
 
 function resolveRetryAfterSeconds(
@@ -1386,8 +1729,11 @@ function paymentStatusLabel(order: PixOrder | null | undefined) {
 
   switch (status) {
     case "approved":
-      return "Pagamento aprovado";
+      return method === "trial" ? "Plano gratuito ativado" : "Pagamento aprovado";
     case "pending":
+      if (method === "trial") {
+        return "Ativacao gratuita em andamento";
+      }
       if (method === "card") {
         return reason
           ? `Pagamento em analise: ${reason}`
@@ -1437,8 +1783,11 @@ function resolveStatusVisual(order: PixOrder | null | undefined): StatusVisual {
 
   if (status === "approved") {
     return {
-      title: "Ja Aprovado, Todos seus sistemas estao ja online!!",
-      label: "Pagamento aprovado",
+      title:
+        method === "trial"
+          ? "Plano gratuito ativado, seu servidor ja pode seguir com a operacao"
+          : "Ja Aprovado, Todos seus sistemas estao ja online!!",
+      label: method === "trial" ? "Plano gratuito ativado" : "Pagamento aprovado",
       colorClassName: "text-[#6AE25A]",
       iconPath: "/cdn/icons/check.png",
       showRegenerate: false,
@@ -1532,6 +1881,10 @@ function resolveStatusSupportCopy(order: PixOrder | null | undefined) {
   }
 
   const diagnostic = resolveOrderDiagnostic(order);
+
+  if (order.method === "trial" && order.status === "approved") {
+    return "O periodo gratuito ja foi liberado para este servidor. A ativacao foi concluida automaticamente e o painel segue pronto para voce continuar.";
+  }
 
   if (order.method === "card" && order.status === "pending") {
     return diagnostic
@@ -1696,7 +2049,9 @@ function ValidationIndicator({
 function CheckoutLegalText({ className }: { className: string }) {
   return (
     <p className={className}>
-      O Flowdesk nao realizara renovacao automatica do pagamento no checkout atual. No momento, o pagamento esta disponivel via PIX e o cartao retornara em breve com a mesma camada de seguranca.
+      PIX continua interno no Flowdesk. Cartao, Google Pay, NuPay e PayPal usam
+      a camada segura do Mercado Pago, com tokenizacao, antifraude e retorno
+      protegido do checkout.
       <br />
       Ao continuar com a confirmacao do pagamento, voce declara que concorda com nossos{" "}
       <Link
@@ -1717,50 +2072,258 @@ function CheckoutLegalText({ className }: { className: string }) {
   );
 }
 
+function PaymentMethodChevron({ disabled = false }: { disabled?: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      className={`h-[18px] w-[18px] ${disabled ? "text-[#4E4E4E]" : "text-[#AFAFAF]"}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m5 7.5 5 5 5-5" />
+    </svg>
+  );
+}
+
+function CardBrandCluster() {
+  return (
+    <div className="flex items-center gap-[8px] opacity-80">
+      <Image
+        src="/cdn/icons/card_visa.svg"
+        alt="Visa"
+        width={36}
+        height={12}
+        className="h-[12px] w-auto object-contain"
+      />
+      <Image
+        src="/cdn/icons/card_mastercard.svg"
+        alt="Mastercard"
+        width={24}
+        height={18}
+        className="h-[18px] w-auto object-contain"
+      />
+      <Image
+        src="/cdn/icons/card_amex.svg"
+        alt="American Express"
+        width={42}
+        height={14}
+        className="h-[14px] w-auto object-contain"
+      />
+      <Image
+        src="/cdn/icons/card_elo.svg"
+        alt="Elo"
+        width={24}
+        height={16}
+        className="h-[16px] w-auto object-contain"
+      />
+    </div>
+  );
+}
+
+function HostedPaymentWordmark({
+  rail,
+}: {
+  rail: Exclude<CheckoutRail, "pix">;
+}) {
+  if (rail === "google_pay") {
+    return (
+      <span className="inline-flex items-center gap-[2px] text-[15px] font-semibold tracking-[-0.03em]">
+        <span className="text-[#4285F4]">G</span>
+        <span className="text-[#DB4437]">o</span>
+        <span className="text-[#F4B400]">o</span>
+        <span className="text-[#4285F4]">g</span>
+        <span className="text-[#0F9D58]">l</span>
+        <span className="text-[#DB4437]">e</span>
+        <span className="ml-[4px] text-[#E8E8E8]">Pay</span>
+      </span>
+    );
+  }
+
+  if (rail === "nupay") {
+    return (
+      <span className="inline-flex items-center gap-[4px] text-[15px] font-semibold tracking-[-0.03em] text-[#B987FF]">
+        <span>Nu</span>
+        <span className="text-[#F1E7FF]">Pay</span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-[4px] text-[15px] font-semibold tracking-[-0.03em]">
+      <span className="text-[#0070E0]">Pay</span>
+      <span className="text-[#62B0FF]">Pal</span>
+    </span>
+  );
+}
+
+function PaymentMethodRow({
+  label,
+  description,
+  active = false,
+  disabled = false,
+  onClick,
+  leading,
+  trailing,
+}: {
+  label: string;
+  description: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  leading?: ReactNode;
+  trailing: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex min-h-[74px] w-full items-center justify-between gap-[16px] rounded-[20px] border px-[18px] py-[14px] text-left transition-[border-color,background-color,opacity,transform] ${
+        active
+          ? "border-[rgba(84,148,255,0.42)] bg-[rgba(11,20,34,0.92)]"
+          : "border-[#1C1C1C] bg-[#0B0B0B] hover:border-[#2B2B2B] hover:bg-[#101010]"
+      } disabled:cursor-not-allowed disabled:opacity-45`}
+    >
+      <span className="flex min-w-0 items-center gap-[14px]">
+        {leading ? (
+          <span className="relative flex h-[24px] w-[24px] shrink-0 items-center justify-center">
+            {leading}
+          </span>
+        ) : null}
+        <span className="min-w-0">
+          <span className="block text-[18px] font-medium tracking-[-0.03em] text-[#F1F1F1]">
+            {label}
+          </span>
+          <span className="mt-[4px] block text-[12px] leading-[1.55] text-[#8A8A8A]">
+            {description}
+          </span>
+        </span>
+      </span>
+
+      <span className="flex shrink-0 items-center gap-[12px]">{trailing}</span>
+    </button>
+  );
+}
+
 function MethodSelectorPanel({
   className,
-  onChooseMethod,
+  onChoosePix,
+  onSelectHostedRail,
   methodMessage,
   canInteract,
   cardEnabled,
+  selectedRail,
+  showHeader = true,
+  showLegalText = true,
 }: MethodSelectorPanelProps) {
   return (
     <div className={className}>
-      <h2 className="text-center text-[33px] font-medium text-[#D8D8D8] max-[1529px]:hidden">
-        Escolha o metodo de pagamento
-      </h2>
+      {showHeader ? (
+        <>
+          <h2 className="text-center text-[33px] font-medium text-[#D8D8D8] max-[1529px]:hidden">
+            Escolha o metodo de pagamento
+          </h2>
 
-      <div className="mt-[25px] mb-[25px] h-[2px] w-full bg-[#242424] max-[1529px]:hidden" />
+          <div className="mt-[25px] mb-[25px] h-[2px] w-full bg-[#242424] max-[1529px]:hidden" />
+        </>
+      ) : null}
 
-      <div className="mt-0 flex flex-col gap-4">
-        <button
-          type="button"
-          onClick={() => onChooseMethod("pix")}
+      <div className="space-y-[10px]">
+        <p className="text-[14px] font-medium text-[#9D9D9D]">
+          Pagamento instantaneo
+        </p>
+
+        <PaymentMethodRow
+          label="PIX"
+          description="QR Code e copia e cola liberados em segundos."
+          active={selectedRail === "pix"}
           disabled={!canInteract}
-          className="flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] font-medium text-[#D8D8D8] transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <span className="relative h-[22px] w-[22px] shrink-0">
-            <Image src="/cdn/icons/pix_.png" alt="PIX" fill sizes="22px" className="object-contain" />
-          </span>
-          Continuar com PIX
-        </button>
+          onClick={onChoosePix}
+          leading={
+            <Image
+              src="/cdn/icons/pix_.png"
+              alt="PIX"
+              fill
+              sizes="24px"
+              className="object-contain"
+            />
+          }
+          trailing={
+            <>
+              <span className="text-[12px] font-semibold text-[#0ECF9C]">
+                Instantaneo
+              </span>
+              <PaymentMethodChevron disabled={!canInteract} />
+            </>
+          }
+        />
 
-        <button
-          type="button"
-          onClick={() => onChooseMethod("card")}
+        <PaymentMethodRow
+          label="Cartao"
+          description="Ativacao direta indisponivel nesta etapa."
+          disabled
+          leading={
+            <Image
+              src="/cdn/icons/card_.png"
+              alt="Cartao"
+              fill
+              sizes="24px"
+              className="object-contain"
+            />
+          }
+          trailing={
+            <>
+              <CardBrandCluster />
+              <PaymentMethodChevron disabled />
+            </>
+          }
+        />
+
+        <PaymentMethodRow
+          label="Google Pay"
+          description="Pagamento seguro pela camada hospedada."
+          active={selectedRail === "google_pay"}
           disabled={!canInteract || !cardEnabled}
-          className="relative flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] font-medium text-[#D8D8D8] transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <span className="relative h-[22px] w-[22px] shrink-0">
-            <Image src="/cdn/icons/card_.png" alt="Cartao" fill sizes="22px" className="object-contain" />
-          </span>
-          <span>Continuar com Cartao</span>
-          {!cardEnabled ? (
-            <span className="pointer-events-none absolute -right-[7px] -top-[9px] inline-flex h-[22px] items-center justify-center rounded-[3px] border border-[#F2C823] bg-[rgba(242,200,35,0.12)] px-2 text-[10px] tracking-[0.04em] text-[#F2C823] shadow-[0_0_0_1px_rgba(10,10,10,0.55)]">
-              {CARD_PAYMENTS_COMING_SOON_BADGE}
-            </span>
-          ) : null}
-        </button>
+          onClick={() => onSelectHostedRail("google_pay")}
+          trailing={
+            <>
+              <HostedPaymentWordmark rail="google_pay" />
+              <PaymentMethodChevron disabled={!canInteract || !cardEnabled} />
+            </>
+          }
+        />
+
+        <PaymentMethodRow
+          label="Nubank"
+          description="Continue com NuPay pelo checkout protegido."
+          active={selectedRail === "nupay"}
+          disabled={!canInteract || !cardEnabled}
+          onClick={() => onSelectHostedRail("nupay")}
+          trailing={
+            <>
+              <HostedPaymentWordmark rail="nupay" />
+              <PaymentMethodChevron disabled={!canInteract || !cardEnabled} />
+            </>
+          }
+        />
+
+        <PaymentMethodRow
+          label="PayPal"
+          description="Pagamento externo com retorno automatico."
+          active={selectedRail === "paypal"}
+          disabled={!canInteract || !cardEnabled}
+          onClick={() => onSelectHostedRail("paypal")}
+          trailing={
+            <>
+              <HostedPaymentWordmark rail="paypal" />
+              <PaymentMethodChevron disabled={!canInteract || !cardEnabled} />
+            </>
+          }
+        />
       </div>
 
       {!canInteract ? (
@@ -1772,9 +2335,13 @@ function MethodSelectorPanel({
 
       {methodMessage ? <p className="mt-[14px] text-center text-[12px] text-[#C2C2C2]">{methodMessage}</p> : null}
 
-      <div className="mt-[25px] h-[2px] w-full bg-[#242424]" />
+      {showLegalText ? (
+        <>
+          <div className="mt-[25px] h-[2px] w-full bg-[#242424]" />
 
-      <CheckoutLegalText className="mt-[25px] hidden text-center text-[12px] leading-[1.6] text-[#949494] min-[1530px]:block" />
+          <CheckoutLegalText className="mt-[25px] hidden text-center text-[12px] leading-[1.6] text-[#949494] min-[1530px]:block" />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -1812,14 +2379,14 @@ function PixFormPanel({
       <div className="mt-[14px] flex flex-col gap-4">
         <div key={`payer-document-${errorAnimationTick}`} className={hasInputError ? "flowdesk-input-shake" : undefined}>
           <div className="relative">
-            <input type="text" value={payerDocument} onChange={(event) => onPayerDocumentChange(event.currentTarget.value)} placeholder="CPF/CNPJ" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[62px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, payerDocumentStatus)}`} inputMode="numeric" aria-invalid={hasInputError} />
+            <input type="text" value={payerDocument} onChange={(event) => onPayerDocumentChange(event.currentTarget.value)} placeholder="CPF/CNPJ" className={`h-[56px] w-full rounded-[16px] border bg-[#050505] px-[20px] pr-[62px] text-[18px] text-[#F0F0F0] outline-none placeholder:text-[18px] placeholder:text-[#424242] ${resolveInputBorderClass(hasInputError, payerDocumentStatus)}`} inputMode="numeric" aria-invalid={hasInputError} />
             <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={payerDocumentStatus} /></span>
           </div>
         </div>
 
         <div key={`payer-name-${errorAnimationTick}`} className={hasInputError ? "flowdesk-input-shake" : undefined}>
           <div className="relative">
-            <input type="text" value={payerName} onChange={(event) => onPayerNameChange(event.currentTarget.value)} placeholder="Nome Completo" className={`h-[56px] w-full rounded-[5px] border bg-[#0A0A0A] px-[24px] pr-[62px] text-[19px] text-[#D8D8D8] outline-none placeholder:text-[19px] placeholder:text-[#242424] ${resolveInputBorderClass(hasInputError, payerNameStatus)}`} aria-invalid={hasInputError} />
+            <input type="text" value={payerName} onChange={(event) => onPayerNameChange(event.currentTarget.value)} placeholder="Nome Completo" className={`h-[56px] w-full rounded-[16px] border bg-[#050505] px-[20px] pr-[62px] text-[18px] text-[#F0F0F0] outline-none placeholder:text-[18px] placeholder:text-[#424242] ${resolveInputBorderClass(hasInputError, payerNameStatus)}`} aria-invalid={hasInputError} />
             <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"><ValidationIndicator status={payerNameStatus} /></span>
           </div>
         </div>
@@ -1831,7 +2398,7 @@ function PixFormPanel({
         </p>
       ) : null}
 
-      <button type="button" onClick={onSubmit} disabled={!canSubmit || isSubmitting} className="mt-[16px] flex h-[56px] w-full items-center justify-center rounded-[5px] bg-[#D8D8D8] text-[20px] font-medium text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-45">
+      <button type="button" onClick={onSubmit} disabled={!canSubmit || isSubmitting} className="mt-[16px] flex h-[56px] w-full items-center justify-center rounded-[16px] bg-[#F0F0F0] text-[18px] font-semibold text-[#101010] transition-opacity hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-45">
         {isSubmitting ? <ButtonLoader size={24} /> : "Confirmar pagamento"}
       </button>
 
@@ -1863,7 +2430,7 @@ function CardFormPanel(props: CardFormPanelProps) {
       </div>
 
       <h2 className="text-center text-[33px] font-medium text-[#D8D8D8]">
-        Redirecionando para o checkout com Cartao
+        Checkout seguro com Cartao
       </h2>
 
       <div className="mt-[25px] h-[2px] w-full bg-[#242424]" />
@@ -1975,7 +2542,7 @@ function PixCheckoutPanel({
         ) : null}
       </div>
 
-      <button type="button" onClick={onCopy} disabled={!qrCodeText} className="mt-[16px] flex h-[51px] w-full items-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-6 text-left disabled:cursor-not-allowed disabled:opacity-45" aria-label="Copiar codigo PIX">
+      <button type="button" onClick={onCopy} disabled={!qrCodeText} className="mt-[16px] flex h-[56px] w-full items-center rounded-[16px] border border-[#171717] bg-[#0B0B0B] px-5 text-left disabled:cursor-not-allowed disabled:opacity-45" aria-label="Copiar codigo PIX">
         <span className={`truncate pr-2 text-[16px] ${qrCodeText ? "text-[#D8D8D8]" : "text-[#242424]"}`} title={qrCodeText || "Codigo copia e cola indisponivel"}>
           {qrCodeText || "CODIGO COPIA E COLA DO PIX PARA O PAGAMENTO"}
         </span>
@@ -2038,13 +2605,21 @@ function StatusResultPanel({
 export function ConfigStepFour({
   displayName,
   guildId,
+  initialPlanCode,
+  initialBillingPeriodCode = DEFAULT_PLAN_BILLING_PERIOD_CODE,
+  hasExplicitInitialPlan = false,
   initialDraft = null,
   onDraftChange,
 }: ConfigStepFourProps) {
   const cardPaymentsEnabled = areCardPaymentsEnabled();
   const initialStepFourDraft = useMemo(
-    () => buildStepFourDraft(initialDraft),
-    [initialDraft],
+    () =>
+      buildStepFourDraft(
+        initialDraft,
+        initialPlanCode,
+        initialBillingPeriodCode,
+      ),
+    [initialBillingPeriodCode, initialDraft, initialPlanCode],
   );
   const hasInitialStepFourDraft = useMemo(
     () => hasStepFourDraftValues(initialDraft),
@@ -2054,11 +2629,76 @@ export function ConfigStepFour({
   const hasInitialStepFourDraftRef = useRef(hasInitialStepFourDraft);
   const paymentPollingInFlightRef = useRef(false);
   const orderBootstrapInFlightRef = useRef(false);
+  const trialActivationRedirectTimeoutRef = useRef<number | null>(null);
   const lastHandledCardRedirectKeyRef = useRef(0);
   const lastAutoResolvedPendingCardOrderRef = useRef<number | null>(null);
+  const hydratedGuildIdRef = useRef<string | null>(null);
+  const planFinancialStateRef = useRef<{
+    recurringEnabled: boolean;
+    recurringMethodId: string | null;
+  }>({
+    recurringEnabled: false,
+    recurringMethodId: null,
+  });
+  const [phase, setPhase] = useState<StepFourPhase>(initialStepFourDraft.phase);
   const [view, setView] = useState<StepFourView>(initialStepFourDraft.view);
+  const [selectedRail, setSelectedRail] = useState<CheckoutRail | null>(
+    initialStepFourDraft.selectedRail,
+  );
+  const initialSelectedPlanCode = hasExplicitInitialPlan
+    ? initialPlanCode
+    : initialStepFourDraft.selectedPlanCode;
+  const initialSelectedBillingPeriodCode = hasExplicitInitialPlan
+    ? initialBillingPeriodCode
+    : initialStepFourDraft.selectedBillingPeriodCode;
+  const initialResolvedPlan = useMemo(
+    () => resolvePlanPricing(initialSelectedPlanCode, initialSelectedBillingPeriodCode),
+    [initialSelectedBillingPeriodCode, initialSelectedPlanCode],
+  );
+  const [selectedPlanCode, setSelectedPlanCode] = useState<PlanCode>(
+    initialResolvedPlan.code,
+  );
+  const [selectedBillingPeriodCode, setSelectedBillingPeriodCode] =
+    useState<PlanBillingPeriodCode>(initialResolvedPlan.billingPeriodCode);
+  const [availablePlans, setAvailablePlans] = useState<PlanSummary[]>([]);
+  const [resolvedPlan, setResolvedPlan] = useState<PlanSummary>(
+    initialResolvedPlan,
+  );
+  const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
   const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
+  const [couponCode, setCouponCode] = useState(
+    initialStepFourDraft.couponCode || initialStepFourDraft.giftCardCode,
+  );
+  const [giftCardCode, setGiftCardCode] = useState("");
+  const [billingFullName, setBillingFullName] = useState(
+    initialStepFourDraft.billingFullName,
+  );
+  const [billingEmail, setBillingEmail] = useState(initialStepFourDraft.billingEmail);
+  const [billingCountry, setBillingCountry] = useState(
+    initialStepFourDraft.billingCountry,
+  );
+  const [billingPostalCode, setBillingPostalCode] = useState(
+    initialStepFourDraft.billingPostalCode,
+  );
+  const [billingRegion, setBillingRegion] = useState(
+    initialStepFourDraft.billingRegion,
+  );
+  const [billingCity, setBillingCity] = useState(initialStepFourDraft.billingCity);
+  const [billingAddressLine1, setBillingAddressLine1] = useState(
+    initialStepFourDraft.billingAddressLine1,
+  );
+  const [billingAddressLine2, setBillingAddressLine2] = useState(
+    initialStepFourDraft.billingAddressLine2,
+  );
+  const [discountPreview, setDiscountPreview] =
+    useState<DiscountPreviewApiResponse["preview"] | null>(null);
+  const [discountMessage, setDiscountMessage] = useState<string | null>(null);
+  const [isDiscountLoading, setIsDiscountLoading] = useState(false);
+  const [isCartNoticeDismissed, setIsCartNoticeDismissed] = useState(false);
+  const [isDiscountEditorOpen, setIsDiscountEditorOpen] = useState(
+    Boolean(initialStepFourDraft.couponCode || initialStepFourDraft.giftCardCode),
+  );
 
   const [payerDocument, setPayerDocument] = useState(initialStepFourDraft.payerDocument);
   const [payerName, setPayerName] = useState(initialStepFourDraft.payerName);
@@ -2068,6 +2708,7 @@ export function ConfigStepFour({
   const [pixFormError, setPixFormError] = useState<string | null>(null);
   const [pixFormHasInputError, setPixFormHasInputError] = useState(false);
   const [pixFormErrorAnimationTick, setPixFormErrorAnimationTick] = useState(0);
+  const [isSubmittingTrial, setIsSubmittingTrial] = useState(false);
 
   const [cardNumber, setCardNumber] = useState(initialStepFourDraft.cardNumber);
   const [cardHolderName, setCardHolderName] = useState(initialStepFourDraft.cardHolderName);
@@ -2114,10 +2755,236 @@ export function ConfigStepFour({
   const pendingPixOrderId = pixOrder?.status === "pending" ? pixOrder.id : null;
   const pendingPixOrderNumber =
     pixOrder?.status === "pending" ? pixOrder.orderNumber : null;
+  const availablePlanOptions = useMemo(
+    () =>
+      availablePlans.length
+        ? availablePlans
+        : getAllPlanPricingDefinitions(selectedBillingPeriodCode),
+    [availablePlans, selectedBillingPeriodCode],
+  );
+  const availableBillingPeriodOptions = useMemo(
+    () => getAvailableBillingPeriodsForPlan(selectedPlanCode),
+    [selectedPlanCode],
+  );
+  const activeOrderPlanCode =
+    pixOrder?.planCode && isPlanCode(pixOrder.planCode) ? pixOrder.planCode : null;
+  const activeOrderBillingCycleDays =
+    typeof pixOrder?.planBillingCycleDays === "number" &&
+    Number.isFinite(pixOrder.planBillingCycleDays)
+      ? pixOrder.planBillingCycleDays
+      : null;
+  const doesActiveOrderMatchSelectedPlan =
+    activeOrderPlanCode !== null &&
+    activeOrderPlanCode === selectedPlanCode &&
+    activeOrderBillingCycleDays === resolvedPlan.billingCycleDays;
   const cardCooldownMessage = useMemo(
     () => formatCooldownMessage(cardClientCooldownRemainingSeconds),
     [cardClientCooldownRemainingSeconds],
   );
+  const baseCheckoutAmount = useMemo(
+    () =>
+      doesActiveOrderMatchSelectedPlan && typeof pixOrder?.amount === "number"
+        ? pixOrder.amount
+        : resolvedPlan.totalAmount,
+    [doesActiveOrderMatchSelectedPlan, pixOrder?.amount, resolvedPlan.totalAmount],
+  );
+  const checkoutCurrency = useMemo(
+    () =>
+      doesActiveOrderMatchSelectedPlan && pixOrder?.currency
+        ? pixOrder.currency
+        : resolvedPlan.currency || "BRL",
+    [doesActiveOrderMatchSelectedPlan, pixOrder?.currency, resolvedPlan.currency],
+  );
+  const promoTargetTimestamp = useMemo(
+    () => Date.now() + 3 * 24 * 60 * 60 * 1000,
+    [],
+  );
+  const [promoCountdown, setPromoCountdown] = useState(() =>
+    formatPromoCountdown(Date.now() + 3 * 24 * 60 * 60 * 1000),
+  );
+
+  useEffect(() => {
+    setPromoCountdown(formatPromoCountdown(promoTargetTimestamp));
+    const intervalId = window.setInterval(() => {
+      setPromoCountdown(formatPromoCountdown(promoTargetTimestamp));
+    }, 1000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [promoTargetTimestamp]);
+
+  useEffect(() => {
+    return () => {
+      if (trialActivationRedirectTimeoutRef.current !== null) {
+        window.clearTimeout(trialActivationRedirectTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!guildId) {
+      setAvailablePlans([]);
+      setResolvedPlan(
+        resolvePlanSummary(selectedPlanCode, selectedBillingPeriodCode, []),
+      );
+      setIsPlanLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    const controller = new AbortController();
+    setIsPlanLoading(true);
+
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/auth/me/servers/plans?${new URLSearchParams({
+            guildId,
+            planCode: selectedPlanCode,
+            billingPeriodCode: selectedBillingPeriodCode,
+          }).toString()}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        const payload = (await response.json()) as PlanApiResponse;
+        if (!response.ok || !payload.ok || !payload.plan) {
+          throw new Error(payload.message || "Nao foi possivel carregar os planos.");
+        }
+
+        if (!isMounted) return;
+
+        const nextAvailablePlans = payload.plan.availablePlans || [];
+        const nextPlanCode = normalizePlanCode(payload.plan.planCode, selectedPlanCode);
+        const nextBillingPeriodCode = normalizePlanBillingPeriodCode(
+          payload.plan.billingPeriodCode,
+          selectedBillingPeriodCode,
+        );
+        planFinancialStateRef.current = {
+          recurringEnabled: payload.plan.recurringEnabled,
+          recurringMethodId: payload.plan.recurringMethodId,
+        };
+        setAvailablePlans(nextAvailablePlans);
+        setSelectedPlanCode(nextPlanCode);
+        setSelectedBillingPeriodCode(nextBillingPeriodCode);
+        setResolvedPlan(
+          resolvePlanSummary(
+            nextPlanCode,
+            nextBillingPeriodCode,
+            nextAvailablePlans,
+          ),
+        );
+      } catch (error) {
+        if (!isMounted) return;
+        setAvailablePlans([]);
+        setResolvedPlan(
+          resolvePlanSummary(selectedPlanCode, selectedBillingPeriodCode, []),
+        );
+        setMethodMessage(
+          error instanceof Error
+            ? error.message
+            : "Nao foi possivel carregar os planos.",
+        );
+      } finally {
+        if (!isMounted) return;
+        setIsPlanLoading(false);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [guildId, selectedBillingPeriodCode, selectedPlanCode]);
+
+  useEffect(() => {
+    if (!guildId) {
+      setDiscountPreview(null);
+      setDiscountMessage(null);
+      setIsDiscountLoading(false);
+      return;
+    }
+
+    const trimmedCouponCode = couponCode.trim();
+    const trimmedGiftCardCode = giftCardCode.trim();
+
+    if (!trimmedCouponCode && !trimmedGiftCardCode) {
+      setDiscountPreview(
+        buildFallbackDiscountPreview({
+          baseAmount: baseCheckoutAmount,
+          currency: checkoutCurrency,
+        }),
+      );
+      setDiscountMessage(null);
+      setIsDiscountLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 8000);
+
+    setIsDiscountLoading(true);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/me/payments/discount-preview", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            guildId,
+            couponCode: trimmedCouponCode,
+            giftCardCode: trimmedGiftCardCode,
+            baseAmount: baseCheckoutAmount,
+            currency: checkoutCurrency,
+          }),
+          signal: controller.signal,
+        });
+        const payload = (await response.json()) as DiscountPreviewApiResponse;
+        if (!response.ok || !payload.ok || !payload.preview) {
+          throw new Error(payload.message || "Nao foi possivel validar os codigos.");
+        }
+
+        setDiscountPreview(payload.preview);
+        setDiscountMessage(payload.message || null);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setDiscountMessage("Tempo esgotado ao validar o codigo.");
+        } else {
+          setDiscountMessage(
+            error instanceof Error
+              ? error.message
+              : "Nao foi possivel validar o codigo.",
+          );
+        }
+
+        setDiscountPreview(
+          buildFallbackDiscountPreview({
+            baseAmount: baseCheckoutAmount,
+            currency: checkoutCurrency,
+          }),
+        );
+      } finally {
+        window.clearTimeout(timeoutId);
+        setIsDiscountLoading(false);
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    baseCheckoutAmount,
+    checkoutCurrency,
+    couponCode,
+    giftCardCode,
+    guildId,
+  ]);
 
   useEffect(() => {
     latestInitialStepFourDraftRef.current = initialStepFourDraft;
@@ -2153,9 +3020,31 @@ export function ConfigStepFour({
 
   useEffect(() => {
     if (!guildId) {
+      hydratedGuildIdRef.current = null;
       clearCheckoutStatusQuery();
+      setPhase("cart");
       setView("methods");
+      setSelectedRail(null);
+      setSelectedPlanCode(initialPlanCode);
+      setSelectedBillingPeriodCode(initialBillingPeriodCode);
+      setResolvedPlan(
+        resolvePlanSummary(initialPlanCode, initialBillingPeriodCode, []),
+      );
+      setAvailablePlans([]);
       setMethodMessage(null);
+      setCouponCode("");
+      setGiftCardCode("");
+      setBillingFullName("");
+      setBillingEmail("");
+      setBillingCountry("Brasil");
+      setBillingPostalCode("");
+      setBillingRegion("");
+      setBillingCity("");
+      setBillingAddressLine1("");
+      setBillingAddressLine2("");
+      setDiscountPreview(null);
+      setDiscountMessage(null);
+      setIsDiscountEditorOpen(false);
       setPayerDocument("");
       setPayerName("");
       setCardNumber("");
@@ -2172,9 +3061,31 @@ export function ConfigStepFour({
       return;
     }
 
+    if (isPlanLoading) {
+      setIsLoadingOrder(true);
+      return;
+    }
+
     const activeGuildId = guildId;
+    const isNewGuildContext = hydratedGuildIdRef.current !== activeGuildId;
+    hydratedGuildIdRef.current = activeGuildId;
     const guildDraft = latestInitialStepFourDraftRef.current;
     const hasStoredDraft = hasInitialStepFourDraftRef.current;
+    const activePlanCode = isNewGuildContext
+      ? hasExplicitInitialPlan
+        ? initialPlanCode
+        : guildDraft.selectedPlanCode
+      : selectedPlanCode;
+    const requestedBillingPeriodCode = isNewGuildContext
+      ? hasExplicitInitialPlan
+        ? initialBillingPeriodCode
+        : guildDraft.selectedBillingPeriodCode
+      : selectedBillingPeriodCode;
+    const activePlanSummary = resolvePlanPricing(
+      activePlanCode,
+      requestedBillingPeriodCode,
+    );
+    const activeBillingPeriodCode = activePlanSummary.billingPeriodCode;
     const requestedPaymentMethod = readRequestedPaymentMethodFromQuery();
     const checkoutQuery = readCheckoutStatusQuery();
     const shouldLoadOrderByCode =
@@ -2189,41 +3100,80 @@ export function ConfigStepFour({
     }
 
     const cachedOrder = readCachedOrderByGuild(activeGuildId);
+    const cachedOrderPlanCode =
+      cachedOrder?.planCode && isPlanCode(cachedOrder.planCode)
+        ? cachedOrder.planCode
+        : null;
+    const cachedOrderPlanBillingCycleDays =
+      typeof cachedOrder?.planBillingCycleDays === "number" &&
+      Number.isFinite(cachedOrder.planBillingCycleDays)
+        ? cachedOrder.planBillingCycleDays
+        : null;
     const cachedPendingOrder =
-      cachedOrder && cachedOrder.status === "pending" ? cachedOrder : null;
+      cachedOrder &&
+      cachedOrder.status === "pending" &&
+      cachedOrderPlanCode === activePlanCode &&
+      cachedOrderPlanBillingCycleDays === activePlanSummary.billingCycleDays
+        ? cachedOrder
+        : null;
 
     if (cachedOrder && cachedOrder.status !== "pending") {
       removeCachedOrderByGuild(activeGuildId);
+    } else if (
+      cachedOrder &&
+      (cachedOrderPlanCode !== activePlanCode ||
+        cachedOrderPlanBillingCycleDays !== activePlanSummary.billingCycleDays)
+    ) {
+      removeCachedOrderByGuild(activeGuildId);
     }
 
-    setView(guildDraft.view);
-    setMethodMessage(null);
-    setPayerDocument(guildDraft.payerDocument);
-    setPayerName(guildDraft.payerName);
-    setCardNumber(guildDraft.cardNumber);
-    setCardHolderName(guildDraft.cardHolderName);
-    setCardExpiry(guildDraft.cardExpiry);
-    setCardCvv(guildDraft.cardCvv);
-    setCardDocument(guildDraft.cardDocument);
-    setCardBillingZipCode(guildDraft.cardBillingZipCode);
-    setCardClientCooldownUntil(null);
-    setLastKnownOrderNumber(guildDraft.lastKnownOrderNumber);
-    setCopied(false);
-    if (cachedPendingOrder) {
-      setPixOrder(cachedPendingOrder);
-      setLastKnownOrderNumber(cachedPendingOrder.orderNumber);
-      setView(
-        resolveRestoredView({
-          hasStoredDraft,
-          preferredView: guildDraft.view,
-          order: cachedPendingOrder,
-        }),
-      );
-    } else if (cachedOrder) {
-      setPixOrder(null);
-      setLastKnownOrderNumber(cachedOrder.orderNumber);
-      setView("methods");
-      setMethodMessage("Pagamento anterior finalizado. Escolha um novo metodo.");
+    if (isNewGuildContext) {
+      setPhase(guildDraft.phase);
+      setView(guildDraft.view);
+      setSelectedRail(guildDraft.selectedRail);
+      setSelectedPlanCode(activePlanCode);
+      setSelectedBillingPeriodCode(activeBillingPeriodCode);
+      setMethodMessage(null);
+      setCouponCode(guildDraft.couponCode || guildDraft.giftCardCode);
+      setGiftCardCode("");
+      setIsDiscountEditorOpen(Boolean(guildDraft.couponCode || guildDraft.giftCardCode));
+      setBillingFullName(guildDraft.billingFullName);
+      setBillingEmail(guildDraft.billingEmail);
+      setBillingCountry(guildDraft.billingCountry || "Brasil");
+      setBillingPostalCode(guildDraft.billingPostalCode);
+      setBillingRegion(guildDraft.billingRegion);
+      setBillingCity(guildDraft.billingCity);
+      setBillingAddressLine1(guildDraft.billingAddressLine1);
+      setBillingAddressLine2(guildDraft.billingAddressLine2);
+      setDiscountPreview(null);
+      setDiscountMessage(null);
+      setPayerDocument(guildDraft.payerDocument);
+      setPayerName(guildDraft.payerName);
+      setCardNumber(guildDraft.cardNumber);
+      setCardHolderName(guildDraft.cardHolderName);
+      setCardExpiry(guildDraft.cardExpiry);
+      setCardCvv(guildDraft.cardCvv);
+      setCardDocument(guildDraft.cardDocument);
+      setCardBillingZipCode(guildDraft.cardBillingZipCode);
+      setCardClientCooldownUntil(null);
+      setLastKnownOrderNumber(guildDraft.lastKnownOrderNumber);
+      setCopied(false);
+      if (cachedPendingOrder) {
+        setPixOrder(cachedPendingOrder);
+        setLastKnownOrderNumber(cachedPendingOrder.orderNumber);
+        setView(
+          resolveRestoredView({
+            hasStoredDraft,
+            preferredView: guildDraft.view,
+            order: cachedPendingOrder,
+          }),
+        );
+      } else if (cachedOrder) {
+        setPixOrder(null);
+        setLastKnownOrderNumber(cachedOrder.orderNumber);
+        setView("methods");
+        setMethodMessage("Pagamento anterior finalizado. Escolha um novo metodo.");
+      }
     }
 
     let isMounted = true;
@@ -2234,6 +3184,17 @@ export function ConfigStepFour({
     setIsLoadingOrder(true);
 
     async function loadLatestPixOrder() {
+      if (activePlanSummary.isTrial && !shouldLoadOrderByCode) {
+        setPhase("cart");
+        setSelectedRail(null);
+        setPixOrder(null);
+        setLastKnownOrderNumber(null);
+        setView("methods");
+        setMethodMessage(null);
+        setIsLoadingOrder(false);
+        return;
+      }
+
       try {
         const lookupUrl =
           shouldLoadOrderByCode && checkoutQuery.code !== null
@@ -2246,6 +3207,8 @@ export function ConfigStepFour({
               })
             : `/api/auth/me/payments/pix?${new URLSearchParams({
                 guildId: activeGuildId,
+                planCode: activePlanCode,
+                billingPeriodCode: activeBillingPeriodCode,
               }).toString()}`;
 
         const response = await fetch(lookupUrl, {
@@ -2445,17 +3408,40 @@ export function ConfigStepFour({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [cardPaymentsEnabled, guildId]);
+  }, [
+    cardPaymentsEnabled,
+    guildId,
+    hasExplicitInitialPlan,
+    initialBillingPeriodCode,
+    initialPlanCode,
+    isPlanLoading,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
 
   useEffect(() => {
     if (!guildId || isLoadingOrder) return;
 
     onDraftChange?.(guildId, {
       visited: true,
+      phase,
       view,
+      selectedRail,
+      selectedPlanCode,
+      selectedBillingPeriodCode,
       lastKnownOrderNumber,
+      couponCode,
+      giftCardCode: "",
       payerDocument,
       payerName,
+      billingFullName,
+      billingEmail,
+      billingCountry,
+      billingPostalCode,
+      billingRegion,
+      billingCity,
+      billingAddressLine1,
+      billingAddressLine2,
       cardNumber,
       cardHolderName,
       cardExpiry,
@@ -2470,18 +3456,33 @@ export function ConfigStepFour({
     cardExpiry,
     cardHolderName,
     cardNumber,
+    couponCode,
+    giftCardCode,
     guildId,
     isLoadingOrder,
     lastKnownOrderNumber,
     onDraftChange,
     payerDocument,
     payerName,
+    phase,
+    selectedRail,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+    billingAddressLine1,
+    billingAddressLine2,
+    billingCity,
+    billingCountry,
+    billingEmail,
+    billingFullName,
+    billingPostalCode,
+    billingRegion,
     view,
   ]);
 
   useEffect(() => {
     if (!guildId) return;
-    if (isLoadingOrder || isPreparingBaseOrder) return;
+    if (isLoadingOrder || isPreparingBaseOrder || isPlanLoading) return;
+    if (resolvedPlan.isTrial) return;
     if (pixOrder?.orderNumber || lastKnownOrderNumber) return;
     if (pixOrder) return;
     if (view !== "methods" && view !== "pix_form") return;
@@ -2499,7 +3500,11 @@ export function ConfigStepFour({
     void (async () => {
       try {
         const response = await fetch(
-          `/api/auth/me/payments/pix?${new URLSearchParams({ guildId }).toString()}`,
+          `/api/auth/me/payments/pix?${new URLSearchParams({
+            guildId,
+            planCode: selectedPlanCode,
+            billingPeriodCode: selectedBillingPeriodCode,
+          }).toString()}`,
           {
             cache: "no-store",
             signal: controller.signal,
@@ -2543,14 +3548,17 @@ export function ConfigStepFour({
   }, [
     guildId,
     isCancellingPendingCard,
+    isPlanLoading,
     isLoadingOrder,
     isPreparingBaseOrder,
     isSubmittingCard,
     isSubmittingPix,
     lastKnownOrderNumber,
-    onDraftChange,
     pixOrder,
     pixOrder?.orderNumber,
+    resolvedPlan.isTrial,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
     view,
   ]);
 
@@ -2884,10 +3892,8 @@ export function ConfigStepFour({
           checkoutToken: null as string | null,
           paymentId: null as string | null,
         };
-  const orderNumberLabel = resolvedOrderNumber ? `#${resolvedOrderNumber}` : null;
   const currentPaymentStatusLabel = paymentStatusLabel(pixOrder);
   const statusVisual = resolveStatusVisual(pixOrder);
-  const statusSupportCopy = resolveStatusSupportCopy(pixOrder);
   const orderDiagnostic = resolveOrderDiagnostic(pixOrder);
   const regenerateButtonLabel = resolveRegenerateButtonLabel(pixOrder);
   const isHostedCardApprovalAwaitingConfirmation = Boolean(
@@ -2968,6 +3974,19 @@ export function ConfigStepFour({
               paymentStatus === "pending")
         ? "live"
         : "neutral";
+  const isPlanSelectionLocked = Boolean(
+    isPlanLoading ||
+      isLoadingOrder ||
+      isPreparingBaseOrder ||
+      isSubmittingTrial ||
+      isSubmittingPix ||
+      isSubmittingCard ||
+      isCancellingPendingCard,
+  );
+
+  useEffect(() => {
+    replaceCurrentPlanPath(selectedPlanCode, selectedBillingPeriodCode);
+  }, [selectedBillingPeriodCode, selectedPlanCode]);
 
   useEffect(() => {
     if (!shouldShowStatusResultPanel) return;
@@ -3001,6 +4020,137 @@ export function ConfigStepFour({
     setCardFormHasInputError(true);
     setCardFormErrorAnimationTick((current) => current + 1);
   }, []);
+
+  const handleSelectPlan = useCallback(
+    (nextPlanCode: PlanCode) => {
+      if (nextPlanCode === selectedPlanCode) return;
+
+      if (isPlanSelectionLocked) {
+        setMethodMessage(
+          "Aguarde a atualizacao atual terminar antes de trocar o plano.",
+        );
+        return;
+      }
+
+      const nextBillingPeriodOptions = getAvailableBillingPeriodsForPlan(nextPlanCode);
+      const nextBillingPeriodCode = nextBillingPeriodOptions.some(
+        (period) => period.code === selectedBillingPeriodCode,
+      )
+        ? selectedBillingPeriodCode
+        : nextBillingPeriodOptions[0]?.code || DEFAULT_PLAN_BILLING_PERIOD_CODE;
+      const nextPlan = resolvePlanSummary(
+        nextPlanCode,
+        nextBillingPeriodCode,
+        getAllPlanPricingDefinitions(nextBillingPeriodCode),
+      );
+
+      if (guildId) {
+        clearPendingCardRedirectState(guildId);
+        removeCachedOrderByGuild(guildId);
+      }
+
+      paymentPollingInFlightRef.current = false;
+      orderBootstrapInFlightRef.current = false;
+      lastHandledCardRedirectKeyRef.current = 0;
+      lastAutoResolvedPendingCardOrderRef.current = null;
+      if (trialActivationRedirectTimeoutRef.current !== null) {
+        window.clearTimeout(trialActivationRedirectTimeoutRef.current);
+        trialActivationRedirectTimeoutRef.current = null;
+      }
+
+      setSelectedPlanCode(nextPlanCode);
+      setSelectedBillingPeriodCode(nextBillingPeriodCode);
+      setResolvedPlan(nextPlan);
+      setPhase("cart");
+      setView("methods");
+      setSelectedRail(null);
+      setPixOrder(null);
+      setLastKnownOrderNumber(null);
+      setCopied(false);
+      setMethodMessage(`Checkout atualizado para ${nextPlan.name}.`);
+      setPixFormError(null);
+      setPixFormHasInputError(false);
+      setCardFormError(null);
+      setCardFormHasInputError(false);
+      setDiscountPreview(
+        buildFallbackDiscountPreview({
+          baseAmount: nextPlan.totalAmount,
+          currency: nextPlan.currency,
+        }),
+      );
+      setDiscountMessage(null);
+      clearCheckoutStatusQuery();
+    },
+    [
+      guildId,
+      isPlanSelectionLocked,
+      selectedBillingPeriodCode,
+      selectedPlanCode,
+    ],
+  );
+
+  const handleSelectBillingPeriod = useCallback(
+    (nextBillingPeriodCode: PlanBillingPeriodCode) => {
+      if (nextBillingPeriodCode === selectedBillingPeriodCode) return;
+
+      if (isPlanSelectionLocked) {
+        setMethodMessage(
+          "Aguarde a atualizacao atual terminar antes de trocar o periodo.",
+        );
+        return;
+      }
+
+      const allowedBillingPeriods = getAvailableBillingPeriodsForPlan(selectedPlanCode);
+      if (!allowedBillingPeriods.some((period) => period.code === nextBillingPeriodCode)) {
+        return;
+      }
+
+      const nextPlan = resolvePlanSummary(
+        selectedPlanCode,
+        nextBillingPeriodCode,
+        getAllPlanPricingDefinitions(nextBillingPeriodCode),
+      );
+
+      if (guildId) {
+        clearPendingCardRedirectState(guildId);
+        removeCachedOrderByGuild(guildId);
+      }
+
+      paymentPollingInFlightRef.current = false;
+      orderBootstrapInFlightRef.current = false;
+      lastHandledCardRedirectKeyRef.current = 0;
+      lastAutoResolvedPendingCardOrderRef.current = null;
+      if (trialActivationRedirectTimeoutRef.current !== null) {
+        window.clearTimeout(trialActivationRedirectTimeoutRef.current);
+        trialActivationRedirectTimeoutRef.current = null;
+      }
+
+      setSelectedBillingPeriodCode(nextBillingPeriodCode);
+      setResolvedPlan(nextPlan);
+      setPhase("cart");
+      setView("methods");
+      setSelectedRail(null);
+      setPixOrder(null);
+      setLastKnownOrderNumber(null);
+      setCopied(false);
+      setMethodMessage(
+        `Checkout atualizado para ${nextPlan.billingPeriodLabel.toLowerCase()}.`,
+      );
+      setPixFormError(null);
+      setPixFormHasInputError(false);
+      setCardFormError(null);
+      setCardFormHasInputError(false);
+      setDiscountPreview(
+        buildFallbackDiscountPreview({
+          baseAmount: nextPlan.totalAmount,
+          currency: nextPlan.currency,
+        }),
+      );
+      setDiscountMessage(null);
+      clearCheckoutStatusQuery();
+    },
+    [guildId, isPlanSelectionLocked, selectedBillingPeriodCode, selectedPlanCode],
+  );
 
   const handlePayerDocumentChange = useCallback((value: string) => {
     setPayerDocument(formatDocumentInput(value));
@@ -3050,7 +4200,7 @@ export function ConfigStepFour({
     setCardFormError(null);
   }, []);
 
-  const startCardRedirectCheckout = useCallback(async () => {
+  const startCardRedirectCheckout = useCallback(async (surfaceLabel = "cartao") => {
     if (!guildId || isSubmittingCard) return;
 
     if (pixOrder?.method === "card" && pixOrder.status === "pending") {
@@ -3064,7 +4214,7 @@ export function ConfigStepFour({
     setIsSubmittingCard(true);
     setCardFormHasInputError(false);
     setCardFormError(null);
-    setMethodMessage("Redirecionando para o checkout seguro do cartao.");
+    setMethodMessage(`Redirecionando para o checkout seguro de ${surfaceLabel}.`);
 
     let redirected = false;
 
@@ -3089,6 +4239,10 @@ export function ConfigStepFour({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           guildId,
+          planCode: selectedPlanCode,
+          billingPeriodCode: selectedBillingPeriodCode,
+          couponCode,
+          giftCardCode,
           renew,
           returnTarget,
           returnGuildId,
@@ -3153,13 +4307,23 @@ export function ConfigStepFour({
       setCardFormHasInputError(false);
       setCardFormError(message);
       setCardFormErrorAnimationTick((current) => current + 1);
+      setMethodMessage(message);
     } finally {
       if (!redirected) {
         clearPendingCardRedirectState(guildId);
         setIsSubmittingCard(false);
       }
     }
-  }, [guildId, isSubmittingCard, pixOrder?.method, pixOrder?.status]);
+  }, [
+    couponCode,
+    giftCardCode,
+    guildId,
+    isSubmittingCard,
+    pixOrder?.method,
+    pixOrder?.status,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
 
   useEffect(() => {
     if (view !== "card_form") return;
@@ -3195,6 +4359,7 @@ export function ConfigStepFour({
     }
 
     setIsLoadingOrder(false);
+    setPhase("checkout");
     setIsSubmittingCard(false);
     setMethodMessage(null);
     setPixFormHasInputError(false);
@@ -3205,14 +4370,134 @@ export function ConfigStepFour({
     clearCheckoutStatusQuery();
 
     if (method === "pix") {
+      setSelectedRail("pix");
       setView("pix_form");
       return;
     }
 
+    setSelectedRail("google_pay");
     setView("card_form");
     setMethodMessage("Preparando checkout seguro do cartao.");
     setCardRedirectRequestKey((current) => current + 1);
   }, [canChoosePaymentMethod, cardPaymentsEnabled, guildId]);
+
+  const handleActivateTrialPlan = useCallback(async () => {
+    if (!guildId || isSubmittingTrial || isPlanLoading || isLoadingOrder) {
+      return;
+    }
+
+    if (trialActivationRedirectTimeoutRef.current !== null) {
+      window.clearTimeout(trialActivationRedirectTimeoutRef.current);
+      trialActivationRedirectTimeoutRef.current = null;
+    }
+
+    if (guildId) {
+      clearPendingCardRedirectState(guildId);
+      removeCachedOrderByGuild(guildId);
+    }
+
+    paymentPollingInFlightRef.current = false;
+    orderBootstrapInFlightRef.current = false;
+    lastHandledCardRedirectKeyRef.current = 0;
+    lastAutoResolvedPendingCardOrderRef.current = null;
+
+    setIsSubmittingTrial(true);
+    setMethodMessage(null);
+    setPixOrder(null);
+    setLastKnownOrderNumber(null);
+    setSelectedRail(null);
+    clearCheckoutStatusQuery();
+
+    try {
+      const response = await fetch("/api/auth/me/payments/trial", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          planCode: selectedPlanCode,
+          billingPeriodCode: selectedBillingPeriodCode,
+        }),
+      });
+      const requestId = resolveResponseRequestId(response);
+      const payload = (await response.json()) as PixPaymentApiResponse & {
+        trialActivated?: boolean;
+      };
+
+      if (!response.ok || !payload.ok || !payload.order) {
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Falha ao ativar o plano gratuito.",
+            requestId,
+          ),
+        );
+      }
+
+      setPixOrder(payload.order);
+      setLastKnownOrderNumber(payload.order.orderNumber);
+      writeCachedOrderByGuild(guildId, payload.order);
+      setMethodMessage(
+        payload.licenseActive
+          ? buildActiveLicenseMessage(payload.licenseExpiresAt)
+          : payload.reused
+            ? "Plano gratuito ja estava ativo para este servidor."
+            : "Plano gratuito ativado com sucesso. Redirecionando...",
+      );
+
+      const redirectConfig = resolveApprovedRedirectConfig(guildId);
+      trialActivationRedirectTimeoutRef.current = window.setTimeout(() => {
+        window.location.assign(redirectConfig.targetUrl);
+      }, 1200);
+    } catch (error) {
+      setMethodMessage(
+        parseUnknownErrorMessage(error) ||
+          "Falha ao ativar o plano gratuito.",
+      );
+    } finally {
+      setIsSubmittingTrial(false);
+    }
+  }, [
+    guildId,
+    isLoadingOrder,
+    isPlanLoading,
+    isSubmittingTrial,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
+
+  const handleContinueToCheckout = useCallback(() => {
+    if (resolvedPlan.isTrial) {
+      void handleActivateTrialPlan();
+      return;
+    }
+
+    setPhase("checkout");
+    if (!selectedRail) {
+      setSelectedRail("pix");
+    }
+    if (view === "methods") {
+      setMethodMessage(null);
+    }
+  }, [handleActivateTrialPlan, resolvedPlan.isTrial, selectedRail, view]);
+
+  const handleBackToCart = useCallback(() => {
+    setPhase("cart");
+    setMethodMessage(null);
+  }, []);
+
+  const handleHostedRailSelection = useCallback(
+    (rail: Exclude<CheckoutRail, "pix">) => {
+      if (!cardPaymentsEnabled) {
+        setMethodMessage(CARD_PAYMENTS_DISABLED_MESSAGE);
+        return;
+      }
+
+      setPhase("checkout");
+      setSelectedRail(rail);
+      setView("methods");
+      void startCardRedirectCheckout(resolveCheckoutRailLabel(rail));
+    },
+    [cardPaymentsEnabled, startCardRedirectCheckout],
+  );
 
   const handleSubmitPixPayment = useCallback(async () => {
     if (!guildId || isSubmittingPix) return;
@@ -3250,6 +4535,10 @@ export function ConfigStepFour({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           guildId,
+          planCode: selectedPlanCode,
+          billingPeriodCode: selectedBillingPeriodCode,
+          couponCode,
+          giftCardCode,
           payerDocument: documentDigits,
           payerName: normalizedName,
         }),
@@ -3299,7 +4588,9 @@ export function ConfigStepFour({
       setIsSubmittingPix(false);
     }
   }, [
+    couponCode,
     documentDigits,
+    giftCardCode,
     guildId,
     isLoadingOrder,
     isPreparingBaseOrder,
@@ -3309,6 +4600,8 @@ export function ConfigStepFour({
     pixNameStatus,
     lastKnownOrderNumber,
     pixOrder?.orderNumber,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
     triggerPixFormValidationError,
   ]);
 
@@ -3446,6 +4739,8 @@ export function ConfigStepFour({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           guildId,
+          planCode: selectedPlanCode,
+          billingPeriodCode: selectedBillingPeriodCode,
           payerName: normalizePersonName(cardHolderName),
           payerDocument: cardDocumentDigits,
           billingZipCode: cardBillingZipCodeDigits,
@@ -3559,6 +4854,8 @@ export function ConfigStepFour({
     isSubmittingCard,
     pixOrder?.method,
     pixOrder?.status,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
     triggerCardFormValidationError,
   ]);
 
@@ -3821,7 +5118,12 @@ export function ConfigStepFour({
         setLastKnownOrderNumber(null);
 
         const refreshOrderResponse = await fetch(
-          `/api/auth/me/payments/pix?guildId=${activeGuildId}&forceNew=1`,
+          `/api/auth/me/payments/pix?${new URLSearchParams({
+            guildId: activeGuildId,
+            planCode: selectedPlanCode,
+            billingPeriodCode: selectedBillingPeriodCode,
+            forceNew: "1",
+          }).toString()}`,
           { cache: "no-store" },
         );
         const refreshOrderPayload =
@@ -3880,6 +5182,8 @@ export function ConfigStepFour({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             guildId: activeGuildId,
+            planCode: selectedPlanCode,
+            billingPeriodCode: selectedBillingPeriodCode,
             payerDocument: documentDigits,
             payerName: normalizedName,
           }),
@@ -3943,7 +5247,14 @@ export function ConfigStepFour({
         setIsLoadingOrder(false);
       }
     })();
-  }, [documentDigits, guildId, payerName, pixOrder?.method]);
+  }, [
+    documentDigits,
+    guildId,
+    payerName,
+    pixOrder?.method,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
 
   const handleStartPixAfterCardIssue = useCallback(() => {
     if (!guildId) return;
@@ -4104,10 +5415,12 @@ export function ConfigStepFour({
     return (
       <MethodSelectorPanel
         className="mx-auto hidden w-full max-w-[536px] min-[1530px]:block min-[1530px]:self-center"
-        onChooseMethod={handleChooseMethod}
+        onChoosePix={() => handleChooseMethod("pix")}
+        onSelectHostedRail={handleHostedRailSelection}
         methodMessage={methodMessage}
         canInteract={canChoosePaymentMethod}
         cardEnabled={cardPaymentsEnabled}
+        selectedRail={selectedRail}
       />
     );
   }, [
@@ -4142,6 +5455,7 @@ export function ConfigStepFour({
     handleCardHolderChange,
     handleCardNumberChange,
     handleChooseMethod,
+    handleHostedRailSelection,
     handleCopyPixCode,
     handlePayerDocumentChange,
     handlePayerNameChange,
@@ -4160,6 +5474,7 @@ export function ConfigStepFour({
     pixFormHasInputError,
     pixNameStatus,
     pixOrder,
+    selectedRail,
     shouldShowStatusResultPanel,
     statusVisual.colorClassName,
     statusVisual.iconPath,
@@ -4293,152 +5608,641 @@ export function ConfigStepFour({
     return (
       <MethodSelectorPanel
         className="mt-[26px] w-full min-[1530px]:hidden"
-        onChooseMethod={handleChooseMethod}
+        onChoosePix={() => handleChooseMethod("pix")}
+        onSelectHostedRail={handleHostedRailSelection}
         methodMessage={methodMessage}
         canInteract={canChoosePaymentMethod}
         cardEnabled={cardPaymentsEnabled}
+        selectedRail={selectedRail}
       />
     );
   }
 
+  const activeDiscountPreview =
+    discountPreview ||
+    buildFallbackDiscountPreview({
+      baseAmount: baseCheckoutAmount,
+      currency: checkoutCurrency,
+    });
+  const totalDiscountAmount =
+    (activeDiscountPreview.coupon?.amount || 0) +
+    (activeDiscountPreview.giftCard?.amount || 0);
+  const showEmbeddedPaymentSurface =
+    shouldShowStatusResultPanel ||
+    view === "pix_form" ||
+    view === "pix_checkout" ||
+    view === "card_form";
+  const checkoutStatusLabel =
+    methodMessage ||
+    (shouldShowStatusResultPanel ? currentPaymentStatusLabel : null);
+  const planDisplayName = resolvedPlan.name;
+  const planBillingLabel = resolvedPlan.billingLabel;
+  const planTotalLabel = resolvedPlan.totalLabel;
+  const planPeriodLabel = resolvedPlan.checkoutPeriodLabel;
+  const planRenewalLabel = resolvedPlan.renewalLabel;
+  const effectiveMonthlyAmount =
+    resolvedPlan.isTrial || resolvedPlan.billingPeriodMonths <= 0
+      ? activeDiscountPreview.totalAmount
+      : roundMoney(
+          activeDiscountPreview.totalAmount / resolvedPlan.billingPeriodMonths,
+        );
+  const effectiveMonthlyLabel = formatMoney(
+    effectiveMonthlyAmount,
+    activeDiscountPreview.currency,
+  );
+  const summaryTotalLabel = formatMoney(
+    activeDiscountPreview.totalAmount,
+    activeDiscountPreview.currency,
+  );
+  const summaryBaseLabel = formatMoney(
+    activeDiscountPreview.baseAmount,
+    activeDiscountPreview.currency,
+  );
+  const compareMonthlyAmountLabel = formatMoney(
+    resolvedPlan.compareMonthlyAmount,
+    activeDiscountPreview.currency,
+  );
+  const compareTotalAmountLabel = formatMoney(
+    resolvedPlan.compareTotalAmount,
+    activeDiscountPreview.currency,
+  );
+  const planSavingsAmount = Math.max(
+    0,
+    resolvedPlan.compareTotalAmount - activeDiscountPreview.totalAmount,
+  );
+  const planSavingsLabel = formatMoney(planSavingsAmount, activeDiscountPreview.currency);
+  const showCompareAmount = planSavingsAmount > 0;
+  const couponDiscountLabel = activeDiscountPreview.coupon
+    ? `- ${formatMoney(activeDiscountPreview.coupon.amount, activeDiscountPreview.currency)}`
+    : formatMoney(0, activeDiscountPreview.currency);
+  const giftCardDiscountLabel = activeDiscountPreview.giftCard
+    ? `- ${formatMoney(activeDiscountPreview.giftCard.amount, activeDiscountPreview.currency)}`
+    : formatMoney(0, activeDiscountPreview.currency);
+  const showCartDiscountEditor =
+    isDiscountEditorOpen || Boolean(couponCode.trim()) || Boolean(giftCardCode.trim());
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-black px-6 py-8 pb-[72px] max-[1529px]:items-start max-[1529px]:justify-start max-[1529px]:pb-[132px]">
-      <section className="w-full max-w-[1840px]">
-        <div className="grid grid-cols-1 items-start gap-12 max-[1529px]:justify-items-center min-[1530px]:grid-cols-[815px_536px] min-[1530px]:items-center min-[1530px]:justify-center min-[1530px]:gap-24">
-          <div className="w-full max-[1529px]:max-w-[536px]">
-            <div key={`header-${statusStageKey}`} className="flowdesk-stage-fade">
-              <div className="flex flex-col items-center">
-                <div className="relative h-[112px] w-[112px] shrink-0">
-                  <Image src="/cdn/logos/logotipo_.svg" alt="Flowdesk" fill sizes="112px" className="object-contain" priority />
-                </div>
-
-                <h1 className="mt-[26px] whitespace-normal text-center text-[33px] font-medium text-[#D8D8D8] min-[960px]:whitespace-nowrap">
-                  {statusVisual.title}
-                </h1>
-              </div>
-            </div>
-
-            {renderInlinePanel()}
-
-            <div className="mt-[36px] hidden h-[2px] w-full bg-[#242424] min-[1530px]:block" />
-
-            <div key={`summary-${statusStageKey}`} className="flowdesk-stage-fade">
-              <div className="mt-[26px] flex justify-center">
-                <div className="flex h-[51px] w-[256px] items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[16px] text-[#D8D8D8]">
-                  <span>Pedido:</span>
-                  {orderNumberLabel ? (
-                    <span className="ml-1">{orderNumberLabel}</span>
-                  ) : isLoadingOrder || isPreparingBaseOrder ? (
-                    <span className="ml-2 inline-flex items-center">
-                      <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
-                    </span>
-                  ) : (
-                    <span className="ml-2 inline-flex items-center">
-                      <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <p className="mt-[26px] text-[16px] leading-[1.55] text-[#D8D8D8]">
-                A assinatura possui cobranca mensal no valor de{" "}
-                <span className="font-semibold text-white">R$ 9,99</span>, com
-                pagamento via <span className="font-semibold text-white">PIX</span>.
-                {!cardPaymentsEnabled ? (
-                  <>
-                    {" "}
-                    <span className="text-[#BDBDBD]">
-                      Cartao e recorrencia retornarao em breve.
-                    </span>
-                  </>
-                ) : null}
-              </p>
-
-              <p className="mt-[16px] text-[16px] leading-[1.55] text-[#D8D8D8]">
-                Apos a confirmacao do pagamento (que ocorre de forma imediata), seu acesso sera liberado automaticamente e voce recebera um e-mail com a confirmacao da compra e os detalhes do servico.
-              </p>
-
-              <div
-                className={`mt-[26px] flex h-[51px] w-full items-center justify-between rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] px-6 ${statusBarEffectClass}`}
-              >
-                <span
-                  className={`max-w-[calc(100%-42px)] truncate pr-3 text-[16px] ${statusVisual.colorClassName}`}
-                  title={currentPaymentStatusLabel}
-                >
-                  {currentPaymentStatusLabel}
-                </span>
-                <ButtonLoader size={24} colorClassName={statusVisual.colorClassName} />
-              </div>
-
-              <div className="mt-[36px] h-[2px] w-full bg-[#242424]" />
-
-              <p className="mt-[36px] text-[12px] leading-[1.6] text-[#949494]">
-                {statusSupportCopy} Caso ocorra algum erro, entre em contato imediatamente em:{" "}
-                <a href="https://discord.gg/ddXtHhvvrx" target="_blank" rel="noreferrer noopener" className="text-[#A8A8A8] underline decoration-[#A0A0A0] underline-offset-2 transition-colors hover:text-[#C7C7C7]">
-                  Ajuda com meu pagamento
-                </a>
-                . O pagamento de R$ 9,99 e referente a validacao de apenas 1 licenca, ou seja, o Flowdesk funcionara somente no servidor do Discord que foi configurado inicialmente.
-              </p>
-
-              {shouldShowCardRecoveryActions && orderDiagnostic ? (
-                <div className={`mt-[18px] rounded-[3px] border px-[16px] py-[14px] ${diagnosticToneClass}`}>
-                  <p className="text-[11px] font-medium uppercase tracking-[0.08em]">
-                    {diagnosticOriginLabel}
-                  </p>
-                  <p className="mt-[8px] text-[14px] font-medium text-[#D8D8D8]">
-                    {orderDiagnostic.headline}
-                  </p>
-                  <p className="mt-[6px] text-[12px] leading-[1.55] text-[#B8B8B8]">
-                    {orderDiagnostic.recommendation}
-                  </p>
-                </div>
-              ) : null}
-
-              <CheckoutLegalText className="mt-[16px] text-[12px] leading-[1.6] text-[#949494] min-[1530px]:hidden" />
-
-              {shouldShowCardRecoveryActions ? (
-                <div className={`mt-[26px] grid w-full gap-[12px] ${cardPaymentsEnabled ? "min-[760px]:grid-cols-2" : ""}`}>
-                  <button
-                    type="button"
-                    onClick={handleStartPixAfterCardIssue}
-                    className="flex h-[51px] w-full items-center justify-center rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[15px] font-medium text-[#D8D8D8] transition-colors hover:border-[#4A4A4A] hover:bg-[#111111]"
-                  >
-                    Pagar com PIX
-                  </button>
-                  {cardPaymentsEnabled ? (
-                    <button
-                      type="button"
-                      onClick={handleStartCardRetry}
-                      className="flex h-[51px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[16px] font-medium text-black transition-opacity hover:opacity-90"
+    <main
+      className={`min-h-screen bg-black px-4 pb-[92px] ${
+        phase === "cart"
+          ? "pt-[20px] sm:px-5 lg:px-6 lg:pt-[24px]"
+          : "pt-[34px] sm:px-6 lg:px-8 lg:pt-[42px]"
+      }`}
+    >
+      <section
+        className={`mx-auto w-full ${
+          phase === "cart" ? "max-w-[1540px]" : "max-w-[1440px]"
+        }`}
+      >
+        {phase === "cart" ? (
+          !isCartNoticeDismissed ? (
+            <div className="rounded-[28px] bg-[#0D0D0F] px-[18px] py-[18px] shadow-[0_24px_80px_rgba(0,0,0,0.28)] sm:px-[28px] sm:py-[24px]">
+              <div className="flex items-center justify-between gap-[16px]">
+                <div className="flex items-center gap-[14px] sm:gap-[18px]">
+                  <div className="flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full border border-[rgba(0,98,255,0.42)] bg-[rgba(0,98,255,0.12)] text-[#63A5FF]">
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 20 20"
+                      className="h-[16px] w-[16px]"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
                     >
-                      Tentar outro cartao
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled
-                      className="flex h-[51px] w-full items-center justify-center gap-3 rounded-[3px] border border-[#2E2E2E] bg-[#0A0A0A] text-[15px] font-medium text-[#D8D8D8] opacity-45"
-                    >
-                      <span>Tentar com cartao</span>
-                      <span className="inline-flex h-[22px] items-center justify-center rounded-[3px] border border-[#F2C823] bg-[rgba(242,200,35,0.12)] px-2 text-[10px] tracking-[0.04em] text-[#F2C823]">
-                        {CARD_PAYMENTS_COMING_SOON_BADGE}
-                      </span>
-                    </button>
-                  )}
+                      <circle cx="10" cy="10" r="7.2" />
+                      <path d="M10 8.2v4.6" strokeLinecap="round" />
+                      <circle cx="10" cy="5.9" r="0.9" fill="currentColor" stroke="none" />
+                    </svg>
+                  </div>
+                  <p className="max-w-[1180px] text-[15px] leading-[1.55] text-[#EAEAEA] sm:text-[17px]">
+                    Voce foi direcionado para o checkout Flowdesk, que e onde sua conta esta registrada.
+                    Os valores do pedido foram atualizados de acordo com sua regiao.
+                  </p>
                 </div>
-              ) : shouldShowStatusResultPanel && statusVisual.showRegenerate ? (
                 <button
                   type="button"
-                  onClick={handleRegeneratePayment}
-                  className="mt-[26px] flex h-[51px] w-full items-center justify-center rounded-[3px] bg-[#D8D8D8] text-[16px] font-medium text-black transition-opacity hover:opacity-90"
+                  onClick={() => setIsCartNoticeDismissed(true)}
+                  className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full text-[#BBBBBB] transition-colors hover:bg-[#151515] hover:text-white"
+                  aria-label="Fechar aviso"
                 >
-                  {regenerateButtonLabel}
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 20 20"
+                    className="h-[18px] w-[18px]"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  >
+                    <path d="M5 5l10 10" />
+                    <path d="M15 5 5 15" />
+                  </svg>
                 </button>
-              ) : null}
+              </div>
             </div>
+          ) : null
+        ) : (
+          <div className="rounded-[28px] border border-[#171717] bg-[#0B0B0B] px-[18px] py-[16px] text-[13px] leading-[1.7] text-[#A2A2A2] shadow-[0_24px_80px_rgba(0,0,0,0.28)] sm:px-[22px]">
+            O carrinho confirma o pedido primeiro. Depois voce entra no checkout para escolher PIX ou seguir para a camada hospedada dos wallets.
+          </div>
+        )}
+
+        <div
+          key={`payment-${statusStageKey}-${phase}`}
+          className={`mt-[22px] grid gap-[20px] ${
+            phase === "cart"
+              ? "xl:grid-cols-[minmax(0,1.62fr)_minmax(360px,0.9fr)] xl:items-start"
+              : "xl:grid-cols-[minmax(0,1fr)_380px]"
+          }`}
+        >
+          <div className="space-y-[18px]">
+            {phase === "cart" ? (
+              <div>
+                <p className="text-[18px] font-semibold text-[#F4F4F4] sm:text-[21px]">
+                  Seu carrinho
+                </p>
+
+                <div className="mt-[22px] rounded-[30px] bg-[linear-gradient(180deg,rgba(13,13,13,0.98)_0%,rgba(8,8,8,0.98)_100%)] px-[20px] py-[22px] shadow-[0_28px_90px_rgba(0,0,0,0.32)] sm:px-[34px] sm:py-[34px]">
+                  <div className="flex flex-col gap-[22px]">
+                    <div className="flex flex-col gap-[16px] xl:flex-row xl:items-center xl:justify-between">
+                      <div className="flex items-center gap-[16px] sm:gap-[18px]">
+                        <div className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-[18px] bg-[#171717] text-[#EFEFEF]">
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            className="h-[28px] w-[28px]"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <rect x="4.5" y="5.5" width="15" height="5.5" rx="1.8" />
+                            <rect x="4.5" y="13" width="15" height="5.5" rx="1.8" />
+                            <path d="M8 8.25h2.5" />
+                            <path d="M8 15.75h2.5" />
+                          </svg>
+                        </div>
+
+                        <div className="flex items-center gap-[12px]">
+                          <CompactPlanSelect
+                            plans={availablePlanOptions}
+                            selectedPlanCode={selectedPlanCode}
+                            onSelectPlan={handleSelectPlan}
+                            disabled={isPlanSelectionLocked}
+                          />
+                          {isPlanSelectionLocked ? (
+                            <span className="inline-flex min-h-[28px] items-center gap-[8px] rounded-full bg-[#151515] px-[12px] text-[12px] font-medium text-[#D2D2D2]">
+                              <ButtonLoader size={12} colorClassName="text-[#D2D2D2]" />
+                              Atualizando
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="xl:text-right">
+                        <div className="flex flex-wrap items-start gap-[12px] xl:justify-end">
+                          {planSavingsAmount > 0 ? (
+                            <span className="mt-[4px] inline-flex min-h-[32px] items-center rounded-full bg-[rgba(0,98,255,0.18)] px-[14px] text-[14px] font-semibold text-[#81B8FF]">
+                              Economize {planSavingsLabel}
+                            </span>
+                          ) : null}
+
+                          <div>
+                            <div className="flex items-end gap-[4px] xl:justify-end">
+                              <span className="text-[24px] font-semibold tracking-[-0.04em] text-[#F5F5F5] sm:text-[26px]">
+                                {effectiveMonthlyLabel}
+                              </span>
+                              <span className="pb-[2px] text-[16px] text-[#C8C8C8]">
+                                {planBillingLabel}
+                              </span>
+                            </div>
+                            {showCompareAmount ? (
+                              <p className="mt-[4px] text-[14px] text-[#777777] line-through xl:text-right">
+                                {compareMonthlyAmountLabel}
+                                {planBillingLabel}
+                              </p>
+                            ) : null}
+                            <p className="mt-[5px] text-[13px] text-[#8E8E8E] xl:text-right">
+                              Cobrado hoje: {summaryBaseLabel}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-[2px]">
+                      <p className="text-[16px] font-medium text-[#F0F0F0]">Periodo</p>
+                      {availableBillingPeriodOptions.length > 0 ? (
+                        <BillingPeriodSwitcher
+                          className="mt-[12px]"
+                          periods={availableBillingPeriodOptions}
+                          selectedBillingPeriodCode={selectedBillingPeriodCode}
+                          onSelectBillingPeriod={handleSelectBillingPeriod}
+                          disabled={isPlanSelectionLocked}
+                        />
+                      ) : (
+                        <div className="mt-[12px] inline-flex h-[42px] items-center rounded-[14px] border border-[#202020] bg-[#111111] px-[14px] text-[13px] font-medium text-[#D9D9D9]">
+                          {resolvedPlan.billingPeriodLabel}
+                        </div>
+                      )}
+                      <div className="mt-[14px] flex flex-wrap items-center gap-[10px] text-[14px] text-[#B8B8B8]">
+                        <span className="inline-flex min-h-[30px] items-center rounded-full border border-[#202020] bg-[#111111] px-[12px] font-medium text-[#ECECEC]">
+                          {planPeriodLabel}
+                        </span>
+                        <span className="inline-flex min-h-[30px] items-center rounded-full border border-[#202020] bg-[#111111] px-[12px] font-medium text-[#ECECEC]">
+                          Total do ciclo {summaryBaseLabel} {planTotalLabel}
+                        </span>
+                        {showCompareAmount ? (
+                          <span className="inline-flex min-h-[30px] items-center rounded-full border border-[#202020] bg-[#111111] px-[12px] font-medium text-[#A0A0A0] line-through">
+                            {compareTotalAmountLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-[12px] text-[14px] leading-[1.6] text-[#909090]">
+                        {planRenewalLabel}
+                      </p>
+                    </div>
+
+                    <div className="mt-[28px] flex flex-col gap-[18px] rounded-[22px] bg-[#131C2E] px-[16px] py-[16px] sm:flex-row sm:items-center sm:justify-between sm:px-[18px]">
+                      <div className="flex items-center gap-[14px]">
+                        <div className="flex h-[54px] w-[54px] shrink-0 items-center justify-center rounded-[16px] bg-[#0062FF] text-[28px] font-semibold text-white">
+                          %
+                        </div>
+                        <div>
+                          <p className="text-[16px] font-semibold text-white">Nao perca!</p>
+                          <p className="mt-[3px] text-[15px] leading-[1.45] text-[#D6E6FF]">
+                            Oferta ativa no {planDisplayName} + ativacao imediata
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-[10px] text-[15px] font-semibold tracking-[0.14em] text-[#F6F6F6] sm:gap-[12px]">
+                        <span className="inline-flex min-w-[58px] items-center justify-center rounded-[12px] bg-[rgba(0,98,255,0.18)] px-[12px] py-[10px]">
+                          {promoCountdown.days}D
+                        </span>
+                        <span className="inline-flex min-w-[58px] items-center justify-center rounded-[12px] bg-[rgba(0,98,255,0.18)] px-[12px] py-[10px]">
+                          {promoCountdown.hours}H
+                        </span>
+                        <span className="inline-flex min-w-[58px] items-center justify-center rounded-[12px] bg-[rgba(0,98,255,0.18)] px-[12px] py-[10px]">
+                          {promoCountdown.minutes}M
+                        </span>
+                        <span className="inline-flex min-w-[58px] items-center justify-center rounded-[12px] bg-[rgba(0,98,255,0.18)] px-[12px] py-[10px]">
+                          {promoCountdown.seconds}S
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-[28px] flex items-start gap-[10px] border-t border-[#1D1D1D] pt-[22px] text-[15px] leading-[1.55] text-[#F0F0F0]">
+                      <span className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[#0ECF9C] text-[11px] font-semibold text-[#08100D]">
+                        ✓
+                      </span>
+                      <p>Boa noticia! A ativacao automatica ja esta incluida neste pedido.</p>
+                    </div>
+                    </div>
+                  </div>
+                </div>
+            ) : (
+              <div>
+                <p className="text-[18px] font-semibold text-[#F4F4F4] sm:text-[21px]">
+                  Pagamento
+                </p>
+
+                <div className="mt-[22px] rounded-[30px] bg-[linear-gradient(180deg,rgba(13,13,13,0.98)_0%,rgba(8,8,8,0.98)_100%)] px-[20px] py-[22px] shadow-[0_28px_90px_rgba(0,0,0,0.32)] sm:px-[34px] sm:py-[34px]">
+                  <div className="flex flex-col gap-[22px]">
+                    <div className="flex flex-col gap-[14px] xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-[24px] font-semibold tracking-[-0.04em] text-[#F5F5F5] sm:text-[27px]">
+                          Escolha como deseja pagar
+                        </p>
+                        <p className="mt-[8px] max-w-[720px] text-[14px] leading-[1.65] text-[#8C8C8C] sm:text-[15px]">
+                          A tela continua no mesmo checkout. O PIX abre aqui e os
+                          wallets seguem pela camada protegida do Mercado Pago,
+                          sem mudar o visual do carrinho.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-[12px] xl:justify-end">
+                        <button
+                          type="button"
+                          onClick={handleBackToCart}
+                          className="inline-flex h-[44px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0B0B0B] px-[16px] text-[14px] font-medium text-[#DADADA] transition-colors hover:border-[#2B2B2B] hover:bg-[#111111]"
+                        >
+                          Voltar
+                        </button>
+                        <div className="rounded-[16px] border border-[#171717] bg-[#0B0B0B] px-[14px] py-[10px] text-right">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-[#666666]">
+                            Metodo
+                          </p>
+                          <p className="mt-[6px] text-[15px] font-medium text-[#F1F1F1]">
+                            {resolveCheckoutRailLabel(selectedRail)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[24px] border border-[#171717] bg-[#090909] p-[18px]">
+                      <MethodSelectorPanel
+                        className=""
+                        onChoosePix={() => handleChooseMethod("pix")}
+                        onSelectHostedRail={handleHostedRailSelection}
+                        methodMessage={checkoutStatusLabel}
+                        canInteract={canChoosePaymentMethod}
+                        cardEnabled={cardPaymentsEnabled}
+                        selectedRail={selectedRail}
+                        showHeader={false}
+                        showLegalText={false}
+                      />
+                    </div>
+
+                    {showEmbeddedPaymentSurface ? (
+                      <>
+                        <div className="min-[1530px]:hidden">{renderInlinePanel()}</div>
+                        <div className="hidden min-[1530px]:block">{rightPanel}</div>
+                      </>
+                    ) : null}
+
+                    {shouldShowCardRecoveryActions && orderDiagnostic ? (
+                      <div className={`rounded-[22px] border px-[18px] py-[16px] ${diagnosticToneClass}`}>
+                        <p className="text-[11px] uppercase tracking-[0.16em]">{diagnosticOriginLabel}</p>
+                        <p className="mt-[8px] text-[15px] font-medium text-[#ECECEC]">{orderDiagnostic.headline}</p>
+                        <p className="mt-[6px] text-[13px] leading-[1.65] text-[#BBBBBB]">{orderDiagnostic.recommendation}</p>
+                        <div className="mt-[12px] flex flex-col gap-[10px] sm:flex-row">
+                          <button type="button" onClick={handleStartPixAfterCardIssue} className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#1F1F1F] bg-[#111111] px-[18px] text-[14px] font-medium text-[#E3E3E3] transition-colors hover:border-[#2B2B2B] hover:bg-[#151515]">Pagar com PIX</button>
+                          {cardPaymentsEnabled ? (
+                            <button type="button" onClick={handleStartCardRetry} className="inline-flex h-[46px] items-center justify-center rounded-[14px] bg-[#F0F0F0] px-[18px] text-[14px] font-medium text-[#111111] transition-opacity hover:opacity-90">Tentar novamente</button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {rightPanel}
+          <aside className={phase === "cart" ? "xl:pt-[54px]" : "space-y-[18px]"}>
+            {phase === "cart" ? (
+              <div className="rounded-[30px] bg-[linear-gradient(180deg,rgba(13,13,13,0.98)_0%,rgba(8,8,8,0.98)_100%)] px-[22px] py-[24px] shadow-[0_28px_90px_rgba(0,0,0,0.32)] sm:px-[30px] sm:py-[32px]">
+                <p className="text-[22px] font-semibold text-[#F5F5F5] sm:text-[24px]">
+                  Resumo do pedido
+                </p>
+
+                <div className="mt-[26px]">
+                  <div className="flex items-start justify-between gap-[12px]">
+                    <div>
+                      <p className="text-[18px] font-semibold text-[#F1F1F1]">
+                        {planDisplayName}
+                      </p>
+                      <p className="mt-[6px] text-[13px] leading-[1.6] text-[#8B8B8B]">
+                        {planPeriodLabel}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[19px] font-semibold text-[#F5F5F5]">
+                        {effectiveMonthlyLabel}
+                        <span className="ml-[4px] text-[13px] font-medium text-[#B9B9B9]">
+                          {planBillingLabel}
+                        </span>
+                      </p>
+                      <p className="mt-[4px] text-[12px] text-[#8B8B8B]">
+                        exibido por mes
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-[18px] space-y-[14px] text-[15px] text-[#E6E6E6]">
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">Total do ciclo</span>
+                      <div className="flex items-center gap-[10px]">
+                        {showCompareAmount ? (
+                          <span className="text-[14px] text-[#7B7B7B] line-through">
+                            {compareTotalAmountLabel}
+                          </span>
+                        ) : null}
+                        <span className="text-[18px] font-semibold text-[#F5F5F5]">
+                          {summaryBaseLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">Equivale por mes</span>
+                      <div className="flex items-center gap-[10px]">
+                        {showCompareAmount ? (
+                          <span className="text-[14px] text-[#7B7B7B] line-through">
+                            {compareMonthlyAmountLabel}
+                          </span>
+                        ) : null}
+                        <span className="font-medium text-[#F5F5F5]">
+                          {effectiveMonthlyLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">Cupom</span>
+                      <span className="font-medium text-[#F5F5F5]">{couponDiscountLabel}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">Vale-presente</span>
+                      <span className="font-medium text-[#F5F5F5]">{giftCardDiscountLabel}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-[20px] border-t border-[#1D1D1D] pt-[18px]">
+                    <div className="flex items-center justify-between gap-[14px] text-[15px] text-[#DDDDDD]">
+                      <span>Impostos</span>
+                      <span className="font-medium text-[#F5F5F5]">
+                        {formatMoney(0, activeDiscountPreview.currency)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-[20px] border-t border-[#1D1D1D] pt-[20px]">
+                    <div className="flex items-end justify-between gap-[14px]">
+                      <span className="text-[20px] font-semibold text-[#F5F5F5]">Total</span>
+                      <div className="text-right">
+                        {showCompareAmount ? (
+                          <p className="text-[14px] text-[#7B7B7B] line-through">
+                            {compareTotalAmountLabel}
+                          </p>
+                        ) : null}
+                        <p className="mt-[4px] text-[22px] font-semibold tracking-[-0.04em] text-[#F5F5F5] sm:text-[24px]">
+                          {summaryTotalLabel}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsDiscountEditorOpen((current) => !current)}
+                    className="mt-[24px] inline-flex items-center gap-[10px] text-left text-[16px] font-semibold text-[#63A5FF] transition-colors hover:text-[#8CC0FF]"
+                  >
+                    Tem um cupom ou vale-presente?
+                    <span
+                      aria-hidden="true"
+                      className={`inline-flex transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                        showCartDiscountEditor ? "rotate-180" : "rotate-0"
+                      }`}
+                    >
+                      <svg
+                        viewBox="0 0 20 20"
+                        className="h-[16px] w-[16px]"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="m5 7.5 5 5 5-5" />
+                      </svg>
+                    </span>
+                  </button>
+
+                  <div
+                    className={`grid overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                      showCartDiscountEditor
+                        ? "mt-[16px] grid-rows-[1fr] opacity-100"
+                        : "mt-0 grid-rows-[0fr] opacity-0"
+                    }`}
+                  >
+                    <div
+                      className={`min-h-0 overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                        showCartDiscountEditor
+                          ? "translate-y-0"
+                          : "-translate-y-[10px]"
+                      }`}
+                    >
+                      <div className="space-y-[12px] pb-[2px]">
+                      <input
+                        type="text"
+                        value={couponCode}
+                        onChange={(event) =>
+                          setCouponCode(event.currentTarget.value.toUpperCase().slice(0, 64))
+                        }
+                        placeholder="Cupom ou vale-presente"
+                        className="h-[52px] w-full rounded-[16px] border border-[#242424] bg-[#121212] px-[16px] text-[14px] text-[#F5F5F5] outline-none placeholder:text-[#5B5B5B]"
+                      />
+
+                      {discountMessage ? (
+                        <p className="flowdesk-slide-down text-[13px] leading-[1.6] text-[#A8A8A8]">
+                          {discountMessage}
+                        </p>
+                      ) : null}
+
+                      {isDiscountLoading ? (
+                        <div className="inline-flex items-center gap-[8px] text-[12px] text-[#B4B4B4]">
+                          <ButtonLoader size={14} colorClassName="text-[#B4B4B4]" />
+                          Validando codigo
+                        </div>
+                      ) : null}
+                    </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleContinueToCheckout}
+                    disabled={isPlanSelectionLocked}
+                    className="group relative mt-[24px] inline-flex h-[65px] w-full shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[18px] leading-none font-semibold transition-transform duration-150 ease-out hover:scale-[1.00] active:scale-[0.995] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-0 rounded-[12px] bg-[linear-gradient(180deg,#0062FF_0%,#0153D5_100%)] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+                    />
+                    <span className="relative z-10 inline-flex items-center justify-center gap-[10px] whitespace-nowrap leading-none">
+                      {isSubmittingTrial ? (
+                        <ButtonLoader size={18} colorClassName="text-white" />
+                      ) : null}
+                      <span className="bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] bg-clip-text text-transparent">
+                        {resolvedPlan.isTrial ? "Ativar gratuitamente" : "Continuar"}
+                      </span>
+                    </span>
+                  </button>
+
+                  {methodMessage ? (
+                    <p className="mt-[14px] text-center text-[12px] leading-[1.6] text-[#BEBEBE]">
+                      {methodMessage}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="rounded-[30px] border border-[#171717] bg-[linear-gradient(180deg,rgba(12,12,12,0.98)_0%,rgba(8,8,8,0.98)_100%)] p-[22px] shadow-[0_28px_90px_rgba(0,0,0,0.32)] sm:p-[24px]">
+                  <p className="text-[24px] leading-[1.02] font-medium tracking-[-0.05em] text-[#F4F4F4]">Resumo do pedido</p>
+                  <p className="mt-[8px] text-[13px] leading-[1.65] text-[#828282]">O servidor continua vinculado a esta compra durante toda a ativacao.</p>
+
+                <div className="mt-[16px] rounded-[22px] border border-[#171717] bg-[#090909] p-[16px]">
+                  <div className="flex items-start justify-between gap-[12px]">
+                    <div>
+                        <p className="text-[16px] font-medium text-[#F1F1F1]">
+                          {planDisplayName} {resolvedPlan.billingPeriodLabel.toLowerCase()}
+                        </p>
+                        <p className="mt-[6px] text-[13px] leading-[1.6] text-[#838383]">
+                          {planPeriodLabel}. Exibido como {effectiveMonthlyLabel}
+                          {planBillingLabel}.
+                        </p>
+                      </div>
+                      <span className="text-[20px] leading-none font-medium tracking-[-0.04em] text-[#F4F4F4]">
+                        {summaryBaseLabel}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-[16px] space-y-[12px] text-[14px] text-[#C8C8C8]">
+                    <div className="flex items-center justify-between"><span className="text-[#8A8A8A]">Subtotal</span><span>{formatMoney(activeDiscountPreview.subtotalAmount, activeDiscountPreview.currency)}</span></div>
+                    <div className="flex items-center justify-between"><span className="text-[#8A8A8A]">Cupom</span><span>{couponDiscountLabel}</span></div>
+                    <div className="flex items-center justify-between"><span className="text-[#8A8A8A]">Vale-presente</span><span>{giftCardDiscountLabel}</span></div>
+                    <div className="flex items-center justify-between"><span className="text-[#8A8A8A]">Impostos</span><span>{formatMoney(0, activeDiscountPreview.currency)}</span></div>
+                  </div>
+
+                  <div className="mt-[16px] rounded-[22px] border border-[#171717] bg-[#090909] px-[16px] py-[15px]">
+                    <div className="flex items-center justify-between gap-[12px]">
+                      <span className="text-[15px] font-medium text-[#EAEAEA]">Total</span>
+                      <span className="text-[26px] leading-none font-medium tracking-[-0.05em] text-[#F6F6F6]">{summaryTotalLabel}</span>
+                    </div>
+                    {totalDiscountAmount > 0 ? (
+                      <p className="mt-[8px] text-[12px] leading-[1.6] text-[#9BD694]">Economia no carrinho: {formatMoney(totalDiscountAmount, activeDiscountPreview.currency)}</p>
+                    ) : null}
+                    {isDiscountLoading ? (
+                      <div className="mt-[8px] inline-flex items-center gap-[8px] text-[12px] text-[#B4B4B4]">
+                        <ButtonLoader size={14} colorClassName="text-[#B4B4B4]" />
+                        Validando codigos
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {shouldShowStatusResultPanel && statusVisual.showRegenerate ? (
+                    <button type="button" onClick={handleRegeneratePayment} className={`mt-[16px] inline-flex h-[50px] w-full items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#F4F4F4_0%,#D9D9D9_100%)] text-[15px] font-semibold text-[#111111] transition-transform hover:scale-[1.01] active:scale-[0.99] ${statusBarEffectClass}`}>
+                      {regenerateButtonLabel}
+                    </button>
+                  ) : null}
+
+                  <CheckoutLegalText className="mt-[16px] text-[12px] leading-[1.7] text-[#8C8C8C]" />
+                </div>
+
+                <div className="inline-flex items-center gap-[10px] rounded-[18px] border border-[#171717] bg-[#090909] px-[16px] py-[14px] text-[14px] font-medium text-[#D7D7D7]">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className="h-[18px] w-[18px] text-[#BDBDBD]"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 3.75 5.75 6.5v5.25c0 4.02 2.47 7.72 6.25 9.25 3.78-1.53 6.25-5.23 6.25-9.25V6.5L12 3.75Z" />
+                    <path d="m9.4 12.2 1.75 1.75 3.45-3.7" />
+                  </svg>
+                  <span>7 dias para pedir reembolso</span>
+                </div>
+              </>
+            )}
+          </aside>
 
           <span className="sr-only">{displayName}</span>
         </div>

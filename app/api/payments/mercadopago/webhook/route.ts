@@ -17,14 +17,23 @@ import {
   isLockedByUnpaidSetupTimeout,
   UNPAID_SETUP_TIMEOUT_REFUND_STATUS_DETAIL,
 } from "@/lib/payments/setupCleanup";
+import { syncUserPlanStateFromOrder } from "@/lib/plans/state";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type PaymentOrderRecord = {
   id: number;
   order_number: number;
+  user_id: number;
   guild_id: string;
-  payment_method: "pix" | "card";
+  payment_method: "pix" | "card" | "trial";
   status: string;
+  plan_code: string;
+  plan_name: string;
+  plan_billing_cycle_days: number;
+  plan_max_licensed_servers: number;
+  plan_max_active_tickets: number;
+  plan_max_automations: number;
+  plan_max_monthly_actions: number;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
   provider_status: string | null;
@@ -38,7 +47,7 @@ type PaymentOrderRecord = {
 };
 
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  "id, order_number, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_qr_base64, provider_ticket_url, paid_at, expires_at, created_at";
+  "id, order_number, user_id, guild_id, payment_method, status, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_qr_base64, provider_ticket_url, paid_at, expires_at, created_at";
 
 function parsePaymentId(value: unknown) {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : null;
@@ -374,6 +383,10 @@ async function updateOrderFromProviderPayment(
     resolvedStatus,
     diagnosticCategory: diagnostic.category,
   });
+
+  if (updatedOrderResult.data.status === "approved") {
+    await syncUserPlanStateFromOrder(updatedOrderResult.data);
+  }
 
   invalidateGuildLicenseCaches(order.guild_id);
   return updatedOrderResult.data;

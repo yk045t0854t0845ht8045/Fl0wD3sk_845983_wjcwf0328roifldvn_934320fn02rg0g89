@@ -18,6 +18,7 @@ import {
   toQrDataUri,
   type MercadoPagoPaymentResponse,
 } from "@/lib/payments/mercadoPago";
+import { resolveDiscountPricing } from "@/lib/payments/discountPricing";
 import {
   ensureCheckoutAccessTokenForOrder,
   PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS,
@@ -35,6 +36,11 @@ import {
   resolveLatestLicenseCoverageFromApprovedOrders,
   resolveRenewalPaymentDecision,
 } from "@/lib/payments/licenseStatus";
+import type { PlanPricingDefinition } from "@/lib/plans/catalog";
+import {
+  resolveEffectivePlanSelection,
+  syncUserPlanStateFromOrder,
+} from "@/lib/plans/state";
 import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -47,18 +53,29 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreatePixPaymentBody = {
   guildId?: unknown;
+  planCode?: unknown;
+  billingPeriodCode?: unknown;
   payerName?: unknown;
   payerDocument?: unknown;
+  couponCode?: unknown;
+  giftCardCode?: unknown;
 };
 
 type PaymentOrderRecord = {
   id: number;
   order_number: number;
   guild_id: string;
-  payment_method: "pix" | "card";
+  payment_method: "pix" | "card" | "trial";
   status: string;
   amount: string | number;
   currency: string;
+  plan_code: string;
+  plan_name: string;
+  plan_billing_cycle_days: number;
+  plan_max_licensed_servers: number;
+  plan_max_active_tickets: number;
+  plan_max_automations: number;
+  plan_max_monthly_actions: number;
   payer_name: string | null;
   payer_document: string | null;
   payer_document_type: "CPF" | "CNPJ" | null;
@@ -81,11 +98,10 @@ type PaymentOrderRecord = {
 
 type PaymentOrderEventPayload = Record<string, unknown>;
 
-const DEFAULT_PIX_AMOUNT = 9.99;
 const DEFAULT_PIX_CURRENCY = "BRL";
 const PENDING_REUSE_WINDOW_MS = 25 * 60 * 1000;
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  `id, order_number, guild_id, payment_method, status, amount, currency, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 function isProviderDocumentErrorMessage(message: string) {
   const normalizedMessage = message.toLowerCase();
@@ -151,21 +167,58 @@ function maskPayerDocument(document: string | null) {
 function parseAmount(amount: string | number) {
   if (typeof amount === "number") return amount;
   const numeric = Number(amount);
-  return Number.isFinite(numeric) ? numeric : DEFAULT_PIX_AMOUNT;
+  return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function resolvePixAmount() {
-  const rawValue = process.env.MERCADO_PAGO_PIX_AMOUNT;
-  if (!rawValue) return DEFAULT_PIX_AMOUNT;
+function normalizeCurrency(value: string | null | undefined) {
+  return (value || "").trim().toUpperCase();
+}
 
-  const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PIX_AMOUNT;
+function amountsMatch(left: string | number, right: number) {
+  return Math.round(parseAmount(left) * 100) === Math.round(right * 100);
+}
 
-  return Math.round(parsed * 100) / 100;
+function currenciesMatch(left: string | null | undefined, right: string) {
+  return normalizeCurrency(left) === normalizeCurrency(right);
 }
 
 function resolvePixCurrency() {
   return process.env.MERCADO_PAGO_PIX_CURRENCY || DEFAULT_PIX_CURRENCY;
+}
+
+async function resolveCheckoutPlanForGuild(input: {
+  userId: number;
+  guildId: string;
+  requestedPlanCode?: unknown;
+  requestedBillingPeriodCode?: unknown;
+}) {
+  const { plan } = await resolveEffectivePlanSelection({
+    userId: input.userId,
+    guildId: input.guildId,
+    preferredPlanCode: input.requestedPlanCode,
+    preferredBillingPeriodCode: input.requestedBillingPeriodCode,
+  });
+
+  return {
+    plan,
+    amount: Math.max(0, Math.round(plan.totalAmount * 100) / 100),
+    currency: plan.currency || resolvePixCurrency(),
+  };
+}
+
+function doesOrderMatchCheckoutPlan(
+  order: Pick<PaymentOrderRecord, "plan_code" | "amount" | "currency">,
+  checkoutPlan: {
+    plan: PlanPricingDefinition;
+    amount: number;
+    currency: string;
+  },
+) {
+  return (
+    order.plan_code === checkoutPlan.plan.code &&
+    amountsMatch(order.amount, checkoutPlan.amount) &&
+    currenciesMatch(order.currency, checkoutPlan.currency)
+  );
 }
 
 function toApiOrder(
@@ -182,6 +235,9 @@ function toApiOrder(
     status: record.status,
     amount: parseAmount(record.amount),
     currency: record.currency,
+    planCode: record.plan_code,
+    planName: record.plan_name,
+    planBillingCycleDays: record.plan_billing_cycle_days,
     payerName: record.payer_name,
     payerDocumentMasked: maskPayerDocument(record.payer_document),
     payerDocumentType: record.payer_document_type,
@@ -573,6 +629,7 @@ async function createDraftOrderForCheckout(input: {
   guildId: string;
   amount: number;
   currency: string;
+  plan: PlanPricingDefinition;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -585,12 +642,27 @@ async function createDraftOrderForCheckout(input: {
       status: "pending",
       amount: input.amount,
       currency: input.currency,
+      plan_code: input.plan.code,
+      plan_name: input.plan.name,
+      plan_billing_cycle_days: input.plan.billingCycleDays,
+      plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
+      plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
+      plan_max_automations: input.plan.entitlements.maxAutomations,
+      plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
       provider: "mercado_pago",
       expires_at: resolveUnpaidSetupExpiresAt(),
       provider_payload: {
         source: "flowdesk_checkout",
         step: 4,
         precreated: true,
+        plan: {
+          code: input.plan.code,
+          name: input.plan.name,
+          billingCycleDays: input.plan.billingCycleDays,
+          entitlements: {
+            ...input.plan.entitlements,
+          },
+        },
       },
     })
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -610,10 +682,76 @@ async function createDraftOrderForCheckout(input: {
   return createdOrderResult.data;
 }
 
+async function reuseDraftOrderForCheckout(input: {
+  order: PaymentOrderRecord;
+  amount: number;
+  currency: string;
+  plan: PlanPricingDefinition;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  const updatedOrderResult = await supabase
+    .from("payment_orders")
+    .update({
+      payment_method: "pix",
+      status: "pending",
+      amount: input.amount,
+      currency: input.currency,
+      plan_code: input.plan.code,
+      plan_name: input.plan.name,
+      plan_billing_cycle_days: input.plan.billingCycleDays,
+      plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
+      plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
+      plan_max_automations: input.plan.entitlements.maxAutomations,
+      plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
+      payer_name: null,
+      payer_document: null,
+      payer_document_type: null,
+      provider_status: null,
+      provider_status_detail: null,
+      provider_payload: {
+        source: "flowdesk_checkout",
+        step: 4,
+        precreated: true,
+        refreshedForPlanSwitch: true,
+        plan: {
+          code: input.plan.code,
+          name: input.plan.name,
+          billingCycleDays: input.plan.billingCycleDays,
+          entitlements: {
+            ...input.plan.entitlements,
+          },
+        },
+      },
+      expires_at: resolveUnpaidSetupExpiresAt(input.order.created_at),
+    })
+    .eq("id", input.order.id)
+    .select(PAYMENT_ORDER_SELECT_COLUMNS)
+    .single<PaymentOrderRecord>();
+
+  if (updatedOrderResult.error || !updatedOrderResult.data) {
+    throw new Error(
+      updatedOrderResult.error?.message ||
+        "Falha ao atualizar o pedido base para o plano selecionado.",
+    );
+  }
+
+  await createPaymentOrderEventSafe(updatedOrderResult.data.id, "order_base_retargeted", {
+    orderNumber: updatedOrderResult.data.order_number,
+    planCode: input.plan.code,
+    amount: input.amount,
+    currency: input.currency,
+  });
+
+  return updatedOrderResult.data;
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const guildIdFromQuery = normalizeGuildId(url.searchParams.get("guildId"));
+    const requestedPlanCode = url.searchParams.get("planCode");
+    const requestedBillingPeriodCode = url.searchParams.get("billingPeriodCode");
     const orderCodeFromQuery = normalizeOrderCode(url.searchParams.get("code"));
     const checkoutToken = normalizeCheckoutToken(
       url.searchParams.get("checkoutToken"),
@@ -709,6 +847,23 @@ export async function GET(request: Request) {
       sessionData.authSession.user.id,
       guildId,
     );
+    const checkoutPlan = await resolveCheckoutPlanForGuild({
+      userId: sessionData.authSession.user.id,
+      guildId,
+      requestedPlanCode,
+      requestedBillingPeriodCode,
+    });
+
+    if (checkoutPlan.plan.isTrial) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            "O plano gratuito e ativado sem checkout. Finalize a ativacao do periodo gratuito na tela de pagamento.",
+        },
+        { status: 409 },
+      );
+    }
 
     const latestPendingPixOrder =
       latestOrder &&
@@ -722,15 +877,35 @@ export async function GET(request: Request) {
       order = await createDraftOrderForCheckout({
         userId: sessionData.authSession.user.id,
         guildId,
-        amount: resolvePixAmount(),
-        currency: resolvePixCurrency(),
+        amount: checkoutPlan.amount,
+        currency: checkoutPlan.currency,
+        plan: checkoutPlan.plan,
       });
+    } else if (
+      latestPendingPixOrder &&
+      !doesOrderMatchCheckoutPlan(latestPendingPixOrder, checkoutPlan)
+    ) {
+      order = latestPendingPixOrder.provider_payment_id
+        ? await createDraftOrderForCheckout({
+            userId: sessionData.authSession.user.id,
+            guildId,
+            amount: checkoutPlan.amount,
+            currency: checkoutPlan.currency,
+            plan: checkoutPlan.plan,
+          })
+        : await reuseDraftOrderForCheckout({
+            order: latestPendingPixOrder,
+            amount: checkoutPlan.amount,
+            currency: checkoutPlan.currency,
+            plan: checkoutPlan.plan,
+          });
     } else if (!order) {
       order = await createDraftOrderForCheckout({
         userId: sessionData.authSession.user.id,
         guildId,
-        amount: resolvePixAmount(),
-        currency: resolvePixCurrency(),
+        amount: checkoutPlan.amount,
+        currency: checkoutPlan.currency,
+        plan: checkoutPlan.plan,
       });
     }
 
@@ -894,12 +1069,39 @@ export async function POST(request: Request) {
 
     const supabase = getSupabaseAdminClientOrThrow();
     const latestOrder = await getLatestOrderForUserAndGuild(user.id, guildId);
+    const checkoutPlan = await resolveCheckoutPlanForGuild({
+      userId: user.id,
+      guildId,
+      requestedPlanCode: body.planCode,
+      requestedBillingPeriodCode: body.billingPeriodCode,
+    });
+
+    if (checkoutPlan.plan.isTrial) {
+      return respond(
+        {
+          ok: false,
+          message:
+            "O plano gratuito e ativado sem PIX. Use a acao de ativacao gratuita na tela de pagamento.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const pricing = await resolveDiscountPricing({
+      baseAmount: checkoutPlan.amount,
+      currency: checkoutPlan.currency,
+      couponCode: typeof body.couponCode === "string" ? body.couponCode : null,
+      giftCardCode: typeof body.giftCardCode === "string" ? body.giftCardCode : null,
+    });
 
     if (
       latestOrder &&
       latestOrder.status === "pending" &&
       latestOrder.payment_method === "pix" &&
+      latestOrder.plan_code === checkoutPlan.plan.code &&
       latestOrder.provider_qr_code &&
+      amountsMatch(latestOrder.amount, pricing.totalAmount) &&
+      currenciesMatch(latestOrder.currency, pricing.currency) &&
       Date.now() - new Date(latestOrder.created_at).getTime() < PENDING_REUSE_WINDOW_MS
     ) {
       const securedOrder = await ensureCheckoutAccessTokenForOrder({
@@ -917,8 +1119,8 @@ export async function POST(request: Request) {
       });
     }
 
-    const amount = resolvePixAmount();
-    const currency = resolvePixCurrency();
+    const amount = pricing.totalAmount;
+    const currency = pricing.currency;
 
     let createdOrder: PaymentOrderRecord;
     const canReuseDraftOrderForPayment =
@@ -934,11 +1136,31 @@ export async function POST(request: Request) {
           status: "pending",
           amount,
           currency,
+          plan_code: checkoutPlan.plan.code,
+          plan_name: checkoutPlan.plan.name,
+          plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
+          plan_max_licensed_servers: checkoutPlan.plan.entitlements.maxLicensedServers,
+          plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
+          plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
+          plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
           payer_name: payerName,
           payer_document: payerDocument.normalized,
           payer_document_type: payerDocument.type,
           provider_status: null,
           provider_status_detail: null,
+          provider_payload: {
+            source: "flowdesk_checkout",
+            step: 4,
+            pricing,
+            plan: {
+              code: checkoutPlan.plan.code,
+              name: checkoutPlan.plan.name,
+              billingCycleDays: checkoutPlan.plan.billingCycleDays,
+              entitlements: {
+                ...checkoutPlan.plan.entitlements,
+              },
+            },
+          },
           expires_at: resolveUnpaidSetupExpiresAt(latestOrder.created_at),
         })
         .eq("id", latestOrder.id)
@@ -962,15 +1184,38 @@ export async function POST(request: Request) {
         guildId,
         amount,
         currency,
+        plan: checkoutPlan.plan,
       });
 
       const preparedOrderResult = await supabase
         .from("payment_orders")
         .update({
           payment_method: "pix",
+          amount,
+          currency,
+          plan_code: checkoutPlan.plan.code,
+          plan_name: checkoutPlan.plan.name,
+          plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
+          plan_max_licensed_servers: checkoutPlan.plan.entitlements.maxLicensedServers,
+          plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
+          plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
+          plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
           payer_name: payerName,
           payer_document: payerDocument.normalized,
           payer_document_type: payerDocument.type,
+          provider_payload: {
+            source: "flowdesk_checkout",
+            step: 4,
+            pricing,
+            plan: {
+              code: checkoutPlan.plan.code,
+              name: checkoutPlan.plan.name,
+              billingCycleDays: checkoutPlan.plan.billingCycleDays,
+              entitlements: {
+                ...checkoutPlan.plan.entitlements,
+              },
+            },
+          },
         })
         .eq("id", createdOrder.id)
         .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -1006,6 +1251,19 @@ export async function POST(request: Request) {
           flowdesk_user_id: String(user.id),
           flowdesk_discord_user_id: user.discord_user_id,
           flowdesk_guild_id: guildId,
+          flowdesk_plan_code: checkoutPlan.plan.code,
+          flowdesk_plan_name: checkoutPlan.plan.name,
+          flowdesk_pricing_total: String(pricing.totalAmount),
+          ...(pricing.coupon?.code
+            ? {
+                flowdesk_coupon_code: pricing.coupon.code,
+              }
+            : {}),
+          ...(pricing.giftCard?.code
+            ? {
+                flowdesk_gift_card_code: pricing.giftCard.code,
+              }
+            : {}),
         },
         dateOfExpiration: resolveUnpaidSetupExpiresAt(createdOrder.created_at),
       });
@@ -1039,6 +1297,15 @@ export async function POST(request: Request) {
             source: "flowdesk_checkout",
             step: 4,
             mercado_pago: mercadoPagoPayment,
+            pricing,
+            plan: {
+              code: checkoutPlan.plan.code,
+              name: checkoutPlan.plan.name,
+              billingCycleDays: checkoutPlan.plan.billingCycleDays,
+              entitlements: {
+                ...checkoutPlan.plan.entitlements,
+              },
+            },
           },
           paid_at: paidAt,
           expires_at: expiresAt,
@@ -1071,6 +1338,10 @@ export async function POST(request: Request) {
         forceRotate: true,
         invalidateOtherOrders: true,
       });
+
+      if (updatedOrderResult.data.status === "approved") {
+        await syncUserPlanStateFromOrder(updatedOrderResult.data);
+      }
 
       return respond({
         ok: true,
@@ -1125,6 +1396,7 @@ export async function POST(request: Request) {
                 step: 4,
                 recovery_after_error: true,
                 mercado_pago: createdProviderPayment,
+                pricing,
               },
               paid_at: paidAt,
               expires_at: expiresAt,

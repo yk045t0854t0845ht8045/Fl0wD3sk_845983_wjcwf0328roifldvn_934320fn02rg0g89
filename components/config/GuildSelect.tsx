@@ -409,10 +409,22 @@ export function GuildSelect({
               const description = resolveGuildDescription(guild);
 
               return (
-                <button
+                <div
                   key={`${guild.id}-${gridRenderVersion}`}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={isSelected}
                   onClick={() => onSelect(guild.id)}
+                  onKeyDown={(event) => {
+                    if (event.currentTarget !== event.target) {
+                      return;
+                    }
+
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect(guild.id);
+                    }
+                  }}
                   style={
                     gridPhase === "in"
                       ? { animationDelay: `${Math.min(index, 5) * 46}ms` }
@@ -523,7 +535,7 @@ export function GuildSelect({
                       </span>
                     </div>
                   </div>
-                </button>
+                </div>
               );
             })}
       </div>

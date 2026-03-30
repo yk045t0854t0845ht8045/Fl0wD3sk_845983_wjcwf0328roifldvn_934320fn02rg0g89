@@ -330,17 +330,17 @@ function statusStyle(status: ManagedServerStatus) {
 }
 
 function statusDescription(server: ManagedServer) {
-  if (server.status === "paid") return `Renovacao ativa â€¢ expira em ${server.daysUntilExpire} dias`;
-  if (server.status === "expired") return `Licenca expirada â€¢ restam ${server.daysUntilOff} dias`;
-  return "Bot desligado â€¢ retorna imediatamente apos pagamento";
+  if (server.status === "paid") return `Renovacao ativa expira em ${server.daysUntilExpire} dias`;
+  if (server.status === "expired") return `Licenca expirada   restam ${server.daysUntilOff} dias`;
+  return "Bot desligado   retorna imediatamente apos pagamento";
 }
 
 function serverMetaLabel(server: ManagedServer) {
   return server.accessMode === "owner"
-    ? `Dono da licenca â€¢ renovado em ${formatDateLabel(server.licensePaidAt)}`
+    ? `Dono da licenca   renovado em ${formatDateLabel(server.licensePaidAt)}`
     : server.canManage
-      ? `Gestao por equipe â€¢ valido ate ${formatDateLabel(server.licenseExpiresAt)}`
-      : `Acesso de visualizacao â€¢ valido ate ${formatDateLabel(server.licenseExpiresAt)}`;
+      ? `Gestao por equipe   valido ate ${formatDateLabel(server.licenseExpiresAt)}`
+      : `Acesso de visualizacao   valido ate ${formatDateLabel(server.licenseExpiresAt)}`;
 }
 
 function serverAccessBadgeLabel(server: ManagedServer) {
@@ -812,7 +812,7 @@ function ServerGridCard({
             {statusDescription(server)}
           </p>
           <p className="mt-[10px] text-[14px] leading-[1.45] text-[#8C8C8C]">
-            {formatDateLabel(server.licensePaidAt)} â€¢ {serverLicenseScopeLabel(server)}
+            {formatDateLabel(server.licensePaidAt)}   {serverLicenseScopeLabel(server)}
           </p>
         </div>
       </article>
@@ -1920,7 +1920,7 @@ export function ServersWorkspace({
   const teamSummaryLabel = isTeamsLoading
     ? "Carregando equipes..."
     : selectedTeam
-      ? `${selectedTeam.memberCount} membro(s) â€¢ ${selectedTeam.linkedGuildIds.length} servidor(es)`
+      ? `${selectedTeam.memberCount} membro(s)   ${selectedTeam.linkedGuildIds.length} servidor(es)`
       : teams.length
         ? `${teams.length} equipe(s) disponivel(is)`
         : pendingTeamInvites.length
@@ -2033,7 +2033,7 @@ export function ServersWorkspace({
                             {team.name}
                           </span>
                           <span className="mt-[5px] block truncate text-[11px] leading-none text-[#666666]">
-                            {team.memberCount} membro(s) â€¢ {team.linkedGuildIds.length} servidor(es)
+                            {team.memberCount} membro(s)   {team.linkedGuildIds.length} servidor(es)
                           </span>
                           </span>
                         </span>

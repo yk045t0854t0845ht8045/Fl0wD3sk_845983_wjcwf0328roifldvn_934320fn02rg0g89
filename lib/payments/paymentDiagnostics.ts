@@ -20,7 +20,7 @@ export type PaymentDiagnosticSnapshot = {
 };
 
 type ResolvePaymentDiagnosticInput = {
-  paymentMethod: "pix" | "card";
+  paymentMethod: "pix" | "card" | "trial";
   status: string | null | undefined;
   providerStatus: string | null | undefined;
   providerStatusDetail: string | null | undefined;

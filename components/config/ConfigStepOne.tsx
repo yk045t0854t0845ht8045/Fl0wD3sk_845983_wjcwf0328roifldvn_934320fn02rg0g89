@@ -375,10 +375,14 @@ export function ConfigStepOne({
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05)_0%,rgba(255,255,255,0.015)_24%,transparent_62%)]"
       />
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[1582px] items-start justify-center px-[20px] pt-[88px] pb-[34px] md:px-6 lg:px-8 xl:px-10 2xl:px-[20px]">
+      <div
+        className={`relative mx-auto flex min-h-screen w-full max-w-[1582px] items-start justify-center px-[20px] pt-[88px] md:px-6 lg:px-8 xl:px-10 2xl:px-[20px] ${
+          selectedGuild ? "pb-[178px]" : "pb-[34px]"
+        }`}
+      >
         <section className="w-full max-w-[1240px] flowdesk-stage-fade">
           <div className="mx-auto max-w-[820px] text-center">
-            <LandingGlowTag>Configuracao do ticket • Etapa 1</LandingGlowTag>
+            <LandingGlowTag>Configuracao do ticket | Etapa 1</LandingGlowTag>
 
             <h1 className="mt-[24px] bg-[linear-gradient(90deg,#E7E7E7_0%,#BFBFBF_100%)] bg-clip-text text-[38px] leading-[0.98] font-normal tracking-[-0.06em] text-transparent sm:text-[48px] lg:text-[56px]">
               Escolha o servidor que vai receber o Flowdesk
@@ -398,60 +402,131 @@ export function ConfigStepOne({
             />
           </div>
 
-          <div className="mt-[26px] flex flex-col gap-[16px] border-t border-[#111111] pt-[18px] lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0">
-              <p className="text-[16px] font-medium text-[#E7E7E7]">
-                {selectedGuild ? selectedGuild.name : "Escolha um servidor para continuar"}
+          {nextActionError && !selectedGuild ? (
+            <div className="mt-[22px] rounded-[24px] border border-[rgba(219,70,70,0.22)] bg-[linear-gradient(180deg,rgba(20,9,9,0.92)_0%,rgba(12,6,6,0.96)_100%)] px-[18px] py-[16px] text-left shadow-[0_20px_65px_rgba(0,0,0,0.28)]">
+              <p className="text-[12px] font-medium tracking-[0.18em] uppercase text-[#D98484]">
+                Nao foi possivel continuar
               </p>
-              <p className="mt-[6px] max-w-[760px] text-[13px] leading-[1.65] text-[#7A7A7A]">
-                {resolveSelectionDescription(selectedGuild)}
+              <p className="mt-[10px] text-[14px] leading-[1.65] text-[#C8B0B0]">
+                {nextActionError}
               </p>
-              {nextActionError ? (
-                <p className="mt-[10px] text-[13px] leading-[1.6] text-[#D88F8F]">
-                  {nextActionError}
-                </p>
-              ) : null}
             </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                void handleNextClick();
-              }}
-              disabled={!selectedGuild || isValidatingNext}
-              aria-busy={isValidatingNext}
-              className={`group relative inline-flex h-[46px] min-w-[220px] shrink-0 items-center justify-center overflow-hidden rounded-[12px] px-6 text-[16px] leading-none font-semibold ${
-                !selectedGuild || isValidatingNext ? "cursor-not-allowed" : ""
-              }`}
-            >
-              <span
-                aria-hidden="true"
-                className={`absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out ${
-                  selectedGuild
-                    ? "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]"
-                    : "bg-[#111111]"
-                }`}
-              />
-              <span
-                className={`relative z-10 inline-flex items-center justify-center ${
-                  selectedGuild ? "text-[#282828]" : "text-[#B7B7B7]"
-                }`}
-              >
-                {isValidatingNext ? (
-                  <ButtonLoader
-                    size={18}
-                    colorClassName={selectedGuild ? "text-[#282828]" : "text-[#B7B7B7]"}
-                  />
-                ) : (
-                  "Proximo"
-                )}
-              </span>
-            </button>
-          </div>
+          ) : null}
 
           <span className="sr-only">{displayName}</span>
         </section>
       </div>
+
+      {selectedGuild ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-[22px] z-[55] flex justify-center px-4 md:px-6 lg:px-8">
+          <div className="w-full max-w-[1220px]">
+            <div className="pointer-events-auto relative w-full overflow-hidden rounded-[26px] shadow-[0_26px_90px_rgba(0,0,0,0.48)] backdrop-blur-[18px] flowdesk-sheet-up">
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-0 rounded-[26px] border ${
+                  nextActionError
+                    ? "border-[rgba(219,70,70,0.38)]"
+                    : "border-[#0E0E0E]"
+                }`}
+              />
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-[-2px] rounded-[26px] ${
+                  nextActionError
+                    ? "flowdesk-tag-border-glow-danger"
+                    : "flowdesk-tag-border-glow"
+                }`}
+              />
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-[-1px] rounded-[26px] ${
+                  nextActionError
+                    ? "flowdesk-tag-border-core-danger"
+                    : "flowdesk-tag-border-core"
+                }`}
+              />
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-[1px] rounded-[25px] bg-[#070707]"
+              />
+
+              <div className="relative z-10 flex flex-col gap-[16px] px-[18px] py-[16px] sm:px-[22px] sm:py-[18px] xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[18px] leading-[1.08] font-medium tracking-[-0.04em] text-[#EDEDED]">
+                    {selectedGuild.name} pronto para continuar
+                  </p>
+                  <p className="mt-[8px] max-w-[720px] text-[13px] leading-[1.62] text-[#7F7F7F]">
+                    {resolveSelectionDescription(selectedGuild)}
+                  </p>
+                  {nextActionError ? (
+                    <p className="mt-[10px] text-[13px] leading-[1.6] text-[#D88F8F]">
+                      {nextActionError}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex shrink-0 flex-col-reverse gap-[10px] sm:flex-row sm:items-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedGuildId(null);
+                      onSelectedGuildChange?.(null);
+                      clearBotPolling();
+                      setNextActionError(null);
+                    }}
+                    className="group relative inline-flex h-[46px] items-center justify-center overflow-hidden whitespace-nowrap rounded-[12px] px-6 text-[15px] leading-none font-semibold transition-colors"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-0 rounded-[12px] border border-[#1B1B1B] bg-[#111111] transition-colors"
+                    />
+                    <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap text-[#D0D0D0]">
+                      Trocar servidor
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleNextClick();
+                    }}
+                    disabled={isValidatingNext}
+                    aria-busy={isValidatingNext}
+                    className={`group relative inline-flex h-[46px] items-center justify-center overflow-hidden whitespace-nowrap rounded-[12px] px-6 text-[15px] leading-none font-semibold ${
+                      isValidatingNext ? "cursor-not-allowed" : ""
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out ${
+                        isValidatingNext
+                          ? "bg-[#111111]"
+                          : "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]"
+                      }`}
+                    />
+                    <span
+                      className={`relative z-10 inline-flex items-center justify-center whitespace-nowrap ${
+                        isValidatingNext ? "text-[#B7B7B7]" : "text-[#282828]"
+                      }`}
+                    >
+                      {isValidatingNext ? (
+                        <ButtonLoader
+                          size={18}
+                          colorClassName={
+                            isValidatingNext ? "text-[#B7B7B7]" : "text-[#282828]"
+                          }
+                        />
+                      ) : (
+                        "Continuar configuracao"
+                      )}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <BotMissingModal
         isOpen={isBotModalOpen}

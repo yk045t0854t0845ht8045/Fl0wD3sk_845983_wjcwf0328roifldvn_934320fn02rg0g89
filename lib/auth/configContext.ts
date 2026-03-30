@@ -1,3 +1,5 @@
+import type { PlanBillingPeriodCode, PlanCode } from "@/lib/plans/catalog";
+
 export type ConfigStep = 1 | 2 | 3 | 4;
 
 export type StepTwoDraft = {
@@ -14,14 +16,30 @@ export type StepThreeDraft = {
   notifyRoleIds: string[];
 };
 
+export type StepFourPhase = "cart" | "checkout";
+export type StepFourPaymentRail = "pix" | "google_pay" | "nupay" | "paypal";
 export type StepFourView = "methods" | "pix_form" | "card_form" | "pix_checkout";
 
 export type StepFourDraft = {
   visited: boolean;
+  phase: StepFourPhase;
   view: StepFourView;
+  selectedRail: StepFourPaymentRail | null;
+  selectedPlanCode: PlanCode;
+  selectedBillingPeriodCode: PlanBillingPeriodCode;
   lastKnownOrderNumber: number | null;
+  couponCode: string;
+  giftCardCode: string;
   payerDocument: string;
   payerName: string;
+  billingFullName: string;
+  billingEmail: string;
+  billingCountry: string;
+  billingPostalCode: string;
+  billingRegion: string;
+  billingCity: string;
+  billingAddressLine1: string;
+  billingAddressLine2: string;
   cardNumber: string;
   cardHolderName: string;
   cardExpiry: string;
@@ -49,6 +67,16 @@ const STEP_FOUR_VIEW_SET: ReadonlySet<StepFourView> = new Set([
   "pix_form",
   "card_form",
   "pix_checkout",
+]);
+const STEP_FOUR_PHASE_SET: ReadonlySet<StepFourPhase> = new Set([
+  "cart",
+  "checkout",
+]);
+const STEP_FOUR_PAYMENT_RAIL_SET: ReadonlySet<StepFourPaymentRail> = new Set([
+  "pix",
+  "google_pay",
+  "nupay",
+  "paypal",
 ]);
 
 export const CONFIG_CONTEXT_STORAGE_KEY = "flowdesk_config_context_v2";
@@ -87,6 +115,18 @@ function normalizeStepFourView(value: unknown): StepFourView {
   if (typeof value !== "string") return "methods";
   if (!STEP_FOUR_VIEW_SET.has(value as StepFourView)) return "methods";
   return value as StepFourView;
+}
+
+function normalizeStepFourPhase(value: unknown): StepFourPhase {
+  if (typeof value !== "string") return "cart";
+  if (!STEP_FOUR_PHASE_SET.has(value as StepFourPhase)) return "cart";
+  return value as StepFourPhase;
+}
+
+function normalizeStepFourPaymentRail(value: unknown): StepFourPaymentRail | null {
+  if (typeof value !== "string") return null;
+  if (!STEP_FOUR_PAYMENT_RAIL_SET.has(value as StepFourPaymentRail)) return null;
+  return value as StepFourPaymentRail;
 }
 
 function normalizeOrderNumberOrNull(value: unknown) {
@@ -147,10 +187,38 @@ function sanitizeStepFourDraft(value: unknown): StepFourDraft | null {
 
   return {
     visited: Boolean(data.visited),
+    phase: normalizeStepFourPhase(data.phase),
     view: normalizeStepFourView(data.view),
+    selectedRail: normalizeStepFourPaymentRail(data.selectedRail),
+    selectedPlanCode:
+      typeof data.selectedPlanCode === "string" &&
+      (data.selectedPlanCode === "basic" ||
+        data.selectedPlanCode === "pro" ||
+        data.selectedPlanCode === "ultra" ||
+        data.selectedPlanCode === "master")
+        ? (data.selectedPlanCode as PlanCode)
+        : "pro",
+    selectedBillingPeriodCode:
+      typeof data.selectedBillingPeriodCode === "string" &&
+      (data.selectedBillingPeriodCode === "monthly" ||
+        data.selectedBillingPeriodCode === "quarterly" ||
+        data.selectedBillingPeriodCode === "semiannual" ||
+        data.selectedBillingPeriodCode === "annual")
+        ? (data.selectedBillingPeriodCode as PlanBillingPeriodCode)
+        : "monthly",
     lastKnownOrderNumber: normalizeOrderNumberOrNull(data.lastKnownOrderNumber),
+    couponCode: normalizeDraftText(data.couponCode, 64),
+    giftCardCode: normalizeDraftText(data.giftCardCode, 64),
     payerDocument: normalizeDraftText(data.payerDocument, 24),
     payerName: normalizeDraftText(data.payerName, 120),
+    billingFullName: normalizeDraftText(data.billingFullName, 120),
+    billingEmail: normalizeDraftText(data.billingEmail, 160),
+    billingCountry: normalizeDraftText(data.billingCountry, 80),
+    billingPostalCode: normalizeDraftText(data.billingPostalCode, 16),
+    billingRegion: normalizeDraftText(data.billingRegion, 80),
+    billingCity: normalizeDraftText(data.billingCity, 80),
+    billingAddressLine1: normalizeDraftText(data.billingAddressLine1, 160),
+    billingAddressLine2: normalizeDraftText(data.billingAddressLine2, 160),
     cardNumber: normalizeDraftText(data.cardNumber, 32),
     cardHolderName: normalizeDraftText(data.cardHolderName, 120),
     cardExpiry: normalizeDraftText(data.cardExpiry, 8),
@@ -243,10 +311,24 @@ export function hasStepFourDraftValues(value: StepFourDraft | null | undefined) 
 
   return Boolean(
     value.visited ||
+      value.phase !== "cart" ||
       value.view !== "methods" ||
+      value.selectedRail ||
+      value.selectedPlanCode !== "pro" ||
+      value.selectedBillingPeriodCode !== "monthly" ||
       value.lastKnownOrderNumber ||
+      value.couponCode.trim() ||
+      value.giftCardCode.trim() ||
       value.payerDocument.trim() ||
       value.payerName.trim() ||
+      value.billingFullName.trim() ||
+      value.billingEmail.trim() ||
+      value.billingCountry.trim() ||
+      value.billingPostalCode.trim() ||
+      value.billingRegion.trim() ||
+      value.billingCity.trim() ||
+      value.billingAddressLine1.trim() ||
+      value.billingAddressLine2.trim() ||
       value.cardNumber.trim() ||
       value.cardHolderName.trim() ||
       value.cardExpiry.trim() ||

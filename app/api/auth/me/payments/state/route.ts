@@ -30,8 +30,9 @@ type PaymentOrderStateRecord = {
   order_number: number;
   user_id: number;
   guild_id: string;
-  payment_method: "pix" | "card";
+  payment_method: "pix" | "card" | "trial";
   status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
+  plan_billing_cycle_days: number | null;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
   provider_status: string | null;
@@ -48,7 +49,7 @@ type PaymentOrderStateRecord = {
 
 const STALE_CARD_REDIRECT_PENDING_MS = 4 * 60 * 1000;
 const PAYMENT_STATE_SELECT_COLUMNS =
-  `id, order_number, user_id, guild_id, payment_method, status, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, user_id, guild_id, payment_method, status, plan_billing_cycle_days, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 function normalizeGuildId(value: string | null) {
   if (!value) return null;

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { Check, ChevronDown } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 
 export type ConfigGuildItem = {
@@ -18,10 +19,34 @@ type ConfigServerSwitcherProps = {
   onSelectGuild: (guildId: string) => void;
 };
 
-function FallbackIcon() {
+function buildGuildInitial(guild: ConfigGuildItem | null) {
+  const name = String(guild?.name || "").trim();
+  return name ? name.slice(0, 1).toUpperCase() : "S";
+}
+
+function GuildAvatar({
+  guild,
+  sizeClassName,
+}: {
+  guild: ConfigGuildItem | null;
+  sizeClassName: string;
+}) {
   return (
-    <span className="inline-flex h-full w-full items-center justify-center rounded-[3px] bg-[#151515] text-[12px] text-[#8A8A8A]">
-      S
+    <span
+      className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[18px] border border-[rgba(255,255,255,0.08)] bg-[#101010] font-semibold text-[#ECECEC] ${sizeClassName}`.trim()}
+    >
+      {guild?.icon_url ? (
+        <Image
+          src={guild.icon_url}
+          alt={guild.name}
+          fill
+          sizes="48px"
+          className="object-cover"
+          unoptimized
+        />
+      ) : (
+        buildGuildInitial(guild)
+      )}
     </span>
   );
 }
@@ -68,99 +93,117 @@ export function ConfigServerSwitcher({
   return (
     <div
       ref={rootRef}
-      className="fixed left-1/2 top-6 z-40 w-[min(620px,calc(100vw-28px))] -translate-x-1/2"
+      className="fixed left-1/2 top-4 z-40 w-[min(720px,calc(100vw-24px))] -translate-x-1/2"
     >
-      <div className="rounded-[4px] border border-[#2E2E2E] bg-[#0A0A0A] px-4 py-[10px]">
+      <div className="relative overflow-hidden rounded-[28px] shadow-[0_26px_90px_rgba(0,0,0,0.4)] backdrop-blur-[18px]">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 rounded-[28px] border border-[#0E0E0E]"
+        />
+        <span
+          aria-hidden="true"
+          className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[28px]"
+        />
+        <span
+          aria-hidden="true"
+          className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[28px]"
+        />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-[1px] rounded-[27px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]"
+        />
         <button
           type="button"
           onClick={() => setIsOpen((current) => !current)}
           disabled={isLoading || isSwitching || guilds.length === 0}
-          className="flex w-full items-center gap-4 text-left disabled:cursor-not-allowed disabled:opacity-45"
+          aria-expanded={isOpen}
+          aria-haspopup="listbox"
+          className="relative z-10 flex w-full items-center gap-[14px] px-[18px] py-[16px] text-left disabled:cursor-not-allowed disabled:opacity-45 sm:px-[22px] sm:py-[18px]"
         >
-          <span className="relative block h-[28px] w-[28px] shrink-0 overflow-hidden rounded-[3px] bg-[#151515]">
-            {selectedGuild?.icon_url ? (
-              <Image
-                src={selectedGuild.icon_url}
-                alt={selectedGuild.name}
-                fill
-                sizes="28px"
-                className="object-cover"
-                unoptimized
-              />
-            ) : (
-              <FallbackIcon />
-            )}
-          </span>
+          <GuildAvatar guild={selectedGuild} sizeClassName="h-[46px] w-[46px] text-[17px]" />
 
-          <span className="truncate text-[13px] text-[#D8D8D8]">
-            {selectedGuild ? selectedGuild.name : "Selecione um servidor"}
-          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-medium tracking-[0.18em] uppercase text-[#6D6D6D]">
+              Servidor ativo
+            </p>
+            <p className="mt-[6px] truncate text-[18px] leading-[1.08] font-medium tracking-[-0.04em] text-[#ECECEC]">
+              {selectedGuild ? selectedGuild.name : "Selecione um servidor"}
+            </p>
+          </div>
 
-          <span className="ml-auto inline-flex items-center justify-center text-[#777777]">
+          <span className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#8A8A8A]">
             {isSwitching ? (
               <ButtonLoader size={16} colorClassName="text-[#D8D8D8]" />
             ) : (
-              <svg
-                viewBox="0 0 24 24"
-                className={`h-[18px] w-[18px] transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="m6 9 6 6 6-6" />
-              </svg>
+              <ChevronDown
+                className={`h-[18px] w-[18px] transition-transform duration-200 ${isOpen ? "rotate-180" : "rotate-0"}`}
+                strokeWidth={2.2}
+              />
             )}
           </span>
         </button>
       </div>
 
       {isOpen ? (
-        <div
-          className={`${scrollClass} mt-2 max-h-[292px] overflow-y-auto rounded-[4px] border border-[#2E2E2E] bg-[#0A0A0A] py-[6px]`}
-        >
-          {guilds.map((guild) => {
-            const isActive = guild.id === selectedGuildId;
-            return (
-              <button
-                key={guild.id}
-                type="button"
-                onClick={() => {
-                  setIsOpen(false);
-                  onSelectGuild(guild.id);
-                }}
-                disabled={isSwitching}
-                className={`flex w-full items-center gap-4 px-4 py-[10px] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
-                  isActive ? "bg-[#131313]" : "hover:bg-[#121212]"
-                }`}
-              >
-                <span className="relative block h-[28px] w-[28px] shrink-0 overflow-hidden rounded-[3px] bg-[#151515]">
-                  {guild.icon_url ? (
-                    <Image
-                      src={guild.icon_url}
-                      alt={guild.name}
-                      fill
-                      sizes="28px"
-                      className="object-cover"
-                      unoptimized
-                    />
-                  ) : (
-                    <FallbackIcon />
-                  )}
-                </span>
-                <span className="truncate text-[13px] text-[#D8D8D8]">{guild.name}</span>
-              </button>
-            );
-          })}
+        <div className="relative mt-[10px] overflow-hidden rounded-[26px] shadow-[0_26px_90px_rgba(0,0,0,0.42)] backdrop-blur-[16px]">
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-[26px] border border-[#121212]"
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-[1px] rounded-[25px] bg-[linear-gradient(180deg,rgba(9,9,9,0.985)_0%,rgba(5,5,5,0.985)_100%)]"
+          />
+
+          <div
+            className={`${scrollClass} relative z-10 max-h-[320px] overflow-y-auto p-[8px]`}
+            role="listbox"
+            aria-label="Servidores"
+          >
+            {guilds.map((guild) => {
+              const isActive = guild.id === selectedGuildId;
+              return (
+                <button
+                  key={guild.id}
+                  type="button"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onSelectGuild(guild.id);
+                  }}
+                  disabled={isSwitching}
+                  className={`flex w-full items-center gap-[14px] rounded-[18px] px-[14px] py-[12px] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                    isActive
+                      ? "border border-[rgba(128,184,255,0.2)] bg-[rgba(16,23,34,0.88)]"
+                      : "border border-transparent hover:border-[#171717] hover:bg-[#101010]"
+                  }`}
+                >
+                  <GuildAvatar guild={guild} sizeClassName="h-[42px] w-[42px] text-[15px]" />
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[15px] font-medium text-[#E3E3E3]">
+                      {guild.name}
+                    </p>
+                    <p className="mt-[4px] truncate text-[12px] text-[#757575]">
+                      {isActive ? "Servidor atual" : `ID ${guild.id}`}
+                    </p>
+                  </div>
+
+                  {isActive ? (
+                    <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border border-[rgba(128,184,255,0.2)] bg-[rgba(128,184,255,0.12)] text-[#DDEEFF]">
+                      <Check className="h-[14px] w-[14px]" strokeWidth={2.5} />
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </div>
       ) : null}
 
       <style jsx>{`
         .${scrollClass} {
           scrollbar-width: thin;
-          scrollbar-color: #2e2e2e #0a0a0a;
+          scrollbar-color: #2b2b2b #080808;
         }
 
         .${scrollClass}::-webkit-scrollbar {
@@ -168,14 +211,14 @@ export function ConfigServerSwitcher({
         }
 
         .${scrollClass}::-webkit-scrollbar-track {
-          background: #0a0a0a;
+          background: #080808;
           border-radius: 999px;
         }
 
         .${scrollClass}::-webkit-scrollbar-thumb {
-          background: #2e2e2e;
+          background: #2b2b2b;
           border-radius: 999px;
-          border: 1px solid #0a0a0a;
+          border: 1px solid #080808;
         }
       `}</style>
     </div>
