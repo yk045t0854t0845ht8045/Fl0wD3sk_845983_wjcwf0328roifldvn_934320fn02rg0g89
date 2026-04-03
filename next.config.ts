@@ -7,6 +7,7 @@ const repoRoot = path.resolve(configDir, "..");
 
 const nextConfig: NextConfig = {
   trailingSlash: true,
+  outputFileTracingRoot: repoRoot,
   images: {
     remotePatterns: [
       {

@@ -74,6 +74,7 @@ type PixOrder = {
   payerDocumentMasked: string | null;
   payerDocumentType: "CPF" | "CNPJ" | null;
   providerPaymentId: string | null;
+  providerExternalReference: string | null;
   providerStatus: string | null;
   providerStatusDetail: string | null;
   qrCodeText: string | null;
@@ -460,9 +461,11 @@ const CHECKOUT_STATUS_QUERY_KEYS = [
   "status",
   "code",
   "guild",
+  "method",
   "checkoutToken",
   "payment_id",
   "paymentId",
+  "paymentRef",
   "collection_id",
 ] as const;
 
@@ -878,6 +881,21 @@ function resolveCheckoutRailLabel(rail: CheckoutRail | null) {
   }
 }
 
+function resolveCompletedPaymentMethodLabel(
+  method: PixOrder["method"] | null | undefined,
+) {
+  switch (method) {
+    case "pix":
+      return "PIX";
+    case "card":
+      return "Cartao";
+    case "trial":
+      return "Plano gratuito";
+    default:
+      return "Pagamento";
+  }
+}
+
 function formatPromoCountdown(targetTimestamp: number) {
   const remainingMs = Math.max(0, targetTimestamp - Date.now());
   const totalSeconds = Math.floor(remainingMs / 1000);
@@ -902,6 +920,7 @@ function readCheckoutStatusQuery() {
       guild: null as string | null,
       checkoutToken: null as string | null,
       paymentId: null as string | null,
+      paymentRef: null as string | null,
     };
   }
 
@@ -917,8 +936,9 @@ function readCheckoutStatusQuery() {
     params.get("paymentId")?.trim() ||
     params.get("collection_id")?.trim() ||
     null;
+  const paymentRef = params.get("paymentRef")?.trim() || null;
 
-  return { code, status, guild, checkoutToken, paymentId };
+  return { code, status, guild, checkoutToken, paymentId, paymentRef };
 }
 
 function readRequestedPaymentMethodFromQuery() {
@@ -1006,8 +1026,17 @@ function setCheckoutStatusQuery(input: {
   }
 
   url.searchParams.set("method", input.order.method);
+  if (input.order.providerPaymentId) {
+    url.searchParams.set("paymentId", input.order.providerPaymentId);
+  } else {
+    url.searchParams.delete("paymentId");
+  }
+  if (input.order.providerExternalReference) {
+    url.searchParams.set("paymentRef", input.order.providerExternalReference);
+  } else {
+    url.searchParams.delete("paymentRef");
+  }
   url.searchParams.delete("payment_id");
-  url.searchParams.delete("paymentId");
   url.searchParams.delete("collection_id");
 
   window.history.replaceState(
@@ -1022,6 +1051,7 @@ function buildPaymentOrderLookupUrl(input: {
   orderCode?: number | null;
   checkoutToken?: string | null;
   paymentId?: string | null;
+  paymentRef?: string | null;
   status?: string | null;
 }) {
   const params = new URLSearchParams({ guildId: input.guildId });
@@ -1036,6 +1066,10 @@ function buildPaymentOrderLookupUrl(input: {
 
   if (input.paymentId) {
     params.set("paymentId", input.paymentId);
+  }
+
+  if (input.paymentRef) {
+    params.set("paymentRef", input.paymentRef);
   }
 
   if (input.status) {
@@ -2586,6 +2620,125 @@ function PixCheckoutPanel({
   );
 }
 
+function ApprovedPaymentPanel({
+  className,
+  order,
+  statusMessage,
+  redirectDelayMs,
+  redirectTargetUrl,
+  onContinueNow,
+}: {
+  className: string;
+  order: PixOrder | null;
+  statusMessage: string | null;
+  redirectDelayMs: number;
+  redirectTargetUrl: string;
+  onContinueNow: () => void;
+}) {
+  const initialSeconds = Math.max(1, Math.ceil(redirectDelayMs / 1000));
+  const [remainingSeconds, setRemainingSeconds] = useState(() =>
+    Math.max(1, Math.ceil(redirectDelayMs / 1000)),
+  );
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setRemainingSeconds((current) => (current > 1 ? current - 1 : 1));
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [initialSeconds]);
+
+  const methodLabel = resolveCompletedPaymentMethodLabel(order?.method);
+  const successHeadline =
+    order?.method === "trial"
+      ? "Sistema ativado com sucesso"
+      : "Pagamento efetuado com sucesso";
+
+  return (
+    <div className={`${className} flowdesk-stage-fade`}>
+      <div className="inline-flex items-center gap-[10px] rounded-full border border-[rgba(14,207,156,0.22)] bg-[rgba(14,207,156,0.1)] px-[12px] py-[7px] text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8EF0D1]">
+        <span className="inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[rgba(14,207,156,0.18)] text-[#D8FFF1]">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            className="h-[11px] w-[11px]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m4.5 10 3 3 8-8" />
+          </svg>
+        </span>
+        Confirmado
+      </div>
+
+      <h2 className="mt-[16px] text-[28px] font-semibold tracking-[-0.05em] text-[#F4F4F4]">
+        {successHeadline}
+      </h2>
+      <p className="mt-[8px] max-w-[720px] text-[14px] leading-[1.75] text-[#A1A1A1] sm:text-[15px]">
+        Sua confirmacao ja foi recebida. Aguarde nesta pagina enquanto a Flowdesk
+        finaliza a liberacao do sistema e sincroniza o servidor automaticamente.
+      </p>
+
+      <div className="mt-[22px] grid gap-[12px] sm:grid-cols-3">
+        <div className="rounded-[20px] border border-[#1E1E1E] bg-[#101010] px-[18px] py-[16px]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#727272]">
+            Metodo
+          </p>
+          <p className="mt-[8px] text-[17px] font-semibold text-[#F1F1F1]">
+            {methodLabel}
+          </p>
+        </div>
+
+        <div className="rounded-[20px] border border-[#1E1E1E] bg-[#101010] px-[18px] py-[16px]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#727272]">
+            Protocolo
+          </p>
+          <p className="mt-[8px] text-[17px] font-semibold text-[#F1F1F1]">
+            #{order?.orderNumber || "-"}
+          </p>
+        </div>
+
+        <div className="rounded-[20px] border border-[#1E1E1E] bg-[#101010] px-[18px] py-[16px]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#727272]">
+            Redirecionamento
+          </p>
+          <p className="mt-[8px] text-[17px] font-semibold text-[#F1F1F1]">
+            {remainingSeconds}s
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-[16px] rounded-[22px] border border-[#1C3128] bg-[linear-gradient(180deg,rgba(13,34,24,0.9)_0%,rgba(8,22,16,0.88)_100%)] px-[18px] py-[18px]">
+        <p className="text-[13px] font-semibold uppercase tracking-[0.14em] text-[#7FDDBF]">
+          Proxima etapa
+        </p>
+        <p className="mt-[10px] text-[15px] leading-[1.7] text-[#E3F6EF]">
+          {statusMessage ||
+            "Estamos validando o pagamento e liberando o sistema deste servidor agora. Nao feche esta tela ate a sincronizacao terminar."}
+        </p>
+      </div>
+
+      <div className="mt-[18px] flex flex-col gap-[12px] sm:flex-row sm:items-center">
+        <button
+          type="button"
+          onClick={onContinueNow}
+          className="inline-flex h-[54px] items-center justify-center rounded-[16px] bg-[linear-gradient(180deg,#0062FF_0%,#0153D5_100%)] px-[22px] text-[15px] font-semibold text-white transition-transform duration-150 ease-out hover:scale-[1.01] active:scale-[0.99]"
+        >
+          Continuar agora
+        </button>
+        <p className="text-[13px] leading-[1.65] text-[#9B9B9B]">
+          Destino: {redirectTargetUrl}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function ConfigStepFour({
   displayName,
   guildId,
@@ -3190,6 +3343,7 @@ export function ConfigStepFour({
                 orderCode: checkoutQuery.code,
                 checkoutToken: checkoutQuery.checkoutToken,
                 paymentId: checkoutQuery.paymentId,
+                paymentRef: checkoutQuery.paymentRef,
                 status: checkoutQuery.status,
               })
             : `/api/auth/me/payments/pix?${new URLSearchParams({
@@ -3553,7 +3707,8 @@ export function ConfigStepFour({
     if (!guildId || !pendingPixOrderId || !pendingPixOrderNumber) return;
     const activeGuildId = guildId;
     const activeOrderCode = pendingPixOrderNumber;
-    const checkoutReturnStatus = readCheckoutStatusQuery().status;
+    const checkoutQuery = readCheckoutStatusQuery();
+    const checkoutReturnStatus = checkoutQuery.status;
     const shouldUseFastCardPolling =
       pixOrder?.method === "card" && checkoutReturnStatus === "approved";
     const pollingIntervalMs = shouldUseFastCardPolling ? 2500 : 8000;
@@ -3583,6 +3738,9 @@ export function ConfigStepFour({
                 guildId: activeGuildId,
                 orderCode: activeOrderCode,
                 checkoutToken: pixOrder?.checkoutAccessToken || null,
+                paymentId: checkoutQuery.paymentId,
+                paymentRef: checkoutQuery.paymentRef,
+                status: checkoutReturnStatus,
               })
             : `/api/auth/me/payments/pix?${queryParams.toString()}`;
         const response = await fetch(
@@ -3885,6 +4043,7 @@ export function ConfigStepFour({
           guild: null as string | null,
           checkoutToken: null as string | null,
           paymentId: null as string | null,
+          paymentRef: null as string | null,
         };
   const currentPaymentStatusLabel = paymentStatusLabel(pixOrder);
   const orderDiagnostic = resolveOrderDiagnostic(pixOrder);
@@ -3907,6 +4066,12 @@ export function ConfigStepFour({
     view === "methods" &&
       pixOrder &&
       (paymentStatus !== "pending" || pixOrder.method === "card"),
+  );
+  const shouldShowApprovedConfirmationPanel = Boolean(
+    phase === "checkout" &&
+      shouldShowStatusResultPanel &&
+      pixOrder &&
+      paymentStatus === "approved",
   );
   const canManuallyCancelPendingCard = Boolean(
     guildId &&
@@ -5326,6 +5491,25 @@ export function ConfigStepFour({
     : formatMoney(0, activeDiscountPreview.currency);
   const showCartDiscountEditor =
     isDiscountEditorOpen || Boolean(couponCode.trim()) || Boolean(giftCardCode.trim());
+  const approvedRedirectConfig = shouldShowApprovedConfirmationPanel
+    ? resolveApprovedRedirectConfig(guildId)
+    : null;
+  const checkoutPanelTitle = shouldShowApprovedConfirmationPanel
+    ? pixOrder?.method === "trial"
+      ? "Ativacao concluida"
+      : "Pagamento confirmado"
+    : view === "pix_checkout"
+      ? "QR Code PIX"
+      : view === "pix_form"
+        ? "Dados do pagador"
+        : "Pagamento";
+  const checkoutPanelDescription = shouldShowApprovedConfirmationPanel
+    ? "O pagamento ja foi validado. Aguarde alguns instantes enquanto terminamos a liberacao do sistema deste servidor."
+    : view === "pix_checkout"
+      ? "Pague pelo app do seu banco ou use o copia e cola logo abaixo."
+      : view === "pix_form"
+        ? "Preencha nome completo e CPF abaixo para gerar o PIX sem sair deste card."
+        : "Escolha como deseja pagar sem sair da tela do carrinho.";
 
   return (
     <main
@@ -5533,24 +5717,30 @@ export function ConfigStepFour({
                     <div className="flex flex-col gap-[14px] xl:flex-row xl:items-start xl:justify-between">
                       <div className="min-w-0">
                         <p className="text-[16px] font-medium text-[#F0F0F0]">
-                          {view === "pix_checkout"
-                            ? "QR Code PIX"
-                            : view === "pix_form"
-                              ? "Dados do pagador"
-                              : "Pagamento"}
+                          {checkoutPanelTitle}
                         </p>
                         <p className="mt-[8px] max-w-[720px] text-[14px] leading-[1.65] text-[#8C8C8C] sm:text-[15px]">
-                          {view === "pix_checkout"
-                            ? "Pague pelo app do seu banco ou use o copia e cola logo abaixo."
-                            : view === "pix_form"
-                              ? "Preencha nome completo e CPF abaixo para gerar o PIX sem sair deste card."
-                              : "Escolha como deseja pagar sem sair da tela do carrinho."}
+                          {checkoutPanelDescription}
                         </p>
                       </div>
                     </div>
 
                     <div>
-                      {view === "pix_form" ? (
+                      {shouldShowApprovedConfirmationPanel &&
+                      approvedRedirectConfig ? (
+                        <ApprovedPaymentPanel
+                          className=""
+                          order={pixOrder}
+                          statusMessage={checkoutStatusLabel}
+                          redirectDelayMs={approvedRedirectConfig.delayMs}
+                          redirectTargetUrl={approvedRedirectConfig.targetUrl}
+                          onContinueNow={() => {
+                            window.location.assign(
+                              approvedRedirectConfig.targetUrl,
+                            );
+                          }}
+                        />
+                      ) : view === "pix_form" ? (
                         <PixFormPanel
                           className=""
                           payerDocument={payerDocument}

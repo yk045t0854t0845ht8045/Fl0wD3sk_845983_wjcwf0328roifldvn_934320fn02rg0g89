@@ -71,6 +71,8 @@ type PaymentStateOrder = {
   guildId: string;
   method: "pix" | "card";
   status: string;
+  providerPaymentId?: string | null;
+  providerExternalReference?: string | null;
   providerStatus: string | null;
   providerStatusDetail: string | null;
   hasPixQr: boolean;
@@ -103,6 +105,7 @@ const CHECKOUT_QUERY_KEYS = [
   "checkoutToken",
   "payment_id",
   "paymentId",
+  "paymentRef",
   "collection_id",
 ] as const;
 
@@ -314,6 +317,12 @@ function readCheckoutStatusQuery(url: URL) {
     code: Number(codeRaw),
     status,
     checkoutToken: url.searchParams.get("checkoutToken")?.trim() || null,
+    paymentId:
+      url.searchParams.get("paymentId")?.trim() ||
+      url.searchParams.get("payment_id")?.trim() ||
+      url.searchParams.get("collection_id")?.trim() ||
+      null,
+    paymentRef: url.searchParams.get("paymentRef")?.trim() || null,
   };
 }
 
@@ -323,7 +332,10 @@ function updateCheckoutStatusQuery(
         status: string;
         code: number;
         guildId: string;
+        method?: "pix" | "card" | null;
         checkoutToken?: string | null;
+        paymentId?: string | null;
+        paymentRef?: string | null;
       }
     | null,
 ) {
@@ -337,10 +349,25 @@ function updateCheckoutStatusQuery(
     url.searchParams.set("status", normalizePaymentStatusForQuery(input.status));
     url.searchParams.set("code", String(input.code));
     url.searchParams.set("guild", input.guildId);
+    if (input.method) {
+      url.searchParams.set("method", input.method);
+    } else {
+      url.searchParams.delete("method");
+    }
     if (input.checkoutToken) {
       url.searchParams.set("checkoutToken", input.checkoutToken);
     } else {
       url.searchParams.delete("checkoutToken");
+    }
+    if (input.paymentId) {
+      url.searchParams.set("paymentId", input.paymentId);
+    } else {
+      url.searchParams.delete("paymentId");
+    }
+    if (input.paymentRef) {
+      url.searchParams.set("paymentRef", input.paymentRef);
+    } else {
+      url.searchParams.delete("paymentRef");
     }
   }
 
@@ -845,7 +872,10 @@ export function ConfigFlow({
               status: string;
               code: number;
               guildId: string;
+              method?: "pix" | "card" | null;
               checkoutToken?: string | null;
+              paymentId?: string | null;
+              paymentRef?: string | null;
             }
           | null = null;
 
@@ -855,7 +885,10 @@ export function ConfigFlow({
             status: activeLicenseOrder.status || "approved",
             code: activeLicenseOrder.orderNumber,
             guildId,
+            method: activeLicenseOrder.method,
             checkoutToken: activeLicenseOrder.checkoutAccessToken || null,
+            paymentId: activeLicenseOrder.providerPaymentId || null,
+            paymentRef: activeLicenseOrder.providerExternalReference || null,
           };
         } else if (latestOrder?.orderNumber && latestOrder.checkoutAccessToken) {
           targetStep = 4;
@@ -863,7 +896,10 @@ export function ConfigFlow({
             status: latestOrder.status || "pending",
             code: latestOrder.orderNumber,
             guildId,
+            method: latestOrder.method,
             checkoutToken: latestOrder.checkoutAccessToken || null,
+            paymentId: latestOrder.providerPaymentId || null,
+            paymentRef: latestOrder.providerExternalReference || null,
           };
         } else if (activeLicenseOrder?.orderNumber || latestOrder?.orderNumber) {
           targetStep = 4;

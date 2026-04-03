@@ -1,4 +1,4 @@
-import flowPlansCatalog from "@shared/flow-plans.json";
+import flowPlansCatalog from "../../../shared/flow-plans.json";
 
 export type PlanCode = "basic" | "pro" | "ultra" | "master";
 export type PlanSlug = "flow-basic" | "flow-pro" | "flow-ultra" | "flow-master";

@@ -66,6 +66,8 @@ function toOrderState(
     guildId: order.guild_id,
     method: order.payment_method,
     status: order.status,
+    providerPaymentId: order.provider_payment_id,
+    providerExternalReference: order.provider_external_reference,
     providerStatus: order.provider_status,
     providerStatusDetail: order.provider_status_detail,
     hasPixQr: Boolean(order.provider_qr_code),
