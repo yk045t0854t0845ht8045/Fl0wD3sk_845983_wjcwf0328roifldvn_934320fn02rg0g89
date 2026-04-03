@@ -2,12 +2,11 @@ import type { NextConfig } from "next";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const configDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(configDir, "..");
+const appRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   trailingSlash: true,
-  outputFileTracingRoot: repoRoot,
+  outputFileTracingRoot: appRoot,
   images: {
     remotePatterns: [
       {
@@ -17,7 +16,7 @@ const nextConfig: NextConfig = {
     ],
   },
   turbopack: {
-    root: repoRoot,
+    root: appRoot,
   },
 };
 
