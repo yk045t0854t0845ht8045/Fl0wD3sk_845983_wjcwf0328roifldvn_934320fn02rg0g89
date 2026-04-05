@@ -34,6 +34,7 @@ import {
   resolvePlanDefinition,
   resolvePlanPricing,
 } from "@/lib/plans/catalog";
+import { resolvePlanUpgradeProration } from "@/lib/plans/proration";
 import {
   getGuildPlanSettingsRecord,
   getUserPlanState,
@@ -252,13 +253,41 @@ function toPlanResponse(input: {
   const userPlanState = input.userPlanState;
   const resolvedPlan = resolvePlanPricing(
     input.requestedPlanCode ||
-      settings?.plan_code ||
       userPlanState?.plan_code ||
       DEFAULT_PLAN_CODE,
     input.requestedBillingPeriodCode || DEFAULT_PLAN_BILLING_PERIOD_CODE,
   );
   const shouldReuseStoredPlanSettings = Boolean(
     settings && settings.plan_code === resolvedPlan.code,
+  );
+
+  const currentPlanExpiresAtMs =
+    userPlanState?.expires_at ? Date.parse(userPlanState.expires_at) : Number.NaN;
+  const hasActiveAccountPlan =
+    !!userPlanState &&
+    (userPlanState.status === "active" || userPlanState.status === "trial") &&
+    (!Number.isFinite(currentPlanExpiresAtMs) || Date.now() <= currentPlanExpiresAtMs);
+
+  const proration =
+    hasActiveAccountPlan && userPlanState
+      ? resolvePlanUpgradeProration({
+          userPlanState,
+          targetPlan: resolvedPlan,
+        })
+      : null;
+
+  const isCurrentPlanSelection =
+    hasActiveAccountPlan &&
+    !!userPlanState &&
+    userPlanState.plan_code === resolvedPlan.code &&
+    userPlanState.billing_cycle_days === resolvedPlan.billingCycleDays;
+
+  const checkoutAmount = Math.max(
+    0,
+    Math.round(
+      (isCurrentPlanSelection ? 0 : proration?.dueAmount ?? resolvedPlan.totalAmount) *
+        100,
+    ) / 100,
   );
 
   return {
@@ -272,6 +301,23 @@ function toPlanResponse(input: {
     baseTotalAmount: resolvedPlan.baseTotalAmount,
     totalAmount: resolvedPlan.totalAmount,
     compareTotalAmount: resolvedPlan.compareTotalAmount,
+    checkoutAmount,
+    checkoutMode: isCurrentPlanSelection
+      ? ("current" as const)
+      : proration
+        ? ("upgrade" as const)
+        : ("new" as const),
+    proration: proration
+      ? {
+          currentPlanCode: proration.currentPlanCode,
+          currentAmount: proration.currentAmount,
+          currentExpiresAt: proration.currentExpiresAt,
+          remainingDaysExact: proration.remainingDaysExact,
+          creditAmount: proration.creditAmount,
+          targetAmountForRemaining: proration.targetAmountForRemaining,
+          dueAmount: proration.dueAmount,
+        }
+      : null,
     currency: shouldReuseStoredPlanSettings
       ? settings?.currency || resolvedPlan.currency
       : resolvedPlan.currency,

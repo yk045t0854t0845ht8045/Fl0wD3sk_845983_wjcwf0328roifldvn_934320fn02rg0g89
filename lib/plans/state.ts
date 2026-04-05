@@ -51,7 +51,7 @@ const USER_PLAN_STATE_SELECT_COLUMNS =
   "user_id, plan_code, plan_name, status, amount, compare_amount, currency, billing_cycle_days, max_licensed_servers, max_active_tickets, max_automations, max_monthly_actions, last_payment_order_id, last_payment_guild_id, activated_at, expires_at, metadata, created_at, updated_at";
 
 const LATEST_APPROVED_ORDER_FOR_PLAN_STATE_SELECT_COLUMNS =
-  "id, user_id, guild_id, plan_code, plan_name, amount, currency, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, paid_at, created_at";
+  "id, user_id, guild_id, plan_code, plan_name, amount, currency, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, paid_at, expires_at, created_at";
 
 type PaymentOrderPlanRecord = {
   id: number;
@@ -67,6 +67,7 @@ type PaymentOrderPlanRecord = {
   plan_max_automations?: number | null;
   plan_max_monthly_actions?: number | null;
   paid_at?: string | null;
+  expires_at?: string | null;
   created_at: string;
 };
 
@@ -94,6 +95,13 @@ function resolveActivePlanStateStatus(planCode: PlanCode, expiresAt: string | nu
   }
 
   return planCode === "basic" ? "trial" : "active";
+}
+
+function normalizeValidIso(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString();
 }
 
 export async function getGuildPlanSettingsRecord(userId: number, guildId: string) {
@@ -160,14 +168,16 @@ export async function getUserPlanState(userId: number) {
   );
   const expectedActivatedAt =
     latestApprovedOrder.paid_at || latestApprovedOrder.created_at;
-  const expectedExpiresAt = resolvePlanCycleExpirationIso({
-    baseTimestamp: expectedActivatedAt,
-    billingCycleDays: resolvedBillingCycleDays,
-    billingPeriodMonths: resolveBillingPeriodMonthsFromCycleDays(
-      resolvedBillingCycleDays,
-    ),
-    fallbackBillingCycleDays: resolvedPlan.billingCycleDays,
-  });
+  const expectedExpiresAt =
+    normalizeValidIso(latestApprovedOrder.expires_at) ||
+    resolvePlanCycleExpirationIso({
+      baseTimestamp: expectedActivatedAt,
+      billingCycleDays: resolvedBillingCycleDays,
+      billingPeriodMonths: resolveBillingPeriodMonthsFromCycleDays(
+        resolvedBillingCycleDays,
+      ),
+      fallbackBillingCycleDays: resolvedPlan.billingCycleDays,
+    });
 
   const shouldResyncPlanState =
     !currentPlanState ||
@@ -236,12 +246,14 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
   );
   const resolvedBillingPeriodMonths =
     resolveBillingPeriodMonthsFromCycleDays(resolvedBillingCycleDays);
-  const expiresAt = resolvePlanCycleExpirationIso({
-    baseTimestamp: activatedAt,
-    billingCycleDays: resolvedBillingCycleDays,
-    billingPeriodMonths: resolvedBillingPeriodMonths,
-    fallbackBillingCycleDays: plan.billingCycleDays,
-  });
+  const expiresAt =
+    normalizeValidIso(order.expires_at) ||
+    resolvePlanCycleExpirationIso({
+      baseTimestamp: activatedAt,
+      billingCycleDays: resolvedBillingCycleDays,
+      billingPeriodMonths: resolvedBillingPeriodMonths,
+      fallbackBillingCycleDays: plan.billingCycleDays,
+    });
 
   const payload = {
     user_id: order.user_id,

@@ -103,23 +103,37 @@ function BillingPeriodSwitcher({
 
 function PlanCta({
   plan,
+  accountPlanCode,
+  accountPlanStatus,
 }: {
   plan: PlanPricingDefinition;
+  accountPlanCode: string | null;
+  accountPlanStatus: string | null;
 }) {
   const planHref = `${buildConfigCheckoutPath({
     planCode: plan.code,
     billingPeriodCode: plan.billingPeriodCode,
   })}?fresh=1`;
   const [isLoading, setIsLoading] = useState(false);
+  const isCurrentPlan =
+    !!accountPlanCode &&
+    accountPlanCode === plan.code &&
+    (accountPlanStatus === "active" || accountPlanStatus === "trial");
 
   return (
     <LandingActionButton
-      href={planHref}
+      href={isCurrentPlan ? undefined : planHref}
       variant="light"
       className="mt-[20px] h-[50px] w-full rounded-[12px] px-6 text-[16px]"
-      onClick={() => setIsLoading(true)}
+      disabled={isCurrentPlan}
+      onClick={() => {
+        if (isCurrentPlan) return;
+        setIsLoading(true);
+      }}
     >
-      {isLoading ? (
+      {isCurrentPlan ? (
+        "Plano atual"
+      ) : isLoading ? (
         <ButtonLoader size={18} colorClassName="text-[#2B2B2B]" />
       ) : (
         "Escolher plano"
@@ -131,9 +145,13 @@ function PlanCta({
 function OfferPlanCard({
   plan,
   delay,
+  accountPlanCode,
+  accountPlanStatus,
 }: {
   plan: PlanPricingDefinition;
   delay: number;
+  accountPlanCode: string | null;
+  accountPlanStatus: string | null;
 }) {
   const isPopular = plan.code === "pro";
   const cardBodyClass =
@@ -192,7 +210,11 @@ function OfferPlanCard({
             {plan.cycleBadge || plan.limitedOffer}
           </div>
 
-          <PlanCta plan={plan} />
+          <PlanCta
+            plan={plan}
+            accountPlanCode={accountPlanCode}
+            accountPlanStatus={accountPlanStatus}
+          />
 
           <p className="mt-[16px] min-h-[48px] text-[13px] leading-[1.22] font-normal text-[rgba(218,218,218,0.3)]">
             {plan.description}
@@ -236,11 +258,47 @@ function OfferPlanCard({
 export function LandingOfferPlans() {
   const [selectedBillingPeriodCode, setSelectedBillingPeriodCode] =
     useState<PlanBillingPeriodCode>("monthly");
+  const [accountPlanCode, setAccountPlanCode] = useState<string | null>(null);
+  const [accountPlanStatus, setAccountPlanStatus] = useState<string | null>(null);
 
   const plans = useMemo(
     () => getAllPlanPricingDefinitions(selectedBillingPeriodCode),
     [selectedBillingPeriodCode],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+    const controller = new AbortController();
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/me/plan-state", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | { ok?: boolean; plan?: { planCode?: string; status?: string } | null }
+          | null;
+        if (!isMounted) return;
+        if (!response.ok || !payload?.ok || !payload.plan?.planCode) {
+          setAccountPlanCode(null);
+          setAccountPlanStatus(null);
+          return;
+        }
+        setAccountPlanCode(payload.plan.planCode || null);
+        setAccountPlanStatus(payload.plan.status || null);
+      } catch {
+        if (!isMounted) return;
+        setAccountPlanCode(null);
+        setAccountPlanStatus(null);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, []);
 
   return (
     <div className="mx-auto mt-[18px] w-full max-w-[1582px] pt-0 min-[1580px]:mt-[20px] min-[1580px]:pt-[45px]">
@@ -259,6 +317,8 @@ export function LandingOfferPlans() {
             key={plan.code}
             plan={plan}
             delay={2040 + index * 90}
+            accountPlanCode={accountPlanCode}
+            accountPlanStatus={accountPlanStatus}
           />
         ))}
       </div>

@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ClientErrorBoundary } from "@/components/common/ClientErrorBoundary";
 import { BotMissingModal } from "@/components/config/BotMissingModal";
@@ -1238,6 +1238,7 @@ export function ServerSettingsEditor({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSendingEmbed, setIsSendingEmbed] = useState(false);
+  const isSendingEmbedRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showSaveSuccessBar, setShowSaveSuccessBar] = useState(false);
@@ -3245,6 +3246,8 @@ export function ServerSettingsEditor({
 
   const handleSendEmbed = useCallback(async () => {
     if (!canSendEmbed || !menuChannelId) return;
+    if (isSendingEmbedRef.current) return;
+    isSendingEmbedRef.current = true;
 
     setIsSendingEmbed(true);
     setErrorMessage(null);
@@ -3271,6 +3274,7 @@ export function ServerSettingsEditor({
           : "Erro ao enviar o embed do ticket.",
       );
     } finally {
+      isSendingEmbedRef.current = false;
       setIsSendingEmbed(false);
     }
   }, [canSendEmbed, guildId, menuChannelId, panelLayout]);
