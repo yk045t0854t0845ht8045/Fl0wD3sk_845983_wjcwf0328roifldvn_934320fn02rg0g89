@@ -16,6 +16,7 @@ type TranscriptAccessPageClientProps = {
 };
 
 const EMPTY_DIGITS = ["", "", "", ""] as const;
+const TRANSCRIPT_SKELETON_ROWS = [0, 1, 2, 3, 4] as const;
 
 function formatRemainingTime(ms: number) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -34,6 +35,7 @@ export function TranscriptAccessPageClient({
   const [isError, setIsError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [frameSeed, setFrameSeed] = useState(0);
+  const [isTranscriptFrameLoading, setIsTranscriptFrameLoading] = useState(false);
   const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(
     initialSessionExpiresAt,
   );
@@ -82,6 +84,15 @@ export function TranscriptAccessPageClient({
     const interval = window.setInterval(updateRemaining, 1000);
     return () => window.clearInterval(interval);
   }, [hasActiveSession, protocol, sessionExpiresAt]);
+
+  useEffect(() => {
+    if (isUnavailable || !hasActiveSession) {
+      setIsTranscriptFrameLoading(false);
+      return;
+    }
+
+    setIsTranscriptFrameLoading(true);
+  }, [frameSeed, hasActiveSession, isUnavailable, protocol]);
 
   function updateDigit(index: number, nextValue: string) {
     const safeValue = nextValue.replace(/\D/g, "").slice(-1);
@@ -370,12 +381,37 @@ export function TranscriptAccessPageClient({
                     </div>
                   </div>
 
-                  <div className="mt-[24px] overflow-hidden rounded-[28px] border border-[#111111] bg-[#070707] shadow-[0_30px_100px_rgba(0,0,0,0.35)]">
+                  <div className="relative mt-[24px] overflow-hidden rounded-[28px] border border-[#111111] bg-[#070707] shadow-[0_30px_100px_rgba(0,0,0,0.35)]">
+                    {isTranscriptFrameLoading ? (
+                      <div className="pointer-events-none absolute inset-0 z-10 bg-[#070707] px-[18px] py-[20px]">
+                        <div className="flex flex-col gap-[16px]">
+                          {TRANSCRIPT_SKELETON_ROWS.map((row) => (
+                            <div
+                              key={`transcript-skeleton-${row}`}
+                              className="grid grid-cols-[40px_minmax(0,1fr)] gap-3"
+                            >
+                              <span className="h-[40px] w-[40px] animate-pulse rounded-full bg-[#161616]" />
+                              <div className="space-y-[8px] pt-[3px]">
+                                <span className="block h-[10px] w-[180px] animate-pulse rounded-full bg-[#191919]" />
+                                <span className="block h-[10px] w-[62%] animate-pulse rounded-full bg-[#141414]" />
+                                {row % 2 === 0 ? (
+                                  <span className="block h-[118px] max-w-[410px] animate-pulse rounded-[12px] bg-[#111111]" />
+                                ) : (
+                                  <span className="block h-[10px] w-[44%] animate-pulse rounded-full bg-[#151515]" />
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                     <iframe
                       key={`${protocol}-${frameSeed}`}
                       title={`Transcript ${protocol}`}
                       src={`/api/transcripts/${encodeURIComponent(protocol)}/content`}
-                      className="h-[76vh] min-h-[620px] w-full bg-white"
+                      onLoad={() => setIsTranscriptFrameLoading(false)}
+                      onError={() => setIsTranscriptFrameLoading(false)}
+                      className="h-[76vh] min-h-[620px] w-full bg-[#070707]"
                     />
                   </div>
                 </>
