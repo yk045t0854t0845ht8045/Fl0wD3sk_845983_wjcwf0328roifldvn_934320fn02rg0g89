@@ -12,6 +12,7 @@ type BotMissingModalProps = {
   isChecking: boolean;
   title: string;
   description: string;
+  scope?: "viewport" | "parent" | "workspace-main";
 };
 
 export function BotMissingModal({
@@ -21,6 +22,7 @@ export function BotMissingModal({
   isChecking,
   title,
   description,
+  scope = "viewport",
 }: BotMissingModalProps) {
   useBodyScrollLock(isOpen);
 
@@ -43,9 +45,15 @@ export function BotMissingModal({
 
   const isPermissionIssue = title.toLowerCase().includes("permiss");
   const eyebrow = isPermissionIssue ? "Permissoes do bot" : "Integracao do bot";
+  const rootClassName =
+    scope === "parent"
+      ? "absolute inset-0 z-[80] isolate overflow-y-auto overscroll-contain px-[18px] py-[28px]"
+      : scope === "workspace-main"
+        ? "fixed inset-y-0 right-0 left-0 z-[80] isolate overflow-y-auto overscroll-contain px-[18px] py-[28px] xl:left-[358px]"
+      : "fixed inset-0 z-[80] isolate overflow-y-auto overscroll-contain px-[18px] py-[28px]";
 
   return (
-    <div className="fixed inset-0 z-[80] isolate overflow-y-auto overscroll-contain px-[18px] py-[28px]">
+    <div className={rootClassName}>
       <button
         type="button"
         aria-label="Fechar modal do bot"

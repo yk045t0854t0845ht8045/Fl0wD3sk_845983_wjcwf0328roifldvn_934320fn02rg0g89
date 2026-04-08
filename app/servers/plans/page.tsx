@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { ServersPlansUpgradePage } from "@/components/servers/ServersPlansUpgradePage";
 import { buildLoginHref } from "@/lib/auth/paths";
-import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
+import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { getUserPlanState } from "@/lib/plans/state";
 
 type ServersPlansPageProps = {
@@ -11,13 +11,14 @@ type ServersPlansPageProps = {
 export default async function ServersPlansPage({
   searchParams: _searchParams,
 }: ServersPlansPageProps) {
-  const user = await getCurrentUserFromSessionCookie();
+  const session = await getCurrentAuthSessionFromCookie();
 
-  if (!user) {
+  if (!session) {
     redirect(buildLoginHref("/servers/plans"));
   }
 
   void _searchParams;
+  const user = session.user;
   const userPlanState = await getUserPlanState(user.id);
 
   return (
@@ -30,6 +31,7 @@ export default async function ServersPlansPage({
             }
           : null
       }
+      preferredGuildId={session.activeGuildId || null}
     />
   );
 }

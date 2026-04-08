@@ -23,6 +23,7 @@ type CurrentPlanSnapshot = {
 
 type Props = {
   currentPlan: CurrentPlanSnapshot | null;
+  preferredGuildId: string | null;
 };
 
 const PLAN_FEATURE_ICON_SOURCES = [
@@ -148,20 +149,29 @@ function BillingPeriodSwitcher({
 function PlanCta({
   plan,
   currentPlan,
+  preferredGuildId,
   pendingKey,
   onStartNavigation,
 }: {
   plan: PlanPricingDefinition;
   currentPlan: CurrentPlanSnapshot | null;
+  preferredGuildId: string | null;
   pendingKey: string | null;
   onStartNavigation: (key: string) => void;
 }) {
   const current = isCurrentPlan(currentPlan, plan);
   const key = `${plan.code}:${plan.billingPeriodCode}`;
+  const checkoutParams = new URLSearchParams({
+    fresh: "1",
+    source: "servers-plans",
+  });
+  if (preferredGuildId) {
+    checkoutParams.set("guild", preferredGuildId);
+  }
   const href = `${buildConfigCheckoutPath({
     planCode: plan.code,
     billingPeriodCode: plan.billingPeriodCode,
-  })}?fresh=1&source=servers-plans`;
+  })}?${checkoutParams.toString()}#/payment`;
 
   return (
     <LandingActionButton
@@ -190,6 +200,7 @@ function OfferPlanCard({
   delay,
   recommendedPlanCode,
   currentPlan,
+  preferredGuildId,
   pendingKey,
   onStartNavigation,
   compact = false,
@@ -199,6 +210,7 @@ function OfferPlanCard({
   delay?: number;
   recommendedPlanCode: PlanCode;
   currentPlan: CurrentPlanSnapshot | null;
+  preferredGuildId: string | null;
   pendingKey: string | null;
   onStartNavigation: (key: string) => void;
   compact?: boolean;
@@ -269,6 +281,7 @@ function OfferPlanCard({
         <PlanCta
           plan={plan}
           currentPlan={currentPlan}
+          preferredGuildId={preferredGuildId}
           pendingKey={pendingKey}
           onStartNavigation={onStartNavigation}
         />
@@ -623,7 +636,7 @@ function PlanComparisonTable({ plans }: { plans: PlanPricingDefinition[] }) {
   );
 }
 
-export function ServersPlansUpgradePage({ currentPlan }: Props) {
+export function ServersPlansUpgradePage({ currentPlan, preferredGuildId }: Props) {
   const [selectedBillingPeriodCode, setSelectedBillingPeriodCode] =
     useState<PlanBillingPeriodCode>(() =>
       resolveInitialBillingPeriodCode(currentPlan),
@@ -665,6 +678,7 @@ export function ServersPlansUpgradePage({ currentPlan }: Props) {
               delay={240 + index * 90}
               recommendedPlanCode={recommendedPlanCode}
               currentPlan={currentPlan}
+              preferredGuildId={preferredGuildId}
               pendingKey={pendingKey}
               onStartNavigation={setPendingKey}
               reveal

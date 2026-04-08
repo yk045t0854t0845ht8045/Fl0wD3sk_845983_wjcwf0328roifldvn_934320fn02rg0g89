@@ -35,6 +35,7 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
     ticketSettingsResult,
     staffSettingsResult,
     welcomeSettingsResult,
+    antiLinkSettingsResult,
     planSettingsResult,
   ] = await Promise.all([
     supabase
@@ -51,6 +52,12 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
       .returns<GuildSavedSetupRecord[]>(),
     supabase
       .from("guild_welcome_settings")
+      .select("guild_id, updated_at")
+      .eq("configured_by_user_id", userId)
+      .in("guild_id", guildIds)
+      .returns<GuildSavedSetupRecord[]>(),
+    supabase
+      .from("guild_antilink_settings")
       .select("guild_id, updated_at")
       .eq("configured_by_user_id", userId)
       .in("guild_id", guildIds)
@@ -73,6 +80,10 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
 
   if (welcomeSettingsResult.error) {
     throw new Error(welcomeSettingsResult.error.message);
+  }
+
+  if (antiLinkSettingsResult.error) {
+    throw new Error(antiLinkSettingsResult.error.message);
   }
 
   if (planSettingsResult.error) {
@@ -105,6 +116,7 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
   for (const record of ticketSettingsResult.data || []) registerRecord(record);
   for (const record of staffSettingsResult.data || []) registerRecord(record);
   for (const record of welcomeSettingsResult.data || []) registerRecord(record);
+  for (const record of antiLinkSettingsResult.data || []) registerRecord(record);
   for (const record of planSettingsResult.data || []) registerRecord(record);
 
   return savedSetupMap;

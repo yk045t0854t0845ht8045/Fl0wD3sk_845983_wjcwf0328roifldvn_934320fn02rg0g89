@@ -49,6 +49,17 @@ type ServerDashboardSettingsPayload = {
     exitThumbnailMode: WelcomeThumbnailMode;
     updatedAt: string | null;
   } | null;
+  antiLinkSettings: {
+    enabled: boolean;
+    logChannelId: string | null;
+    enforcementAction: "delete_only" | "timeout" | "kick" | "ban";
+    timeoutMinutes: number;
+    ignoredRoleIds: string[];
+    blockExternalLinks: boolean;
+    blockDiscordInvites: boolean;
+    blockObfuscatedLinks: boolean;
+    updatedAt: string | null;
+  } | null;
 };
 
 type ServerDashboardSettingsApiResponse =
@@ -58,7 +69,7 @@ type ServerDashboardSettingsApiResponse =
       message?: string;
     };
 
-const SERVER_DASHBOARD_SETTINGS_CACHE_TTL_MS = 30_000;
+const SERVER_DASHBOARD_SETTINGS_CACHE_TTL_MS = 90_000;
 const SERVER_DASHBOARD_SETTINGS_STORAGE_KEY =
   "flowdesk_server_dashboard_settings_cache_v1";
 

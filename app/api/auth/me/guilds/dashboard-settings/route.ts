@@ -54,6 +54,27 @@ function normalizeWelcomeThumbnailMode(value: unknown) {
   return value === "avatar" ? "avatar" : "custom";
 }
 
+function normalizeAntiLinkAction(value: unknown) {
+  if (
+    value === "delete_only" ||
+    value === "timeout" ||
+    value === "kick" ||
+    value === "ban"
+  ) {
+    return value;
+  }
+  return "delete_only";
+}
+
+function normalizeAntiLinkTimeoutMinutes(value: unknown) {
+  const parsed =
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.trunc(value)
+      : Number.NaN;
+  if (!Number.isFinite(parsed)) return 10;
+  return Math.min(10080, Math.max(1, parsed));
+}
+
 async function ensureGuildAccess(guildId: string) {
   const sessionData = await resolveSessionAccessToken();
   if (!sessionData?.authSession) {
@@ -141,7 +162,7 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult] = await Promise.all([
+    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult] = await Promise.all([
       fetchGuildChannelsByBot(guildId),
       fetchGuildRolesByBot(guildId),
         supabase
@@ -162,6 +183,13 @@ export async function GET(request: Request) {
         .from("guild_welcome_settings")
         .select(
           "enabled, entry_public_channel_id, entry_log_channel_id, exit_public_channel_id, exit_log_channel_id, entry_layout, exit_layout, entry_thumbnail_mode, exit_thumbnail_mode, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      supabase
+        .from("guild_antilink_settings")
+        .select(
+          "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
         )
         .eq("guild_id", guildId)
         .maybeSingle(),
@@ -203,6 +231,10 @@ export async function GET(request: Request) {
       throw new Error(welcomeResult.error.message);
     }
 
+    if (antiLinkResult.error) {
+      throw new Error(antiLinkResult.error.message);
+    }
+
     const categories = sortChannels(
       rawChannels
         .filter((channel) => channel.type === GUILD_CATEGORY)
@@ -239,6 +271,7 @@ export async function GET(request: Request) {
           position: role.position,
         })),
     );
+    const roleSet = new Set(roles.map((role) => role.id));
 
     const defaultEntryLayout = createDefaultWelcomeEntryLayout();
     const defaultExitLayout = createDefaultWelcomeExitLayout();
@@ -334,6 +367,35 @@ export async function GET(request: Request) {
                 welcomeResult.data.exit_thumbnail_mode,
               ),
               updatedAt: welcomeResult.data.updated_at,
+            }
+          : null,
+        antiLinkSettings: antiLinkResult.data
+          ? {
+              enabled: Boolean(antiLinkResult.data.enabled),
+              logChannelId:
+                antiLinkResult.data.log_channel_id &&
+                textSet.has(antiLinkResult.data.log_channel_id)
+                  ? antiLinkResult.data.log_channel_id
+                  : null,
+              enforcementAction: normalizeAntiLinkAction(
+                antiLinkResult.data.enforcement_action,
+              ),
+              timeoutMinutes: normalizeAntiLinkTimeoutMinutes(
+                antiLinkResult.data.timeout_minutes,
+              ),
+              ignoredRoleIds: Array.isArray(antiLinkResult.data.ignored_role_ids)
+                ? antiLinkResult.data.ignored_role_ids.filter(
+                    (roleId): roleId is string =>
+                      typeof roleId === "string" && roleSet.has(roleId),
+                  )
+                : [],
+              blockExternalLinks:
+                antiLinkResult.data.block_external_links !== false,
+              blockDiscordInvites:
+                antiLinkResult.data.block_discord_invites !== false,
+              blockObfuscatedLinks:
+                antiLinkResult.data.block_obfuscated_links !== false,
+              updatedAt: antiLinkResult.data.updated_at,
             }
           : null,
       }),

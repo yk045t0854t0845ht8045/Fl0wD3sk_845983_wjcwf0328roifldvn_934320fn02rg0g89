@@ -170,36 +170,6 @@ async function ensureGuildAccess(guildId: string) {
   };
 }
 
-async function hasStoredGuildSetupConfiguration(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const [ticketSettingsResult, staffSettingsResult] = await Promise.all([
-    supabase
-      .from("guild_ticket_settings")
-      .select("id")
-      .eq("guild_id", guildId)
-      .maybeSingle<{ id: number }>(),
-    supabase
-      .from("guild_ticket_staff_settings")
-      .select("id")
-      .eq("guild_id", guildId)
-      .maybeSingle<{ id: number }>(),
-  ]);
-
-  if (ticketSettingsResult.error) {
-    throw new Error(
-      `Erro ao verificar configuracoes de canais do servidor: ${ticketSettingsResult.error.message}`,
-    );
-  }
-
-  if (staffSettingsResult.error) {
-    throw new Error(
-      `Erro ao verificar configuracoes de cargos do servidor: ${staffSettingsResult.error.message}`,
-    );
-  }
-
-  return Boolean(ticketSettingsResult.data && staffSettingsResult.data);
-}
-
 async function getLatestApprovedLicenseCoverageForGuild(guildId: string) {
   const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
     guildId,
@@ -277,17 +247,6 @@ export async function POST(request: Request) {
       guildId,
       source: "payment_trial_post",
     });
-
-    if (!(await hasStoredGuildSetupConfiguration(guildId))) {
-      return NextResponse.json(
-        {
-          ok: false,
-          message:
-            "A configuracao desse servidor expirou apos 30 minutos sem ativacao. Refaça a configuracao antes de continuar.",
-        },
-        { status: 409 },
-      );
-    }
 
     const checkoutPlan = await resolveEffectivePlanSelection({
       userId: user.id,

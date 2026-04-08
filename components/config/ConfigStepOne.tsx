@@ -20,7 +20,7 @@ type ConfigStepOneProps = {
   displayName: string;
   initialSelectedGuildId?: string | null;
   onSelectedGuildChange?: (guildId: string | null) => void;
-  onProceedToStepTwo?: (guildId: string) => void;
+  onProceedToPayment?: (guildId: string) => void;
 };
 
 type GuildsApiResponse = {
@@ -36,7 +36,7 @@ type BotPresenceApiResponse = {
   message?: string;
 };
 
-const DEFAULT_NEXT_STEP_URL = "/config/#/step/2";
+const DEFAULT_NEXT_STEP_URL = "/config";
 const BOT_CHECK_INTERVAL_MS = 4_000;
 const GUILDS_CACHE_STORAGE_KEY = "flowdesk_step1_guilds_cache_v3";
 const GUILDS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -80,25 +80,25 @@ function writeGuildsCache(guilds: GuildItem[]) {
 
 function resolveSelectionDescription(guild: GuildItem | null) {
   if (!guild) {
-    return "Escolha um servidor acima para validar o bot, liberar os proximos passos e continuar a configuracao do ticket com mais seguranca.";
+    return "Escolha um servidor acima para validar o bot e seguir direto para o pagamento.";
   }
 
   if (guild.owner) {
-    return "A conta atual possui a posse deste servidor. No proximo passo vamos validar o bot em tempo real e preparar o fluxo de canais para a configuracao.";
+    return "A conta atual possui a posse deste servidor. Assim que validarmos o bot, voce segue direto para o pagamento.";
   }
 
   if (guild.admin) {
-    return "Voce tem acesso administrativo neste servidor. O proximo passo confirma a presenca do bot e libera a configuracao de tickets, canais e cargos.";
+    return "Voce tem acesso administrativo neste servidor. O proximo passo confirma a presenca do bot e abre o checkout imediatamente.";
   }
 
-  return "Este servidor esta pronto para seguir na configuracao. O proximo passo valida o bot e prepara os canais principais do atendimento.";
+  return "Este servidor esta pronto para seguir no checkout. O proximo passo valida o bot e libera o pagamento.";
 }
 
 export function ConfigStepOne({
   displayName,
   initialSelectedGuildId = null,
   onSelectedGuildChange,
-  onProceedToStepTwo,
+  onProceedToPayment,
 }: ConfigStepOneProps) {
   const [guilds, setGuilds] = useState<GuildItem[]>([]);
   const [isLoadingGuilds, setIsLoadingGuilds] = useState(true);
@@ -213,13 +213,13 @@ export function ConfigStepOne({
     setIsBotModalOpen(false);
     setBotInviteUrl(null);
 
-    if (onProceedToStepTwo) {
-      onProceedToStepTwo(guildId);
+    if (onProceedToPayment) {
+      onProceedToPayment(guildId);
       return;
     }
 
-    window.location.assign(`${DEFAULT_NEXT_STEP_URL}?guild=${guildId}`);
-  }, [clearBotPolling, onProceedToStepTwo]);
+    window.location.assign(`${DEFAULT_NEXT_STEP_URL}?guild=${guildId}#/payment`);
+  }, [clearBotPolling, onProceedToPayment]);
 
   const startRealtimeBotPolling = useCallback(
     (guildId: string) => {
@@ -382,14 +382,14 @@ export function ConfigStepOne({
       >
         <section className="w-full max-w-[1240px] flowdesk-stage-fade">
           <div className="mx-auto max-w-[820px] text-center">
-            <LandingGlowTag>Configuracao do ticket | Etapa 1</LandingGlowTag>
+            <LandingGlowTag>Ativacao da licenca | Etapa 1</LandingGlowTag>
 
             <h1 className="mt-[24px] bg-[linear-gradient(90deg,#E7E7E7_0%,#BFBFBF_100%)] bg-clip-text text-[38px] leading-[0.98] font-normal tracking-[-0.06em] text-transparent sm:text-[48px] lg:text-[56px]">
               Escolha o servidor que vai receber o Flowdesk
             </h1>
 
             <p className="mx-auto mt-[16px] max-w-[720px] text-[15px] leading-[1.7] text-[#8A8A8A] sm:text-[16px]">
-              A etapa inicial agora mostra seus servidores em cards mais vivos, com GIF preservado, favoritos salvos e uma selecao visual muito mais clara antes da validacao do bot.
+              Escolha um servidor, valide o bot e siga direto para a tela de pagamento. A configuracao fina de tickets voce faz depois em Servers.
             </p>
           </div>
 
@@ -517,7 +517,7 @@ export function ConfigStepOne({
                           }
                         />
                       ) : (
-                        "Continuar configuracao"
+                        "Ir para pagamento"
                       )}
                     </span>
                   </button>

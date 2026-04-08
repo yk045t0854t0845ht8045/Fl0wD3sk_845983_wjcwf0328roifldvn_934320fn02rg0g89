@@ -24,8 +24,6 @@ import {
   LEGACY_GUILD_STORAGE_KEY,
   createEmptyConfigDraft,
   hasStepFourDraftValues,
-  hasStepThreeDraftValues,
-  hasStepTwoDraftValues,
   mergeConfigDraft,
   sanitizeStoredConfigContext,
 } from "@/lib/auth/configContext";
@@ -116,9 +114,14 @@ const CHECKOUT_QUERY_KEYS = [
   "collection_id",
 ] as const;
 
+function normalizeFlowStep(step: ConfigStep): ConfigStep {
+  return step === 4 ? 4 : 1;
+}
+
 function resolveHashForStep(step: ConfigStep) {
-  if (step === 4) return PAYMENT_HASH;
-  return `#/step/${step}`;
+  const normalizedStep = normalizeFlowStep(step);
+  if (normalizedStep === 4) return PAYMENT_HASH;
+  return STEP_ONE_HASH;
 }
 
 function normalizeStepHash(hash: string) {
@@ -138,13 +141,13 @@ function shouldForceFreshStart(url: URL) {
 function parseStepFromHash(hash: string): ConfigStep {
   const normalized = normalizeStepHash(hash);
   if (normalized === STEP_ONE_HASH) return 1;
-  if (normalized === STEP_TWO_HASH) return 2;
-  if (normalized === STEP_THREE_HASH) return 3;
+  if (normalized === STEP_TWO_HASH) return 1;
+  if (normalized === STEP_THREE_HASH) return 1;
   if (normalized === STEP_FOUR_LEGACY_HASH || normalized === PAYMENT_HASH) return 4;
 
   const dynamicStepMatch = normalized.match(/^#\/step\/([1-4])$/);
   if (dynamicStepMatch) {
-    return Number(dynamicStepMatch[1]) as ConfigStep;
+    return normalizeFlowStep(Number(dynamicStepMatch[1]) as ConfigStep);
   }
 
   return 1;
@@ -259,7 +262,7 @@ function toStoredConfigContext(input: {
 }) {
   return {
     activeGuildId: input.activeGuildId,
-    activeStep: input.activeStep,
+    activeStep: normalizeFlowStep(input.activeStep),
     draft: input.draft,
     updatedAt: input.updatedAt,
   } satisfies StoredConfigContext;
@@ -398,12 +401,6 @@ function updateCheckoutStatusQuery(
 function resolvePreferredStepForGuild(draft: ConfigDraft, guildId: string): ConfigStep {
   const stepFourDraft = draft.stepFourByGuild[guildId];
   if (hasStepFourDraftValues(stepFourDraft)) return 4;
-
-  const stepThreeDraft = draft.stepThreeByGuild[guildId];
-  if (hasStepThreeDraftValues(stepThreeDraft)) return 3;
-
-  const stepTwoDraft = draft.stepTwoByGuild[guildId];
-  if (hasStepTwoDraftValues(stepTwoDraft)) return 2;
 
   return 1;
 }
@@ -559,7 +556,7 @@ export function ConfigFlow({
 
       const hash = window.location.hash;
       if (!hasStepHash(hash)) return;
-      setCurrentStep(parseStepFromHash(hash));
+      setCurrentStep(normalizeFlowStep(parseStepFromHash(hash)));
     }
 
     let isMounted = true;
@@ -567,6 +564,9 @@ export function ConfigFlow({
     async function loadConfigContext() {
       const initialUrl = new URL(window.location.href);
       const shouldForceFresh = shouldForceFreshStart(initialUrl);
+      const sourceValue =
+        initialUrl.searchParams.get("source")?.trim().toLowerCase() || null;
+      const isServersPlansSource = sourceValue === "servers-plans";
       setForceFreshCheckout(shouldForceFresh);
       const localContext = shouldForceFresh ? null : readLocalConfigContext();
       const initialHash = window.location.hash;
@@ -633,18 +633,18 @@ export function ConfigFlow({
             : checkoutQuery?.guildId || queryGuildId || mergedContext.activeGuildId;
         const resolvedActiveStep =
           shouldForceFresh
-            ? resolvedActiveGuildId
-              ? 2
+            ? isServersPlansSource && resolvedActiveGuildId
+              ? 4
               : 1
             : checkoutQuery
               ? 4
               : shouldRespectHash && resolvedActiveGuildId
-                ? initialHashStep
+                ? normalizeFlowStep(initialHashStep)
                 : shouldRespectHash && !resolvedActiveGuildId
                   ? 1
                   : queryGuildId
-                    ? 2
-                    : mergedContext.activeStep;
+                    ? 1
+                    : normalizeFlowStep(mergedContext.activeStep);
         const hydratedContext = toStoredConfigContext({
           activeGuildId: resolvedActiveGuildId,
           activeStep: resolvedActiveStep,
@@ -874,19 +874,19 @@ export function ConfigFlow({
     [currentStep, setAndSyncContext],
   );
 
-  const handleProceedToStepTwo = useCallback(
+  const handleProceedToPayment = useCallback(
     (guildId: string) => {
       updateCheckoutStatusQuery(null);
       setAndSyncContext(
         {
           activeGuildId: guildId,
-          activeStep: 2,
+          activeStep: 4,
         },
         true,
       );
 
       setIsTransitioningStep(true);
-      setStepHash(2);
+      setStepHash(4);
     },
     [setAndSyncContext],
   );
@@ -1180,17 +1180,18 @@ export function ConfigFlow({
         displayName={displayName}
         initialSelectedGuildId={selectedGuildId}
         onSelectedGuildChange={handleGuildSelectionChange}
-        onProceedToStepTwo={handleProceedToStepTwo}
+        onProceedToPayment={handleProceedToPayment}
       />
     );
   }, [
     currentStep,
     displayName,
+    forceFreshCheckout,
     handleGoBackToStepOne,
     handleGuildSelectionChange,
+    handleProceedToPayment,
     handleProceedToStepFour,
     handleProceedToStepThree,
-    handleProceedToStepTwo,
     handleStepFourDraftChange,
     hasExplicitInitialPlan,
     handleStepThreeDraftChange,

@@ -1,10 +1,11 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { RefObject } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  ArrowRightLeft,
   BadgePercent,
   BarChart3,
   Check as CheckLucide,
@@ -25,7 +26,9 @@ import {
   PlugZap,
   Search as SearchLucide,
   Settings2,
+  Shield,
   SlidersHorizontal,
+  Ticket,
   UserRound,
   Users,
   WalletCards,
@@ -80,7 +83,8 @@ type ServerSettingsSection =
   | "overview"
   | "message"
   | "entry_exit_overview"
-  | "entry_exit_message";
+  | "entry_exit_message"
+  | "security_antilink";
 type FilterOption = "all" | ManagedServerStatus;
 type ViewMode = "overview" | "list";
 type CreateTeamStep = "name" | "servers" | "members";
@@ -117,7 +121,7 @@ const FILTER_LABEL: Record<FilterOption, string> = {
 
 type SidebarItem = {
   label: string;
-  kind: "overview" | "settings";
+  kind: "overview" | "settings" | "ticket" | "entry_exit" | "security";
   tab?: ServerEditorTab | null;
   settingsSection?: ServerSettingsSection | null;
   disabled?: boolean;
@@ -137,7 +141,7 @@ const PROJECTS_SIDEBAR_ITEMS: SidebarItem[] = [
 const TICKET_SIDEBAR_ITEMS: SidebarItem[] = [
   {
     label: "Visao geral",
-    kind: "settings",
+    kind: "ticket",
     tab: "settings",
     settingsSection: "overview",
     searchAliases: [
@@ -154,7 +158,7 @@ const TICKET_SIDEBAR_ITEMS: SidebarItem[] = [
   },
   {
     label: "Mensagem do ticket",
-    kind: "settings",
+    kind: "ticket",
     tab: "settings",
     settingsSection: "message",
     searchAliases: [
@@ -172,7 +176,7 @@ const TICKET_SIDEBAR_ITEMS: SidebarItem[] = [
 const ENTRY_EXIT_SIDEBAR_ITEMS: SidebarItem[] = [
   {
     label: "Canais e Logs",
-    kind: "settings",
+    kind: "entry_exit",
     tab: "settings",
     settingsSection: "entry_exit_overview",
     searchAliases: [
@@ -187,7 +191,7 @@ const ENTRY_EXIT_SIDEBAR_ITEMS: SidebarItem[] = [
   },
   {
     label: "Configurando Mensagem",
-    kind: "settings",
+    kind: "entry_exit",
     tab: "settings",
     settingsSection: "entry_exit_message",
     searchAliases: [
@@ -197,6 +201,26 @@ const ENTRY_EXIT_SIDEBAR_ITEMS: SidebarItem[] = [
       "saida",
       "configurar",
       "boas vindas",
+    ],
+  },
+];
+
+const SECURITY_SIDEBAR_ITEMS: SidebarItem[] = [
+  {
+    label: "AntiLink",
+    kind: "security",
+    tab: "settings",
+    settingsSection: "security_antilink",
+    searchAliases: [
+      "seguranca",
+      "anti link",
+      "antilink",
+      "moderacao",
+      "ban",
+      "expulsar",
+      "silenciar",
+      "links",
+      "discord.gg",
     ],
   },
 ];
@@ -335,6 +359,17 @@ function parseWorkspaceRoute(pathname: string | null): {
         entryExitSectionMatch[2] === "overview"
           ? "entry_exit_overview"
           : "entry_exit_message",
+    };
+  }
+
+  const securitySectionMatch = pathname.match(
+    /^\/servers\/(\d{10,25})\/security\/antilink\/?$/,
+  );
+  if (securitySectionMatch) {
+    return {
+      guildId: securitySectionMatch[1],
+      tab: "settings",
+      settingsSection: "security_antilink",
     };
   }
 
@@ -578,6 +613,9 @@ function SidebarNavIcon({
   const Icon: LucideIcon = {
     overview: FolderKanban,
     settings: Settings2,
+    ticket: Ticket,
+    entry_exit: ArrowRightLeft,
+    security: Shield,
     payments: WalletCards,
     methods: Workflow,
     plans: BadgePercent,
@@ -924,6 +962,7 @@ export function ServersWorkspace({
     useState<ServerSettingsSection>(initialSettingsSection);
   const [isTicketSidebarOpen, setIsTicketSidebarOpen] = useState(true);
   const [isEntryExitSidebarOpen, setIsEntryExitSidebarOpen] = useState(true);
+  const [isSecuritySidebarOpen, setIsSecuritySidebarOpen] = useState(true);
   const statusRef = useRef<HTMLDivElement | null>(null);
   const desktopTeamMenuRef = useRef<HTMLDivElement | null>(null);
   const mobileTeamMenuRef = useRef<HTMLDivElement | null>(null);
@@ -939,6 +978,7 @@ export function ServersWorkspace({
   const [serversReloadToken, setServersReloadToken] = useState(0);
   const [teamsReloadToken, setTeamsReloadToken] = useState(0);
   const previousRouteGuildIdRef = useRef<string | null>(null);
+  const [, startOpenServerTransition] = useTransition();
 
   const routeState = useMemo(() => parseWorkspaceRoute(pathname), [pathname]);
   const routeGuildId = routeState.guildId;
@@ -1583,6 +1623,22 @@ export function ServersWorkspace({
       )
       .map((entry) => entry.item);
   }, [normalizedSidebarQuery]);
+  const filteredSecuritySidebarItems = useMemo(() => {
+    if (!normalizedSidebarQuery) return SECURITY_SIDEBAR_ITEMS;
+
+    return SECURITY_SIDEBAR_ITEMS
+      .map((item) => {
+        const haystack = [item.label, ...(item.searchAliases || [])].join(" ");
+        return { item, score: getSearchScore(haystack, normalizedSidebarQuery) };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) =>
+        a.score !== b.score
+          ? b.score - a.score
+          : a.item.label.localeCompare(b.item.label, "pt-BR"),
+      )
+      .map((entry) => entry.item);
+  }, [normalizedSidebarQuery]);
   const isEditingServer = Boolean(selectedGuildIdForConfig);
   const activeTeamServerCount = visibleServers.length;
   const isCreateTeamNextDisabled =
@@ -1599,11 +1655,16 @@ export function ServersWorkspace({
     selectedEditorTabForConfig === "settings" &&
     (selectedSettingsSectionForConfig === "entry_exit_overview" ||
       selectedSettingsSectionForConfig === "entry_exit_message");
+  const isSecurityGroupActive =
+    isEditingServer &&
+    selectedEditorTabForConfig === "settings" &&
+    selectedSettingsSectionForConfig === "security_antilink";
 
   useEffect(() => {
     if (selectedGuildIdForConfig || normalizedSidebarQuery) {
       setIsTicketSidebarOpen(true);
       setIsEntryExitSidebarOpen(true);
+      setIsSecuritySidebarOpen(true);
     }
   }, [normalizedSidebarQuery, selectedGuildIdForConfig]);
 
@@ -1618,14 +1679,14 @@ export function ServersWorkspace({
     }
 
     const guildIdsToWarm = filteredServers
-      .slice(0, 3)
+      .slice(0, 6)
       .map((server) => server.guildId);
 
     const timeoutId = window.setTimeout(() => {
       guildIdsToWarm.forEach((guildId) => {
         void prefetchServerDashboardSettings(guildId);
       });
-    }, 140);
+    }, 80);
 
     return () => {
       window.clearTimeout(timeoutId);
@@ -1653,6 +1714,9 @@ export function ServersWorkspace({
     if (settingsSection === "entry_exit_overview") {
       return `/servers/${encodedGuildId}/entry-exit/overview/`;
     }
+    if (settingsSection === "security_antilink") {
+      return `/servers/${encodedGuildId}/security/antilink/`;
+    }
     if (options?.explicitSection) {
       return `/servers/${encodedGuildId}/tickets/overview/`;
     }
@@ -1665,6 +1729,18 @@ export function ServersWorkspace({
     const comparableCurrentUrl = normalizeComparablePath(currentUrl);
     const comparableNextUrl = normalizeComparablePath(nextUrl);
     if (comparableCurrentUrl === comparableNextUrl) return;
+    const currentPathname = window.location.pathname;
+    const nextPathname = nextUrl.split("?")[0]?.split("#")[0] || "";
+    const isInternalServersPath =
+      currentPathname.startsWith("/servers/") &&
+      nextPathname.startsWith("/servers/");
+
+    // Evita remount da arvore ao trocar apenas secao interna do workspace.
+    if (mode === "replace" && isInternalServersPath) {
+      window.history.replaceState(window.history.state, "", nextUrl);
+      return;
+    }
+
     if (mode === "replace") router.replace(nextUrl, { scroll: false });
     else router.push(nextUrl, { scroll: false });
   }, [router]);
@@ -1926,13 +2002,31 @@ export function ServersWorkspace({
   );
 
   const handleOpenServerConfig = useCallback((guildId: string, tab: ServerEditorTab = "settings") => {
+    const nextSettingsSection: ServerSettingsSection = "overview";
+    const isSameSelection =
+      selectedGuildIdForConfig === guildId &&
+      selectedEditorTabForConfig === tab &&
+      selectedSettingsSectionForConfig === nextSettingsSection;
+    if (isSameSelection) {
+      return;
+    }
+
     void prefetchServerDashboardSettings(guildId);
-    setSelectedGuildIdForConfig(guildId);
-    setSelectedEditorTabForConfig(tab);
-    setSelectedSettingsSectionForConfig("overview");
-    setErrorMessage(null);
-    navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
-  }, [buildServerConfigUrl, navigateToUrl]);
+    startOpenServerTransition(() => {
+      setSelectedGuildIdForConfig(guildId);
+      setSelectedEditorTabForConfig(tab);
+      setSelectedSettingsSectionForConfig(nextSettingsSection);
+      setErrorMessage(null);
+      navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
+    });
+  }, [
+    buildServerConfigUrl,
+    navigateToUrl,
+    selectedEditorTabForConfig,
+    selectedGuildIdForConfig,
+    selectedSettingsSectionForConfig,
+    startOpenServerTransition,
+  ]);
 
   const prefetchServerConfig = useCallback((guildId: string, tab: ServerEditorTab = "settings") => {
     void prefetchServerDashboardSettings(guildId);
@@ -2220,7 +2314,8 @@ export function ServersWorkspace({
       <div className="mt-[14px] flex-1 overflow-y-auto pr-[2px]">
         {filteredProjectsSidebarItems.length ||
         filteredTicketSidebarItems.length ||
-        filteredEntryExitSidebarItems.length ? (
+        filteredEntryExitSidebarItems.length ||
+        filteredSecuritySidebarItems.length ? (
           <>
             {filteredProjectsSidebarItems.length ? (
               <div className="space-y-[4px]">
@@ -2265,7 +2360,7 @@ export function ServersWorkspace({
                   }`}
                 >
                   <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isTicketGroupActive ? "text-[#F0F0F0]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
-                    <SidebarNavIcon kind="settings" active={isTicketGroupActive} />
+                    <SidebarNavIcon kind="ticket" active={isTicketGroupActive} />
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
                     Ticket
@@ -2349,7 +2444,7 @@ export function ServersWorkspace({
                   }`}
                 >
                   <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isEntryExitGroupActive ? "text-[#F0F0F0]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
-                    <SidebarNavIcon kind="settings" active={isEntryExitGroupActive} />
+                    <SidebarNavIcon kind="entry_exit" active={isEntryExitGroupActive} />
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
                     Mensagem Entrada/Saida
@@ -2368,6 +2463,90 @@ export function ServersWorkspace({
                 {isEntryExitSidebarOpen || normalizedSidebarQuery ? (
                   <div className="mt-[6px] space-y-[4px] pl-[12px]">
                     {filteredEntryExitSidebarItems.map((item) => {
+                      const isDisabled = item.disabled || !selectedServer || !item.tab;
+                      const isActive =
+                        Boolean(
+                          item.tab &&
+                            selectedEditorTabForConfig === item.tab &&
+                            selectedSettingsSectionForConfig === item.settingsSection &&
+                            isEditingServer,
+                        );
+
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => {
+                            if (isDisabled || !selectedServer || !item.tab) return;
+                            setSelectedGuildIdForConfig(selectedServer.guildId);
+                            setSelectedEditorTabForConfig(item.tab);
+                            setSelectedSettingsSectionForConfig(
+                              item.settingsSection || "overview",
+                            );
+                            navigateToUrl(
+                              buildServerConfigUrl(
+                                selectedServer.guildId,
+                                item.tab,
+                                item.settingsSection || "overview",
+                                { explicitSection: true },
+                              ),
+                              "replace",
+                            );
+                          }}
+                          disabled={isDisabled}
+                          className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
+                            isActive
+                              ? "bg-[#1A1A1A] text-[#F0F0F0]"
+                              : isDisabled
+                                ? "text-[#585858]"
+                                : "text-[#AFAFAF] hover:bg-[#101010] hover:text-[#E3E3E3]"
+                          }`}
+                        >
+                          <span className={`inline-flex h-[20px] w-[20px] items-center justify-center ${isActive ? "text-[#F0F0F0]" : isDisabled ? "text-[#4A4A4A]" : "text-[#7F7F7F] group-hover:text-[#DADADA]"}`}>
+                            <SidebarNavIcon kind={item.kind} active={isActive} />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {filteredSecuritySidebarItems.length ? (
+              <div className="mt-[12px] border-t border-[#121212] pt-[12px]">
+                <button
+                  type="button"
+                  onClick={() => setIsSecuritySidebarOpen((current) => !current)}
+                  className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                    isSecurityGroupActive
+                      ? "bg-[#1E1E1E] text-[#F0F0F0]"
+                      : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                  }`}
+                >
+                  <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isSecurityGroupActive ? "text-[#F0F0F0]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
+                    <SidebarNavIcon kind="security" active={isSecurityGroupActive} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
+                    Seguranca
+                  </span>
+                  <span
+                    className={`transition-transform duration-200 ${
+                      isSecuritySidebarOpen || normalizedSidebarQuery
+                        ? "rotate-180 text-[#C9C9C9]"
+                        : "rotate-0 text-[#6F6F6F] group-hover:text-[#BEBEBE]"
+                    }`}
+                  >
+                    <SidebarDropdownChevronIcon />
+                  </span>
+                </button>
+
+                {isSecuritySidebarOpen || normalizedSidebarQuery ? (
+                  <div className="mt-[6px] space-y-[4px] pl-[12px]">
+                    {filteredSecuritySidebarItems.map((item) => {
                       const isDisabled = item.disabled || !selectedServer || !item.tab;
                       const isActive =
                         Boolean(
@@ -2750,7 +2929,7 @@ export function ServersWorkspace({
             <div className="relative z-[10] mt-[22px]">
               {selectedServer ? (
                 <LandingReveal delay={180}>
-                  <div key={selectedServer.guildId} className={editorPanelRevealClass}>
+                  <div className={editorPanelRevealClass}>
                     <ServerSettingsEditor guildId={selectedServer.guildId} guildName={selectedServer.guildName} status={selectedServer.status} daysUntilExpire={selectedServer.daysUntilExpire} daysUntilOff={selectedServer.daysUntilOff} accessMode={selectedServer.accessMode} canManage={selectedServer.canManage} allServers={servers} initialTab={selectedEditorTabForConfig} settingsSection={selectedSettingsSectionForConfig} onTabChange={(tab) => { setSelectedEditorTabForConfig(tab); navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab, selectedSettingsSectionForConfig, { explicitSection: selectedSettingsSectionForConfig !== "overview" || pathname?.includes("/tickets/overview/") }), "replace"); }} standalone onClose={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); setSelectedSettingsSectionForConfig("overview"); navigateToUrl("/servers/", "push"); }} />
                   </div>
                 </LandingReveal>

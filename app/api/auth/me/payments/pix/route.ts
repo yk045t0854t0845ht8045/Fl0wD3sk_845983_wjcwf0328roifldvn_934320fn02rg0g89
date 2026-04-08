@@ -607,36 +607,6 @@ async function getCoverageForApprovedOrder(order: PaymentOrderRecord) {
   return resolveCoverageForApprovedOrder(approvedOrders, order);
 }
 
-async function hasStoredGuildSetupConfiguration(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const [ticketSettingsResult, staffSettingsResult] = await Promise.all([
-    supabase
-      .from("guild_ticket_settings")
-      .select("id")
-      .eq("guild_id", guildId)
-      .maybeSingle<{ id: number }>(),
-    supabase
-      .from("guild_ticket_staff_settings")
-      .select("id")
-      .eq("guild_id", guildId)
-      .maybeSingle<{ id: number }>(),
-  ]);
-
-  if (ticketSettingsResult.error) {
-    throw new Error(
-      `Erro ao verificar configuracoes de canais do servidor: ${ticketSettingsResult.error.message}`,
-    );
-  }
-
-  if (staffSettingsResult.error) {
-    throw new Error(
-      `Erro ao verificar configuracoes de cargos do servidor: ${staffSettingsResult.error.message}`,
-    );
-  }
-
-  return Boolean(ticketSettingsResult.data && staffSettingsResult.data);
-}
-
 async function reconcilePixOrderFromProvider(
   order: PaymentOrderRecord,
   source: "poll" | "order_code" | "post_recovery",
@@ -1231,17 +1201,6 @@ export async function POST(request: Request) {
           activeLicenseLink?.checkoutAccessToken || null,
         ),
       });
-    }
-
-    if (!(await hasStoredGuildSetupConfiguration(guildId))) {
-      return respond(
-        {
-          ok: false,
-          message:
-            "A configuracao desse servidor expirou apos 30 minutos sem pagamento. RefaÃ§a a configuracao antes de gerar um novo checkout.",
-        },
-        { status: 409 },
-      );
     }
 
     const supabase = getSupabaseAdminClientOrThrow();

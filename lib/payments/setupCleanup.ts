@@ -267,6 +267,11 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
     .select("guild_id, updated_at")
     .eq("configured_by_user_id", input.userId);
 
+  let antiLinkSettingsActivityQuery = supabase
+    .from("guild_antilink_settings")
+    .select("guild_id, updated_at")
+    .eq("configured_by_user_id", input.userId);
+
   let planSettingsActivityQuery = supabase
     .from("guild_plan_settings")
     .select("guild_id, updated_at")
@@ -281,16 +286,22 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
       "guild_id",
       input.guildId,
     );
+    antiLinkSettingsActivityQuery = antiLinkSettingsActivityQuery.eq(
+      "guild_id",
+      input.guildId,
+    );
     planSettingsActivityQuery = planSettingsActivityQuery.eq("guild_id", input.guildId);
   }
 
   const [
     ticketSettingsActivityResult,
     staffSettingsActivityResult,
+    antiLinkSettingsActivityResult,
     planSettingsActivityResult,
   ] = await Promise.all([
     ticketSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     staffSettingsActivityQuery.returns<GuildActivityRecord[]>(),
+    antiLinkSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     planSettingsActivityQuery.returns<GuildActivityRecord[]>(),
   ]);
 
@@ -303,6 +314,12 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
   if (staffSettingsActivityResult.error) {
     throw new Error(
       `Erro ao carregar atividade das configuracoes de cargos: ${staffSettingsActivityResult.error.message}`,
+    );
+  }
+
+  if (antiLinkSettingsActivityResult.error) {
+    throw new Error(
+      `Erro ao carregar atividade das configuracoes anti-link: ${antiLinkSettingsActivityResult.error.message}`,
     );
   }
 
@@ -333,6 +350,10 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
   }
 
   for (const item of staffSettingsActivityResult.data || []) {
+    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
+  }
+
+  for (const item of antiLinkSettingsActivityResult.data || []) {
     registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
   }
 
@@ -463,7 +484,11 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
   );
 
   if (removableGlobalGuildIds.length) {
-    const [ticketSettingsDeleteResult, staffSettingsDeleteResult] =
+    const [
+      ticketSettingsDeleteResult,
+      staffSettingsDeleteResult,
+      antiLinkSettingsDeleteResult,
+    ] =
       await Promise.all([
         supabase
           .from("guild_ticket_settings")
@@ -473,6 +498,12 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
           .in("guild_id", removableGlobalGuildIds),
         supabase
           .from("guild_ticket_staff_settings")
+          .delete()
+          .eq("configured_by_user_id", input.userId)
+          .lt("updated_at", cutoffIso)
+          .in("guild_id", removableGlobalGuildIds),
+        supabase
+          .from("guild_antilink_settings")
           .delete()
           .eq("configured_by_user_id", input.userId)
           .lt("updated_at", cutoffIso)
@@ -488,6 +519,12 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
     if (staffSettingsDeleteResult.error) {
       throw new Error(
         `Erro ao remover configuracoes de cargos do servidor: ${staffSettingsDeleteResult.error.message}`,
+      );
+    }
+
+    if (antiLinkSettingsDeleteResult.error) {
+      throw new Error(
+        `Erro ao remover configuracoes anti-link do servidor: ${antiLinkSettingsDeleteResult.error.message}`,
       );
     }
   }
