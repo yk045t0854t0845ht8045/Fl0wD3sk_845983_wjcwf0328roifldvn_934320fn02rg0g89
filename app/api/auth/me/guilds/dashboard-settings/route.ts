@@ -75,6 +75,24 @@ function normalizeAntiLinkTimeoutMinutes(value: unknown) {
   return Math.min(10080, Math.max(1, parsed));
 }
 
+function resolveSecurityLogEvent(data: Record<string, unknown>, input: {
+  enabledColumn: string;
+  channelColumn: string;
+  textSet: Set<string>;
+}) {
+  const enabled = data[input.enabledColumn] === true;
+  const rawChannelId = data[input.channelColumn];
+  const channelId =
+    typeof rawChannelId === "string" && input.textSet.has(rawChannelId)
+      ? rawChannelId
+      : null;
+
+  return {
+    enabled,
+    channelId,
+  };
+}
+
 async function ensureGuildAccess(guildId: string) {
   const sessionData = await resolveSessionAccessToken();
   if (!sessionData?.authSession) {
@@ -162,7 +180,7 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult] = await Promise.all([
+    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult, securityLogsResult] = await Promise.all([
       fetchGuildChannelsByBot(guildId),
       fetchGuildRolesByBot(guildId),
         supabase
@@ -190,6 +208,13 @@ export async function GET(request: Request) {
         .from("guild_antilink_settings")
         .select(
           "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      supabase
+        .from("guild_security_logs_settings")
+        .select(
+          "nickname_change_enabled, nickname_change_channel_id, avatar_change_enabled, avatar_change_channel_id, voice_join_enabled, voice_join_channel_id, voice_leave_enabled, voice_leave_channel_id, message_delete_enabled, message_delete_channel_id, message_edit_enabled, message_edit_channel_id, member_ban_enabled, member_ban_channel_id, member_unban_enabled, member_unban_channel_id, member_kick_enabled, member_kick_channel_id, member_timeout_enabled, member_timeout_channel_id, voice_move_enabled, voice_move_channel_id, updated_at",
         )
         .eq("guild_id", guildId)
         .maybeSingle(),
@@ -233,6 +258,10 @@ export async function GET(request: Request) {
 
     if (antiLinkResult.error) {
       throw new Error(antiLinkResult.error.message);
+    }
+
+    if (securityLogsResult.error) {
+      throw new Error(securityLogsResult.error.message);
     }
 
     const categories = sortChannels(
@@ -389,13 +418,111 @@ export async function GET(request: Request) {
                       typeof roleId === "string" && roleSet.has(roleId),
                   )
                 : [],
-              blockExternalLinks:
-                antiLinkResult.data.block_external_links !== false,
-              blockDiscordInvites:
-                antiLinkResult.data.block_discord_invites !== false,
-              blockObfuscatedLinks:
-                antiLinkResult.data.block_obfuscated_links !== false,
+              blockExternalLinks: true,
+              blockDiscordInvites: true,
+              blockObfuscatedLinks: true,
               updatedAt: antiLinkResult.data.updated_at,
+            }
+          : null,
+        securityLogsSettings: securityLogsResult.data
+          ? {
+              events: {
+                nicknameChange: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "nickname_change_enabled",
+                    channelColumn: "nickname_change_channel_id",
+                    textSet,
+                  },
+                ),
+                avatarChange: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "avatar_change_enabled",
+                    channelColumn: "avatar_change_channel_id",
+                    textSet,
+                  },
+                ),
+                voiceJoin: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "voice_join_enabled",
+                    channelColumn: "voice_join_channel_id",
+                    textSet,
+                  },
+                ),
+                voiceLeave: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "voice_leave_enabled",
+                    channelColumn: "voice_leave_channel_id",
+                    textSet,
+                  },
+                ),
+                messageDelete: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "message_delete_enabled",
+                    channelColumn: "message_delete_channel_id",
+                    textSet,
+                  },
+                ),
+                messageEdit: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "message_edit_enabled",
+                    channelColumn: "message_edit_channel_id",
+                    textSet,
+                  },
+                ),
+                memberBan: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "member_ban_enabled",
+                    channelColumn: "member_ban_channel_id",
+                    textSet,
+                  },
+                ),
+                memberUnban: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "member_unban_enabled",
+                    channelColumn: "member_unban_channel_id",
+                    textSet,
+                  },
+                ),
+                memberKick: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "member_kick_enabled",
+                    channelColumn: "member_kick_channel_id",
+                    textSet,
+                  },
+                ),
+                memberTimeout: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "member_timeout_enabled",
+                    channelColumn: "member_timeout_channel_id",
+                    textSet,
+                  },
+                ),
+                voiceMove: resolveSecurityLogEvent(
+                  securityLogsResult.data as Record<string, unknown>,
+                  {
+                    enabledColumn: "voice_move_enabled",
+                    channelColumn: "voice_move_channel_id",
+                    textSet,
+                  },
+                ),
+              },
+              updatedAt:
+                (securityLogsResult.data as Record<string, unknown>).updated_at
+                  ? String(
+                      (securityLogsResult.data as Record<string, unknown>)
+                        .updated_at,
+                    )
+                  : null,
             }
           : null,
       }),

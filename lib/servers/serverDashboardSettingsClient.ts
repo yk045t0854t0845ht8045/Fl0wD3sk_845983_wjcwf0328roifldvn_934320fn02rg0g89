@@ -60,6 +60,22 @@ type ServerDashboardSettingsPayload = {
     blockObfuscatedLinks: boolean;
     updatedAt: string | null;
   } | null;
+  securityLogsSettings: {
+    events: {
+      nicknameChange: { enabled: boolean; channelId: string | null };
+      avatarChange: { enabled: boolean; channelId: string | null };
+      voiceJoin: { enabled: boolean; channelId: string | null };
+      voiceLeave: { enabled: boolean; channelId: string | null };
+      messageDelete: { enabled: boolean; channelId: string | null };
+      messageEdit: { enabled: boolean; channelId: string | null };
+      memberBan: { enabled: boolean; channelId: string | null };
+      memberUnban: { enabled: boolean; channelId: string | null };
+      memberKick: { enabled: boolean; channelId: string | null };
+      memberTimeout: { enabled: boolean; channelId: string | null };
+      voiceMove: { enabled: boolean; channelId: string | null };
+    };
+    updatedAt: string | null;
+  } | null;
 };
 
 type ServerDashboardSettingsApiResponse =

@@ -84,7 +84,8 @@ type ServerSettingsSection =
   | "message"
   | "entry_exit_overview"
   | "entry_exit_message"
-  | "security_antilink";
+  | "security_antilink"
+  | "security_logs";
 type FilterOption = "all" | ManagedServerStatus;
 type ViewMode = "overview" | "list";
 type CreateTeamStep = "name" | "servers" | "members";
@@ -221,6 +222,27 @@ const SECURITY_SIDEBAR_ITEMS: SidebarItem[] = [
       "silenciar",
       "links",
       "discord.gg",
+    ],
+  },
+  {
+    label: "Logs",
+    kind: "security",
+    tab: "settings",
+    settingsSection: "security_logs",
+    searchAliases: [
+      "seguranca",
+      "logs",
+      "nickname",
+      "avatar",
+      "voz",
+      "mensagem deletada",
+      "mensagem editada",
+      "ban",
+      "desban",
+      "kick",
+      "silenciar",
+      "timeout",
+      "move call",
     ],
   },
 ];
@@ -363,13 +385,16 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const securitySectionMatch = pathname.match(
-    /^\/servers\/(\d{10,25})\/security\/antilink\/?$/,
+    /^\/servers\/(\d{10,25})\/security\/(antilink|logs)\/?$/,
   );
   if (securitySectionMatch) {
     return {
       guildId: securitySectionMatch[1],
       tab: "settings",
-      settingsSection: "security_antilink",
+      settingsSection:
+        securitySectionMatch[2] === "logs"
+          ? "security_logs"
+          : "security_antilink",
     };
   }
 
@@ -960,6 +985,8 @@ export function ServersWorkspace({
   const [selectedEditorTabForConfig, setSelectedEditorTabForConfig] = useState<ServerEditorTab>(initialTab);
   const [selectedSettingsSectionForConfig, setSelectedSettingsSectionForConfig] =
     useState<ServerSettingsSection>(initialSettingsSection);
+  const [hasUnsavedSettingsChanges, setHasUnsavedSettingsChanges] = useState(false);
+  const [navigationBlockSignal, setNavigationBlockSignal] = useState(0);
   const [isTicketSidebarOpen, setIsTicketSidebarOpen] = useState(true);
   const [isEntryExitSidebarOpen, setIsEntryExitSidebarOpen] = useState(true);
   const [isSecuritySidebarOpen, setIsSecuritySidebarOpen] = useState(true);
@@ -1658,8 +1685,8 @@ export function ServersWorkspace({
   const isSecurityGroupActive =
     isEditingServer &&
     selectedEditorTabForConfig === "settings" &&
-    selectedSettingsSectionForConfig === "security_antilink";
-
+    (selectedSettingsSectionForConfig === "security_antilink" ||
+      selectedSettingsSectionForConfig === "security_logs");
   useEffect(() => {
     if (selectedGuildIdForConfig || normalizedSidebarQuery) {
       setIsTicketSidebarOpen(true);
@@ -1667,6 +1694,12 @@ export function ServersWorkspace({
       setIsSecuritySidebarOpen(true);
     }
   }, [normalizedSidebarQuery, selectedGuildIdForConfig]);
+
+  useEffect(() => {
+    if (!selectedGuildIdForConfig) {
+      setHasUnsavedSettingsChanges(false);
+    }
+  }, [selectedGuildIdForConfig]);
 
   useEffect(() => {
     if (
@@ -1717,6 +1750,9 @@ export function ServersWorkspace({
     if (settingsSection === "security_antilink") {
       return `/servers/${encodedGuildId}/security/antilink/`;
     }
+    if (settingsSection === "security_logs") {
+      return `/servers/${encodedGuildId}/security/logs/`;
+    }
     if (options?.explicitSection) {
       return `/servers/${encodedGuildId}/tickets/overview/`;
     }
@@ -1744,6 +1780,49 @@ export function ServersWorkspace({
     if (mode === "replace") router.replace(nextUrl, { scroll: false });
     else router.push(nextUrl, { scroll: false });
   }, [router]);
+
+  const handleSidebarSettingsSectionNavigation = useCallback(
+    (input: {
+      guildId: string;
+      tab: ServerEditorTab;
+      settingsSection: ServerSettingsSection;
+    }) => {
+      const isChangingSettingsSection =
+        selectedEditorTabForConfig === "settings" &&
+        input.tab === "settings" &&
+        selectedSettingsSectionForConfig !== input.settingsSection;
+
+      if (
+        isEditingServer &&
+        hasUnsavedSettingsChanges &&
+        isChangingSettingsSection
+      ) {
+        setNavigationBlockSignal((current) => current + 1);
+        return;
+      }
+
+      setSelectedGuildIdForConfig(input.guildId);
+      setSelectedEditorTabForConfig(input.tab);
+      setSelectedSettingsSectionForConfig(input.settingsSection);
+      navigateToUrl(
+        buildServerConfigUrl(
+          input.guildId,
+          input.tab,
+          input.settingsSection,
+          { explicitSection: true },
+        ),
+        "replace",
+      );
+    },
+    [
+      buildServerConfigUrl,
+      hasUnsavedSettingsChanges,
+      isEditingServer,
+      navigateToUrl,
+      selectedEditorTabForConfig,
+      selectedSettingsSectionForConfig,
+    ],
+  );
 
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return;
@@ -2394,20 +2473,11 @@ export function ServersWorkspace({
                           type="button"
                           onClick={() => {
                             if (isDisabled || !selectedServer || !item.tab) return;
-                            setSelectedGuildIdForConfig(selectedServer.guildId);
-                            setSelectedEditorTabForConfig(item.tab);
-                            setSelectedSettingsSectionForConfig(
-                              item.settingsSection || "overview",
-                            );
-                            navigateToUrl(
-                              buildServerConfigUrl(
-                                selectedServer.guildId,
-                                item.tab,
-                                item.settingsSection || "overview",
-                                { explicitSection: true },
-                              ),
-                              "replace",
-                            );
+                            handleSidebarSettingsSectionNavigation({
+                              guildId: selectedServer.guildId,
+                              tab: item.tab,
+                              settingsSection: item.settingsSection || "overview",
+                            });
                           }}
                           disabled={isDisabled}
                           className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
@@ -2478,20 +2548,11 @@ export function ServersWorkspace({
                           type="button"
                           onClick={() => {
                             if (isDisabled || !selectedServer || !item.tab) return;
-                            setSelectedGuildIdForConfig(selectedServer.guildId);
-                            setSelectedEditorTabForConfig(item.tab);
-                            setSelectedSettingsSectionForConfig(
-                              item.settingsSection || "overview",
-                            );
-                            navigateToUrl(
-                              buildServerConfigUrl(
-                                selectedServer.guildId,
-                                item.tab,
-                                item.settingsSection || "overview",
-                                { explicitSection: true },
-                              ),
-                              "replace",
-                            );
+                            handleSidebarSettingsSectionNavigation({
+                              guildId: selectedServer.guildId,
+                              tab: item.tab,
+                              settingsSection: item.settingsSection || "overview",
+                            });
                           }}
                           disabled={isDisabled}
                           className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
@@ -2562,20 +2623,11 @@ export function ServersWorkspace({
                           type="button"
                           onClick={() => {
                             if (isDisabled || !selectedServer || !item.tab) return;
-                            setSelectedGuildIdForConfig(selectedServer.guildId);
-                            setSelectedEditorTabForConfig(item.tab);
-                            setSelectedSettingsSectionForConfig(
-                              item.settingsSection || "overview",
-                            );
-                            navigateToUrl(
-                              buildServerConfigUrl(
-                                selectedServer.guildId,
-                                item.tab,
-                                item.settingsSection || "overview",
-                                { explicitSection: true },
-                              ),
-                              "replace",
-                            );
+                            handleSidebarSettingsSectionNavigation({
+                              guildId: selectedServer.guildId,
+                              tab: item.tab,
+                              settingsSection: item.settingsSection || "overview",
+                            });
                           }}
                           disabled={isDisabled}
                           className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
@@ -2930,7 +2982,43 @@ export function ServersWorkspace({
               {selectedServer ? (
                 <LandingReveal delay={180}>
                   <div className={editorPanelRevealClass}>
-                    <ServerSettingsEditor guildId={selectedServer.guildId} guildName={selectedServer.guildName} status={selectedServer.status} daysUntilExpire={selectedServer.daysUntilExpire} daysUntilOff={selectedServer.daysUntilOff} accessMode={selectedServer.accessMode} canManage={selectedServer.canManage} allServers={servers} initialTab={selectedEditorTabForConfig} settingsSection={selectedSettingsSectionForConfig} onTabChange={(tab) => { setSelectedEditorTabForConfig(tab); navigateToUrl(buildServerConfigUrl(selectedServer.guildId, tab, selectedSettingsSectionForConfig, { explicitSection: selectedSettingsSectionForConfig !== "overview" || pathname?.includes("/tickets/overview/") }), "replace"); }} standalone onClose={() => { setSelectedGuildIdForConfig(null); setSelectedEditorTabForConfig("settings"); setSelectedSettingsSectionForConfig("overview"); navigateToUrl("/servers/", "push"); }} />
+                    <ServerSettingsEditor
+                      guildId={selectedServer.guildId}
+                      guildName={selectedServer.guildName}
+                      status={selectedServer.status}
+                      daysUntilExpire={selectedServer.daysUntilExpire}
+                      daysUntilOff={selectedServer.daysUntilOff}
+                      accessMode={selectedServer.accessMode}
+                      canManage={selectedServer.canManage}
+                      allServers={servers}
+                      initialTab={selectedEditorTabForConfig}
+                      settingsSection={selectedSettingsSectionForConfig}
+                      onTabChange={(tab) => {
+                        setSelectedEditorTabForConfig(tab);
+                        navigateToUrl(
+                          buildServerConfigUrl(
+                            selectedServer.guildId,
+                            tab,
+                            selectedSettingsSectionForConfig,
+                            {
+                              explicitSection:
+                                selectedSettingsSectionForConfig !== "overview" ||
+                                pathname?.includes("/tickets/overview/"),
+                            },
+                          ),
+                          "replace",
+                        );
+                      }}
+                      onUnsavedChangesChange={setHasUnsavedSettingsChanges}
+                      navigationBlockSignal={navigationBlockSignal}
+                      standalone
+                      onClose={() => {
+                        setSelectedGuildIdForConfig(null);
+                        setSelectedEditorTabForConfig("settings");
+                        setSelectedSettingsSectionForConfig("overview");
+                        navigateToUrl("/servers/", "push");
+                      }}
+                    />
                   </div>
                 </LandingReveal>
               ) : shouldShowEditorSkeleton ? (

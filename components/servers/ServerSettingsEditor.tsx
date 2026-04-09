@@ -3,10 +3,12 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CircleHelp, Settings2 } from "lucide-react";
 import { ClientErrorBoundary } from "@/components/common/ClientErrorBoundary";
 import { BotMissingModal } from "@/components/config/BotMissingModal";
 import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect";
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
+import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { TicketMessageBuilder } from "@/components/servers/TicketMessageBuilder";
@@ -51,7 +53,8 @@ type ServerSettingsSection =
   | "message"
   | "entry_exit_overview"
   | "entry_exit_message"
-  | "security_antilink";
+  | "security_antilink"
+  | "security_logs";
 type PaymentStatus =
   | "pending"
   | "approved"
@@ -109,6 +112,26 @@ type AntiLinkSettingsDraft = {
   blockDiscordInvites: boolean;
   blockObfuscatedLinks: boolean;
 };
+
+type SecurityLogEventKey =
+  | "nicknameChange"
+  | "avatarChange"
+  | "voiceJoin"
+  | "voiceLeave"
+  | "messageDelete"
+  | "messageEdit"
+  | "memberBan"
+  | "memberUnban"
+  | "memberKick"
+  | "memberTimeout"
+  | "voiceMove";
+
+type SecurityLogEventDraft = {
+  enabled: boolean;
+  channelId: string | null;
+};
+
+type SecurityLogsSettingsDraft = Record<SecurityLogEventKey, SecurityLogEventDraft>;
 
 type PaymentOrder = {
   id: number;
@@ -218,6 +241,8 @@ type ServerSettingsEditorProps = {
   initialTab?: EditorTab;
   settingsSection?: ServerSettingsSection;
   onTabChange?: (tab: EditorTab) => void;
+  onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  navigationBlockSignal?: number;
   onClose: () => void;
   standalone?: boolean;
 };
@@ -248,6 +273,95 @@ const ANTILINK_ACTION_OPTIONS: Array<{
   { id: "timeout", name: "Silenciar por alguns minutos" },
   { id: "kick", name: "Expulsar usuario" },
   { id: "ban", name: "Banir usuario" },
+];
+
+const ANTILINK_DEFAULT_DETECTION = {
+  blockExternalLinks: true,
+  blockDiscordInvites: true,
+  blockObfuscatedLinks: true,
+} as const;
+
+const SECURITY_LOG_EVENT_OPTIONS: Array<{
+  key: SecurityLogEventKey;
+  title: string;
+  description: string;
+  tooltip: string;
+}> = [
+  {
+    key: "nicknameChange",
+    title: "Alteracao de nickname",
+    description: "Mostra nickname antigo e novo quando um membro altera.",
+    tooltip:
+      "Registra o nome antigo e o novo nickname do membro quando a alteracao acontece no servidor.",
+  },
+  {
+    key: "avatarChange",
+    title: "Alteracao de avatar",
+    description: "Gera comparativo visual (metade antiga / metade nova).",
+    tooltip:
+      "Envia embed com imagem comparativa feita em canvas para facilitar auditoria de troca de avatar.",
+  },
+  {
+    key: "voiceJoin",
+    title: "Entrou em canal de voz",
+    description: "Dispara quando alguem conecta em call.",
+    tooltip: "Registra usuario, canal e horario da entrada em voz.",
+  },
+  {
+    key: "voiceLeave",
+    title: "Saiu de canal de voz",
+    description: "Dispara quando alguem sai de uma call.",
+    tooltip: "Registra usuario, canal anterior e horario da saida.",
+  },
+  {
+    key: "messageDelete",
+    title: "Mensagem deletada",
+    description: "Registra mensagem removida em canais de texto.",
+    tooltip:
+      "Mostra autor, canal e conteudo capturado da mensagem que foi deletada.",
+  },
+  {
+    key: "messageEdit",
+    title: "Mensagem editada",
+    description: "Mostra texto antigo e novo da mensagem.",
+    tooltip:
+      "Compara conteudo anterior e novo quando uma mensagem e editada.",
+  },
+  {
+    key: "memberBan",
+    title: "Membro banido",
+    description: "Registra banimentos aplicados no servidor.",
+    tooltip:
+      "Inclui alvo e, quando possivel, quem executou o banimento via audit log.",
+  },
+  {
+    key: "memberUnban",
+    title: "Membro desbanido",
+    description: "Registra remoção de bans.",
+    tooltip:
+      "Inclui alvo e, quando possivel, quem executou o desbanimento via audit log.",
+  },
+  {
+    key: "memberKick",
+    title: "Membro expulso",
+    description: "Registra expulsao (kick) de membros.",
+    tooltip:
+      "Usa evento de saida + audit log para identificar kick e moderador quando disponivel.",
+  },
+  {
+    key: "memberTimeout",
+    title: "Membro silenciado",
+    description: "Registra aplicacao de timeout/silenciamento.",
+    tooltip:
+      "Dispara quando timeout e aplicado, com duracao e executor quando disponivel.",
+  },
+  {
+    key: "voiceMove",
+    title: "Membro movido de call",
+    description: "Registra troca de call por moderacao.",
+    tooltip:
+      "Tenta identificar quem moveu o membro usando audit log de movimentacao.",
+  },
 ];
 
 function normalizeSearch(value: string) {
@@ -360,6 +474,47 @@ function areAntiLinkSettingsDraftsEqual(
   if (!left || !right) return left === right;
 
   return JSON.stringify(normalizeAntiLinkSettingsDraft(left)) === JSON.stringify(normalizeAntiLinkSettingsDraft(right));
+}
+
+function createDefaultSecurityLogsSettingsDraft(): SecurityLogsSettingsDraft {
+  return {
+    nicknameChange: { enabled: false, channelId: null },
+    avatarChange: { enabled: false, channelId: null },
+    voiceJoin: { enabled: false, channelId: null },
+    voiceLeave: { enabled: false, channelId: null },
+    messageDelete: { enabled: false, channelId: null },
+    messageEdit: { enabled: false, channelId: null },
+    memberBan: { enabled: false, channelId: null },
+    memberUnban: { enabled: false, channelId: null },
+    memberKick: { enabled: false, channelId: null },
+    memberTimeout: { enabled: false, channelId: null },
+    voiceMove: { enabled: false, channelId: null },
+  };
+}
+
+function normalizeSecurityLogsSettingsDraft(
+  draft: SecurityLogsSettingsDraft,
+): SecurityLogsSettingsDraft {
+  const defaults = createDefaultSecurityLogsSettingsDraft();
+
+  for (const option of SECURITY_LOG_EVENT_OPTIONS) {
+    const current = draft[option.key];
+    defaults[option.key] = {
+      enabled: current?.enabled === true,
+      channelId: current?.channelId || null,
+    };
+  }
+
+  return defaults;
+}
+
+function areSecurityLogsSettingsDraftsEqual(
+  left: SecurityLogsSettingsDraft | null,
+  right: SecurityLogsSettingsDraft | null,
+) {
+  if (!left || !right) return left === right;
+
+  return JSON.stringify(normalizeSecurityLogsSettingsDraft(left)) === JSON.stringify(normalizeSecurityLogsSettingsDraft(right));
 }
 
 function orderStatusBadge(status: PaymentStatus) {
@@ -1294,6 +1449,8 @@ export function ServerSettingsEditor({
   initialTab = "settings",
   settingsSection = "overview",
   onTabChange: _onTabChange,
+  onUnsavedChangesChange,
+  navigationBlockSignal = 0,
   onClose,
   standalone = false,
 }: ServerSettingsEditorProps) {
@@ -1312,9 +1469,12 @@ export function ServerSettingsEditor({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showSaveSuccessBar, setShowSaveSuccessBar] = useState(false);
+  const [showNavigationBlockedSaveState, setShowNavigationBlockedSaveState] =
+    useState(false);
   const [isPortalMounted, setIsPortalMounted] = useState(false);
   const [isSaveBarRendered, setIsSaveBarRendered] = useState(false);
   const [isSaveBarExiting, setIsSaveBarExiting] = useState(false);
+  const navigationBlockedFeedbackTimeoutRef = useRef<number | null>(null);
 
   const [textChannelOptions, setTextChannelOptions] = useState<SelectOption[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<SelectOption[]>([]);
@@ -1352,12 +1512,17 @@ export function ServerSettingsEditor({
   const [antiLinkIgnoredRoleIds, setAntiLinkIgnoredRoleIds] = useState<string[]>(
     [],
   );
-  const [antiLinkBlockExternalLinks, setAntiLinkBlockExternalLinks] =
-    useState(true);
-  const [antiLinkBlockDiscordInvites, setAntiLinkBlockDiscordInvites] =
-    useState(true);
-  const [antiLinkBlockObfuscatedLinks, setAntiLinkBlockObfuscatedLinks] =
-    useState(true);
+  const [, setAntiLinkBlockExternalLinks] = useState(true);
+  const [, setAntiLinkBlockDiscordInvites] = useState(true);
+  const [, setAntiLinkBlockObfuscatedLinks] = useState(true);
+  const [securityLogsDraft, setSecurityLogsDraft] =
+    useState<SecurityLogsSettingsDraft>(createDefaultSecurityLogsSettingsDraft);
+  const [savedSecurityLogsDraft, setSavedSecurityLogsDraft] =
+    useState<SecurityLogsSettingsDraft | null>(null);
+  const [activeSecurityLogModalEvent, setActiveSecurityLogModalEvent] =
+    useState<SecurityLogEventKey | null>(null);
+  const [openSecurityLogTooltipKey, setOpenSecurityLogTooltipKey] =
+    useState<SecurityLogEventKey | null>(null);
 
   const [adminRoleId, setAdminRoleId] = useState<string | null>(null);
   const [claimRoleIds, setClaimRoleIds] = useState<string[]>([]);
@@ -1449,7 +1614,8 @@ export function ServerSettingsEditor({
     isRecurringMethodModalOpen ||
       isAddMethodModalOpen ||
       isWelcomeActivationModalOpen ||
-      isAntiLinkActivationModalOpen,
+      isAntiLinkActivationModalOpen ||
+      Boolean(activeSecurityLogModalEvent),
   );
 
   const locked = status === "expired" || status === "off";
@@ -1589,11 +1755,105 @@ export function ServerSettingsEditor({
         ? payload.antiLinkSettings.ignoredRoleIds.filter((id) => roleSet.has(id))
         : [];
       const nextAntiLinkBlockExternalLinks =
-        payload.antiLinkSettings?.blockExternalLinks !== false;
+        ANTILINK_DEFAULT_DETECTION.blockExternalLinks;
       const nextAntiLinkBlockDiscordInvites =
-        payload.antiLinkSettings?.blockDiscordInvites !== false;
+        ANTILINK_DEFAULT_DETECTION.blockDiscordInvites;
       const nextAntiLinkBlockObfuscatedLinks =
-        payload.antiLinkSettings?.blockObfuscatedLinks !== false;
+        ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks;
+      const nextSecurityLogsDraft = normalizeSecurityLogsSettingsDraft(
+        payload.securityLogsSettings?.events
+          ? {
+              nicknameChange: {
+                enabled: payload.securityLogsSettings.events.nicknameChange.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.nicknameChange.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.nicknameChange.channelId)
+                    ? payload.securityLogsSettings.events.nicknameChange.channelId
+                    : null,
+              },
+              avatarChange: {
+                enabled: payload.securityLogsSettings.events.avatarChange.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.avatarChange.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.avatarChange.channelId)
+                    ? payload.securityLogsSettings.events.avatarChange.channelId
+                    : null,
+              },
+              voiceJoin: {
+                enabled: payload.securityLogsSettings.events.voiceJoin.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.voiceJoin.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.voiceJoin.channelId)
+                    ? payload.securityLogsSettings.events.voiceJoin.channelId
+                    : null,
+              },
+              voiceLeave: {
+                enabled: payload.securityLogsSettings.events.voiceLeave.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.voiceLeave.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.voiceLeave.channelId)
+                    ? payload.securityLogsSettings.events.voiceLeave.channelId
+                    : null,
+              },
+              messageDelete: {
+                enabled: payload.securityLogsSettings.events.messageDelete.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.messageDelete.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.messageDelete.channelId)
+                    ? payload.securityLogsSettings.events.messageDelete.channelId
+                    : null,
+              },
+              messageEdit: {
+                enabled: payload.securityLogsSettings.events.messageEdit.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.messageEdit.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.messageEdit.channelId)
+                    ? payload.securityLogsSettings.events.messageEdit.channelId
+                    : null,
+              },
+              memberBan: {
+                enabled: payload.securityLogsSettings.events.memberBan.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.memberBan.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.memberBan.channelId)
+                    ? payload.securityLogsSettings.events.memberBan.channelId
+                    : null,
+              },
+              memberUnban: {
+                enabled: payload.securityLogsSettings.events.memberUnban.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.memberUnban.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.memberUnban.channelId)
+                    ? payload.securityLogsSettings.events.memberUnban.channelId
+                    : null,
+              },
+              memberKick: {
+                enabled: payload.securityLogsSettings.events.memberKick.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.memberKick.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.memberKick.channelId)
+                    ? payload.securityLogsSettings.events.memberKick.channelId
+                    : null,
+              },
+              memberTimeout: {
+                enabled: payload.securityLogsSettings.events.memberTimeout.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.memberTimeout.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.memberTimeout.channelId)
+                    ? payload.securityLogsSettings.events.memberTimeout.channelId
+                    : null,
+              },
+              voiceMove: {
+                enabled: payload.securityLogsSettings.events.voiceMove.enabled,
+                channelId:
+                  payload.securityLogsSettings.events.voiceMove.channelId &&
+                  textSet.has(payload.securityLogsSettings.events.voiceMove.channelId)
+                    ? payload.securityLogsSettings.events.voiceMove.channelId
+                    : null,
+              },
+            }
+          : createDefaultSecurityLogsSettingsDraft(),
+      );
 
       setMenuChannelId(nextMenuChannelId);
       setTicketsCategoryId(nextTicketsCategoryId);
@@ -1617,6 +1877,7 @@ export function ServerSettingsEditor({
       setAntiLinkBlockExternalLinks(nextAntiLinkBlockExternalLinks);
       setAntiLinkBlockDiscordInvites(nextAntiLinkBlockDiscordInvites);
       setAntiLinkBlockObfuscatedLinks(nextAntiLinkBlockObfuscatedLinks);
+      setSecurityLogsDraft(nextSecurityLogsDraft);
       setAdminRoleId(nextAdminRoleId);
       setClaimRoleIds(nextClaimRoleIds);
       setCloseRoleIds(nextCloseRoleIds);
@@ -1659,6 +1920,7 @@ export function ServerSettingsEditor({
           blockObfuscatedLinks: nextAntiLinkBlockObfuscatedLinks,
         }),
       );
+      setSavedSecurityLogsDraft(nextSecurityLogsDraft);
     },
     [],
   );
@@ -1681,6 +1943,8 @@ export function ServerSettingsEditor({
     setIsAntiLinkActivationModalOpen(false);
     setHasDismissedAntiLinkModal(false);
     setIsActivatingAntiLink(false);
+    setActiveSecurityLogModalEvent(null);
+    setOpenSecurityLogTooltipKey(null);
     setPaymentGuildFilter(guildId);
     setPaymentSearch("");
     setPaymentStatusFilter("all");
@@ -1720,6 +1984,7 @@ export function ServerSettingsEditor({
     setSavedSettingsDraft(null);
     setSavedWelcomeSettingsDraft(null);
     setSavedAntiLinkSettingsDraft(null);
+    setSavedSecurityLogsDraft(null);
     setPanelLayout(createDefaultTicketPanelLayout());
     setWelcomeEnabled(false);
     setEntryPublicChannelId(null);
@@ -1738,6 +2003,7 @@ export function ServerSettingsEditor({
     setAntiLinkBlockExternalLinks(true);
     setAntiLinkBlockDiscordInvites(true);
     setAntiLinkBlockObfuscatedLinks(true);
+    setSecurityLogsDraft(createDefaultSecurityLogsSettingsDraft());
   }, [guildId, initialTab]);
 
   useEffect(() => {
@@ -2324,7 +2590,9 @@ export function ServerSettingsEditor({
     );
   }, []);
 
-  const isSecuritySection = settingsSection === "security_antilink";
+  const isAntiLinkSection = settingsSection === "security_antilink";
+  const isSecurityLogsSection = settingsSection === "security_logs";
+  const isSecuritySection = isAntiLinkSection || isSecurityLogsSection;
   const isTicketSection =
     settingsSection === "overview" || settingsSection === "message";
   const isWelcomeSection =
@@ -2367,10 +2635,6 @@ export function ServerSettingsEditor({
       isEntryLayoutValid &&
       isExitLayoutValid,
   );
-  const antiLinkDetectionEnabled =
-    antiLinkBlockExternalLinks ||
-    antiLinkBlockDiscordInvites ||
-    antiLinkBlockObfuscatedLinks;
   const antiLinkTimeoutValue = normalizeAntiLinkTimeoutMinutes(
     antiLinkTimeoutMinutes,
   );
@@ -2380,9 +2644,22 @@ export function ServerSettingsEditor({
       !isSaving &&
       (!antiLinkEnabled ||
         (antiLinkLogChannelId &&
-          antiLinkDetectionEnabled &&
           (antiLinkEnforcementAction !== "timeout" ||
             antiLinkTimeoutValue >= 1))),
+  );
+  const hasAnySecurityLogEnabled = SECURITY_LOG_EVENT_OPTIONS.some(
+    (option) => securityLogsDraft[option.key].enabled,
+  );
+  const hasInvalidSecurityLogChannel = SECURITY_LOG_EVENT_OPTIONS.some(
+    (option) =>
+      securityLogsDraft[option.key].enabled &&
+      !securityLogsDraft[option.key].channelId,
+  );
+  const canSaveSecurityLogs = Boolean(
+    !settingsReadOnly &&
+      !isLoading &&
+      !isSaving &&
+      (!hasAnySecurityLogEnabled || !hasInvalidSecurityLogChannel),
   );
 
   const canSendEmbed = Boolean(
@@ -2455,14 +2732,11 @@ export function ServerSettingsEditor({
         enforcementAction: antiLinkEnforcementAction,
         timeoutMinutes: antiLinkTimeoutValue,
         ignoredRoleIds: antiLinkIgnoredRoleIds,
-        blockExternalLinks: antiLinkBlockExternalLinks,
-        blockDiscordInvites: antiLinkBlockDiscordInvites,
-        blockObfuscatedLinks: antiLinkBlockObfuscatedLinks,
+        blockExternalLinks: ANTILINK_DEFAULT_DETECTION.blockExternalLinks,
+        blockDiscordInvites: ANTILINK_DEFAULT_DETECTION.blockDiscordInvites,
+        blockObfuscatedLinks: ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks,
       }),
     [
-      antiLinkBlockDiscordInvites,
-      antiLinkBlockExternalLinks,
-      antiLinkBlockObfuscatedLinks,
       antiLinkEnabled,
       antiLinkEnforcementAction,
       antiLinkIgnoredRoleIds,
@@ -2470,11 +2744,17 @@ export function ServerSettingsEditor({
       antiLinkTimeoutValue,
     ],
   );
+  const currentSecurityLogsDraft = useMemo(
+    () => normalizeSecurityLogsSettingsDraft(securityLogsDraft),
+    [securityLogsDraft],
+  );
 
   const hasLoadedTicketDraft = !isLoading && savedSettingsDraft !== null;
   const hasLoadedWelcomeDraft = !isLoading && savedWelcomeSettingsDraft !== null;
   const hasLoadedAntiLinkDraft =
     !isLoading && savedAntiLinkSettingsDraft !== null;
+  const hasLoadedSecurityLogsDraft =
+    !isLoading && savedSecurityLogsDraft !== null;
   const shouldShowBlockingSkeleton = isLoading && !hasLoadedDashboardSnapshot;
   const hasTicketUnsavedChanges = useMemo(
     () =>
@@ -2501,14 +2781,31 @@ export function ServerSettingsEditor({
       savedAntiLinkSettingsDraft,
     ],
   );
+  const hasSecurityLogsUnsavedChanges = useMemo(
+    () =>
+      hasLoadedSecurityLogsDraft &&
+      !areSecurityLogsSettingsDraftsEqual(
+        currentSecurityLogsDraft,
+        savedSecurityLogsDraft,
+      ),
+    [
+      currentSecurityLogsDraft,
+      hasLoadedSecurityLogsDraft,
+      savedSecurityLogsDraft,
+    ],
+  );
 
-  const hasLoadedSettingsDraft = isSecuritySection
+  const hasLoadedSettingsDraft = isAntiLinkSection
     ? hasLoadedAntiLinkDraft
+    : isSecurityLogsSection
+      ? hasLoadedSecurityLogsDraft
     : isWelcomeSection
       ? hasLoadedWelcomeDraft
       : hasLoadedTicketDraft;
-  const hasUnsavedChanges = isSecuritySection
+  const hasUnsavedChanges = isAntiLinkSection
     ? hasAntiLinkUnsavedChanges
+    : isSecurityLogsSection
+      ? hasSecurityLogsUnsavedChanges
     : isWelcomeSection
       ? hasWelcomeUnsavedChanges
       : hasTicketUnsavedChanges;
@@ -2518,8 +2815,10 @@ export function ServerSettingsEditor({
       !isLoading &&
       !isSaving &&
       hasUnsavedChanges &&
-      (isSecuritySection
+      (isAntiLinkSection
         ? savedAntiLinkSettingsDraft
+        : isSecurityLogsSection
+          ? savedSecurityLogsDraft
         : isWelcomeSection
           ? savedWelcomeSettingsDraft
           : savedSettingsDraft),
@@ -2533,8 +2832,10 @@ export function ServerSettingsEditor({
   const isWelcomeMessageLayoutInvalid =
     !isEntryLayoutValid || !isExitLayoutValid;
   const canPersistSettings = Boolean(
-    (isSecuritySection
+    (isAntiLinkSection
       ? canSaveAntiLink
+      : isSecurityLogsSection
+        ? canSaveSecurityLogs
       : isWelcomeSection
         ? canSaveWelcome
         : canSaveTicket) && hasUnsavedChanges,
@@ -2552,6 +2853,7 @@ export function ServerSettingsEditor({
     isSaving || settingsReadOnly || !welcomeEnabled || isActivatingWelcome;
   const antiLinkControlsDisabled =
     isSaving || settingsReadOnly || !antiLinkEnabled || isActivatingAntiLink;
+  const securityLogsControlsDisabled = isSaving || settingsReadOnly;
   const showInvalidTicketSaveState =
     isTicketMessageSection &&
     hasUnsavedChanges &&
@@ -2568,6 +2870,15 @@ export function ServerSettingsEditor({
     showSaveSuccessBar &&
     !hasUnsavedChanges &&
     !isSaving;
+  const showBlockedNavigationSaveState =
+    showNavigationBlockedSaveState &&
+    hasUnsavedChanges &&
+    !isSaving &&
+    !showSaveSuccessBar;
+  const showSaveBarErrorState =
+    showInvalidTicketSaveState ||
+    showInvalidWelcomeSaveState ||
+    showBlockedNavigationSaveState;
   const saveActionVisualEnabled = canPersistSettings || isSaving;
   const floatingSaveBarTitle = showSaveBarSuccessState
     ? "Configuracoes salvas com sucesso."
@@ -2581,9 +2892,13 @@ export function ServerSettingsEditor({
           : "Nao da para salvar uma mensagem vazia"
       : showInvalidWelcomeSaveState
           ? "Adicione pelo menos um conteudo na mensagem"
+      : showBlockedNavigationSaveState
+          ? "Salve as alteracoes antes de sair desta secao."
           : !canPersistSettings && hasUnsavedChanges
             ? isSecuritySection
-              ? "Defina canal de log e pelo menos uma deteccao para continuar"
+              ? isAntiLinkSection
+                ? "Defina o canal de log para continuar"
+                : "Ative eventos validos e defina o canal de cada log ligado"
               : isWelcomeSection
               ? "Complete os canais de entrada e saida para continuar"
               : "Complete os campos obrigatorios para continuar"
@@ -2600,9 +2915,13 @@ export function ServerSettingsEditor({
           : "Adicione pelo menos um conteudo com texto e uma acao no builder antes de salvar. Enquanto a mensagem estiver sem nada, essa barra continua em alerta."
         : showInvalidWelcomeSaveState
           ? "Preencha a mensagem de entrada ou saida com pelo menos um bloco de texto."
+        : showBlockedNavigationSaveState
+          ? "Voce tentou trocar de opcao na sidebar com mudancas pendentes. Salve ou redefina antes de continuar."
         : !canPersistSettings && hasUnsavedChanges
           ? isSecuritySection
-            ? "Escolha um canal de log e mantenha pelo menos uma regra ativa no modulo anti-link."
+            ? isAntiLinkSection
+              ? "Escolha um canal de log para o modulo anti-link."
+              : "Todo evento ligado precisa ter um canal de log configurado."
             : isWelcomeSection
             ? "Defina canais publicos e privados para entrada e saida antes de salvar."
             : "Preencha todos os campos de ticket e staff para liberar o salvamento."
@@ -2624,6 +2943,55 @@ export function ServerSettingsEditor({
       setShowSaveSuccessBar(false);
     }
   }, [hasUnsavedChanges, showSaveSuccessBar, successMessage]);
+
+  useEffect(() => {
+    if (typeof onUnsavedChangesChange === "function") {
+      onUnsavedChangesChange(hasUnsavedChanges);
+    }
+  }, [hasUnsavedChanges, onUnsavedChangesChange]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof onUnsavedChangesChange === "function") {
+        onUnsavedChangesChange(false);
+      }
+    };
+  }, [onUnsavedChangesChange]);
+
+  useEffect(() => {
+    if (!navigationBlockSignal) return;
+    if (!hasUnsavedChanges || isSaving || showSaveSuccessBar) return;
+    if (activeTab !== "settings") return;
+
+    setShowNavigationBlockedSaveState(true);
+    if (navigationBlockedFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(navigationBlockedFeedbackTimeoutRef.current);
+    }
+    navigationBlockedFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setShowNavigationBlockedSaveState(false);
+      navigationBlockedFeedbackTimeoutRef.current = null;
+    }, 2800);
+  }, [
+    activeTab,
+    hasUnsavedChanges,
+    isSaving,
+    navigationBlockSignal,
+    showSaveSuccessBar,
+  ]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges || isSaving || showSaveSuccessBar) {
+      setShowNavigationBlockedSaveState(false);
+    }
+  }, [hasUnsavedChanges, isSaving, showSaveSuccessBar]);
+
+  useEffect(() => {
+    return () => {
+      if (navigationBlockedFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(navigationBlockedFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!showSaveSuccessBar) return;
@@ -3355,7 +3723,7 @@ export function ServerSettingsEditor({
   const handleResetSettings = useCallback(() => {
     if (!canResetSettings) return;
 
-    if (isSecuritySection && savedAntiLinkSettingsDraft) {
+    if (isAntiLinkSection && savedAntiLinkSettingsDraft) {
       setAntiLinkEnabled(savedAntiLinkSettingsDraft.enabled);
       setAntiLinkLogChannelId(savedAntiLinkSettingsDraft.logChannelId);
       setAntiLinkEnforcementAction(savedAntiLinkSettingsDraft.enforcementAction);
@@ -3364,6 +3732,8 @@ export function ServerSettingsEditor({
       setAntiLinkBlockExternalLinks(savedAntiLinkSettingsDraft.blockExternalLinks);
       setAntiLinkBlockDiscordInvites(savedAntiLinkSettingsDraft.blockDiscordInvites);
       setAntiLinkBlockObfuscatedLinks(savedAntiLinkSettingsDraft.blockObfuscatedLinks);
+    } else if (isSecurityLogsSection && savedSecurityLogsDraft) {
+      setSecurityLogsDraft(savedSecurityLogsDraft);
     } else if (isWelcomeSection && savedWelcomeSettingsDraft) {
       setWelcomeEnabled(savedWelcomeSettingsDraft.enabled);
       setEntryPublicChannelId(savedWelcomeSettingsDraft.entryPublicChannelId);
@@ -3392,9 +3762,11 @@ export function ServerSettingsEditor({
     setSuccessMessage(null);
   }, [
     canResetSettings,
-    isSecuritySection,
+    isAntiLinkSection,
+    isSecurityLogsSection,
     isWelcomeSection,
     savedAntiLinkSettingsDraft,
+    savedSecurityLogsDraft,
     savedSettingsDraft,
     savedWelcomeSettingsDraft,
   ]);
@@ -3406,7 +3778,7 @@ export function ServerSettingsEditor({
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      if (isSecuritySection) {
+      if (isAntiLinkSection) {
         const response = await fetch("/api/auth/me/guilds/antilink-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3417,9 +3789,9 @@ export function ServerSettingsEditor({
             enforcementAction: antiLinkEnforcementAction,
             timeoutMinutes: antiLinkTimeoutValue,
             ignoredRoleIds: antiLinkIgnoredRoleIds,
-            blockExternalLinks: antiLinkBlockExternalLinks,
-            blockDiscordInvites: antiLinkBlockDiscordInvites,
-            blockObfuscatedLinks: antiLinkBlockObfuscatedLinks,
+            blockExternalLinks: ANTILINK_DEFAULT_DETECTION.blockExternalLinks,
+            blockDiscordInvites: ANTILINK_DEFAULT_DETECTION.blockDiscordInvites,
+            blockObfuscatedLinks: ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks,
           }),
         });
 
@@ -3431,6 +3803,28 @@ export function ServerSettingsEditor({
         }
 
         setSavedAntiLinkSettingsDraft(currentAntiLinkDraft);
+      } else if (isSecurityLogsSection) {
+        const response = await fetch(
+          "/api/auth/me/guilds/security-logs-settings",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              guildId,
+              events: currentSecurityLogsDraft,
+            }),
+          },
+        );
+
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(
+            payload.message ||
+              "Falha ao salvar configuracoes de logs de seguranca.",
+          );
+        }
+
+        setSavedSecurityLogsDraft(currentSecurityLogsDraft);
       } else if (isWelcomeSection) {
         const response = await fetch("/api/auth/me/guilds/welcome-settings", {
           method: "POST",
@@ -3497,9 +3891,6 @@ export function ServerSettingsEditor({
       setIsSaving(false);
     }
   }, [
-    antiLinkBlockDiscordInvites,
-    antiLinkBlockExternalLinks,
-    antiLinkBlockObfuscatedLinks,
     antiLinkEnabled,
     antiLinkEnforcementAction,
     antiLinkIgnoredRoleIds,
@@ -3521,7 +3912,8 @@ export function ServerSettingsEditor({
     exitPublicChannelId,
     exitThumbnailMode,
     guildId,
-    isSecuritySection,
+    isAntiLinkSection,
+    isSecurityLogsSection,
     isTicketSection,
     isWelcomeSection,
     logsClosedChannelId,
@@ -3530,10 +3922,12 @@ export function ServerSettingsEditor({
     notifyRoleIds,
     panelLayout,
     setSavedAntiLinkSettingsDraft,
+    setSavedSecurityLogsDraft,
     setSavedSettingsDraft,
     setSavedWelcomeSettingsDraft,
     ticketsCategoryId,
     welcomeEnabled,
+    currentSecurityLogsDraft,
   ]);
 
   const handleSendEmbed = useCallback(async () => {
@@ -3686,9 +4080,9 @@ export function ServerSettingsEditor({
           enforcementAction: antiLinkEnforcementAction,
           timeoutMinutes: antiLinkTimeoutValue,
           ignoredRoleIds: antiLinkIgnoredRoleIds,
-          blockExternalLinks: antiLinkBlockExternalLinks,
-          blockDiscordInvites: antiLinkBlockDiscordInvites,
-          blockObfuscatedLinks: antiLinkBlockObfuscatedLinks,
+          blockExternalLinks: ANTILINK_DEFAULT_DETECTION.blockExternalLinks,
+          blockDiscordInvites: ANTILINK_DEFAULT_DETECTION.blockDiscordInvites,
+          blockObfuscatedLinks: ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks,
         }),
       });
 
@@ -3706,9 +4100,9 @@ export function ServerSettingsEditor({
           enforcementAction: antiLinkEnforcementAction,
           timeoutMinutes: antiLinkTimeoutValue,
           ignoredRoleIds: antiLinkIgnoredRoleIds,
-          blockExternalLinks: antiLinkBlockExternalLinks,
-          blockDiscordInvites: antiLinkBlockDiscordInvites,
-          blockObfuscatedLinks: antiLinkBlockObfuscatedLinks,
+          blockExternalLinks: ANTILINK_DEFAULT_DETECTION.blockExternalLinks,
+          blockDiscordInvites: ANTILINK_DEFAULT_DETECTION.blockDiscordInvites,
+          blockObfuscatedLinks: ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks,
         }),
       );
       setShowSaveSuccessBar(true);
@@ -3722,9 +4116,6 @@ export function ServerSettingsEditor({
       setIsActivatingAntiLink(false);
     }
   }, [
-    antiLinkBlockDiscordInvites,
-    antiLinkBlockExternalLinks,
-    antiLinkBlockObfuscatedLinks,
     antiLinkEnforcementAction,
     antiLinkIgnoredRoleIds,
     antiLinkLogChannelId,
@@ -3734,6 +4125,44 @@ export function ServerSettingsEditor({
     settingsReadOnly,
     textChannelOptions,
   ]);
+
+  const activeSecurityLogModalOption = useMemo(
+    () =>
+      activeSecurityLogModalEvent
+        ? SECURITY_LOG_EVENT_OPTIONS.find(
+            (option) => option.key === activeSecurityLogModalEvent,
+          ) || null
+        : null,
+    [activeSecurityLogModalEvent],
+  );
+
+  const handleToggleSecurityLogEvent = useCallback(
+    (eventKey: SecurityLogEventKey) => {
+      if (securityLogsControlsDisabled) return;
+      setSecurityLogsDraft((current) => ({
+        ...current,
+        [eventKey]: {
+          ...current[eventKey],
+          enabled: !current[eventKey].enabled,
+        },
+      }));
+    },
+    [securityLogsControlsDisabled],
+  );
+
+  const handleSelectSecurityLogChannel = useCallback(
+    (eventKey: SecurityLogEventKey, channelId: string | null) => {
+      if (securityLogsControlsDisabled) return;
+      setSecurityLogsDraft((current) => ({
+        ...current,
+        [eventKey]: {
+          ...current[eventKey],
+          channelId,
+        },
+      }));
+    },
+    [securityLogsControlsDisabled],
+  );
 
   useEffect(() => {
     if (!isWelcomeSection || isLoading || !hasLoadedDashboardSnapshot) {
@@ -3757,23 +4186,13 @@ export function ServerSettingsEditor({
   ]);
 
   useEffect(() => {
-    if (!isSecuritySection || isLoading || !hasLoadedDashboardSnapshot) {
-      setIsAntiLinkActivationModalOpen(false);
-      return;
-    }
-    if (antiLinkEnabled) {
-      setIsAntiLinkActivationModalOpen(false);
-      return;
-    }
-    if (savedAntiLinkSettingsDraft?.enabled === false && !hasDismissedAntiLinkModal) {
-      setIsAntiLinkActivationModalOpen(true);
-    }
+    setIsAntiLinkActivationModalOpen(false);
   }, [
     antiLinkEnabled,
     hasDismissedAntiLinkModal,
     hasLoadedDashboardSnapshot,
     isLoading,
-    isSecuritySection,
+    isAntiLinkSection,
     savedAntiLinkSettingsDraft,
   ]);
 
@@ -3982,56 +4401,52 @@ export function ServerSettingsEditor({
                               Modulo AntiLink
                             </h3>
                             <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
-                              Bloqueie links externos, convites do Discord e tentativas de ofuscacao. O bot apaga a mensagem automaticamente, aplica a acao escolhida e envia log detalhado.
+                              Bloqueio padrao sempre ativo para links externos, convites e ofuscacao. Configure acao, log e excecoes de cargo.
                             </p>
                           </div>
-                          <span className="inline-flex h-[30px] items-center justify-center rounded-full border border-[#151515] bg-[#0B0B0B] px-[12px] text-[11px] uppercase tracking-[0.16em] text-[#686868]">
-                            AntiLink
-                          </span>
+                          <div className="flex shrink-0 items-center gap-[10px]">
+                            <span className="text-[11px] uppercase tracking-[0.12em] text-[#7A7A7A]">
+                              {antiLinkEnabled ? "Ligado" : "Desligado"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isSaving || settingsReadOnly) return;
+                                setHasDismissedAntiLinkModal(true);
+                                setAntiLinkEnabled((current) => !current);
+                              }}
+                              disabled={isSaving || settingsReadOnly}
+                              className={`relative inline-flex h-[34px] w-[66px] items-center rounded-full border px-[4px] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                antiLinkEnabled
+                                  ? "border-[rgba(106,226,90,0.42)] bg-[rgba(106,226,90,0.25)]"
+                                  : "border-[#2A2A2A] bg-[#111111]"
+                              }`}
+                              aria-pressed={antiLinkEnabled}
+                              aria-label="Ativar ou desativar modulo AntiLink"
+                            >
+                              <span
+                                className={`absolute text-[10px] font-medium uppercase tracking-[0.1em] transition-all ${
+                                  antiLinkEnabled
+                                    ? "left-[10px] text-[#183018]"
+                                    : "right-[8px] text-[#6F6F6F]"
+                                }`}
+                              >
+                                {antiLinkEnabled ? "On" : "Off"}
+                              </span>
+                              <span
+                                className={`h-[24px] w-[24px] rounded-full bg-[#D8D8D8] shadow-[0_4px_14px_rgba(0,0,0,0.4)] transition-transform ${
+                                  antiLinkEnabled ? "translate-x-[31px]" : "translate-x-0"
+                                }`}
+                              />
+                            </button>
+                          </div>
                         </div>
 
                         {!antiLinkEnabled ? (
-                          <div className="mt-[18px] rounded-[24px] border border-[#241616] bg-[linear-gradient(180deg,rgba(25,12,12,0.9)_0%,rgba(12,6,6,0.92)_100%)] px-[18px] py-[18px] text-[13px] leading-[1.6] text-[#D8A0A0] sm:px-[22px]">
-                            O modulo AntiLink ainda nao esta ativado. Clique em ativar para liberar a configuracao.
-                            <div className="mt-[14px]">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setHasDismissedAntiLinkModal(false);
-                                  setIsAntiLinkActivationModalOpen(true);
-                                }}
-                                className="inline-flex h-[40px] items-center justify-center rounded-[12px] border border-[#2A1D1D] bg-[#120C0C] px-[16px] text-[13px] font-medium text-[#F2C3C3] transition-colors hover:border-[#3A2A2A] hover:bg-[#1B1212]"
-                              >
-                                Ativar modulo
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mt-[18px] rounded-[18px] border border-[rgba(106,226,90,0.38)] bg-[rgba(20,34,20,0.65)] px-[14px] py-[14px]">
-                            <div className="flex items-center justify-between gap-[12px] rounded-[14px] border border-[rgba(106,226,90,0.3)] bg-[rgba(14,22,14,0.6)] px-[12px] py-[12px]">
-                              <div>
-                                <p className="text-[14px] font-medium text-[#E4E4E4]">
-                                  Modulo ativo
-                                </p>
-                                <p className="mt-[4px] text-[12px] leading-[1.5] text-[#9CCB95]">
-                                  O AntiLink esta em operacao e protegendo este servidor.
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (isSaving || settingsReadOnly) return;
-                                  setHasDismissedAntiLinkModal(true);
-                                  setAntiLinkEnabled(false);
-                                }}
-                                disabled={isSaving || settingsReadOnly}
-                                className="inline-flex h-[36px] items-center justify-center rounded-[10px] border border-[#2A2A2A] bg-[#131313] px-[12px] text-[11px] font-medium uppercase tracking-[0.12em] text-[#B6B6B6] transition-colors hover:border-[#3B3B3B] hover:text-[#E2E2E2] disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                Desativar
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                          <p className="mt-[14px] text-[12px] leading-[1.6] text-[#C89A9A]">
+                            Modulo desativado. Ligue o AntiLink para liberar as configuracoes abaixo.
+                          </p>
+                        ) : null}
 
                         <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
                           <ConfigStepSelect
@@ -4085,63 +4500,6 @@ export function ServerSettingsEditor({
                           </div>
                         ) : null}
 
-                        <div className="mt-[16px] grid grid-cols-1 gap-[12px] lg:grid-cols-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (antiLinkControlsDisabled) return;
-                              setAntiLinkBlockExternalLinks((current) => !current);
-                            }}
-                            disabled={antiLinkControlsDisabled}
-                            className={`rounded-[14px] border px-[12px] py-[12px] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                              antiLinkBlockExternalLinks
-                                ? "border-[rgba(138,182,255,0.35)] bg-[rgba(10,25,46,0.6)]"
-                                : "border-[#171717] bg-[#0A0A0A]"
-                            }`}
-                          >
-                            <p className="text-[13px] font-medium text-[#E2E2E2]">HTTP, HTTPS e dominios</p>
-                            <p className="mt-[6px] text-[12px] leading-[1.5] text-[#7A7A7A]">
-                              Detecta links diretos, www e dominios comuns.
-                            </p>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (antiLinkControlsDisabled) return;
-                              setAntiLinkBlockDiscordInvites((current) => !current);
-                            }}
-                            disabled={antiLinkControlsDisabled}
-                            className={`rounded-[14px] border px-[12px] py-[12px] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                              antiLinkBlockDiscordInvites
-                                ? "border-[rgba(138,182,255,0.35)] bg-[rgba(10,25,46,0.6)]"
-                                : "border-[#171717] bg-[#0A0A0A]"
-                            }`}
-                          >
-                            <p className="text-[13px] font-medium text-[#E2E2E2]">Convites do Discord</p>
-                            <p className="mt-[6px] text-[12px] leading-[1.5] text-[#7A7A7A]">
-                              Bloqueia discord.gg, discord.com/invite e variacoes.
-                            </p>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (antiLinkControlsDisabled) return;
-                              setAntiLinkBlockObfuscatedLinks((current) => !current);
-                            }}
-                            disabled={antiLinkControlsDisabled}
-                            className={`rounded-[14px] border px-[12px] py-[12px] text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                              antiLinkBlockObfuscatedLinks
-                                ? "border-[rgba(138,182,255,0.35)] bg-[rgba(10,25,46,0.6)]"
-                                : "border-[#171717] bg-[#0A0A0A]"
-                            }`}
-                          >
-                            <p className="text-[13px] font-medium text-[#E2E2E2]">Deteccao inteligente</p>
-                            <p className="mt-[6px] text-[12px] leading-[1.5] text-[#7A7A7A]">
-                              Tenta pegar links escondidos em texto e markdown.
-                            </p>
-                          </button>
-                        </div>
-
                         <div className="mt-[16px]">
                           <ConfigStepMultiSelect
                             label="Ignorar cargos (opcional)"
@@ -4154,6 +4512,153 @@ export function ServerSettingsEditor({
                           />
                         </div>
                       </div>
+                    </>
+                  ) : settingsSection === "security_logs" ? (
+                    <>
+                      <div className="px-[2px]">
+                        <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">
+                          Seguranca
+                        </p>
+                        <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                          Logs de Seguranca
+                        </h3>
+                        <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                          Organize apelidos, mensagens, voz e moderacao com cards individuais. Cada evento pode ser ligado de forma separada e configurado em um canal proprio.
+                        </p>
+                      </div>
+
+                      <div className="space-y-[14px]">
+                        {SECURITY_LOG_EVENT_OPTIONS.map((option, index) => {
+                          const eventDraft = securityLogsDraft[option.key];
+                          const hasChannel = Boolean(eventDraft.channelId);
+                          const channelLabel =
+                            textChannelOptions.find(
+                              (channel) => channel.id === eventDraft.channelId,
+                            )?.name || null;
+                          const showChannelWarning = eventDraft.enabled && !hasChannel;
+
+                          return (
+                            <div
+                              key={option.key}
+                              className={`rounded-[22px] border bg-[linear-gradient(180deg,#0D0D0D_0%,#090909_100%)] px-[16px] py-[16px] shadow-[inset_0_1px_0_rgba(255,255,255,0.015)] transition-colors sm:px-[18px] sm:py-[18px] ${
+                                eventDraft.enabled
+                                  ? "border-[#242424]"
+                                  : "border-[#171717]"
+                              }`}
+                            >
+                              <div className="flex flex-col gap-[14px] xl:flex-row xl:items-center xl:justify-between">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-start gap-[12px]">
+                                    <span
+                                      className={`inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[16px] text-[11px] font-semibold tracking-[0.14em] transition-colors ${
+                                        eventDraft.enabled
+                                          ? "bg-[#F3F3F3] text-[#080808]"
+                                          : "bg-[#101010] text-[#6E6E6E]"
+                                      }`}
+                                    >
+                                      {String(index + 1).padStart(2, "0")}
+                                    </span>
+
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-[8px]">
+                                        <p className="text-[15px] font-medium tracking-[-0.03em] text-[#E6E6E6]">
+                                          {option.title}
+                                        </p>
+                                        <div className="relative">
+                                          <button
+                                            type="button"
+                                            aria-label={`Ajuda sobre ${option.title}`}
+                                            onMouseEnter={() =>
+                                              setOpenSecurityLogTooltipKey(option.key)
+                                            }
+                                            onMouseLeave={() =>
+                                              setOpenSecurityLogTooltipKey((current) =>
+                                                current === option.key ? null : current,
+                                              )
+                                            }
+                                            onFocus={() =>
+                                              setOpenSecurityLogTooltipKey(option.key)
+                                            }
+                                            onBlur={() =>
+                                              setOpenSecurityLogTooltipKey((current) =>
+                                                current === option.key ? null : current,
+                                              )
+                                            }
+                                            className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-full bg-[#111111] text-[#808080] transition-colors hover:bg-[#171717] hover:text-[#E0E0E0]"
+                                          >
+                                            <CircleHelp size={13} strokeWidth={2.2} />
+                                          </button>
+                                          <div
+                                            className={`pointer-events-none absolute left-0 top-full z-30 mt-[10px] w-[280px] rounded-[14px] border border-[rgba(255,255,255,0.08)] bg-[rgba(9,9,9,0.98)] p-[12px] text-[12px] leading-[1.5] text-[rgba(218,218,218,0.84)] shadow-[0_18px_40px_rgba(0,0,0,0.45)] transition-all duration-150 ${
+                                              openSecurityLogTooltipKey === option.key
+                                                ? "translate-y-0 opacity-100"
+                                                : "translate-y-[-4px] opacity-0"
+                                            }`}
+                                          >
+                                            {option.tooltip}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <p className="mt-[6px] max-w-[760px] text-[13px] leading-[1.6] text-[#7A7A7A]">
+                                        {option.description}
+                                      </p>
+
+                                      <div className="mt-[12px] flex flex-wrap items-center gap-[8px]">
+                                        <span className="inline-flex items-center rounded-full bg-[#0A0A0A] px-[10px] py-[6px] text-[11px] uppercase tracking-[0.12em] text-[#696969]">
+                                          Canal: {channelLabel || "nao definido"}
+                                        </span>
+                                        {showChannelWarning ? (
+                                          <span className="inline-flex items-center rounded-full bg-[rgba(73,24,24,0.42)] px-[10px] py-[6px] text-[11px] uppercase tracking-[0.12em] text-[#D09B9B]">
+                                            Canal pendente
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex shrink-0 items-center justify-end gap-[10px] xl:min-w-[126px]">
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveSecurityLogModalEvent(option.key)}
+                                    disabled={securityLogsControlsDisabled}
+                                    className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-[14px] bg-[#101010] text-[#8C8C8C] transition-colors hover:bg-[#171717] hover:text-[#F0F0F0] disabled:cursor-not-allowed disabled:opacity-55"
+                                    aria-label={`Configurar canal para ${option.title}`}
+                                  >
+                                    <Settings2 size={16} strokeWidth={2.1} />
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleSecurityLogEvent(option.key)}
+                                    disabled={securityLogsControlsDisabled}
+                                    className={`relative inline-flex h-[40px] w-[72px] items-center rounded-full p-[4px] transition-colors disabled:cursor-not-allowed disabled:opacity-55 ${
+                                      eventDraft.enabled ? "bg-[#F2F2F2]" : "bg-[#141414]"
+                                    }`}
+                                    aria-pressed={eventDraft.enabled}
+                                    aria-label={`Ativar ou desativar ${option.title}`}
+                                  >
+                                    <span
+                                      className={`h-[32px] w-[32px] rounded-full shadow-[0_4px_14px_rgba(0,0,0,0.22)] transition-all duration-200 ${
+                                        eventDraft.enabled
+                                          ? "translate-x-[32px] bg-[#050505]"
+                                          : "translate-x-0 bg-[#696969]"
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {hasInvalidSecurityLogChannel ? (
+                        <p className="text-[12px] leading-[1.55] text-[#D7A0A0]">
+                          Um ou mais eventos ligados ainda nao possuem canal configurado.
+                        </p>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -4845,12 +5350,12 @@ export function ServerSettingsEditor({
                 <div
                   className={`pointer-events-auto relative w-full overflow-hidden rounded-[26px] shadow-[0_26px_90px_rgba(0,0,0,0.48)] backdrop-blur-[18px] ${
                     isSaveBarExiting ? "flowdesk-sheet-down" : "flowdesk-sheet-up"
-                  } ${showInvalidTicketSaveState ? "flowdesk-savebar-shake-soft" : ""}`}
+                  } ${showSaveBarErrorState ? "flowdesk-savebar-shake-soft" : ""}`}
                 >
                   <span
                     aria-hidden="true"
                     className={`pointer-events-none absolute inset-0 rounded-[26px] border ${
-                      showInvalidTicketSaveState
+                      showSaveBarErrorState
                         ? "border-[rgba(219,70,70,0.38)]"
                         : showSaveBarSuccessState
                           ? "border-[rgba(106,226,90,0.34)]"
@@ -4860,7 +5365,7 @@ export function ServerSettingsEditor({
                   <span
                     aria-hidden="true"
                     className={`pointer-events-none absolute inset-[-2px] rounded-[26px] ${
-                      showInvalidTicketSaveState
+                      showSaveBarErrorState
                         ? "flowdesk-tag-border-glow-danger"
                         : showSaveBarSuccessState
                           ? "flowdesk-tag-border-glow-success"
@@ -4870,7 +5375,7 @@ export function ServerSettingsEditor({
                   <span
                     aria-hidden="true"
                     className={`pointer-events-none absolute inset-[-1px] rounded-[26px] ${
-                      showInvalidTicketSaveState
+                      showSaveBarErrorState
                         ? "flowdesk-tag-border-core-danger"
                         : showSaveBarSuccessState
                           ? "flowdesk-tag-border-core-success"
@@ -5385,6 +5890,124 @@ export function ServerSettingsEditor({
             </div>
           </div>
         </ClientErrorBoundary>
+      ) : null}
+
+      {activeSecurityLogModalEvent && activeSecurityLogModalOption ? (
+        <div className="fixed inset-y-0 right-0 left-0 z-[140] isolate overflow-y-auto overscroll-contain px-[18px] py-[28px] xl:left-[358px]">
+          <button
+            type="button"
+            aria-label="Fechar modal de canal"
+            className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[5px]"
+            onClick={() => setActiveSecurityLogModalEvent(null)}
+          />
+
+          <div className="relative z-[10] flex min-h-full items-center justify-center">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Configurar canal de ${activeSecurityLogModalOption.title}`}
+              className="flowdesk-stage-fade relative w-full max-w-[720px] overflow-hidden rounded-[32px] bg-transparent px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
+            >
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 rounded-[32px] border border-[#0E0E0E]"
+              />
+              <span
+                aria-hidden="true"
+                className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[32px]"
+              />
+              <span
+                aria-hidden="true"
+                className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[32px]"
+              />
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]"
+              />
+
+              <div className="relative z-10">
+                <div className="flex flex-col gap-[14px] sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <LandingGlowTag className="px-[18px]">
+                      Logs de Seguranca
+                    </LandingGlowTag>
+
+                    <div className="mt-[18px]">
+                      <h2 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[30px] leading-[0.98] font-normal tracking-[-0.05em] text-transparent sm:text-[36px]">
+                        {activeSecurityLogModalOption.title}
+                      </h2>
+                      <p className="mt-[14px] max-w-[560px] text-[14px] leading-[1.62] text-[#787878]">
+                        {activeSecurityLogModalOption.tooltip}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveSecurityLogModalEvent(null)}
+                    className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+                    aria-label="Fechar modal"
+                  >
+                    <span className="text-[18px] leading-none">x</span>
+                  </button>
+                </div>
+
+                <div className="mt-[24px] rounded-[22px] border border-[#161616] bg-[#090909] px-[18px] py-[18px]">
+                  <p className="text-[12px] uppercase tracking-[0.16em] text-[#666666]">
+                    Canal de destino
+                  </p>
+                  <p className="mt-[8px] text-[13px] leading-[1.6] text-[#787878]">
+                    Escolha em qual canal este evento vai registrar os embeds de auditoria.
+                  </p>
+
+                  <div className="mt-[16px]">
+                    <ConfigStepSelect
+                      label=""
+                      placeholder="Escolha o canal de log"
+                      options={textChannelOptions}
+                      value={
+                        securityLogsDraft[activeSecurityLogModalEvent].channelId
+                      }
+                      onChange={(value) =>
+                        handleSelectSecurityLogChannel(
+                          activeSecurityLogModalEvent,
+                          value,
+                        )
+                      }
+                      disabled={securityLogsControlsDisabled}
+                      controlHeightPx={serverSettingsControlHeight}
+                      variant="immersive"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-[24px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSecurityLogModalEvent(null)}
+                    className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1]"
+                  >
+                    Cancelar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveSecurityLogModalEvent(null)}
+                    className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-0 rounded-[12px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+                    />
+                    <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+                      Concluir
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <BotMissingModal

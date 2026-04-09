@@ -272,9 +272,9 @@ export async function GET(request: Request) {
                 (roleId): roleId is string => typeof roleId === "string",
               )
             : [],
-          blockExternalLinks: result.data.block_external_links !== false,
-          blockDiscordInvites: result.data.block_discord_invites !== false,
-          blockObfuscatedLinks: result.data.block_obfuscated_links !== false,
+          blockExternalLinks: true,
+          blockDiscordInvites: true,
+          blockObfuscatedLinks: true,
           updatedAt: result.data.updated_at,
         },
       }),
@@ -328,18 +328,9 @@ export async function POST(request: Request) {
     const enforcementAction = normalizeAction(body.enforcementAction);
     const timeoutMinutes = normalizeTimeoutMinutes(body.timeoutMinutes);
     const ignoredRoleIds = normalizeRoleIdList(body.ignoredRoleIds);
-    const blockExternalLinks =
-      typeof body.blockExternalLinks === "boolean"
-        ? body.blockExternalLinks
-        : true;
-    const blockDiscordInvites =
-      typeof body.blockDiscordInvites === "boolean"
-        ? body.blockDiscordInvites
-        : true;
-    const blockObfuscatedLinks =
-      typeof body.blockObfuscatedLinks === "boolean"
-        ? body.blockObfuscatedLinks
-        : true;
+    const blockExternalLinks = true;
+    const blockDiscordInvites = true;
+    const blockObfuscatedLinks = true;
 
     diagnostic = createServerSaveDiagnosticContext("antilink_settings", guildId);
 
@@ -371,30 +362,6 @@ export async function POST(request: Request) {
             ok: false,
             message:
               "Escolha um canal de log para registrar as acoes do anti-link.",
-          },
-          { status: 400 },
-        ),
-      );
-    }
-
-    if (
-      enabled &&
-      !blockExternalLinks &&
-      !blockDiscordInvites &&
-      !blockObfuscatedLinks
-    ) {
-      recordServerSaveDiagnostic({
-        context: diagnostic,
-        outcome: "payload_invalid",
-        httpStatus: 400,
-        detail: "Nenhum tipo de deteccao ativo no anti-link.",
-      });
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          {
-            ok: false,
-            message:
-              "Ative pelo menos uma opcao de deteccao para o modulo anti-link.",
           },
           { status: 400 },
         ),
@@ -628,9 +595,9 @@ export async function POST(request: Request) {
                 (roleId): roleId is string => typeof roleId === "string",
               )
             : [],
-          blockExternalLinks: savedSettings.block_external_links !== false,
-          blockDiscordInvites: savedSettings.block_discord_invites !== false,
-          blockObfuscatedLinks: savedSettings.block_obfuscated_links !== false,
+          blockExternalLinks: true,
+          blockDiscordInvites: true,
+          blockObfuscatedLinks: true,
           updatedAt: savedSettings.updated_at,
         },
       }),
