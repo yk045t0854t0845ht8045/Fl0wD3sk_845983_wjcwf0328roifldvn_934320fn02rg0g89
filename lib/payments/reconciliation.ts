@@ -14,6 +14,7 @@ import {
   resolveApprovedOrderLicenseExpiresAt,
   syncUserPlanStateFromOrder,
 } from "@/lib/plans/state";
+import { orderTransitionAllowsImmediateApproval } from "@/lib/plans/change";
 import {
   getApprovedOrdersForGuild,
   invalidateGuildLicenseCaches,
@@ -373,10 +374,21 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       order.id,
     );
     const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
-    const renewalDecision = resolveRenewalPaymentDecision(
-      existingCoverage,
-      Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+    const canBypassRenewalWindow = orderTransitionAllowsImmediateApproval(
+      order.provider_payload,
     );
+    const renewalDecision = canBypassRenewalWindow
+      ? {
+          allowed: true as const,
+          reason: "immediate_upgrade" as const,
+          licenseStartsAtMs: Number.isFinite(paymentTimestampMs)
+            ? paymentTimestampMs
+            : Date.now(),
+        }
+      : resolveRenewalPaymentDecision(
+          existingCoverage,
+          Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+        );
 
     if (!renewalDecision.allowed) {
       await autoRefundProviderPayment({

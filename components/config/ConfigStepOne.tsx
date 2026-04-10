@@ -20,7 +20,18 @@ type ConfigStepOneProps = {
   displayName: string;
   initialSelectedGuildId?: string | null;
   onSelectedGuildChange?: (guildId: string | null) => void;
-  onProceedToPayment?: (guildId: string) => void;
+  onProceedAfterValidation?: (
+    guildId: string,
+  ) => Promise<
+    | {
+        ok: true;
+        target: "payment" | "servers";
+      }
+    | {
+        ok: false;
+        message: string;
+      }
+  >;
 };
 
 type GuildsApiResponse = {
@@ -38,8 +49,9 @@ type BotPresenceApiResponse = {
 
 const DEFAULT_NEXT_STEP_URL = "/config";
 const BOT_CHECK_INTERVAL_MS = 4_000;
-const GUILDS_CACHE_STORAGE_KEY = "flowdesk_step1_guilds_cache_v3";
+const GUILDS_CACHE_STORAGE_KEY = "flowdesk_step1_guilds_cache_v4";
 const GUILDS_CACHE_TTL_MS = 5 * 60 * 1000;
+const GUILDS_REALTIME_SYNC_INTERVAL_MS = 20_000;
 
 type GuildsCachePayload = {
   guilds: GuildItem[];
@@ -80,25 +92,25 @@ function writeGuildsCache(guilds: GuildItem[]) {
 
 function resolveSelectionDescription(guild: GuildItem | null) {
   if (!guild) {
-    return "Escolha um servidor acima para validar o bot e seguir direto para o pagamento.";
+    return "Escolha um servidor acima para validar o bot e liberar a configuracao do Flowdesk.";
   }
 
   if (guild.owner) {
-    return "A conta atual possui a posse deste servidor. Assim que validarmos o bot, voce segue direto para o pagamento.";
+    return "A conta atual possui a posse deste servidor. Assim que validarmos o bot, o sistema decide automaticamente se este servidor ja pode ser liberado ou se precisa abrir o checkout.";
   }
 
   if (guild.admin) {
-    return "Voce tem acesso administrativo neste servidor. O proximo passo confirma a presenca do bot e abre o checkout imediatamente.";
+    return "Voce tem acesso administrativo neste servidor. O proximo passo confirma a presenca do bot e libera este servidor imediatamente quando sua conta ja tiver capacidade disponivel.";
   }
 
-  return "Este servidor esta pronto para seguir no checkout. O proximo passo valida o bot e libera o pagamento.";
+  return "Este servidor esta pronto para seguir. O proximo passo valida o bot e decide entre liberar a configuracao agora ou abrir o checkout.";
 }
 
 export function ConfigStepOne({
   displayName,
   initialSelectedGuildId = null,
   onSelectedGuildChange,
-  onProceedToPayment,
+  onProceedAfterValidation,
 }: ConfigStepOneProps) {
   const [guilds, setGuilds] = useState<GuildItem[]>([]);
   const [isLoadingGuilds, setIsLoadingGuilds] = useState(true);
@@ -116,15 +128,20 @@ export function ConfigStepOne({
   const [isModalChecking, setIsModalChecking] = useState(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollLockRef = useRef(false);
+  const guildsRefreshLockRef = useRef(false);
 
-  useEffect(() => {
-    let isMounted = true;
+  const refreshGuilds = useCallback(
+    async (options?: { allowCachedFallback?: boolean; keepLoadingState?: boolean }) => {
+      if (guildsRefreshLockRef.current) {
+        return;
+      }
 
-    async function loadGuilds() {
-      const cachedGuilds = readGuildsCache();
-      if (cachedGuilds && cachedGuilds.length) {
-        setGuilds(cachedGuilds);
-        setIsLoadingGuilds(false);
+      guildsRefreshLockRef.current = true;
+      const allowCachedFallback = options?.allowCachedFallback ?? true;
+      const keepLoadingState = options?.keepLoadingState ?? false;
+
+      if (!keepLoadingState) {
+        setIsLoadingGuilds(true);
       }
 
       try {
@@ -133,37 +150,61 @@ export function ConfigStepOne({
         });
         const payload = (await response.json()) as GuildsApiResponse;
 
-        if (!isMounted) return;
-
-        if (payload.ok) {
-          const nextGuilds = payload.guilds || [];
-          setGuilds(nextGuilds);
-          writeGuildsCache(nextGuilds);
-          setHasFreshGuildsSync(true);
-          return;
+        if (!payload.ok) {
+          throw new Error("Falha ao atualizar a lista de servidores.");
         }
 
-        if (!cachedGuilds) {
-          setGuilds([]);
-        }
+        const nextGuilds = payload.guilds || [];
+        setGuilds(nextGuilds);
+        writeGuildsCache(nextGuilds);
+        setHasFreshGuildsSync(true);
       } catch {
-        if (!isMounted) return;
-
-        if (!cachedGuilds) {
-          setGuilds([]);
+        if (allowCachedFallback) {
+          const cachedGuilds = readGuildsCache();
+          if (cachedGuilds) {
+            setGuilds(cachedGuilds);
+          }
         }
       } finally {
-        if (!isMounted) return;
+        guildsRefreshLockRef.current = false;
         setIsLoadingGuilds(false);
       }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    async function loadGuilds() {
+      await refreshGuilds({ allowCachedFallback: true });
     }
 
     void loadGuilds();
+  }, [refreshGuilds]);
+
+  useEffect(() => {
+    function handleWindowFocus() {
+      void refreshGuilds({ allowCachedFallback: false, keepLoadingState: true });
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState !== "visible") return;
+      void refreshGuilds({ allowCachedFallback: false, keepLoadingState: true });
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void refreshGuilds({ allowCachedFallback: false, keepLoadingState: true });
+    }, GUILDS_REALTIME_SYNC_INTERVAL_MS);
+
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      isMounted = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [refreshGuilds]);
 
   const selectedGuild = useMemo(
     () => guilds.find((guild) => guild.id === selectedGuildId) || null,
@@ -208,18 +249,21 @@ export function ConfigStepOne({
     }
   }, []);
 
-  const goToNextStep = useCallback((guildId: string) => {
+  const goToNextStep = useCallback(async (guildId: string) => {
     clearBotPolling();
     setIsBotModalOpen(false);
     setBotInviteUrl(null);
 
-    if (onProceedToPayment) {
-      onProceedToPayment(guildId);
+    if (onProceedAfterValidation) {
+      const result = await onProceedAfterValidation(guildId);
+      if (!result.ok) {
+        setNextActionError(result.message);
+      }
       return;
     }
 
     window.location.assign(`${DEFAULT_NEXT_STEP_URL}?guild=${guildId}#/payment`);
-  }, [clearBotPolling, onProceedToPayment]);
+  }, [clearBotPolling, onProceedAfterValidation]);
 
   const startRealtimeBotPolling = useCallback(
     (guildId: string) => {
@@ -234,7 +278,7 @@ export function ConfigStepOne({
           const payload = await requestBotPresence(guildId);
 
           if (payload.ok && payload.canProceed) {
-            goToNextStep(guildId);
+            void goToNextStep(guildId);
           } else if (payload.ok) {
             if (payload.reason) {
               setBotBlockReason(payload.reason);
@@ -257,26 +301,28 @@ export function ConfigStepOne({
     setNextActionError(null);
     setIsValidatingNext(true);
 
-    const payload = await requestBotPresence(selectedGuild.id);
+    try {
+      const payload = await requestBotPresence(selectedGuild.id);
 
-    setIsValidatingNext(false);
-
-    if (payload.ok && payload.canProceed) {
-      goToNextStep(selectedGuild.id);
-      return;
-    }
-
-    if (payload.ok && !payload.canProceed) {
-      if (payload.reason) {
-        setBotBlockReason(payload.reason);
+      if (payload.ok && payload.canProceed) {
+        await goToNextStep(selectedGuild.id);
+        return;
       }
-      setBotInviteUrl(payload.inviteUrl || null);
-      setIsBotModalOpen(true);
-      startRealtimeBotPolling(selectedGuild.id);
-      return;
-    }
 
-    setNextActionError(payload.message || "Nao foi possivel validar o servidor.");
+      if (payload.ok && !payload.canProceed) {
+        if (payload.reason) {
+          setBotBlockReason(payload.reason);
+        }
+        setBotInviteUrl(payload.inviteUrl || null);
+        setIsBotModalOpen(true);
+        startRealtimeBotPolling(selectedGuild.id);
+        return;
+      }
+
+      setNextActionError(payload.message || "Nao foi possivel validar o servidor.");
+    } finally {
+      setIsValidatingNext(false);
+    }
   }, [goToNextStep, requestBotPresence, selectedGuild, startRealtimeBotPolling]);
 
   const handleCloseBotModal = useCallback(() => {
@@ -294,27 +340,28 @@ export function ConfigStepOne({
 
     setIsModalChecking(true);
 
-    const payload = await requestBotPresence(selectedGuildId);
+    try {
+      const payload = await requestBotPresence(selectedGuildId);
 
-    if (payload.ok && payload.canProceed) {
-      setIsModalChecking(false);
-      goToNextStep(selectedGuildId);
-      return;
-    }
-
-    if (payload.ok && payload.inviteUrl) {
-      if (payload.reason) {
-        setBotBlockReason(payload.reason);
+      if (payload.ok && payload.canProceed) {
+        await goToNextStep(selectedGuildId);
+        return;
       }
-      setBotInviteUrl(payload.inviteUrl);
-      startRealtimeBotPolling(selectedGuildId);
-    }
 
-    if (!payload.ok) {
-      setNextActionError(payload.message || "Erro ao validar o servidor em tempo real.");
-    }
+      if (payload.ok && payload.inviteUrl) {
+        if (payload.reason) {
+          setBotBlockReason(payload.reason);
+        }
+        setBotInviteUrl(payload.inviteUrl);
+        startRealtimeBotPolling(selectedGuildId);
+      }
 
-    setIsModalChecking(false);
+      if (!payload.ok) {
+        setNextActionError(payload.message || "Erro ao validar o servidor em tempo real.");
+      }
+    } finally {
+      setIsModalChecking(false);
+    }
   }, [
     botInviteUrl,
     goToNextStep,
@@ -389,7 +436,7 @@ export function ConfigStepOne({
             </h1>
 
             <p className="mx-auto mt-[16px] max-w-[720px] text-[15px] leading-[1.7] text-[#8A8A8A] sm:text-[16px]">
-              Escolha um servidor, valide o bot e siga direto para a tela de pagamento. A configuracao fina de tickets voce faz depois em Servers.
+              Escolha um servidor, valide o bot e siga para a liberacao. Quando sua conta ja tiver capacidade no plano atual, voce vai direto para Servers sem voltar ao checkout.
             </p>
           </div>
 
@@ -517,7 +564,7 @@ export function ConfigStepOne({
                           }
                         />
                       ) : (
-                        "Ir para pagamento"
+                        "Continuar"
                       )}
                     </span>
                   </button>

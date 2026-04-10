@@ -375,7 +375,7 @@ export async function resolveDiscountPricing(input: {
 
   const rawTotal = Math.max(0, baseAmount - couponAmount - giftCardAmount);
   const totalAmount =
-    rawTotal > 0 ? Math.max(MINIMUM_PAYABLE_AMOUNT, rawTotal) : MINIMUM_PAYABLE_AMOUNT;
+    rawTotal > 0 ? Math.max(MINIMUM_PAYABLE_AMOUNT, rawTotal) : 0;
 
   return {
     baseAmount,

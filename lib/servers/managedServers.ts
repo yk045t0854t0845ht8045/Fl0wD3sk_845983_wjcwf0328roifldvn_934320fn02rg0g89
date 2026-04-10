@@ -6,11 +6,14 @@ import {
 import type { DiscordGuild } from "@/lib/auth/discord";
 import {
   getLockedGuildLicenseMap,
-  resolveLatestLicenseCoverageMapForGuilds,
 } from "@/lib/payments/licenseStatus";
 import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
-import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import {
+  getPlanGuildsForUser,
+  resolveGuildLicenseFromUserPlanState,
+} from "@/lib/plans/planGuilds";
+import { getUserPlanState } from "@/lib/plans/state";
 import { getAcceptedTeamGuildIdsForUser } from "@/lib/teams/userTeams";
 
 export type ManagedServerStatus = "paid" | "expired" | "off";
@@ -28,14 +31,6 @@ export type ManagedServer = {
   graceExpiresAt: string;
   daysUntilExpire: number;
   daysUntilOff: number;
-};
-
-type ApprovedOrderRecord = {
-  guild_id: string;
-  paid_at: string | null;
-  created_at: string;
-  plan_code?: string | null;
-  plan_billing_cycle_days?: number | null;
 };
 
 function buildGuildIconUrl(guildId: string, icon: string | null) {
@@ -80,8 +75,6 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
     throw new Error("Token OAuth ausente na sessao.");
   }
 
-  const supabase = getSupabaseAdminClientOrThrow();
-
   try {
     await cleanupExpiredUnpaidServerSetups({
       userId: sessionData.authSession.user.id,
@@ -101,28 +94,18 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
     // melhor esforco; nao bloquear dashboard por reconciliacao oportunista
   }
 
-  const approvedOrdersResult = await supabase
-    .from("payment_orders")
-    .select("guild_id, paid_at, created_at, plan_code, plan_billing_cycle_days")
-    .eq("user_id", sessionData.authSession.user.id)
-    .eq("status", "approved")
-    .order("paid_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .returns<ApprovedOrderRecord[]>();
-
-  if (approvedOrdersResult.error) {
-    throw new Error(approvedOrdersResult.error.message);
-  }
-
-  const latestApprovedOrderByGuild = new Map<string, ApprovedOrderRecord[]>();
-  for (const order of approvedOrdersResult.data || []) {
-    const current = latestApprovedOrderByGuild.get(order.guild_id) || [];
-    current.push(order);
-    latestApprovedOrderByGuild.set(order.guild_id, current);
-  }
-
-  const latestOwnedCoverageByGuild =
-    resolveLatestLicenseCoverageMapForGuilds(latestApprovedOrderByGuild);
+  const [userPlanState, ownedPlanGuilds] = await Promise.all([
+    getUserPlanState(sessionData.authSession.user.id),
+    getPlanGuildsForUser(sessionData.authSession.user.id),
+  ]);
+  const ownedPlanGuildsByGuildId = new Map(
+    ownedPlanGuilds.map((record) => [record.guild_id, record]),
+  );
+  const ownedPlanGuildIds = new Set(ownedPlanGuilds.map((record) => record.guild_id));
+  const ownedPlanCoverage = resolveGuildLicenseFromUserPlanState({
+    userPlanState,
+    guildLicensed: ownedPlanGuildIds.size > 0,
+  });
 
   const accessibleGuilds = await getAccessibleGuildsForSession({
     authSession: sessionData.authSession,
@@ -143,7 +126,7 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
     new Set([
       ...accessibleGuilds.map((guild) => guild.id),
       ...acceptedTeamGuildIds,
-      ...latestOwnedCoverageByGuild.keys(),
+      ...ownedPlanGuildIds,
     ]),
   );
   const missingTeamGuildIds = Array.from(acceptedTeamGuildIds).filter(
@@ -193,7 +176,7 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
 
   const lockedGuildMap = await getLockedGuildLicenseMap(guildIdsForLookup);
 
-  if (!latestApprovedOrderByGuild.size && !lockedGuildMap.size) {
+  if (!ownedPlanGuildIds.size && !lockedGuildMap.size) {
     return Array.from(guildCatalog.values())
       .filter((guild) => acceptedTeamGuildIds.has(guild.id))
       .map((guild) => ({
@@ -215,12 +198,12 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
   return Array.from(guildCatalog.values())
     .filter(
       (guild) =>
-        latestOwnedCoverageByGuild.has(guild.id) ||
+        ownedPlanGuildIds.has(guild.id) ||
         lockedGuildMap.has(guild.id) ||
         acceptedTeamGuildIds.has(guild.id),
     )
     .map((guild) => {
-      const ownedCoverage = latestOwnedCoverageByGuild.get(guild.id) || null;
+      const ownedPlanGuild = ownedPlanGuildsByGuildId.get(guild.id) || null;
       const lockedRecord = lockedGuildMap.get(guild.id) || null;
       const currentLicenseBelongsToViewer = Boolean(
         lockedRecord && lockedRecord.userId !== sessionData.authSession.user.id,
@@ -229,19 +212,27 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
 
       const status: ManagedServerStatus = currentLicenseBelongsToViewer
         ? lockedRecord?.status || "off"
-        : ownedCoverage?.status || "off";
+        : ownedPlanGuild
+          ? ownedPlanCoverage.status === "paid" || ownedPlanCoverage.status === "expired"
+            ? ownedPlanCoverage.status
+            : "off"
+          : "off";
       const referencePaidAt = currentLicenseBelongsToViewer
         ? lockedRecord?.paidAt || null
-        : ownedCoverage?.paidAt || null;
+        : ownedPlanGuild?.activated_at || null;
       const referenceCreatedAt = currentLicenseBelongsToViewer
         ? lockedRecord?.createdAt || null
-        : ownedCoverage?.createdAt || null;
+        : ownedPlanGuild?.created_at || null;
       const licenseExpiresAt = currentLicenseBelongsToViewer
         ? lockedRecord?.licenseExpiresAt || null
-        : ownedCoverage?.licenseExpiresAt || null;
+        : ownedPlanGuild
+          ? ownedPlanCoverage.expiresAt || null
+          : null;
       const graceExpiresAt = currentLicenseBelongsToViewer
         ? lockedRecord?.graceExpiresAt || null
-        : ownedCoverage?.graceExpiresAt || null;
+        : ownedPlanGuild
+          ? ownedPlanCoverage.graceExpiresAt || null
+          : null;
       const licenseExpiresAtMs = licenseExpiresAt
         ? Date.parse(licenseExpiresAt)
         : Number.NaN;
@@ -255,7 +246,8 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
         iconUrl: buildGuildIconUrl(guild.id, guild.icon),
         status,
         accessMode,
-        canManage: acceptedTeamGuildIds.has(guild.id) || guild.owner,
+        canManage:
+          accessibleGuildLookup.has(guild.id) || acceptedTeamGuildIds.has(guild.id),
         licenseOwnerUserId:
           lockedRecord?.userId || sessionData.authSession.user.id,
         licensePaidAt:

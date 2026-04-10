@@ -22,6 +22,7 @@ import {
   resolveApprovedOrderLicenseExpiresAt,
   syncUserPlanStateFromOrder,
 } from "@/lib/plans/state";
+import { orderTransitionAllowsImmediateApproval } from "@/lib/plans/change";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
@@ -321,10 +322,21 @@ async function updateOrderFromProviderPayment(
       order.id,
     );
     const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
-    const renewalDecision = resolveRenewalPaymentDecision(
-      existingCoverage,
-      Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+    const canBypassRenewalWindow = orderTransitionAllowsImmediateApproval(
+      order.provider_payload,
     );
+    const renewalDecision = canBypassRenewalWindow
+      ? {
+          allowed: true as const,
+          reason: "immediate_upgrade" as const,
+          licenseStartsAtMs: Number.isFinite(paymentTimestampMs)
+            ? paymentTimestampMs
+            : Date.now(),
+        }
+      : resolveRenewalPaymentDecision(
+          existingCoverage,
+          Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+        );
     if (!renewalDecision.allowed) {
       await autoRefundProviderPayment({
         providerPaymentId,

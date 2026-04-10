@@ -10,7 +10,15 @@ import {
   type ConfigGuildItem,
 } from "@/components/config/ConfigServerSwitcher";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
-import type { PlanBillingPeriodCode, PlanCode } from "@/lib/plans/catalog";
+import {
+  normalizePlanBillingPeriodCodeFromSlug,
+  normalizePlanCodeFromSlug,
+  resolvePlanPricing,
+  type PlanBillingPeriodCode,
+  type PlanCode,
+} from "@/lib/plans/catalog";
+import { buildServersPlansPath } from "@/lib/plans/addServerFlow";
+import { shouldBlockConfigServerSelection } from "@/lib/plans/configServerSelection";
 import type {
   ConfigDraft,
   ConfigStep,
@@ -96,6 +104,31 @@ type PaymentStateApiResponse = {
   latestOrder?: PaymentStateOrder | null;
 };
 
+type PlanStateApiResponse = {
+  ok: boolean;
+  plan?: {
+    status?: string | null;
+    maxLicensedServers?: number | null;
+  } | null;
+  usage?: {
+    licensedServersCount?: number;
+    hasReachedLicensedServersLimit?: boolean;
+  } | null;
+};
+
+type ClaimServerApiResponse =
+  | {
+      ok: true;
+      guildId: string;
+      alreadyLicensed: boolean;
+      redirectPath: string;
+    }
+  | {
+      ok: false;
+      reason?: string;
+      message?: string;
+    };
+
 const STEP_ONE_HASH = "#/step/1";
 const STEP_TWO_HASH = "#/step/2";
 const STEP_THREE_HASH = "#/step/3";
@@ -157,6 +190,30 @@ function normalizeGuildIdFromQuery(value: string | null) {
   if (!value) return null;
   const guildId = value.trim();
   return /^\d{10,25}$/.test(guildId) ? guildId : null;
+}
+
+function resolveConfigPlanFromPathname(input: {
+  pathname: string;
+  fallbackPlanCode: PlanCode;
+  fallbackBillingPeriodCode: PlanBillingPeriodCode;
+}) {
+  const segments = input.pathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const configIndex = segments.findIndex(
+    (segment) => segment.toLowerCase() === "config",
+  );
+  const planSlug = configIndex >= 0 ? segments[configIndex + 1] || null : null;
+  const billingSlug = configIndex >= 0 ? segments[configIndex + 2] || null : null;
+
+  return resolvePlanPricing(
+    normalizePlanCodeFromSlug(planSlug, input.fallbackPlanCode),
+    normalizePlanBillingPeriodCodeFromSlug(
+      billingSlug,
+      input.fallbackBillingPeriodCode,
+    ),
+  );
 }
 
 function hasStepHash(hash: string) {
@@ -432,6 +489,8 @@ export function ConfigFlow({
     Record<string, ManagedServerStatus>
   >({});
   const [forceFreshCheckout, setForceFreshCheckout] = useState(false);
+  const [isStepOneAccessCheckLoading, setIsStepOneAccessCheckLoading] =
+    useState(false);
 
   const contextSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingContextPatchRef = useRef<ConfigContextPatch | null>(null);
@@ -822,6 +881,83 @@ export function ConfigFlow({
   }, [currentStep, isContextHydrated]);
 
   useEffect(() => {
+    if (!isContextHydrated || isConfigContextLoading || currentStep !== 1) {
+      setIsStepOneAccessCheckLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    const controller = new AbortController();
+    setIsStepOneAccessCheckLoading(true);
+
+    void (async () => {
+      try {
+        const targetPlan = resolveConfigPlanFromPathname({
+          pathname: window.location.pathname,
+          fallbackPlanCode: initialPlanCode,
+          fallbackBillingPeriodCode: initialBillingPeriodCode,
+        });
+        const response = await fetch("/api/auth/me/plan-state", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | PlanStateApiResponse
+          | null;
+
+        if (!isMounted) return;
+
+        const shouldBlockSelection =
+          response.ok &&
+          payload?.ok &&
+          shouldBlockConfigServerSelection({
+            userPlanState: payload.plan
+              ? {
+                  status: payload.plan.status || "inactive",
+                  max_licensed_servers:
+                    typeof payload.plan.maxLicensedServers === "number"
+                      ? payload.plan.maxLicensedServers
+                      : 0,
+                }
+              : null,
+            licensedServersCount:
+              typeof payload.usage?.licensedServersCount === "number"
+                ? payload.usage.licensedServersCount
+                : 0,
+            targetPlanMaxLicensedServers:
+              targetPlan.entitlements.maxLicensedServers,
+          });
+
+        if (shouldBlockSelection) {
+          window.location.replace(buildServersPlansPath());
+          return;
+        }
+      } catch (error) {
+        if (
+          error instanceof DOMException &&
+          error.name === "AbortError"
+        ) {
+          return;
+        }
+      } finally {
+        if (!isMounted) return;
+        setIsStepOneAccessCheckLoading(false);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [
+    currentStep,
+    initialBillingPeriodCode,
+    initialPlanCode,
+    isConfigContextLoading,
+    isContextHydrated,
+  ]);
+
+  useEffect(() => {
     return () => {
       if (contextSyncTimerRef.current) {
         clearTimeout(contextSyncTimerRef.current);
@@ -874,21 +1010,123 @@ export function ConfigFlow({
     [currentStep, setAndSyncContext],
   );
 
-  const handleProceedToPayment = useCallback(
-    (guildId: string) => {
-      updateCheckoutStatusQuery(null);
-      setAndSyncContext(
-        {
-          activeGuildId: guildId,
-          activeStep: 4,
-        },
-        true,
-      );
+  const handleProceedAfterValidation = useCallback(
+    async (guildId: string) => {
+      const continueToPayment = () => {
+        updateCheckoutStatusQuery(null);
+        setAndSyncContext(
+          {
+            activeGuildId: guildId,
+            activeStep: 4,
+          },
+          true,
+        );
 
-      setIsTransitioningStep(true);
-      setStepHash(4);
+        setIsTransitioningStep(true);
+        setStepHash(4);
+
+        return { ok: true as const, target: "payment" as const };
+      };
+
+      try {
+        return await (async () => {
+          const targetPlan = resolveConfigPlanFromPathname({
+            pathname: window.location.pathname,
+            fallbackPlanCode: initialPlanCode,
+            fallbackBillingPeriodCode: initialBillingPeriodCode,
+          });
+          const response = await fetch("/api/auth/me/plan-state", {
+            cache: "no-store",
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | PlanStateApiResponse
+            | null;
+
+          const shouldBlockSelection =
+            response.ok &&
+            payload?.ok &&
+            shouldBlockConfigServerSelection({
+              userPlanState: payload.plan
+                ? {
+                    status: payload.plan.status || "inactive",
+                    max_licensed_servers:
+                      typeof payload.plan.maxLicensedServers === "number"
+                        ? payload.plan.maxLicensedServers
+                        : 0,
+                  }
+                : null,
+              licensedServersCount:
+                typeof payload.usage?.licensedServersCount === "number"
+                  ? payload.usage.licensedServersCount
+                  : 0,
+              targetPlanMaxLicensedServers:
+                targetPlan.entitlements.maxLicensedServers,
+            });
+
+          if (shouldBlockSelection) {
+            window.location.replace(buildServersPlansPath());
+            return { ok: true as const, target: "payment" as const };
+          }
+
+          const hasCapacityInCurrentPlan =
+            response.ok &&
+            payload?.ok &&
+            (payload.plan?.status === "active" || payload.plan?.status === "trial") &&
+            !payload.usage?.hasReachedLicensedServersLimit;
+
+          if (hasCapacityInCurrentPlan) {
+            const claimResponse = await fetch("/api/auth/me/servers/claim", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ guildId }),
+            });
+            const claimPayload =
+              (await claimResponse.json().catch(() => null)) as ClaimServerApiResponse | null;
+
+            if (claimResponse.ok && claimPayload?.ok) {
+              updateCheckoutStatusQuery(null);
+              setAndSyncContext(
+                {
+                  activeGuildId: guildId,
+                  activeStep: 1,
+                },
+                true,
+              );
+              window.location.assign(claimPayload.redirectPath || `/servers/${guildId}/`);
+              return { ok: true as const, target: "servers" as const };
+            }
+
+            if (claimPayload && !claimPayload.ok) {
+              if (
+                claimPayload.reason === "payment_required" ||
+                claimPayload.reason === "limit_reached"
+              ) {
+                return continueToPayment();
+              }
+
+              return {
+                ok: false as const,
+                message:
+                  claimPayload.message ||
+                  "Nao foi possivel liberar este servidor com o plano atual.",
+              };
+            }
+
+            return {
+              ok: false as const,
+              message: "Nao foi possivel validar a liberacao deste servidor agora.",
+            };
+          }
+
+          return continueToPayment();
+        })();
+      } catch {
+        return continueToPayment();
+      }
     },
-    [setAndSyncContext],
+    [initialBillingPeriodCode, initialPlanCode, setAndSyncContext],
   );
 
   const handleProceedToStepThree = useCallback(() => {
@@ -1124,7 +1362,7 @@ export function ConfigFlow({
     });
   }, [availableGuilds, managedServerStatusByGuild, managedServers]);
   const stepContent = useMemo(() => {
-    if (isConfigContextLoading && currentStep !== 1) {
+    if ((isConfigContextLoading && currentStep !== 1) || isStepOneAccessCheckLoading) {
       return (
         <main className="flex min-h-screen items-center justify-center bg-black">
           <ButtonLoader size={36} />
@@ -1176,20 +1414,20 @@ export function ConfigFlow({
     }
 
     return (
-      <ConfigStepOne
-        displayName={displayName}
-        initialSelectedGuildId={selectedGuildId}
-        onSelectedGuildChange={handleGuildSelectionChange}
-        onProceedToPayment={handleProceedToPayment}
-      />
-    );
+        <ConfigStepOne
+          displayName={displayName}
+          initialSelectedGuildId={selectedGuildId}
+          onSelectedGuildChange={handleGuildSelectionChange}
+          onProceedAfterValidation={handleProceedAfterValidation}
+        />
+      );
   }, [
     currentStep,
     displayName,
     forceFreshCheckout,
     handleGoBackToStepOne,
     handleGuildSelectionChange,
-    handleProceedToPayment,
+    handleProceedAfterValidation,
     handleProceedToStepFour,
     handleProceedToStepThree,
     handleStepFourDraftChange,
@@ -1199,6 +1437,7 @@ export function ConfigFlow({
     initialBillingPeriodCode,
     initialPlanCode,
     isConfigContextLoading,
+    isStepOneAccessCheckLoading,
     selectedGuildId,
     selectedGuildLicenseStatus,
     stepFourDraft,

@@ -43,6 +43,13 @@ import {
   syncUserPlanStateFromOrder,
 } from "@/lib/plans/state";
 import {
+  applyFlowPointsToAmount,
+  buildPlanTransitionPayload,
+  orderTransitionAllowsImmediateApproval,
+  resolvePlanChangePreview,
+  type PlanChangePreview,
+} from "@/lib/plans/change";
+import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
 } from "@/lib/security/errors";
@@ -351,29 +358,44 @@ async function resolveCheckoutPlanForGuild(input: {
   requestedPlanCode?: unknown;
   requestedBillingPeriodCode?: unknown;
 }) {
-  const { plan, userPlanState } = await resolveEffectivePlanSelection({
+  const selection = await resolveEffectivePlanSelection({
     userId: input.userId,
     guildId: input.guildId,
     preferredPlanCode: input.requestedPlanCode,
     preferredBillingPeriodCode: input.requestedBillingPeriodCode,
   });
-  const currentPlanExpiresAtMs = userPlanState?.expires_at
-    ? Date.parse(userPlanState.expires_at)
-    : Number.NaN;
-  const hasActiveAccountPlan =
-    !!userPlanState &&
-    (userPlanState.status === "active" || userPlanState.status === "trial") &&
-    (!Number.isFinite(currentPlanExpiresAtMs) || Date.now() <= currentPlanExpiresAtMs);
-  const currentPlanRepurchaseBlocked =
-    hasActiveAccountPlan &&
-    userPlanState.plan_code === plan.code &&
-    userPlanState.billing_cycle_days === plan.billingCycleDays;
+  const planChange = resolvePlanChangePreview({
+    userPlanState: selection.userPlanState,
+    targetPlan: selection.plan,
+    flowPointsBalance: selection.flowPointsBalance,
+    scheduledChange: selection.scheduledChange,
+  });
 
   return {
-    plan,
-    amount: Math.max(0, Math.round(plan.totalAmount * 100) / 100),
-    currency: plan.currency || resolvePixCurrency(),
-    currentPlanRepurchaseBlocked,
+    plan: selection.plan,
+    amount: Math.max(0, Math.round(planChange.immediateSubtotalAmount * 100) / 100),
+    currency: selection.plan.currency || resolvePixCurrency(),
+    currentPlanRepurchaseBlocked: planChange.isCurrentSelectionBlocked,
+    userPlanState: selection.userPlanState,
+    flowPointsBalance: selection.flowPointsBalance,
+    scheduledChange: selection.scheduledChange,
+    planChange,
+  };
+}
+
+function buildCheckoutTransitionProviderPayload(input: {
+  planChange: PlanChangePreview;
+  flowPointsApplied: number;
+  flowPointsGranted?: number;
+  scheduledChangeId?: number | null;
+}) {
+  return {
+    transition: buildPlanTransitionPayload({
+      preview: input.planChange,
+      flowPointsApplied: input.flowPointsApplied,
+      flowPointsGranted: input.flowPointsGranted,
+      scheduledChangeId: input.scheduledChangeId,
+    }),
   };
 }
 
@@ -390,7 +412,7 @@ async function confirmImmediatePixProviderPayment(
 }
 
 function doesOrderMatchCheckoutPlan(
-  order: Pick<PaymentOrderRecord, "plan_code" | "amount" | "currency">,
+  order: Pick<PaymentOrderRecord, "plan_code" | "plan_billing_cycle_days" | "amount" | "currency">,
   checkoutPlan: {
     plan: PlanPricingDefinition;
     amount: number;
@@ -399,6 +421,7 @@ function doesOrderMatchCheckoutPlan(
 ) {
   return (
     order.plan_code === checkoutPlan.plan.code &&
+    order.plan_billing_cycle_days === checkoutPlan.plan.billingCycleDays &&
     amountsMatch(order.amount, checkoutPlan.amount) &&
     currenciesMatch(order.currency, checkoutPlan.currency)
   );
@@ -671,10 +694,21 @@ async function reconcilePixOrderFromProvider(
       order.id,
     );
     const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
-    const renewalDecision = resolveRenewalPaymentDecision(
-      existingCoverage,
-      Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+    const canBypassRenewalWindow = orderTransitionAllowsImmediateApproval(
+      order.provider_payload,
     );
+    const renewalDecision = canBypassRenewalWindow
+      ? {
+          allowed: true as const,
+          reason: "immediate_upgrade" as const,
+          licenseStartsAtMs: Number.isFinite(paymentTimestampMs)
+            ? paymentTimestampMs
+            : Date.now(),
+        }
+      : resolveRenewalPaymentDecision(
+          existingCoverage,
+          Number.isFinite(paymentTimestampMs) ? paymentTimestampMs : Date.now(),
+        );
 
     if (!renewalDecision.allowed) {
       await refundMercadoPagoPixPayment(providerPaymentId);
@@ -790,6 +824,7 @@ async function createDraftOrderForCheckout(input: {
   amount: number;
   currency: string;
   plan: PlanPricingDefinition;
+  providerPayload?: Record<string, unknown>;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -823,6 +858,7 @@ async function createDraftOrderForCheckout(input: {
             ...input.plan.entitlements,
           },
         },
+        ...(input.providerPayload || {}),
       },
     })
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -847,6 +883,7 @@ async function reuseDraftOrderForCheckout(input: {
   amount: number;
   currency: string;
   plan: PlanPricingDefinition;
+  providerPayload?: Record<string, unknown>;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -882,6 +919,7 @@ async function reuseDraftOrderForCheckout(input: {
             ...input.plan.entitlements,
           },
         },
+        ...(input.providerPayload || {}),
       },
       expires_at: resolveUnpaidSetupExpiresAt(input.order.created_at),
     })
@@ -904,6 +942,79 @@ async function reuseDraftOrderForCheckout(input: {
   });
 
   return updatedOrderResult.data;
+}
+
+async function finalizeCreditCoveredCheckoutOrder(input: {
+  order: PaymentOrderRecord;
+  pricing: Awaited<ReturnType<typeof resolveDiscountPricing>>;
+  flowPointsApplied: number;
+  flowPointsGranted: number;
+  planChange: PlanChangePreview;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const paidAt = new Date().toISOString();
+  const expiresAt = await resolveApprovedOrderExpiresAt(input.order, paidAt);
+  const updatedOrderResult = await supabase
+    .from("payment_orders")
+    .update({
+      status: "approved",
+      amount: 0,
+      provider_status: "approved",
+      provider_status_detail: "covered_by_internal_credits",
+      provider_payload: {
+        source: "flowdesk_checkout",
+        step: 4,
+        coveredByCredits: true,
+        pricing: {
+          ...input.pricing,
+          flowPoints: {
+            appliedAmount: input.flowPointsApplied,
+          },
+          totalAmount: 0,
+        },
+        transition: buildPlanTransitionPayload({
+          preview: input.planChange,
+          flowPointsApplied: input.flowPointsApplied,
+          flowPointsGranted: input.flowPointsGranted,
+        }),
+        plan: {
+          code: input.order.plan_code,
+          name: input.order.plan_name,
+          billingCycleDays: input.order.plan_billing_cycle_days,
+        },
+      },
+      paid_at: paidAt,
+      expires_at: expiresAt,
+    })
+    .eq("id", input.order.id)
+    .select(PAYMENT_ORDER_SELECT_COLUMNS)
+    .single<PaymentOrderRecord>();
+
+  if (updatedOrderResult.error || !updatedOrderResult.data) {
+    throw new Error(
+      updatedOrderResult.error?.message ||
+        "Falha ao concluir a troca coberta por creditos internos.",
+    );
+  }
+
+  await createPaymentOrderEventSafe(
+    updatedOrderResult.data.id,
+    "provider_payment_created",
+    {
+      providerStatus: "approved",
+      providerStatusDetail: "covered_by_internal_credits",
+      flowPointsApplied: input.flowPointsApplied,
+      flowPointsGranted: input.flowPointsGranted,
+    },
+  );
+
+  await syncUserPlanStateFromOrder(updatedOrderResult.data);
+
+  return ensureCheckoutAccessTokenForOrder({
+    order: updatedOrderResult.data,
+    forceRotate: true,
+    invalidateOtherOrders: true,
+  });
 }
 
 export async function GET(request: Request) {
@@ -1023,6 +1134,16 @@ export async function GET(request: Request) {
       );
     }
 
+    if (checkoutPlan.planChange.execution === "schedule_for_renewal") {
+      return NextResponse.json({
+        ok: true,
+        order: null,
+        requiresScheduledChange: true,
+        message:
+          "Esse downgrade sera aplicado apenas no proximo vencimento. Agende a troca na tela do checkout.",
+      });
+    }
+
     if (checkoutPlan.plan.isTrial) {
       return NextResponse.json(
         {
@@ -1032,6 +1153,16 @@ export async function GET(request: Request) {
         },
         { status: 409 },
       );
+    }
+
+    if (checkoutPlan.amount <= 0) {
+      return NextResponse.json({
+        ok: true,
+        order: null,
+        coveredByCreditsPreview: true,
+        message:
+          "O saldo restante do plano atual e os creditos internos ja cobrem essa troca.",
+      });
     }
 
     if (
@@ -1068,6 +1199,10 @@ export async function GET(request: Request) {
         amount: checkoutPlan.amount,
         currency: checkoutPlan.currency,
         plan: checkoutPlan.plan,
+        providerPayload: buildCheckoutTransitionProviderPayload({
+          planChange: checkoutPlan.planChange,
+          flowPointsApplied: 0,
+        }),
       });
     } else if (
       latestPendingPixOrder &&
@@ -1082,12 +1217,20 @@ export async function GET(request: Request) {
             amount: checkoutPlan.amount,
             currency: checkoutPlan.currency,
             plan: checkoutPlan.plan,
+            providerPayload: buildCheckoutTransitionProviderPayload({
+              planChange: checkoutPlan.planChange,
+              flowPointsApplied: 0,
+            }),
           })
         : await reuseDraftOrderForCheckout({
             order: latestPendingPixOrder,
             amount: checkoutPlan.amount,
             currency: checkoutPlan.currency,
             plan: checkoutPlan.plan,
+            providerPayload: buildCheckoutTransitionProviderPayload({
+              planChange: checkoutPlan.planChange,
+              flowPointsApplied: 0,
+            }),
           });
     } else if (
       latestPendingPixOrder &&
@@ -1102,6 +1245,10 @@ export async function GET(request: Request) {
         amount: checkoutPlan.amount,
         currency: checkoutPlan.currency,
         plan: checkoutPlan.plan,
+        providerPayload: buildCheckoutTransitionProviderPayload({
+          planChange: checkoutPlan.planChange,
+          flowPointsApplied: 0,
+        }),
       });
     } else if (!order) {
       order = await createDraftOrderForCheckout({
@@ -1110,6 +1257,10 @@ export async function GET(request: Request) {
         amount: checkoutPlan.amount,
         currency: checkoutPlan.currency,
         plan: checkoutPlan.plan,
+        providerPayload: buildCheckoutTransitionProviderPayload({
+          planChange: checkoutPlan.planChange,
+          flowPointsApplied: 0,
+        }),
       });
     }
 
@@ -1221,8 +1372,34 @@ export async function POST(request: Request) {
       source: "payment_pix_post",
     });
 
+    const checkoutPlan = await resolveCheckoutPlanForGuild({
+      userId: user.id,
+      guildId,
+      requestedPlanCode: body.planCode,
+      requestedBillingPeriodCode: body.billingPeriodCode,
+    });
+
+    if (checkoutPlan.planChange.execution === "schedule_for_renewal") {
+      return respond(
+        {
+          ok: false,
+          requiresScheduledChange: true,
+          message:
+            "Esse downgrade deve ser agendado para o proximo vencimento. Use a acao de agendar troca na tela de pagamento.",
+        },
+        { status: 409 },
+      );
+    }
+
     const latestCoverage = await getLatestApprovedLicenseCoverageForGuild(guildId);
-    const renewalDecision = resolveRenewalPaymentDecision(latestCoverage);
+    const renewalDecision =
+      checkoutPlan.planChange.kind === "upgrade"
+        ? {
+            allowed: true as const,
+            reason: "immediate_upgrade" as const,
+            licenseStartsAtMs: Date.now(),
+          }
+        : resolveRenewalPaymentDecision(latestCoverage);
     if (latestCoverage && !renewalDecision.allowed) {
       return respond({
         ok: false,
@@ -1251,32 +1428,6 @@ export async function POST(request: Request) {
         });
       }
     }
-
-    const payerName =
-      requestedPayerName || normalizePayerName(latestOrder?.payer_name);
-    const payerDocument =
-      requestedPayerDocument || normalizePayerDocument(latestOrder?.payer_document);
-
-    if (!payerName) {
-      return respond(
-        { ok: false, message: "Nome completo invalido para pagamento." },
-        { status: 400 },
-      );
-    }
-
-    if (!payerDocument) {
-      return respond(
-        { ok: false, message: "CPF/CNPJ invalido para pagamento." },
-        { status: 400 },
-      );
-    }
-
-    const checkoutPlan = await resolveCheckoutPlanForGuild({
-      userId: user.id,
-      guildId,
-      requestedPlanCode: body.planCode,
-      requestedBillingPeriodCode: body.billingPeriodCode,
-    });
 
     if (checkoutPlan.currentPlanRepurchaseBlocked) {
       return respond(
@@ -1309,6 +1460,45 @@ export async function POST(request: Request) {
       planCode: checkoutPlan.plan.code,
       billingPeriodCode: checkoutPlan.plan.billingPeriodCode,
     });
+    const flowPointsPreview = applyFlowPointsToAmount({
+      amount: pricing.totalAmount,
+      flowPointsBalance: checkoutPlan.flowPointsBalance,
+    });
+    const pricingWithFlowPoints = {
+      ...pricing,
+      totalAmount: flowPointsPreview.remainingAmount,
+      flowPoints: {
+        appliedAmount: flowPointsPreview.appliedAmount,
+        balanceBefore: checkoutPlan.flowPointsBalance,
+        balanceAfter: flowPointsPreview.nextBalanceAmount,
+      },
+    };
+    const payerName =
+      requestedPayerName || normalizePayerName(latestOrder?.payer_name);
+    const payerDocument =
+      requestedPayerDocument || normalizePayerDocument(latestOrder?.payer_document);
+    const amount = pricingWithFlowPoints.totalAmount;
+    const currency = pricingWithFlowPoints.currency;
+    const transitionProviderPayload = buildCheckoutTransitionProviderPayload({
+      planChange: checkoutPlan.planChange,
+      flowPointsApplied: flowPointsPreview.appliedAmount,
+      flowPointsGranted: checkoutPlan.planChange.flowPointsGrantPreview,
+      scheduledChangeId: checkoutPlan.scheduledChange?.id || null,
+    });
+
+    if (amount > 0 && !payerName) {
+      return respond(
+        { ok: false, message: "Nome completo invalido para pagamento." },
+        { status: 400 },
+      );
+    }
+
+    if (amount > 0 && !payerDocument) {
+      return respond(
+        { ok: false, message: "CPF/CNPJ invalido para pagamento." },
+        { status: 400 },
+      );
+    }
 
     if (
       forceNew &&
@@ -1342,10 +1532,11 @@ export async function POST(request: Request) {
       !forceNew &&
       latestOrder &&
       latestOrder.plan_code === checkoutPlan.plan.code &&
+      latestOrder.plan_billing_cycle_days === checkoutPlan.plan.billingCycleDays &&
       canReuseExistingPixCheckoutOrder(
         latestOrder,
-        pricing.totalAmount,
-        pricing.currency,
+        amount,
+        currency,
       )
     ) {
       const securedOrder = await ensureCheckoutAccessTokenForOrder({
@@ -1362,9 +1553,6 @@ export async function POST(request: Request) {
         ),
       });
     }
-
-    const amount = pricing.totalAmount;
-    const currency = pricing.currency;
 
     let createdOrder: PaymentOrderRecord;
     const draftOrderToReuse =
@@ -1387,15 +1575,16 @@ export async function POST(request: Request) {
           plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
           plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
           plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
-          payer_name: payerName,
-          payer_document: payerDocument.normalized,
-          payer_document_type: payerDocument.type,
+          payer_name: payerName || null,
+          payer_document: payerDocument?.normalized || null,
+          payer_document_type: payerDocument?.type || null,
           provider_status: null,
           provider_status_detail: null,
           provider_payload: {
             source: "flowdesk_checkout",
             step: 4,
-            pricing,
+            pricing: pricingWithFlowPoints,
+            ...transitionProviderPayload,
             plan: {
               code: checkoutPlan.plan.code,
               name: checkoutPlan.plan.name,
@@ -1444,13 +1633,14 @@ export async function POST(request: Request) {
           plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
           plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
           plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
-          payer_name: payerName,
-          payer_document: payerDocument.normalized,
-          payer_document_type: payerDocument.type,
+          payer_name: payerName || null,
+          payer_document: payerDocument?.normalized || null,
+          payer_document_type: payerDocument?.type || null,
           provider_payload: {
             source: "flowdesk_checkout",
             step: 4,
-            pricing,
+            pricing: pricingWithFlowPoints,
+            ...transitionProviderPayload,
             plan: {
               code: checkoutPlan.plan.code,
               name: checkoutPlan.plan.name,
@@ -1472,7 +1662,38 @@ export async function POST(request: Request) {
       createdOrder = preparedOrderResult.data;
     }
 
+    if (amount <= 0) {
+      const securedOrder = await finalizeCreditCoveredCheckoutOrder({
+        order: createdOrder,
+        pricing,
+        flowPointsApplied: flowPointsPreview.appliedAmount,
+        flowPointsGranted: checkoutPlan.planChange.flowPointsGrantPreview,
+        planChange: checkoutPlan.planChange,
+      });
+
+      await logSecurityAuditEventSafe(auditContext, {
+        action: "payment_pix_post",
+        outcome: "succeeded",
+        metadata: {
+          orderNumber: securedOrder.order.order_number,
+          status: securedOrder.order.status,
+          coveredByCredits: true,
+        },
+      });
+
+      return respond({
+        ok: true,
+        reused: false,
+        order: toApiOrder(
+          securedOrder.order,
+          securedOrder.checkoutAccessToken,
+        ),
+      });
+    }
+
     const externalReference = `flowdesk-order-${createdOrder.order_number}`;
+    const resolvedPayerName = payerName as string;
+    const resolvedPayerDocument = payerDocument as NonNullable<typeof payerDocument>;
 
     let createdProviderPayment: MercadoPagoPaymentResponse | null = null;
     try {
@@ -1483,11 +1704,11 @@ export async function POST(request: Request) {
       const mercadoPagoPayment = await createMercadoPagoPixPayment({
         amount,
         description: `Flowdesk pagamento #${createdOrder.order_number}`,
-        payerName,
+        payerName: resolvedPayerName,
         payerEmail,
         payerIdentification: {
-          type: payerDocument.type,
-          number: payerDocument.normalized,
+          type: resolvedPayerDocument.type,
+          number: resolvedPayerDocument.normalized,
         },
         externalReference,
         metadata: {
@@ -1497,7 +1718,7 @@ export async function POST(request: Request) {
           flowdesk_guild_id: guildId,
           flowdesk_plan_code: checkoutPlan.plan.code,
           flowdesk_plan_name: checkoutPlan.plan.name,
-          flowdesk_pricing_total: String(pricing.totalAmount),
+          flowdesk_pricing_total: String(amount),
           ...(pricing.coupon?.code
             ? {
                 flowdesk_coupon_code: pricing.coupon.code,
@@ -1506,6 +1727,11 @@ export async function POST(request: Request) {
           ...(pricing.giftCard?.code
             ? {
                 flowdesk_gift_card_code: pricing.giftCard.code,
+              }
+            : {}),
+          ...(flowPointsPreview.appliedAmount > 0
+            ? {
+                flowdesk_flow_points_applied: String(flowPointsPreview.appliedAmount),
               }
             : {}),
         },
@@ -1554,7 +1780,8 @@ export async function POST(request: Request) {
             source: "flowdesk_checkout",
             step: 4,
             mercado_pago: confirmedMercadoPagoPayment,
-            pricing,
+            pricing: pricingWithFlowPoints,
+            ...transitionProviderPayload,
             plan: {
               code: checkoutPlan.plan.code,
               name: checkoutPlan.plan.name,
@@ -1657,7 +1884,8 @@ export async function POST(request: Request) {
                 step: 4,
                 recovery_after_error: true,
                 mercado_pago: createdProviderPayment,
-                pricing,
+                pricing: pricingWithFlowPoints,
+                ...transitionProviderPayload,
               },
               paid_at: paidAt,
               expires_at: expiresAt,

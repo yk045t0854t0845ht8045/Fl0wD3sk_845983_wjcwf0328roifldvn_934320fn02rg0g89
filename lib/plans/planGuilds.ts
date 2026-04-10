@@ -297,7 +297,7 @@ export async function licenseGuildForUser(input: {
   };
 }
 
-export async function resolveGuildLicenseFromUserPlanState(input: {
+export function resolveGuildLicenseFromUserPlanState(input: {
   userPlanState: UserPlanStateRecord | null;
   guildLicensed: boolean;
 }) {

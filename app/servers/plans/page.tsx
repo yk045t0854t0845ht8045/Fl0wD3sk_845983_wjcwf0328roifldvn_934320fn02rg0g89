@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { ServersPlansUpgradePage } from "@/components/servers/ServersPlansUpgradePage";
 import { buildLoginHref } from "@/lib/auth/paths";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
+import { getPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { getBasicPlanAvailability, getUserPlanState } from "@/lib/plans/state";
 
 type ServersPlansPageProps = {
@@ -26,10 +27,27 @@ export default async function ServersPlansPage({
   const shouldShowServerLimitBanner =
     takeFirstQueryValue(query.reason) === "server-limit";
   const user = session.user;
-  const [userPlanState, basicPlanAvailability] = await Promise.all([
+  const [userPlanState, basicPlanAvailability, licensedPlanGuilds] = await Promise.all([
     getUserPlanState(user.id),
     getBasicPlanAvailability(user.id),
+    getPlanGuildsForUser(user.id),
   ]);
+  const licensedGuildIdSet = new Set(
+    licensedPlanGuilds.map((guild) => guild.guild_id),
+  );
+  const preferredGuildId = (() => {
+    const activeGuildId = session.activeGuildId || null;
+    if (activeGuildId && licensedGuildIdSet.has(activeGuildId)) {
+      return activeGuildId;
+    }
+
+    const lastPaymentGuildId = userPlanState?.last_payment_guild_id?.trim() || null;
+    if (lastPaymentGuildId && licensedGuildIdSet.has(lastPaymentGuildId)) {
+      return lastPaymentGuildId;
+    }
+
+    return licensedPlanGuilds[0]?.guild_id || activeGuildId || null;
+  })();
 
   return (
     <ServersPlansUpgradePage
@@ -41,7 +59,7 @@ export default async function ServersPlansPage({
             }
           : null
       }
-      preferredGuildId={session.activeGuildId || null}
+      preferredGuildId={preferredGuildId}
       showServerLimitBanner={shouldShowServerLimitBanner}
       basicPlanAvailable={basicPlanAvailability.isAvailable}
     />

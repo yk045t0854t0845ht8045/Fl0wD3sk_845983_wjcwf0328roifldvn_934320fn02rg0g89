@@ -95,6 +95,8 @@ type PixPaymentApiResponse = {
   message?: string;
   reused?: boolean;
   alreadyProcessing?: boolean;
+  requiresScheduledChange?: boolean;
+  coveredByCreditsPreview?: boolean;
   retryAfterSeconds?: number;
   blockedByActiveLicense?: boolean;
   licenseActive?: boolean;
@@ -249,6 +251,11 @@ type DiscountPreviewApiResponse = {
     } | null;
     subtotalAmount: number;
     totalAmount: number;
+    flowPoints?: {
+      appliedAmount: number;
+      balanceBefore: number;
+      balanceAfter: number;
+    } | null;
   };
 };
 
@@ -257,6 +264,34 @@ type PlanSummary = PlanPricingDefinition & {
   unavailableReason?: string | null;
 };
 type BillingPeriodOption = PlanBillingPeriodDefinition;
+
+type PlanChangeSummary = {
+  kind: "new" | "current" | "upgrade" | "downgrade";
+  execution: "pay_now" | "schedule_for_renewal" | "already_active" | "trial_activation";
+  currentPlanCode: PlanCode | null;
+  currentBillingCycleDays: number | null;
+  currentExpiresAt: string | null;
+  currentStatus: string | null;
+  currentCreditAmount: number;
+  remainingDaysExact: number;
+  immediateSubtotalAmount: number;
+  flowPointsBalance: number;
+  flowPointsGrantPreview: number;
+  effectiveAt: string | null;
+  scheduledChangeMatchesTarget: boolean;
+};
+
+type ScheduledPlanChangeSummary = {
+  id: number;
+  guildId: string | null;
+  currentPlanCode: PlanCode;
+  currentBillingCycleDays: number;
+  targetPlanCode: PlanCode;
+  targetBillingPeriodCode: PlanBillingPeriodCode;
+  targetBillingCycleDays: number;
+  status: "scheduled" | "applied" | "cancelled";
+  effectiveAt: string;
+};
 
 type PlanApiResponse = {
   ok: boolean;
@@ -272,6 +307,11 @@ type PlanApiResponse = {
     baseTotalAmount: number;
     totalAmount: number;
     compareTotalAmount: number;
+    checkoutAmount: number;
+    checkoutMode: PlanChangeSummary["kind"];
+    checkoutExecution: PlanChangeSummary["execution"];
+    planChange: PlanChangeSummary;
+    scheduledChange: ScheduledPlanChangeSummary | null;
     currency: string;
     billingCycleDays: number;
     billingLabel: string;
@@ -308,6 +348,10 @@ type PlanApiResponse = {
   };
 };
 
+type AccountPlanSnapshot = NonNullable<
+  NonNullable<PlanApiResponse["plan"]>["accountPlan"]
+>;
+
 function resolvePlanSummary(
   planCode: PlanCode,
   billingPeriodCode: PlanBillingPeriodCode,
@@ -331,6 +375,24 @@ function decoratePlanSummaries(plans: PlanPricingDefinition[]): PlanSummary[] {
     isAvailable: true,
     unavailableReason: null,
   }));
+}
+
+function buildFallbackPlanChangeSummary(plan: PlanSummary): PlanChangeSummary {
+  return {
+    kind: "new",
+    execution: plan.isTrial ? "trial_activation" : "pay_now",
+    currentPlanCode: null,
+    currentBillingCycleDays: null,
+    currentExpiresAt: null,
+    currentStatus: null,
+    currentCreditAmount: 0,
+    remainingDaysExact: 0,
+    immediateSubtotalAmount: plan.totalAmount,
+    flowPointsBalance: 0,
+    flowPointsGrantPreview: 0,
+    effectiveAt: null,
+    scheduledChangeMatchesTarget: false,
+  };
 }
 
 function toPlanSummaryFromApi(
@@ -916,6 +978,7 @@ function buildFallbackDiscountPreview(input: {
     giftCard: null,
     subtotalAmount: input.baseAmount,
     totalAmount: input.baseAmount,
+    flowPoints: null,
   };
 }
 
@@ -2903,9 +2966,15 @@ export function ConfigStepFour({
   const [selectedBillingPeriodCode, setSelectedBillingPeriodCode] =
     useState<PlanBillingPeriodCode>(initialResolvedPlan.billingPeriodCode);
   const [availablePlans, setAvailablePlans] = useState<PlanSummary[]>([]);
+  const [accountPlan, setAccountPlan] = useState<AccountPlanSnapshot | null>(null);
   const [resolvedPlan, setResolvedPlan] = useState<PlanSummary>(
     initialResolvedPlan,
   );
+  const [selectedPlanChange, setSelectedPlanChange] = useState<PlanChangeSummary>(
+    () => buildFallbackPlanChangeSummary(initialResolvedPlan),
+  );
+  const [scheduledPlanChange, setScheduledPlanChange] =
+    useState<ScheduledPlanChangeSummary | null>(null);
   const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
   const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
@@ -3004,14 +3073,33 @@ export function ConfigStepFour({
   const pendingPixOrderId = pixOrder?.status === "pending" ? pixOrder.id : null;
   const pendingPixOrderNumber =
     pixOrder?.status === "pending" ? pixOrder.orderNumber : null;
+  const fallbackPlanOptions = useMemo(
+    () => decoratePlanSummaries(getAllPlanPricingDefinitions(selectedBillingPeriodCode)),
+    [selectedBillingPeriodCode],
+  );
   const availablePlanOptions = useMemo(
     () =>
-      (
-        availablePlans.length
-          ? availablePlans
-          : decoratePlanSummaries(getAllPlanPricingDefinitions(selectedBillingPeriodCode))
-      ).filter((plan) => plan.isAvailable),
-    [availablePlans, selectedBillingPeriodCode],
+      (availablePlans.length ? availablePlans : fallbackPlanOptions)
+        .map((plan) => {
+          const isCurrentFallbackSelectionBlocked =
+            !availablePlans.length &&
+            !!accountPlan &&
+            (accountPlan.status === "active" || accountPlan.status === "trial") &&
+            accountPlan.planCode === plan.code &&
+            accountPlan.billingCycleDays === plan.billingCycleDays &&
+            !plan.isTrial;
+
+          return isCurrentFallbackSelectionBlocked
+            ? {
+                ...plan,
+                isAvailable: false,
+                unavailableReason:
+                  "Seu plano atual ja esta ativo nesta conta. Escolha outro plano para mudar agora.",
+              }
+            : plan;
+        })
+        .filter((plan) => plan.isAvailable),
+    [accountPlan, availablePlans, fallbackPlanOptions],
   );
   const availableBillingPeriodOptions = useMemo(
     () => getAvailableBillingPeriodsForPlan(selectedPlanCode),
@@ -3036,8 +3124,12 @@ export function ConfigStepFour({
     () =>
       doesActiveOrderMatchSelectedPlan && typeof pixOrder?.amount === "number"
         ? pixOrder.amount
-        : resolvedPlan.totalAmount,
-    [doesActiveOrderMatchSelectedPlan, pixOrder?.amount, resolvedPlan.totalAmount],
+        : selectedPlanChange.immediateSubtotalAmount,
+    [
+      doesActiveOrderMatchSelectedPlan,
+      pixOrder?.amount,
+      selectedPlanChange.immediateSubtotalAmount,
+    ],
   );
   const checkoutCurrency = useMemo(
     () =>
@@ -3046,6 +3138,12 @@ export function ConfigStepFour({
         : resolvedPlan.currency || "BRL",
     [doesActiveOrderMatchSelectedPlan, pixOrder?.currency, resolvedPlan.currency],
   );
+  const activeDiscountPreview =
+    discountPreview ||
+    buildFallbackDiscountPreview({
+      baseAmount: baseCheckoutAmount,
+      currency: checkoutCurrency,
+    });
   const promoTargetTimestamp = useMemo(
     () => Date.now() + 3 * 24 * 60 * 60 * 1000,
     [],
@@ -3075,9 +3173,16 @@ export function ConfigStepFour({
   useEffect(() => {
     if (!guildId) {
       setAvailablePlans([]);
+      setAccountPlan(null);
       setResolvedPlan(
         resolvePlanSummary(selectedPlanCode, selectedBillingPeriodCode, []),
       );
+      setSelectedPlanChange(
+        buildFallbackPlanChangeSummary(
+          resolvePlanSummary(selectedPlanCode, selectedBillingPeriodCode, []),
+        ),
+      );
+      setScheduledPlanChange(null);
       setIsPlanLoading(false);
       return;
     }
@@ -3120,9 +3225,12 @@ export function ConfigStepFour({
           recurringMethodId: payload.plan.recurringMethodId,
         };
         setAvailablePlans(nextAvailablePlans);
+        setAccountPlan(payload.plan.accountPlan || null);
         setSelectedPlanCode(nextPlanCode);
         setSelectedBillingPeriodCode(nextBillingPeriodCode);
         setResolvedPlan(nextResolvedPlan);
+        setSelectedPlanChange(payload.plan.planChange);
+        setScheduledPlanChange(payload.plan.scheduledChange);
         if (requestedBasicBecameUnavailable) {
           setMethodMessage(null);
         }
@@ -3130,9 +3238,15 @@ export function ConfigStepFour({
         if (!isMounted) return;
         if (isAbortLikeError(error)) return;
         setAvailablePlans([]);
-        setResolvedPlan(
-          resolvePlanSummary(selectedPlanCode, selectedBillingPeriodCode, []),
+        setAccountPlan(null);
+        const fallbackPlan = resolvePlanSummary(
+          selectedPlanCode,
+          selectedBillingPeriodCode,
+          [],
         );
+        setResolvedPlan(fallbackPlan);
+        setSelectedPlanChange(buildFallbackPlanChangeSummary(fallbackPlan));
+        setScheduledPlanChange(null);
         setMethodMessage(
           error instanceof Error
             ? error.message
@@ -3252,6 +3366,8 @@ export function ConfigStepFour({
     couponCode,
     giftCardCode,
     guildId,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
   ]);
 
   useEffect(() => {
@@ -3461,6 +3577,33 @@ export function ConfigStepFour({
         setLastKnownOrderNumber(null);
         setView("methods");
         setMethodMessage(null);
+        setIsLoadingOrder(false);
+        return;
+      }
+
+      if (
+        selectedPlanChange.execution === "schedule_for_renewal" &&
+        !shouldLoadOrderByCode
+      ) {
+        setPhase("cart");
+        setSelectedRail(null);
+        setPixOrder(null);
+        setLastKnownOrderNumber(null);
+        setView("methods");
+        setIsLoadingOrder(false);
+        return;
+      }
+
+      if (
+        selectedPlanChange.execution === "pay_now" &&
+        selectedPlanChange.immediateSubtotalAmount <= 0 &&
+        !shouldLoadOrderByCode
+      ) {
+        setPhase("cart");
+        setSelectedRail(null);
+        setPixOrder(null);
+        setLastKnownOrderNumber(null);
+        setView("methods");
         setIsLoadingOrder(false);
         return;
       }
@@ -3741,6 +3884,8 @@ export function ConfigStepFour({
     initialPlanCode,
     isPlanLoading,
     lastKnownOrderNumber,
+    selectedPlanChange.execution,
+    selectedPlanChange.immediateSubtotalAmount,
     selectedBillingPeriodCode,
     selectedPlanCode,
   ]);
@@ -3810,6 +3955,13 @@ export function ConfigStepFour({
     if (isLoadingOrder || isPreparingBaseOrder || isPlanLoading) return;
     if (resolvedPlan.isTrial) return;
     if (!resolvedPlan.isAvailable) return;
+    if (selectedPlanChange.execution === "schedule_for_renewal") return;
+    if (
+      selectedPlanChange.execution === "pay_now" &&
+      activeDiscountPreview.totalAmount <= 0
+    ) {
+      return;
+    }
     if (pixOrder?.orderNumber || lastKnownOrderNumber) return;
     if (pixOrder) return;
     if (view !== "methods" && view !== "pix_form") return;
@@ -3900,6 +4052,8 @@ export function ConfigStepFour({
     pixOrder?.orderNumber,
     resolvedPlan.isAvailable,
     resolvedPlan.isTrial,
+    activeDiscountPreview.totalAmount,
+    selectedPlanChange.execution,
     selectedBillingPeriodCode,
     selectedPlanCode,
     view,
@@ -4469,6 +4623,8 @@ export function ConfigStepFour({
       setSelectedPlanCode(nextPlanCode);
       setSelectedBillingPeriodCode(nextBillingPeriodCode);
       setResolvedPlan(nextPlan);
+      setSelectedPlanChange(buildFallbackPlanChangeSummary(nextPlan));
+      setScheduledPlanChange(null);
       setPhase("cart");
       setView("methods");
       setSelectedRail(null);
@@ -4535,6 +4691,8 @@ export function ConfigStepFour({
 
       setSelectedBillingPeriodCode(nextBillingPeriodCode);
       setResolvedPlan(nextPlan);
+      setSelectedPlanChange(buildFallbackPlanChangeSummary(nextPlan));
+      setScheduledPlanChange(null);
       setPhase("cart");
       setView("methods");
       setSelectedRail(null);
@@ -5003,6 +5161,151 @@ export function ConfigStepFour({
     selectedPlanCode,
   ]);
 
+  const handleSchedulePlanChange = useCallback(async () => {
+    if (
+      !guildId ||
+      isPlanLoading ||
+      isLoadingOrder ||
+      selectedPlanChange.execution !== "schedule_for_renewal"
+    ) {
+      return;
+    }
+
+    if (selectedPlanChange.scheduledChangeMatchesTarget && scheduledPlanChange) {
+      setMethodMessage("Essa troca ja esta agendada para o proximo vencimento.");
+      return;
+    }
+
+    setIsSubmittingTrial(true);
+    setMethodMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/me/payments/plan-change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          planCode: selectedPlanCode,
+          billingPeriodCode: selectedBillingPeriodCode,
+        }),
+      });
+      const requestId = resolveResponseRequestId(response);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        message?: string;
+        scheduledChange?: ScheduledPlanChangeSummary | null;
+      };
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Nao foi possivel agendar a troca de plano.",
+            requestId,
+          ),
+        );
+      }
+
+      setScheduledPlanChange(payload.scheduledChange || null);
+      setSelectedPlanChange((current) => ({
+        ...current,
+        scheduledChangeMatchesTarget: true,
+        effectiveAt:
+          payload.scheduledChange?.effectiveAt || current.effectiveAt || null,
+      }));
+      setPhase("cart");
+      setView("methods");
+      setMethodMessage(
+        payload.message ||
+          "Troca agendada com sucesso. O plano atual continua ativo ate o fim do ciclo.",
+      );
+    } catch (error) {
+      setMethodMessage(
+        parseUnknownErrorMessage(error) ||
+          "Nao foi possivel agendar a troca de plano.",
+      );
+    } finally {
+      setIsSubmittingTrial(false);
+    }
+  }, [
+    guildId,
+    isLoadingOrder,
+    isPlanLoading,
+    scheduledPlanChange,
+    selectedBillingPeriodCode,
+    selectedPlanChange.execution,
+    selectedPlanChange.scheduledChangeMatchesTarget,
+    selectedPlanCode,
+  ]);
+
+  const handleApplyCoveredPlanChange = useCallback(async () => {
+    if (
+      !guildId ||
+      isPlanLoading ||
+      isLoadingOrder ||
+      activeDiscountPreview.totalAmount > 0
+    ) {
+      return;
+    }
+
+    setIsSubmittingTrial(true);
+    setMethodMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/me/payments/pix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          planCode: selectedPlanCode,
+          billingPeriodCode: selectedBillingPeriodCode,
+          couponCode,
+          giftCardCode,
+          forceNew: forceNewCheckoutRef.current,
+        }),
+      });
+      const requestId = resolveResponseRequestId(response);
+      const payload = (await response.json()) as PixPaymentApiResponse;
+
+      if (!response.ok || !payload.ok || !payload.order) {
+        throw new Error(
+          withSupportRequestId(
+            payload.message || "Nao foi possivel aplicar a troca agora.",
+            requestId,
+          ),
+        );
+      }
+
+      setPixOrder(payload.order);
+      setLastKnownOrderNumber(payload.order.orderNumber);
+      writeCachedOrderByGuild(guildId, payload.order);
+      forceNewCheckoutRef.current = false;
+      setPhase("checkout");
+      setView("methods");
+      setMethodMessage(
+        payload.licenseActive
+          ? buildActiveLicenseMessage(payload.licenseExpiresAt)
+          : "Troca aplicada com sucesso usando o credito disponivel da conta.",
+      );
+      setCheckoutStatusQuery({ order: payload.order, guildId });
+    } catch (error) {
+      setMethodMessage(
+        parseUnknownErrorMessage(error) ||
+          "Nao foi possivel aplicar a troca agora.",
+      );
+    } finally {
+      setIsSubmittingTrial(false);
+    }
+  }, [
+    activeDiscountPreview.totalAmount,
+    couponCode,
+    giftCardCode,
+    guildId,
+    isLoadingOrder,
+    isPlanLoading,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
+
   const handleContinueToCheckout = useCallback(() => {
     if (!resolvedPlan.isAvailable) {
       setMethodMessage(
@@ -5017,15 +5320,29 @@ export function ConfigStepFour({
       return;
     }
 
+    if (selectedPlanChange.execution === "schedule_for_renewal") {
+      void handleSchedulePlanChange();
+      return;
+    }
+
+    if (activeDiscountPreview.totalAmount <= 0) {
+      void handleApplyCoveredPlanChange();
+      return;
+    }
+
     setPhase("checkout");
     if (view === "methods") {
       setMethodMessage(null);
     }
   }, [
+    activeDiscountPreview.totalAmount,
+    handleApplyCoveredPlanChange,
     handleActivateTrialPlan,
+    handleSchedulePlanChange,
     resolvedPlan.isAvailable,
     resolvedPlan.isTrial,
     resolvedPlan.unavailableReason,
+    selectedPlanChange.execution,
     view,
   ]);
 
@@ -5741,12 +6058,6 @@ export function ConfigStepFour({
       />
     ) : null;
 
-  const activeDiscountPreview =
-    discountPreview ||
-    buildFallbackDiscountPreview({
-      baseAmount: baseCheckoutAmount,
-      currency: checkoutCurrency,
-    });
   const checkoutStatusLabel =
     methodMessage ||
     (shouldShowStatusResultPanel ? currentPaymentStatusLabel : null);
@@ -5793,6 +6104,21 @@ export function ConfigStepFour({
   const giftCardDiscountLabel = activeDiscountPreview.giftCard
     ? `- ${formatMoney(activeDiscountPreview.giftCard.amount, activeDiscountPreview.currency)}`
     : formatMoney(0, activeDiscountPreview.currency);
+  const flowPointsDiscountLabel =
+    activeDiscountPreview.flowPoints && activeDiscountPreview.flowPoints.appliedAmount > 0
+      ? `- ${formatMoney(
+          activeDiscountPreview.flowPoints.appliedAmount,
+          activeDiscountPreview.currency,
+        )}`
+      : formatMoney(0, activeDiscountPreview.currency);
+  const flowPointsGrantAmount = Math.max(
+    0,
+    roundMoney(selectedPlanChange.flowPointsGrantPreview),
+  );
+  const flowPointsGrantLabel =
+    flowPointsGrantAmount > 0
+      ? `+ ${formatMoney(flowPointsGrantAmount, activeDiscountPreview.currency)}`
+      : formatMoney(0, activeDiscountPreview.currency);
   const showCartDiscountEditor =
     isDiscountEditorOpen || Boolean(couponCode.trim()) || Boolean(giftCardCode.trim());
   const approvedRedirectConfig = shouldShowApprovedConfirmationPanel
@@ -5815,15 +6141,32 @@ export function ConfigStepFour({
         ? "Preencha nome completo e CPF abaixo para gerar o PIX sem sair deste card."
         : "Escolha como deseja pagar sem sair da tela do carrinho.";
   const isContinueButtonAwaitingPayment = phase !== "cart";
+  const isScheduledTargetAlreadyPending =
+    selectedPlanChange.execution === "schedule_for_renewal" &&
+    selectedPlanChange.scheduledChangeMatchesTarget &&
+    scheduledPlanChange?.status === "scheduled";
   const isContinueButtonDisabled = Boolean(
     isPlanSelectionLocked ||
+      isSubmittingTrial ||
       isContinueButtonAwaitingPayment ||
+      isScheduledTargetAlreadyPending ||
       !resolvedPlan.isAvailable,
   );
+  const isContinueButtonBusy =
+    phase === "cart" &&
+    Boolean(
+      isPlanLoading || isLoadingOrder || isPreparingBaseOrder || isSubmittingTrial,
+    );
   const continueButtonLabel = !resolvedPlan.isAvailable
     ? "Indisponivel"
     : resolvedPlan.isTrial
       ? "Ativar gratuitamente"
+      : selectedPlanChange.execution === "schedule_for_renewal"
+        ? isScheduledTargetAlreadyPending
+          ? "Troca agendada"
+          : "Agendar troca"
+        : activeDiscountPreview.totalAmount <= 0
+          ? "Aplicar agora"
       : isContinueButtonAwaitingPayment
         ? "Aguardando pagamento"
         : "Continuar";
@@ -5888,26 +6231,6 @@ export function ConfigStepFour({
               <p className="text-[18px] font-semibold text-[#F4F4F4] sm:text-[21px]">
                 Seu carrinho
               </p>
-              <button
-                type="button"
-                onClick={handleCheckoutBack}
-                className="mt-[12px] inline-flex h-[42px] items-center justify-center gap-[10px] rounded-[14px] border border-[#1D1D1D] bg-[#0D0D0D] px-[16px] text-[14px] font-medium text-[#D5D5D5] transition-colors hover:border-[#2A2A2A] hover:bg-[#121212] hover:text-[#FFFFFF]"
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 20 20"
-                  className="h-[14px] w-[14px]"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M11.75 4.75 6.5 10l5.25 5.25" />
-                </svg>
-                <span>Voltar</span>
-              </button>
-
               <div className="mt-[22px] rounded-[30px] bg-[linear-gradient(180deg,rgba(13,13,13,0.98)_0%,rgba(8,8,8,0.98)_100%)] px-[20px] py-[22px] shadow-[0_28px_90px_rgba(0,0,0,0.32)] sm:px-[34px] sm:py-[34px]">
                 <div className="flex flex-col gap-[22px]">
                   <div className="flex flex-col gap-[16px] xl:flex-row xl:items-center xl:justify-between">
@@ -5935,7 +6258,9 @@ export function ConfigStepFour({
                             plans={availablePlanOptions}
                             selectedPlanCode={selectedPlanCode}
                             onSelectPlan={handleSelectPlan}
-                            disabled={isPlanSelectionLocked}
+                            disabled={
+                              isPlanSelectionLocked || availablePlanOptions.length <= 1
+                            }
                           />
                           {isPlanSelectionLocked ? (
                             <span className="inline-flex min-h-[28px] items-center gap-[8px] rounded-full bg-[#151515] px-[12px] text-[12px] font-medium text-[#D2D2D2]">
@@ -6151,7 +6476,29 @@ export function ConfigStepFour({
             </div>
           </div>
 
-          <aside className="space-y-[18px] xl:pt-[54px]">
+          <aside className="relative space-y-[18px] xl:pt-[54px]">
+            <div className="flex justify-end xl:absolute xl:top-0 xl:right-0 xl:z-10">
+              <button
+                type="button"
+                onClick={handleCheckoutBack}
+                className="inline-flex h-[42px] items-center justify-center gap-[10px] rounded-[14px] bg-[#0C0C0C] px-[16px] text-[14px] font-medium text-[#E1E1E1] shadow-[0_18px_44px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.03)] transition-colors hover:bg-[#121212] hover:text-[#FFFFFF]"
+              >
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 20 20"
+                  className="h-[14px] w-[14px]"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M11.75 4.75 6.5 10l5.25 5.25" />
+                </svg>
+                <span>Voltar</span>
+              </button>
+            </div>
+
             {phase === "checkout" && rightPanel ? (
               rightPanel
             ) : (
@@ -6220,6 +6567,22 @@ export function ConfigStepFour({
                     <div className="flex items-center justify-between gap-[14px]">
                       <span className="text-[#DDDDDD]">Vale-presente</span>
                       <span className="font-medium text-[#F5F5F5]">{giftCardDiscountLabel}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">FlowPoints</span>
+                      <span className="font-medium text-[#F5F5F5]">{flowPointsDiscountLabel}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">FlowPoints que ganha</span>
+                      <span
+                        className={`font-medium ${
+                          flowPointsGrantAmount > 0 ? "text-[#81B8FF]" : "text-[#F5F5F5]"
+                        }`}
+                      >
+                        {flowPointsGrantLabel}
+                      </span>
                     </div>
                   </div>
 
@@ -6350,18 +6713,19 @@ export function ConfigStepFour({
                       }`}
                     />
                     <span className="relative z-10 inline-flex items-center justify-center gap-[10px] whitespace-nowrap leading-none">
-                      {isSubmittingTrial ? (
-                        <ButtonLoader size={18} colorClassName="text-white" />
-                      ) : null}
-                      <span
-                        className={
-                          isContinueButtonDisabled
-                            ? "text-[#D6D6D6]"
-                            : "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] bg-clip-text text-transparent"
-                        }
-                      >
-                        {continueButtonLabel}
-                      </span>
+                      {isContinueButtonBusy ? (
+                        <ButtonLoader size={18} colorClassName="text-[#E6E6E6]" />
+                      ) : (
+                        <span
+                          className={
+                            isContinueButtonDisabled
+                              ? "text-[#D6D6D6]"
+                              : "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] bg-clip-text text-transparent"
+                          }
+                        >
+                          {continueButtonLabel}
+                        </span>
+                      )}
                     </span>
                   </button>
                 </div>

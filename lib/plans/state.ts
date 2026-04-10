@@ -23,6 +23,14 @@ import {
   BETA_PINNED_PLAN_CODE,
   canApplyBetaProgramToSelection,
 } from "@/lib/payments/betaProgram";
+import {
+  applyFlowPointsEvent,
+  getUserPlanFlowPointsBalance,
+  getUserPlanScheduledChange,
+  readOrderPlanTransitionPayload,
+  resolveFlowPointsBalanceAmount,
+  updateScheduledPlanChangeStatus,
+} from "@/lib/plans/change";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export type GuildPlanSettingsRecord = {
@@ -82,6 +90,7 @@ type PaymentOrderPlanRecord = {
   plan_max_active_tickets?: number | null;
   plan_max_automations?: number | null;
   plan_max_monthly_actions?: number | null;
+  provider_payload?: unknown;
   paid_at?: string | null;
   expires_at?: string | null;
   created_at: string;
@@ -491,6 +500,27 @@ async function resolveApprovedOrderBenefits(input: {
   } satisfies ApprovedOrderBenefits;
 }
 
+async function resolveOrderProviderPayload(order: PaymentOrderPlanRecord) {
+  if (order.provider_payload !== undefined) {
+    return order.provider_payload;
+  }
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const providerPayloadResult = await supabase
+    .from("payment_orders")
+    .select("provider_payload")
+    .eq("id", order.id)
+    .maybeSingle<PaymentOrderProviderPayloadRecord>();
+
+  if (providerPayloadResult.error) {
+    throw new Error(
+      `Erro ao carregar payload financeiro do pedido aprovado: ${providerPayloadResult.error.message}`,
+    );
+  }
+
+  return providerPayloadResult.data?.provider_payload;
+}
+
 async function persistApprovedOrderBenefits(input: {
   orderId: number;
   userId: number;
@@ -599,6 +629,74 @@ async function persistApprovedOrderBenefits(input: {
         throw new Error(updateGiftCardResult.error.message);
       }
     }
+  }
+}
+
+async function persistApprovedOrderTransitionEffects(input: {
+  order: PaymentOrderPlanRecord;
+  currency: string;
+}) {
+  const providerPayload = await resolveOrderProviderPayload(input.order);
+  const transition = readOrderPlanTransitionPayload(providerPayload);
+  if (!transition) {
+    return;
+  }
+
+  if (transition.flowPointsApplied > 0) {
+    await applyFlowPointsEvent({
+      userId: input.order.user_id,
+      eventType: "plan_change_charge_applied",
+      amount: -Math.abs(transition.flowPointsApplied),
+      currency: input.currency,
+      referenceKey: `payment-order:${input.order.id}:flow-points-consume`,
+      paymentOrderId: input.order.id,
+      metadata: {
+        kind: transition.kind,
+        execution: transition.execution,
+        currentPlanCode: transition.currentPlanCode,
+      },
+    });
+  }
+
+  if (transition.flowPointsGranted > 0) {
+    await applyFlowPointsEvent({
+      userId: input.order.user_id,
+      eventType: "plan_change_credit_granted",
+      amount: Math.abs(transition.flowPointsGranted),
+      currency: input.currency,
+      referenceKey: `payment-order:${input.order.id}:flow-points-grant`,
+      paymentOrderId: input.order.id,
+      metadata: {
+        kind: transition.kind,
+        execution: transition.execution,
+        currentPlanCode: transition.currentPlanCode,
+      },
+    });
+  }
+
+  if (typeof transition.scheduledChangeId === "number" && Number.isFinite(transition.scheduledChangeId)) {
+    await updateScheduledPlanChangeStatus({
+      userId: input.order.user_id,
+      scheduledChangeId: transition.scheduledChangeId,
+      nextStatus: "applied",
+      metadata: {
+        paymentOrderId: input.order.id,
+        appliedAt: input.order.paid_at || input.order.created_at,
+      },
+    });
+    return;
+  }
+
+  if (transition.execution === "pay_now" && transition.kind !== "current") {
+    await updateScheduledPlanChangeStatus({
+      userId: input.order.user_id,
+      nextStatus: "cancelled",
+      metadata: {
+        paymentOrderId: input.order.id,
+        cancelledAt: input.order.paid_at || input.order.created_at,
+        reason: "superseded_by_immediate_plan_change",
+      },
+    });
   }
 }
 
@@ -721,16 +819,24 @@ export async function resolveEffectivePlanSelection(input: {
   preferredPlanCode?: unknown;
   preferredBillingPeriodCode?: unknown;
 }) {
-  const [guildSettings, userPlanState, basicPlanAvailability] = await Promise.all([
+  const [guildSettings, userPlanState, basicPlanAvailability, flowPointsBalanceRecord, scheduledChange] = await Promise.all([
     getGuildPlanSettingsRecord(input.userId, input.guildId),
     getUserPlanState(input.userId),
     getBasicPlanAvailability(input.userId),
+    getUserPlanFlowPointsBalance(input.userId),
+    getUserPlanScheduledChange(input.userId),
   ]);
 
+  const nowMs = Date.now();
   const preferredPlanCode =
     typeof input.preferredPlanCode === "string" && isPlanCode(input.preferredPlanCode)
       ? input.preferredPlanCode
       : null;
+  const preferredBillingPeriodCode =
+    normalizePlanBillingPeriodCode(
+      input.preferredBillingPeriodCode,
+      DEFAULT_PLAN_BILLING_PERIOD_CODE,
+    ) as PlanBillingPeriodCode;
   const activeAccountPlanCode =
     userPlanState &&
     (userPlanState.status === "active" ||
@@ -738,12 +844,21 @@ export async function resolveEffectivePlanSelection(input: {
       userPlanState.status === "expired")
       ? userPlanState.plan_code
       : null;
+  const scheduledChangeEffectiveAtMs = scheduledChange?.effective_at
+    ? Date.parse(scheduledChange.effective_at)
+    : Number.NaN;
+  const shouldPreferScheduledChange =
+    !!scheduledChange &&
+    Number.isFinite(scheduledChangeEffectiveAtMs) &&
+    scheduledChangeEffectiveAtMs <= nowMs &&
+    !isCurrentlyActivePlanState(userPlanState);
   const allowCurrentBasicPlanSelection =
     userPlanState?.plan_code === "basic" && isCurrentlyActivePlanState(userPlanState);
   const canSelectBasicPlan =
     basicPlanAvailability.isAvailable || allowCurrentBasicPlanSelection;
   const candidatePlanCodes = [
     preferredPlanCode,
+    shouldPreferScheduledChange ? scheduledChange?.target_plan_code || null : null,
     guildSettings?.plan_code || null,
     activeAccountPlanCode,
     DEFAULT_PLAN_CODE,
@@ -754,10 +869,13 @@ export async function resolveEffectivePlanSelection(input: {
       (candidate): candidate is PlanCode =>
         Boolean(candidate) && (candidate !== "basic" || canSelectBasicPlan),
     ) || DEFAULT_PLAN_CODE;
-  const selectedBillingPeriodCode = normalizePlanBillingPeriodCode(
-    input.preferredBillingPeriodCode,
-    DEFAULT_PLAN_BILLING_PERIOD_CODE,
-  ) as PlanBillingPeriodCode;
+  const selectedBillingPeriodCode =
+    preferredPlanCode
+      ? preferredBillingPeriodCode
+      : shouldPreferScheduledChange &&
+          scheduledChange?.target_plan_code === selectedPlanCode
+        ? scheduledChange.target_billing_period_code
+        : preferredBillingPeriodCode;
   const plan = applyUserPlanStatePricingAdjustments(
     resolvePlanPricing(selectedPlanCode, selectedBillingPeriodCode),
     userPlanState,
@@ -768,6 +886,8 @@ export async function resolveEffectivePlanSelection(input: {
     guildSettings,
     userPlanState,
     basicPlanAvailability,
+    flowPointsBalance: resolveFlowPointsBalanceAmount(flowPointsBalanceRecord),
+    scheduledChange,
   };
 }
 
@@ -914,6 +1034,10 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
     userId: order.user_id,
     guildId: order.guild_id,
     benefits: approvedOrderBenefits,
+  });
+  await persistApprovedOrderTransitionEffects({
+    order,
+    currency: payload.currency,
   });
 
   return result.data;

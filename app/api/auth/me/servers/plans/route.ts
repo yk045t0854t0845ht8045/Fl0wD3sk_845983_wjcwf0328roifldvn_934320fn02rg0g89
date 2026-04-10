@@ -34,11 +34,15 @@ import {
   resolvePlanDefinition,
   resolvePlanPricing,
 } from "@/lib/plans/catalog";
-import { resolvePlanUpgradeProration } from "@/lib/plans/proration";
+import {
+  resolvePlanChangePreview,
+  type UserPlanScheduledChangeRecord,
+} from "@/lib/plans/change";
 import {
   applyUserPlanStatePricingAdjustments,
   getBasicPlanAvailability,
   getGuildPlanSettingsRecord,
+  resolveEffectivePlanSelection,
   getUserPlanState,
   type BasicPlanAvailability,
   type GuildPlanSettingsRecord,
@@ -250,6 +254,8 @@ function toPlanResponse(input: {
   settings: GuildPlanSettingsRecord | null;
   userPlanState: UserPlanStateRecord | null;
   basicPlanAvailability: BasicPlanAvailability;
+  flowPointsBalance: number;
+  scheduledChange: UserPlanScheduledChangeRecord | null;
   requestedPlanCode?: string | null;
   requestedBillingPeriodCode?: string | null;
   recurringMethodId: string | null;
@@ -293,26 +299,19 @@ function toPlanResponse(input: {
   const shouldReuseStoredPlanSettings = Boolean(
     settings && settings.plan_code === resolvedPlan.code,
   );
-
-  const proration =
-    hasActiveAccountPlan && userPlanState
-      ? resolvePlanUpgradeProration({
-          userPlanState,
-          targetPlan: resolvedPlan,
-        })
-      : null;
+  const selectedPlanChange = resolvePlanChangePreview({
+    userPlanState,
+    targetPlan: resolvedPlan,
+    flowPointsBalance: input.flowPointsBalance,
+    scheduledChange: input.scheduledChange,
+  });
   const isActiveBasicPlan =
     resolvedPlan.code === "basic" &&
     !!userPlanState &&
     userPlanState.plan_code === "basic" &&
     hasActiveAccountPlan;
-  const isCurrentPlanSelection =
-    hasActiveAccountPlan &&
-    !!userPlanState &&
-    userPlanState.plan_code === resolvedPlan.code &&
-    userPlanState.billing_cycle_days === resolvedPlan.billingCycleDays;
   const isCurrentPlanRepurchaseBlocked =
-    isCurrentPlanSelection && !resolvedPlan.isTrial;
+    selectedPlanChange.isCurrentSelectionBlocked && !resolvedPlan.isTrial;
   const isResolvedPlanAvailable =
     !isCurrentPlanRepurchaseBlocked &&
     (resolvedPlan.code !== "basic" ||
@@ -327,8 +326,9 @@ function toPlanResponse(input: {
   const checkoutAmount = Math.max(
     0,
     Math.round(
-      (isCurrentPlanSelection ? 0 : proration?.dueAmount ?? resolvedPlan.totalAmount) *
-        100,
+      (selectedPlanChange.execution === "pay_now"
+        ? selectedPlanChange.immediateSubtotalAmount
+        : 0) * 100,
     ) / 100,
   );
 
@@ -344,20 +344,34 @@ function toPlanResponse(input: {
     totalAmount: resolvedPlan.totalAmount,
     compareTotalAmount: resolvedPlan.compareTotalAmount,
     checkoutAmount,
-    checkoutMode: isCurrentPlanSelection
-      ? ("current" as const)
-      : proration
-        ? ("upgrade" as const)
-        : ("new" as const),
-    proration: proration
+    checkoutMode: selectedPlanChange.kind,
+    checkoutExecution: selectedPlanChange.execution,
+    planChange: {
+      kind: selectedPlanChange.kind,
+      execution: selectedPlanChange.execution,
+      currentPlanCode: selectedPlanChange.currentPlanCode,
+      currentBillingCycleDays: selectedPlanChange.currentBillingCycleDays,
+      currentExpiresAt: selectedPlanChange.currentExpiresAt,
+      currentStatus: selectedPlanChange.currentStatus,
+      currentCreditAmount: selectedPlanChange.currentCreditAmount,
+      remainingDaysExact: selectedPlanChange.remainingDaysExact,
+      immediateSubtotalAmount: selectedPlanChange.immediateSubtotalAmount,
+      flowPointsBalance: selectedPlanChange.flowPointsBalance,
+      flowPointsGrantPreview: selectedPlanChange.flowPointsGrantPreview,
+      effectiveAt: selectedPlanChange.effectiveAt,
+      scheduledChangeMatchesTarget: selectedPlanChange.scheduledChangeMatchesTarget,
+    },
+    scheduledChange: input.scheduledChange
       ? {
-          currentPlanCode: proration.currentPlanCode,
-          currentAmount: proration.currentAmount,
-          currentExpiresAt: proration.currentExpiresAt,
-          remainingDaysExact: proration.remainingDaysExact,
-          creditAmount: proration.creditAmount,
-          targetAmountForRemaining: proration.targetAmountForRemaining,
-          dueAmount: proration.dueAmount,
+          id: input.scheduledChange.id,
+          guildId: input.scheduledChange.guild_id,
+          currentPlanCode: input.scheduledChange.current_plan_code,
+          currentBillingCycleDays: input.scheduledChange.current_billing_cycle_days,
+          targetPlanCode: input.scheduledChange.target_plan_code,
+          targetBillingPeriodCode: input.scheduledChange.target_billing_period_code,
+          targetBillingCycleDays: input.scheduledChange.target_billing_cycle_days,
+          status: input.scheduledChange.status,
+          effectiveAt: input.scheduledChange.effective_at,
         }
       : null,
     currency: shouldReuseStoredPlanSettings
@@ -433,18 +447,42 @@ function toPlanResponse(input: {
       cycleDiscountPercent: plan.cycleDiscountPercent,
       cycleBadge: plan.cycleBadge,
       isTrial: plan.isTrial,
-      isAvailable:
-        plan.code !== "basic" ||
-        input.basicPlanAvailability.isAvailable ||
-        (hasActiveAccountPlan &&
-          userPlanState?.plan_code === "basic" &&
-          plan.code === "basic"),
-      unavailableReason:
-        plan.code === "basic" &&
-        !input.basicPlanAvailability.isAvailable &&
-        !(hasActiveAccountPlan && userPlanState?.plan_code === "basic")
-          ? input.basicPlanAvailability.unavailableMessage
-          : null,
+      isAvailable: (() => {
+        const planChange = resolvePlanChangePreview({
+          userPlanState,
+          targetPlan: plan,
+          flowPointsBalance: input.flowPointsBalance,
+          scheduledChange: input.scheduledChange,
+        });
+        const basicAvailable =
+          plan.code !== "basic" ||
+          input.basicPlanAvailability.isAvailable ||
+          (hasActiveAccountPlan &&
+            userPlanState?.plan_code === "basic" &&
+            plan.code === "basic");
+        return basicAvailable && !planChange.isCurrentSelectionBlocked;
+      })(),
+      unavailableReason: (() => {
+        const planChange = resolvePlanChangePreview({
+          userPlanState,
+          targetPlan: plan,
+          flowPointsBalance: input.flowPointsBalance,
+          scheduledChange: input.scheduledChange,
+        });
+        if (planChange.isCurrentSelectionBlocked && !plan.isTrial) {
+          return "Seu plano atual ja esta ativo nesta conta. Escolha outro plano para mudar agora.";
+        }
+
+        if (
+          plan.code === "basic" &&
+          !input.basicPlanAvailability.isAvailable &&
+          !(hasActiveAccountPlan && userPlanState?.plan_code === "basic")
+        ) {
+          return input.basicPlanAvailability.unavailableMessage;
+        }
+
+        return null;
+      })(),
       entitlements: {
         ...plan.entitlements,
       },
@@ -509,6 +547,12 @@ export async function GET(request: Request) {
       getUserPlanState(userId),
       getBasicPlanAvailability(userId),
     ]);
+    const selection = await resolveEffectivePlanSelection({
+      userId,
+      guildId,
+      preferredPlanCode: requestedPlanCode,
+      preferredBillingPeriodCode: requestedBillingPeriodCode,
+    });
 
     const recurringMethodId = settings?.recurring_method_id || null;
     const recurringMethod =
@@ -523,6 +567,8 @@ export async function GET(request: Request) {
         settings,
         userPlanState,
         basicPlanAvailability,
+        flowPointsBalance: selection.flowPointsBalance,
+        scheduledChange: selection.scheduledChange,
         requestedPlanCode,
         requestedBillingPeriodCode,
         recurringMethodId,
@@ -674,6 +720,11 @@ export async function POST(request: Request) {
       getUserPlanState(userId),
       getBasicPlanAvailability(userId),
     ]);
+    const selection = await resolveEffectivePlanSelection({
+      userId,
+      guildId,
+      preferredPlanCode: requestedPlanCode,
+    });
 
     const savedMethodMap = new Map(savedMethods.map((method) => [method.id, method]));
 
@@ -767,6 +818,8 @@ export async function POST(request: Request) {
         settings: upsertResult.data,
         userPlanState,
         basicPlanAvailability,
+        flowPointsBalance: selection.flowPointsBalance,
+        scheduledChange: selection.scheduledChange,
         requestedPlanCode: upsertResult.data.plan_code,
         recurringMethodId: resolvedRecurringMethodId,
         recurringMethod,

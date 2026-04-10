@@ -7,6 +7,11 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import { resolveDiscountPricing } from "@/lib/payments/discountPricing";
 import {
+  applyFlowPointsToAmount,
+  getUserPlanFlowPointsBalance,
+  resolveFlowPointsBalanceAmount,
+} from "@/lib/plans/change";
+import {
   isPlanBillingPeriodCode,
   isPlanCode,
 } from "@/lib/plans/catalog";
@@ -165,12 +170,28 @@ export async function POST(request: Request) {
       planCode: normalizePlanCode(body.planCode),
       billingPeriodCode: normalizeBillingPeriodCode(body.billingPeriodCode),
     });
+    const flowPointsBalanceRecord = await getUserPlanFlowPointsBalance(
+      access.sessionData.authSession.user.id,
+    );
+    const flowPointsBalance = resolveFlowPointsBalanceAmount(flowPointsBalanceRecord);
+    const flowPointsPreview = applyFlowPointsToAmount({
+      amount: preview.totalAmount,
+      flowPointsBalance,
+    });
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
         message: preview.message,
-        preview,
+        preview: {
+          ...preview,
+          totalAmount: flowPointsPreview.remainingAmount,
+          flowPoints: {
+            appliedAmount: flowPointsPreview.appliedAmount,
+            balanceBefore: flowPointsBalance,
+            balanceAfter: flowPointsPreview.nextBalanceAmount,
+          },
+        },
       }),
     );
   } catch (error) {

@@ -4,7 +4,9 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { getLockedGuildLicenseMap } from "@/lib/payments/licenseStatus";
+import { getPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
+import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type GuildSavedSetupRecord = {
@@ -131,16 +133,20 @@ export async function GET(request: Request) {
       url.searchParams.get("excludePaid") === "true";
 
     if (!sessionData?.authSession) {
-      return NextResponse.json(
-        { ok: false, message: "Nao autenticado." },
-        { status: 401 },
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Nao autenticado." },
+          { status: 401 },
+        ),
       );
     }
 
     if (!sessionData.accessToken) {
-      return NextResponse.json(
-        { ok: false, message: "Token OAuth ausente na sessao." },
-        { status: 401 },
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Token OAuth ausente na sessao." },
+          { status: 401 },
+        ),
       );
     }
 
@@ -171,30 +177,41 @@ export async function GET(request: Request) {
     });
 
     if (excludePaid) {
-      const lockedGuilds = await getLockedGuildLicenseMap(
-        guilds.map((guild) => guild.id),
+      const [lockedGuilds, ownedPlanGuilds] = await Promise.all([
+        getLockedGuildLicenseMap(guilds.map((guild) => guild.id)),
+        getPlanGuildsForUser(sessionData.authSession.user.id),
+      ]);
+      const ownedPlanGuildIdSet = new Set(
+        ownedPlanGuilds.map((record) => record.guild_id),
       );
-      guilds = guilds.filter((guild) => !lockedGuilds.has(guild.id));
+      guilds = guilds.filter(
+        (guild) =>
+          !lockedGuilds.has(guild.id) && !ownedPlanGuildIdSet.has(guild.id),
+      );
     }
 
-    return NextResponse.json({
-      ok: true,
-      user: {
-        discord_user_id: sessionData.authSession.user.discord_user_id,
-        display_name: sessionData.authSession.user.display_name,
-      },
-      guilds,
-    });
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        ok: true,
+        user: {
+          discord_user_id: sessionData.authSession.user.discord_user_id,
+          display_name: sessionData.authSession.user.display_name,
+        },
+        guilds,
+      }),
+    );
   } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: sanitizeErrorMessage(
-          error,
-          "Erro ao listar servidores do usuario.",
-        ),
-      },
-      { status: 500 },
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: sanitizeErrorMessage(
+            error,
+            "Erro ao listar servidores do usuario.",
+          ),
+        },
+        { status: 500 },
+      ),
     );
   }
 }
