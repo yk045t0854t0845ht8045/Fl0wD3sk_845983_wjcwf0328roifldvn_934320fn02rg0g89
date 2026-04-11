@@ -187,7 +187,7 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult, securityLogsResult] = await Promise.all([
+    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult, autoRoleResult, securityLogsResult] = await Promise.all([
       fetchGuildChannelsByBot(guildId),
       fetchGuildRolesByBot(guildId),
       supabase
@@ -215,6 +215,13 @@ export async function GET(request: Request) {
         .from("guild_antilink_settings")
         .select(
           "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      supabase
+        .from("guild_autorole_settings")
+        .select(
+          "enabled, role_ids, assignment_delay_minutes, existing_members_sync_requested_at, existing_members_sync_started_at, existing_members_sync_completed_at, existing_members_sync_status, existing_members_sync_error, updated_at",
         )
         .eq("guild_id", guildId)
         .maybeSingle(),
@@ -265,6 +272,10 @@ export async function GET(request: Request) {
 
     if (antiLinkResult.error) {
       throw new Error(antiLinkResult.error.message);
+    }
+
+    if (autoRoleResult.error) {
+      throw new Error(autoRoleResult.error.message);
     }
 
     if (securityLogsResult.error) {
@@ -430,6 +441,38 @@ export async function GET(request: Request) {
               blockDiscordInvites: true,
               blockObfuscatedLinks: true,
               updatedAt: antiLinkResult.data.updated_at,
+            }
+          : null,
+        autoRoleSettings: autoRoleResult.data
+          ? {
+              enabled: Boolean(autoRoleResult.data.enabled),
+              roleIds: Array.isArray(autoRoleResult.data.role_ids)
+                ? autoRoleResult.data.role_ids.filter(
+                    (roleId): roleId is string =>
+                      typeof roleId === "string" && roleSet.has(roleId),
+                  )
+                : [],
+              assignmentDelayMinutes:
+                autoRoleResult.data.assignment_delay_minutes === 10 ||
+                autoRoleResult.data.assignment_delay_minutes === 20 ||
+                autoRoleResult.data.assignment_delay_minutes === 30
+                  ? autoRoleResult.data.assignment_delay_minutes
+                  : 0,
+              syncStatus:
+                autoRoleResult.data.existing_members_sync_status === "pending" ||
+                autoRoleResult.data.existing_members_sync_status === "processing" ||
+                autoRoleResult.data.existing_members_sync_status === "completed" ||
+                autoRoleResult.data.existing_members_sync_status === "failed"
+                  ? autoRoleResult.data.existing_members_sync_status
+                  : "idle",
+              syncRequestedAt:
+                autoRoleResult.data.existing_members_sync_requested_at,
+              syncStartedAt:
+                autoRoleResult.data.existing_members_sync_started_at,
+              syncCompletedAt:
+                autoRoleResult.data.existing_members_sync_completed_at,
+              syncError: autoRoleResult.data.existing_members_sync_error,
+              updatedAt: autoRoleResult.data.updated_at,
             }
           : null,
         securityLogsSettings: securityLogsResult.data

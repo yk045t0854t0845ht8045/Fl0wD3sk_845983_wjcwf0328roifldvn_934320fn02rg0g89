@@ -9,7 +9,10 @@ import {
 } from "@/lib/plans/downgradeEnforcement";
 import { countPlanGuildsForUser, getPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { PLAN_ORDER, resolvePlanPricing, type PlanCode } from "@/lib/plans/catalog";
-import { getUserPlanState } from "@/lib/plans/state";
+import {
+  getUserPlanState,
+  repairOrphanPlanGuildLinkForUser,
+} from "@/lib/plans/state";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
@@ -107,8 +110,13 @@ export async function GET(request: Request) {
     }
 
     const userId = sessionData.authSession.user.id;
-    const [userPlanState, licensedServersCount, allPlanGuilds, scheduledChange] = await Promise.all([
-      getUserPlanState(sessionData.authSession.user.id),
+    const userPlanState = await getUserPlanState(sessionData.authSession.user.id);
+    await repairOrphanPlanGuildLinkForUser({
+      userId,
+      userPlanState,
+      source: "auth_me_plan_state",
+    });
+    const [licensedServersCount, allPlanGuilds, scheduledChange] = await Promise.all([
       countPlanGuildsForUser(userId),
       getPlanGuildsForUser(userId, { includeInactive: true }),
       getUserPlanScheduledChange(userId),

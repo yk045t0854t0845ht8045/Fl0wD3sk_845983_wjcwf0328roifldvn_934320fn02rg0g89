@@ -98,6 +98,8 @@ type PaymentOrderPlanRecord = {
   created_at: string;
 };
 
+type PaymentOrderEventPayload = Record<string, unknown>;
+
 type UserPlanStateMetadataRecord = {
   metadata: Record<string, unknown> | null;
 };
@@ -719,6 +721,23 @@ function resolveActivePlanStateStatus(planCode: PlanCode, expiresAt: string | nu
   return planCode === "basic" ? "trial" : "active";
 }
 
+async function createPaymentOrderEventSafe(
+  paymentOrderId: number,
+  eventType: string,
+  eventPayload: PaymentOrderEventPayload,
+) {
+  try {
+    const supabase = getSupabaseAdminClientOrThrow();
+    await supabase.from("payment_order_events").insert({
+      payment_order_id: paymentOrderId,
+      event_type: eventType,
+      event_payload: eventPayload,
+    });
+  } catch {
+    // telemetria nao deve derrubar o fluxo de plano
+  }
+}
+
 function normalizeValidIso(value: string | null | undefined) {
   if (!value) return null;
   const parsed = Date.parse(value);
@@ -813,6 +832,138 @@ export async function getUserPlanState(userId: number) {
   }
 
   return currentPlanState;
+}
+
+export async function repairOrphanPlanGuildLinkForUser(input: {
+  userId: number;
+  source?: string;
+  userPlanState?: UserPlanStateRecord | null;
+}) {
+  const userPlanState =
+    input.userPlanState === undefined
+      ? await getUserPlanState(input.userId)
+      : input.userPlanState;
+
+  const candidateGuildId =
+    typeof userPlanState?.last_payment_guild_id === "string"
+      ? userPlanState.last_payment_guild_id.trim()
+      : "";
+  const source = input.source || "plan_state_repair";
+
+  if (
+    !candidateGuildId ||
+    !userPlanState ||
+    (userPlanState.status !== "active" &&
+      userPlanState.status !== "trial" &&
+      userPlanState.status !== "expired")
+  ) {
+    return {
+      repaired: false,
+      detected: false,
+      guildId: candidateGuildId || null,
+      reason: "no_candidate",
+    } as const;
+  }
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const [existingGuildLinkResult, candidateOrderResult] = await Promise.all([
+    supabase
+      .from("auth_user_plan_guilds")
+      .select("id, is_active")
+      .eq("user_id", input.userId)
+      .eq("guild_id", candidateGuildId)
+      .maybeSingle<{ id: number; is_active: boolean }>(),
+    supabase
+      .from("payment_orders")
+      .select(
+        "id, user_id, guild_id, payment_method, plan_code, plan_name, amount, currency, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, paid_at, expires_at, created_at",
+      )
+      .eq("user_id", input.userId)
+      .eq("guild_id", candidateGuildId)
+      .eq("status", "approved")
+      .order("paid_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<PaymentOrderPlanRecord>(),
+  ]);
+
+  if (existingGuildLinkResult.error) {
+    throw new Error(
+      `Erro ao validar vinculo atual do plano: ${existingGuildLinkResult.error.message}`,
+    );
+  }
+
+  if (candidateOrderResult.error) {
+    throw new Error(
+      `Erro ao localizar pedido aprovado para reparo de vinculo: ${candidateOrderResult.error.message}`,
+    );
+  }
+
+  if (existingGuildLinkResult.data?.id) {
+    return {
+      repaired: false,
+      detected: false,
+      guildId: candidateGuildId,
+      reason: existingGuildLinkResult.data.is_active ? "already_linked" : "already_inactive",
+    } as const;
+  }
+
+  const candidateOrder = candidateOrderResult.data || null;
+  if (!candidateOrder) {
+    return {
+      repaired: false,
+      detected: false,
+      guildId: candidateGuildId,
+      reason: "approved_order_missing",
+    } as const;
+  }
+
+  await createPaymentOrderEventSafe(candidateOrder.id, "plan_guild_link_orphan_detected", {
+    source,
+    guildId: candidateGuildId,
+    userId: input.userId,
+    planCode: userPlanState.plan_code,
+    planStatus: userPlanState.status,
+    lastPaymentOrderId: userPlanState.last_payment_order_id,
+  });
+
+  const repairResult = await licenseGuildForUser({
+    userId: input.userId,
+    guildId: candidateGuildId,
+    maxLicensedServers: Math.max(userPlanState.max_licensed_servers || 1, 1),
+    currentPlanCode: userPlanState.plan_code,
+    currentPlanState: userPlanState,
+  });
+
+  if (!repairResult.ok) {
+    await createPaymentOrderEventSafe(candidateOrder.id, "plan_guild_link_repair_skipped", {
+      source,
+      guildId: candidateGuildId,
+      userId: input.userId,
+      reason: repairResult.reason,
+    });
+
+    return {
+      repaired: false,
+      detected: true,
+      guildId: candidateGuildId,
+      reason: repairResult.reason,
+    } as const;
+  }
+
+  await createPaymentOrderEventSafe(candidateOrder.id, "plan_guild_link_repaired", {
+    source,
+    guildId: candidateGuildId,
+    userId: input.userId,
+    alreadyLicensed: repairResult.alreadyLicensed,
+  });
+
+  return {
+    repaired: true,
+    detected: true,
+    guildId: candidateGuildId,
+    reason: repairResult.alreadyLicensed ? "already_covered" : "relinked",
+  } as const;
 }
 
 export async function resolveEffectivePlanSelection(input: {

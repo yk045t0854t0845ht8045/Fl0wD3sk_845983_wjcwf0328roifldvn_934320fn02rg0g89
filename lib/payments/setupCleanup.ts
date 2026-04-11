@@ -272,6 +272,11 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
     .select("guild_id, updated_at")
     .eq("configured_by_user_id", input.userId);
 
+  let autoRoleSettingsActivityQuery = supabase
+    .from("guild_autorole_settings")
+    .select("guild_id, updated_at")
+    .eq("configured_by_user_id", input.userId);
+
   let planSettingsActivityQuery = supabase
     .from("guild_plan_settings")
     .select("guild_id, updated_at")
@@ -290,6 +295,10 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
       "guild_id",
       input.guildId,
     );
+    autoRoleSettingsActivityQuery = autoRoleSettingsActivityQuery.eq(
+      "guild_id",
+      input.guildId,
+    );
     planSettingsActivityQuery = planSettingsActivityQuery.eq("guild_id", input.guildId);
   }
 
@@ -297,11 +306,13 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
     ticketSettingsActivityResult,
     staffSettingsActivityResult,
     antiLinkSettingsActivityResult,
+    autoRoleSettingsActivityResult,
     planSettingsActivityResult,
   ] = await Promise.all([
     ticketSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     staffSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     antiLinkSettingsActivityQuery.returns<GuildActivityRecord[]>(),
+    autoRoleSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     planSettingsActivityQuery.returns<GuildActivityRecord[]>(),
   ]);
 
@@ -320,6 +331,12 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
   if (antiLinkSettingsActivityResult.error) {
     throw new Error(
       `Erro ao carregar atividade das configuracoes anti-link: ${antiLinkSettingsActivityResult.error.message}`,
+    );
+  }
+
+  if (autoRoleSettingsActivityResult.error) {
+    throw new Error(
+      `Erro ao carregar atividade das configuracoes de autorole: ${autoRoleSettingsActivityResult.error.message}`,
     );
   }
 
@@ -354,6 +371,10 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
   }
 
   for (const item of antiLinkSettingsActivityResult.data || []) {
+    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
+  }
+
+  for (const item of autoRoleSettingsActivityResult.data || []) {
     registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
   }
 
@@ -488,6 +509,8 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
       ticketSettingsDeleteResult,
       staffSettingsDeleteResult,
       antiLinkSettingsDeleteResult,
+      autoRoleSettingsDeleteResult,
+      autoRoleQueueDeleteResult,
     ] =
       await Promise.all([
         supabase
@@ -508,6 +531,16 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
           .eq("configured_by_user_id", input.userId)
           .lt("updated_at", cutoffIso)
           .in("guild_id", removableGlobalGuildIds),
+        supabase
+          .from("guild_autorole_settings")
+          .delete()
+          .eq("configured_by_user_id", input.userId)
+          .lt("updated_at", cutoffIso)
+          .in("guild_id", removableGlobalGuildIds),
+        supabase
+          .from("guild_autorole_queue")
+          .delete()
+          .in("guild_id", removableGlobalGuildIds),
       ]);
 
     if (ticketSettingsDeleteResult.error) {
@@ -525,6 +558,18 @@ export async function cleanupExpiredUnpaidServerSetups(input: {
     if (antiLinkSettingsDeleteResult.error) {
       throw new Error(
         `Erro ao remover configuracoes anti-link do servidor: ${antiLinkSettingsDeleteResult.error.message}`,
+      );
+    }
+
+    if (autoRoleSettingsDeleteResult.error) {
+      throw new Error(
+        `Erro ao remover configuracoes de autorole do servidor: ${autoRoleSettingsDeleteResult.error.message}`,
+      );
+    }
+
+    if (autoRoleQueueDeleteResult.error) {
+      throw new Error(
+        `Erro ao remover fila de autorole do servidor: ${autoRoleQueueDeleteResult.error.message}`,
       );
     }
   }

@@ -5,6 +5,7 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import { getLockedGuildLicenseMap } from "@/lib/payments/licenseStatus";
 import { getPlanGuildsForUser } from "@/lib/plans/planGuilds";
+import { repairOrphanPlanGuildLinkForUser } from "@/lib/plans/state";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
@@ -38,6 +39,7 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
     staffSettingsResult,
     welcomeSettingsResult,
     antiLinkSettingsResult,
+    autoRoleSettingsResult,
     planSettingsResult,
   ] = await Promise.all([
     supabase
@@ -65,6 +67,12 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
       .in("guild_id", guildIds)
       .returns<GuildSavedSetupRecord[]>(),
     supabase
+      .from("guild_autorole_settings")
+      .select("guild_id, updated_at")
+      .eq("configured_by_user_id", userId)
+      .in("guild_id", guildIds)
+      .returns<GuildSavedSetupRecord[]>(),
+    supabase
       .from("guild_plan_settings")
       .select("guild_id, updated_at")
       .eq("user_id", userId)
@@ -86,6 +94,10 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
 
   if (antiLinkSettingsResult.error) {
     throw new Error(antiLinkSettingsResult.error.message);
+  }
+
+  if (autoRoleSettingsResult.error) {
+    throw new Error(autoRoleSettingsResult.error.message);
   }
 
   if (planSettingsResult.error) {
@@ -119,6 +131,7 @@ async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
   for (const record of staffSettingsResult.data || []) registerRecord(record);
   for (const record of welcomeSettingsResult.data || []) registerRecord(record);
   for (const record of antiLinkSettingsResult.data || []) registerRecord(record);
+  for (const record of autoRoleSettingsResult.data || []) registerRecord(record);
   for (const record of planSettingsResult.data || []) registerRecord(record);
 
   return savedSetupMap;
@@ -149,6 +162,11 @@ export async function GET(request: Request) {
         ),
       );
     }
+
+    await repairOrphanPlanGuildLinkForUser({
+      userId: sessionData.authSession.user.id,
+      source: "auth_me_guilds_list",
+    });
 
     let guilds = (await getAccessibleGuildsForSession({
       authSession: sessionData.authSession,

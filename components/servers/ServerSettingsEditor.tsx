@@ -69,6 +69,7 @@ type ServerSettingsSection =
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
+  | "security_autorole"
   | "security_logs";
 type PaymentStatus =
   | "pending"
@@ -128,6 +129,21 @@ type AntiLinkSettingsDraft = {
   blockDiscordInvites: boolean;
   blockObfuscatedLinks: boolean;
 };
+
+type AutoRoleAssignmentDelayMinutes = 0 | 10 | 20 | 30;
+
+type AutoRoleSettingsDraft = {
+  enabled: boolean;
+  roleIds: string[];
+  assignmentDelayMinutes: AutoRoleAssignmentDelayMinutes;
+};
+
+type AutoRoleSyncStatus =
+  | "idle"
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed";
 
 type SecurityLogEventKey =
   | "nicknameChange"
@@ -297,6 +313,16 @@ const ANTILINK_ACTION_OPTIONS: Array<{
   { id: "timeout", name: "Silenciar por alguns minutos" },
   { id: "kick", name: "Expulsar usuario" },
   { id: "ban", name: "Banir usuario" },
+];
+
+const AUTOROLE_DELAY_OPTIONS: Array<{
+  id: string;
+  name: string;
+}> = [
+  { id: "0", name: "Adicionar ao entrar" },
+  { id: "10", name: "Adicionar depois de 10 min" },
+  { id: "20", name: "Adicionar depois de 20 min" },
+  { id: "30", name: "Adicionar depois de 30 min" },
 ];
 
 const ANTILINK_DEFAULT_DETECTION = {
@@ -519,6 +545,33 @@ function areAntiLinkSettingsDraftsEqual(
   if (!left || !right) return left === right;
 
   return JSON.stringify(normalizeAntiLinkSettingsDraft(left)) === JSON.stringify(normalizeAntiLinkSettingsDraft(right));
+}
+
+function normalizeAutoRoleAssignmentDelayMinutes(
+  value: unknown,
+): AutoRoleAssignmentDelayMinutes {
+  return value === 10 || value === 20 || value === 30 ? value : 0;
+}
+
+function normalizeAutoRoleSettingsDraft(
+  draft: AutoRoleSettingsDraft,
+): AutoRoleSettingsDraft {
+  return {
+    enabled: draft.enabled === true,
+    roleIds: normalizeDraftIds(draft.roleIds),
+    assignmentDelayMinutes: normalizeAutoRoleAssignmentDelayMinutes(
+      draft.assignmentDelayMinutes,
+    ),
+  };
+}
+
+function areAutoRoleSettingsDraftsEqual(
+  left: AutoRoleSettingsDraft | null,
+  right: AutoRoleSettingsDraft | null,
+) {
+  if (!left || !right) return left === right;
+
+  return JSON.stringify(normalizeAutoRoleSettingsDraft(left)) === JSON.stringify(normalizeAutoRoleSettingsDraft(right));
 }
 
 function createDefaultSecurityLogEventsDraft(): SecurityLogEventsDraft {
@@ -1620,6 +1673,26 @@ export function ServerSettingsEditor({
   const [, setAntiLinkBlockExternalLinks] = useState(true);
   const [, setAntiLinkBlockDiscordInvites] = useState(true);
   const [, setAntiLinkBlockObfuscatedLinks] = useState(true);
+  const [autoRoleEnabled, setAutoRoleEnabled] = useState(false);
+  const [autoRoleRoleIds, setAutoRoleRoleIds] = useState<string[]>([]);
+  const [autoRoleAssignmentDelayMinutes, setAutoRoleAssignmentDelayMinutes] =
+    useState<AutoRoleAssignmentDelayMinutes>(0);
+  const [autoRoleSyncExistingMembers, setAutoRoleSyncExistingMembers] =
+    useState(false);
+  const [autoRoleSyncStatus, setAutoRoleSyncStatus] =
+    useState<AutoRoleSyncStatus>("idle");
+  const [autoRoleSyncRequestedAt, setAutoRoleSyncRequestedAt] = useState<
+    string | null
+  >(null);
+  const [autoRoleSyncStartedAt, setAutoRoleSyncStartedAt] = useState<
+    string | null
+  >(null);
+  const [autoRoleSyncCompletedAt, setAutoRoleSyncCompletedAt] = useState<
+    string | null
+  >(null);
+  const [autoRoleSyncError, setAutoRoleSyncError] = useState<string | null>(
+    null,
+  );
   const [securityLogsDraft, setSecurityLogsDraft] =
     useState<SecurityLogsSettingsDraft>(createDefaultSecurityLogsSettingsDraft);
   const [savedSecurityLogsDraft, setSavedSecurityLogsDraft] =
@@ -1639,6 +1712,8 @@ export function ServerSettingsEditor({
     useState<WelcomeSettingsDraft | null>(null);
   const [savedAntiLinkSettingsDraft, setSavedAntiLinkSettingsDraft] =
     useState<AntiLinkSettingsDraft | null>(null);
+  const [savedAutoRoleSettingsDraft, setSavedAutoRoleSettingsDraft] =
+    useState<AutoRoleSettingsDraft | null>(null);
   const [isStaffCardCollapsed, setIsStaffCardCollapsed] = useState(true);
   const [welcomeMessageTab, setWelcomeMessageTab] = useState<"entry" | "exit">(
     "entry",
@@ -1865,6 +1940,28 @@ export function ServerSettingsEditor({
         ANTILINK_DEFAULT_DETECTION.blockDiscordInvites;
       const nextAntiLinkBlockObfuscatedLinks =
         ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks;
+      const nextAutoRoleEnabled = Boolean(payload.autoRoleSettings?.enabled);
+      const nextAutoRoleRoleIds = Array.isArray(payload.autoRoleSettings?.roleIds)
+        ? payload.autoRoleSettings.roleIds.filter((id) => roleSet.has(id))
+        : [];
+      const nextAutoRoleAssignmentDelayMinutes =
+        normalizeAutoRoleAssignmentDelayMinutes(
+          payload.autoRoleSettings?.assignmentDelayMinutes,
+        );
+      const nextAutoRoleSyncStatus: AutoRoleSyncStatus =
+        payload.autoRoleSettings?.syncStatus === "pending" ||
+        payload.autoRoleSettings?.syncStatus === "processing" ||
+        payload.autoRoleSettings?.syncStatus === "completed" ||
+        payload.autoRoleSettings?.syncStatus === "failed"
+          ? payload.autoRoleSettings.syncStatus
+          : "idle";
+      const nextAutoRoleSyncRequestedAt =
+        payload.autoRoleSettings?.syncRequestedAt || null;
+      const nextAutoRoleSyncStartedAt =
+        payload.autoRoleSettings?.syncStartedAt || null;
+      const nextAutoRoleSyncCompletedAt =
+        payload.autoRoleSettings?.syncCompletedAt || null;
+      const nextAutoRoleSyncError = payload.autoRoleSettings?.syncError || null;
       const nextSecurityLogsDraft = normalizeSecurityLogsSettingsDraft(
         payload.securityLogsSettings
           ? {
@@ -2001,6 +2098,15 @@ export function ServerSettingsEditor({
       setAntiLinkBlockExternalLinks(nextAntiLinkBlockExternalLinks);
       setAntiLinkBlockDiscordInvites(nextAntiLinkBlockDiscordInvites);
       setAntiLinkBlockObfuscatedLinks(nextAntiLinkBlockObfuscatedLinks);
+      setAutoRoleEnabled(nextAutoRoleEnabled);
+      setAutoRoleRoleIds(nextAutoRoleRoleIds);
+      setAutoRoleAssignmentDelayMinutes(nextAutoRoleAssignmentDelayMinutes);
+      setAutoRoleSyncExistingMembers(false);
+      setAutoRoleSyncStatus(nextAutoRoleSyncStatus);
+      setAutoRoleSyncRequestedAt(nextAutoRoleSyncRequestedAt);
+      setAutoRoleSyncStartedAt(nextAutoRoleSyncStartedAt);
+      setAutoRoleSyncCompletedAt(nextAutoRoleSyncCompletedAt);
+      setAutoRoleSyncError(nextAutoRoleSyncError);
       setSecurityLogsDraft(nextSecurityLogsDraft);
       setAdminRoleId(nextAdminRoleId);
       setClaimRoleIds(nextClaimRoleIds);
@@ -2043,6 +2149,13 @@ export function ServerSettingsEditor({
           blockExternalLinks: nextAntiLinkBlockExternalLinks,
           blockDiscordInvites: nextAntiLinkBlockDiscordInvites,
           blockObfuscatedLinks: nextAntiLinkBlockObfuscatedLinks,
+        }),
+      );
+      setSavedAutoRoleSettingsDraft(
+        normalizeAutoRoleSettingsDraft({
+          enabled: nextAutoRoleEnabled,
+          roleIds: nextAutoRoleRoleIds,
+          assignmentDelayMinutes: nextAutoRoleAssignmentDelayMinutes,
         }),
       );
       setSavedSecurityLogsDraft(nextSecurityLogsDraft);
@@ -2101,6 +2214,7 @@ export function ServerSettingsEditor({
     setIsRecurringMethodModalOpen(false);
     setRecurringMethodDraftId(null);
     setShouldEnableRecurringAfterMethodAdd(false);
+    setAutoRoleSyncExistingMembers(false);
 
     if (!shouldHardResetEditor) {
       return;
@@ -2109,6 +2223,7 @@ export function ServerSettingsEditor({
     setSavedSettingsDraft(null);
     setSavedWelcomeSettingsDraft(null);
     setSavedAntiLinkSettingsDraft(null);
+    setSavedAutoRoleSettingsDraft(null);
     setSavedSecurityLogsDraft(null);
     setPanelLayout(createDefaultTicketPanelLayout());
     setTicketEnabled(false);
@@ -2129,6 +2244,14 @@ export function ServerSettingsEditor({
     setAntiLinkBlockExternalLinks(true);
     setAntiLinkBlockDiscordInvites(true);
     setAntiLinkBlockObfuscatedLinks(true);
+    setAutoRoleEnabled(false);
+    setAutoRoleRoleIds([]);
+    setAutoRoleAssignmentDelayMinutes(0);
+    setAutoRoleSyncStatus("idle");
+    setAutoRoleSyncRequestedAt(null);
+    setAutoRoleSyncStartedAt(null);
+    setAutoRoleSyncCompletedAt(null);
+    setAutoRoleSyncError(null);
     setSecurityLogsDraft(createDefaultSecurityLogsSettingsDraft());
   }, [guildId, initialTab]);
 
@@ -2717,8 +2840,10 @@ export function ServerSettingsEditor({
   }, []);
 
   const isAntiLinkSection = settingsSection === "security_antilink";
+  const isAutoRoleSection = settingsSection === "security_autorole";
   const isSecurityLogsSection = settingsSection === "security_logs";
-  const isSecuritySection = isAntiLinkSection || isSecurityLogsSection;
+  const isSecuritySection =
+    isAntiLinkSection || isAutoRoleSection || isSecurityLogsSection;
   const isTicketSection =
     settingsSection === "overview" || settingsSection === "message";
   const isWelcomeSection =
@@ -2765,6 +2890,9 @@ export function ServerSettingsEditor({
   const antiLinkTimeoutValue = normalizeAntiLinkTimeoutMinutes(
     antiLinkTimeoutMinutes,
   );
+  const autoRoleAssignmentDelayValue = normalizeAutoRoleAssignmentDelayMinutes(
+    autoRoleAssignmentDelayMinutes,
+  );
   const canSaveAntiLink = Boolean(
     !settingsReadOnly &&
       !isLoading &&
@@ -2773,6 +2901,12 @@ export function ServerSettingsEditor({
         (antiLinkLogChannelId &&
           (antiLinkEnforcementAction !== "timeout" ||
             antiLinkTimeoutValue >= 1))),
+  );
+  const canSaveAutoRole = Boolean(
+    !settingsReadOnly &&
+      !isLoading &&
+      !isSaving &&
+      (!autoRoleEnabled || autoRoleRoleIds.length > 0),
   );
   const hasAnySecurityLogEnabled = SECURITY_LOG_EVENT_OPTIONS.some(
     (option) => securityLogsDraft.events[option.key].enabled,
@@ -2885,6 +3019,15 @@ export function ServerSettingsEditor({
       antiLinkTimeoutValue,
     ],
   );
+  const currentAutoRoleDraft = useMemo(
+    () =>
+      normalizeAutoRoleSettingsDraft({
+        enabled: autoRoleEnabled,
+        roleIds: autoRoleRoleIds,
+        assignmentDelayMinutes: autoRoleAssignmentDelayValue,
+      }),
+    [autoRoleAssignmentDelayValue, autoRoleEnabled, autoRoleRoleIds],
+  );
   const currentSecurityLogsDraft = useMemo(
     () => normalizeSecurityLogsSettingsDraft(securityLogsDraft),
     [securityLogsDraft],
@@ -2894,6 +3037,8 @@ export function ServerSettingsEditor({
   const hasLoadedWelcomeDraft = !isLoading && savedWelcomeSettingsDraft !== null;
   const hasLoadedAntiLinkDraft =
     !isLoading && savedAntiLinkSettingsDraft !== null;
+  const hasLoadedAutoRoleDraft =
+    !isLoading && savedAutoRoleSettingsDraft !== null;
   const hasLoadedSecurityLogsDraft =
     !isLoading && savedSecurityLogsDraft !== null;
   const shouldShowBlockingSkeleton = isLoading && !hasLoadedDashboardSnapshot;
@@ -2922,6 +3067,15 @@ export function ServerSettingsEditor({
       savedAntiLinkSettingsDraft,
     ],
   );
+  const hasAutoRoleUnsavedChanges = useMemo(
+    () =>
+      hasLoadedAutoRoleDraft &&
+      !areAutoRoleSettingsDraftsEqual(
+        currentAutoRoleDraft,
+        savedAutoRoleSettingsDraft,
+      ),
+    [currentAutoRoleDraft, hasLoadedAutoRoleDraft, savedAutoRoleSettingsDraft],
+  );
   const hasSecurityLogsUnsavedChanges = useMemo(
     () =>
       hasLoadedSecurityLogsDraft &&
@@ -2938,6 +3092,8 @@ export function ServerSettingsEditor({
 
   const hasLoadedSettingsDraft = isAntiLinkSection
     ? hasLoadedAntiLinkDraft
+    : isAutoRoleSection
+      ? hasLoadedAutoRoleDraft
     : isSecurityLogsSection
       ? hasLoadedSecurityLogsDraft
     : isWelcomeSection
@@ -2945,6 +3101,8 @@ export function ServerSettingsEditor({
       : hasLoadedTicketDraft;
   const hasUnsavedChanges = isAntiLinkSection
     ? hasAntiLinkUnsavedChanges
+    : isAutoRoleSection
+      ? hasAutoRoleUnsavedChanges || autoRoleSyncExistingMembers
     : isSecurityLogsSection
       ? hasSecurityLogsUnsavedChanges
     : isWelcomeSection
@@ -2958,6 +3116,8 @@ export function ServerSettingsEditor({
       hasUnsavedChanges &&
       (isAntiLinkSection
         ? savedAntiLinkSettingsDraft
+        : isAutoRoleSection
+          ? savedAutoRoleSettingsDraft
         : isSecurityLogsSection
           ? savedSecurityLogsDraft
         : isWelcomeSection
@@ -2975,6 +3135,8 @@ export function ServerSettingsEditor({
   const canPersistSettings = Boolean(
     (isAntiLinkSection
       ? canSaveAntiLink
+      : isAutoRoleSection
+        ? canSaveAutoRole
       : isSecurityLogsSection
         ? canSaveSecurityLogs
       : isWelcomeSection
@@ -2995,6 +3157,10 @@ export function ServerSettingsEditor({
     isSaving || settingsReadOnly || !welcomeEnabled || isActivatingWelcome;
   const antiLinkControlsDisabled =
     isSaving || settingsReadOnly || !antiLinkEnabled || isActivatingAntiLink;
+  const autoRoleControlsDisabled =
+    isSaving || settingsReadOnly || !autoRoleEnabled;
+  const autoRoleSyncExistingMembersDisabled =
+    autoRoleControlsDisabled || autoRoleRoleIds.length === 0;
   const securityLogsModuleControlsDisabled = isSaving || settingsReadOnly;
   const securityLogsControlsDisabled =
     securityLogsModuleControlsDisabled || !securityLogsDraft.enabled;
@@ -3880,6 +4046,13 @@ export function ServerSettingsEditor({
       setAntiLinkBlockExternalLinks(savedAntiLinkSettingsDraft.blockExternalLinks);
       setAntiLinkBlockDiscordInvites(savedAntiLinkSettingsDraft.blockDiscordInvites);
       setAntiLinkBlockObfuscatedLinks(savedAntiLinkSettingsDraft.blockObfuscatedLinks);
+    } else if (isAutoRoleSection && savedAutoRoleSettingsDraft) {
+      setAutoRoleEnabled(savedAutoRoleSettingsDraft.enabled);
+      setAutoRoleRoleIds(savedAutoRoleSettingsDraft.roleIds);
+      setAutoRoleAssignmentDelayMinutes(
+        savedAutoRoleSettingsDraft.assignmentDelayMinutes,
+      );
+      setAutoRoleSyncExistingMembers(false);
     } else if (isSecurityLogsSection && savedSecurityLogsDraft) {
       setSecurityLogsDraft(savedSecurityLogsDraft);
     } else if (isWelcomeSection && savedWelcomeSettingsDraft) {
@@ -3912,9 +4085,11 @@ export function ServerSettingsEditor({
   }, [
     canResetSettings,
     isAntiLinkSection,
+    isAutoRoleSection,
     isSecurityLogsSection,
     isWelcomeSection,
     savedAntiLinkSettingsDraft,
+    savedAutoRoleSettingsDraft,
     savedSecurityLogsDraft,
     savedSettingsDraft,
     savedWelcomeSettingsDraft,
@@ -3927,7 +4102,55 @@ export function ServerSettingsEditor({
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      if (isAntiLinkSection) {
+      if (isAutoRoleSection) {
+        const response = await fetch("/api/auth/me/guilds/autorole-settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            enabled: autoRoleEnabled,
+            roleIds: autoRoleRoleIds,
+            assignmentDelayMinutes: autoRoleAssignmentDelayValue,
+            syncExistingMembers: autoRoleSyncExistingMembers,
+          }),
+        });
+
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(
+            payload.message || "Falha ao salvar configuracoes de autorole.",
+          );
+        }
+
+        if (payload.settings) {
+          setAutoRoleEnabled(Boolean(payload.settings.enabled));
+          setAutoRoleRoleIds(
+            Array.isArray(payload.settings.roleIds)
+              ? payload.settings.roleIds.filter((id: unknown): id is string => typeof id === "string")
+              : [],
+          );
+          setAutoRoleAssignmentDelayMinutes(
+            normalizeAutoRoleAssignmentDelayMinutes(
+              payload.settings.assignmentDelayMinutes,
+            ),
+          );
+          setAutoRoleSyncStatus(
+            payload.settings.syncStatus === "pending" ||
+              payload.settings.syncStatus === "processing" ||
+              payload.settings.syncStatus === "completed" ||
+              payload.settings.syncStatus === "failed"
+              ? payload.settings.syncStatus
+              : "idle",
+          );
+          setAutoRoleSyncRequestedAt(payload.settings.syncRequestedAt || null);
+          setAutoRoleSyncStartedAt(payload.settings.syncStartedAt || null);
+          setAutoRoleSyncCompletedAt(payload.settings.syncCompletedAt || null);
+          setAutoRoleSyncError(payload.settings.syncError || null);
+        }
+
+        setAutoRoleSyncExistingMembers(false);
+        setSavedAutoRoleSettingsDraft(currentAutoRoleDraft);
+      } else if (isAntiLinkSection) {
         const response = await fetch("/api/auth/me/guilds/antilink-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4125,11 +4348,16 @@ export function ServerSettingsEditor({
     antiLinkIgnoredRoleIds,
     antiLinkLogChannelId,
     antiLinkTimeoutValue,
+    autoRoleAssignmentDelayValue,
+    autoRoleEnabled,
+    autoRoleRoleIds,
+    autoRoleSyncExistingMembers,
     adminRoleId,
     canPersistSettings,
     claimRoleIds,
     closeRoleIds,
     currentAntiLinkDraft,
+    currentAutoRoleDraft,
     currentWelcomeDraft,
     entryLayout,
     entryLogChannelId,
@@ -4141,6 +4369,7 @@ export function ServerSettingsEditor({
     exitThumbnailMode,
     guildId,
     isAntiLinkSection,
+    isAutoRoleSection,
     isSecurityLogsSection,
     isTicketSection,
     isWelcomeSection,
@@ -4151,6 +4380,7 @@ export function ServerSettingsEditor({
     panelLayout,
     savedSettingsDraft,
     setSavedAntiLinkSettingsDraft,
+    setSavedAutoRoleSettingsDraft,
     setSavedSecurityLogsDraft,
     setSavedSettingsDraft,
     setSavedWelcomeSettingsDraft,
@@ -4830,6 +5060,151 @@ export function ServerSettingsEditor({
                             disabled={antiLinkControlsDisabled}
                             controlHeightPx={serverSettingsControlHeight}
                           />
+                        </div>
+                      </div>
+                    </div>
+                  ) : settingsSection === "security_autorole" ? (
+                    <div className="space-y-[14px]">
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">
+                              Modulo AutoRole
+                            </p>
+                            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Aplique cargos automaticamente
+                            </h3>
+                            <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                              Selecione cargos para o bot adicionar em novos membros e, se quiser, sincronize quem ja esta no servidor.
+                            </p>
+                          </div>
+
+                          <DashboardInlineSwitch
+                            checked={autoRoleEnabled}
+                            onChange={() => {
+                              if (isSaving || settingsReadOnly) return;
+                              setAutoRoleEnabled((current) => {
+                                const next = !current;
+                                if (!next) {
+                                  setAutoRoleSyncExistingMembers(false);
+                                }
+                                return next;
+                              });
+                            }}
+                            disabled={isSaving || settingsReadOnly}
+                            ariaLabel="Ativar ou desativar modulo AutoRole"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">
+                              Configuracao AutoRole
+                            </p>
+                            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Cargos, tempo e sincronizacao
+                            </h3>
+                            <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                              O bot precisa ter permissao de gerenciar cargos e estar acima (na hierarquia) dos cargos selecionados.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                          <ConfigStepMultiSelect
+                            label="Cargos para adicionar"
+                            placeholder="Escolha os cargos"
+                            options={roleOptions}
+                            values={autoRoleRoleIds}
+                            onChange={setAutoRoleRoleIds}
+                            disabled={autoRoleControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                          <ConfigStepSelect
+                            label="Quando adicionar"
+                            placeholder="Escolha o tempo"
+                            options={AUTOROLE_DELAY_OPTIONS}
+                            value={String(autoRoleAssignmentDelayValue)}
+                            onChange={(value) => {
+                              const raw = Number(value);
+                              setAutoRoleAssignmentDelayMinutes(
+                                normalizeAutoRoleAssignmentDelayMinutes(
+                                  Number.isFinite(raw) ? raw : 0,
+                                ),
+                              );
+                            }}
+                            disabled={autoRoleControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                        </div>
+
+                        <div className="mt-[16px] space-y-[12px]">
+                          <label
+                            className={`flex items-start gap-[12px] rounded-[16px] border px-[14px] py-[12px] transition-colors ${
+                              autoRoleSyncExistingMembers
+                                ? "border-[rgba(0,98,255,0.32)] bg-[rgba(0,98,255,0.08)]"
+                                : "border-[#141414] bg-[#0A0A0A] hover:border-[#1F1F1F] hover:bg-[#0D0D0D]"
+                            } ${
+                              autoRoleSyncExistingMembersDisabled
+                                ? "cursor-not-allowed opacity-60 hover:border-[#141414] hover:bg-[#0A0A0A]"
+                                : "cursor-pointer"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={autoRoleSyncExistingMembers}
+                              onChange={(event) =>
+                                setAutoRoleSyncExistingMembers(
+                                  event.currentTarget.checked,
+                                )
+                              }
+                              disabled={autoRoleSyncExistingMembersDisabled}
+                              className="hidden"
+                            />
+                            <span
+                              className={`mt-[1px] inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[6px] border ${
+                                autoRoleSyncExistingMembers
+                                  ? "border-[#0062FF] bg-[#0062FF]"
+                                  : "border-[#303030] bg-[#111111]"
+                              }`}
+                            >
+                              {autoRoleSyncExistingMembers ? (
+                                <span className="h-[6px] w-[6px] rounded-full bg-white" />
+                              ) : null}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-[14px] leading-none font-medium text-[#E8E8E8]">
+                                Adicionar tambem para membros atuais (em massa)
+                              </span>
+                              <span className="mt-[6px] block text-[12px] leading-[1.55] text-[#6B6B6B]">
+                                Ao salvar, o bot tenta adicionar esses cargos em quem ja esta no servidor e ainda nao possui.
+                              </span>
+                            </span>
+                          </label>
+
+                          <div className="rounded-[16px] border border-[#141414] bg-[#0A0A0A] px-[14px] py-[12px]">
+                            <p className="text-[12px] uppercase tracking-[0.16em] text-[#666666]">
+                              Status da sincronizacao
+                            </p>
+                            <p className="mt-[8px] text-[13px] leading-[1.6] text-[#7B7B7B]">
+                              {autoRoleSyncStatus === "pending"
+                                ? `Em fila desde ${formatDateTime(autoRoleSyncRequestedAt)}.`
+                                : autoRoleSyncStatus === "processing"
+                                  ? `Processando desde ${formatDateTime(autoRoleSyncStartedAt)}.`
+                                  : autoRoleSyncStatus === "completed"
+                                    ? `Concluido em ${formatDateTime(autoRoleSyncCompletedAt)}.`
+                                    : autoRoleSyncStatus === "failed"
+                                      ? "Falhou. Veja o erro abaixo."
+                                      : "Nenhuma sincronizacao em andamento."}
+                            </p>
+                            {autoRoleSyncStatus === "failed" && autoRoleSyncError ? (
+                              <p className="mt-[8px] text-[12px] leading-[1.55] text-[#D98A8A]">
+                                {autoRoleSyncError}
+                              </p>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     </div>

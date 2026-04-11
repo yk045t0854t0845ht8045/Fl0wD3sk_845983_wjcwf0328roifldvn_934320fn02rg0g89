@@ -61,6 +61,17 @@ type ServerDashboardSettingsPayload = {
     blockObfuscatedLinks: boolean;
     updatedAt: string | null;
   } | null;
+  autoRoleSettings: {
+    enabled: boolean;
+    roleIds: string[];
+    assignmentDelayMinutes: 0 | 10 | 20 | 30;
+    syncStatus: "idle" | "pending" | "processing" | "completed" | "failed";
+    syncRequestedAt: string | null;
+    syncStartedAt: string | null;
+    syncCompletedAt: string | null;
+    syncError: string | null;
+    updatedAt: string | null;
+  } | null;
   securityLogsSettings: {
     enabled: boolean;
     useDefaultChannel: boolean;

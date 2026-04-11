@@ -8,6 +8,7 @@ export type ServerSaveRouteName =
   | "ticket_panel_dispatch"
   | "welcome_settings"
   | "antilink_settings"
+  | "autorole_settings"
   | "security_logs_settings";
 export type ServerSaveAccessMode = "owner" | "team" | "viewer" | "unknown";
 export type ServerSaveOutcome =

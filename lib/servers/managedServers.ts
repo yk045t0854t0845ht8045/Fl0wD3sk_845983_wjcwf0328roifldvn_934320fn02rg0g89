@@ -18,7 +18,10 @@ import {
   getPlanGuildsForUser,
   resolveGuildLicenseFromUserPlanState,
 } from "@/lib/plans/planGuilds";
-import { getUserPlanState } from "@/lib/plans/state";
+import {
+  getUserPlanState,
+  repairOrphanPlanGuildLinkForUser,
+} from "@/lib/plans/state";
 import { getAcceptedTeamGuildIdsForUser } from "@/lib/teams/userTeams";
 
 export type ManagedServerStatus = "paid" | "expired" | "off" | "pending_payment";
@@ -106,6 +109,11 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
     getUserPlanState(userId),
     getUserPlanScheduledChange(userId),
   ]);
+  await repairOrphanPlanGuildLinkForUser({
+    userId,
+    userPlanState,
+    source: "managed_servers_session",
+  });
   await ensureDowngradeEnforcementForUser({
     userId,
     userPlanState,

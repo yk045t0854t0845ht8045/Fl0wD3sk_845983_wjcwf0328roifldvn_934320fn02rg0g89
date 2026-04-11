@@ -84,6 +84,7 @@ type ServerSettingsSection =
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
+  | "security_autorole"
   | "security_logs";
 type FilterOption = "all" | ManagedServerStatus;
 type ViewMode = "overview" | "list";
@@ -222,6 +223,21 @@ const SECURITY_SIDEBAR_ITEMS: SidebarItem[] = [
       "silenciar",
       "links",
       "discord.gg",
+    ],
+  },
+  {
+    label: "AutoRole",
+    kind: "security",
+    tab: "settings",
+    settingsSection: "security_autorole",
+    searchAliases: [
+      "seguranca",
+      "autorole",
+      "auto role",
+      "cargo automatico",
+      "cargos automaticos",
+      "roles",
+      "cargos",
     ],
   },
   {
@@ -385,7 +401,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const securitySectionMatch = pathname.match(
-    /^\/servers\/(\d{10,25})\/security\/(antilink|logs)\/?$/,
+    /^\/servers\/(\d{10,25})\/security\/(antilink|autorole|logs)\/?$/,
   );
   if (securitySectionMatch) {
     return {
@@ -394,7 +410,9 @@ function parseWorkspaceRoute(pathname: string | null): {
       settingsSection:
         securitySectionMatch[2] === "logs"
           ? "security_logs"
-          : "security_antilink",
+          : securitySectionMatch[2] === "autorole"
+            ? "security_autorole"
+            : "security_antilink",
     };
   }
 
@@ -1702,6 +1720,7 @@ export function ServersWorkspace({
     isEditingServer &&
     selectedEditorTabForConfig === "settings" &&
     (selectedSettingsSectionForConfig === "security_antilink" ||
+      selectedSettingsSectionForConfig === "security_autorole" ||
       selectedSettingsSectionForConfig === "security_logs");
   useEffect(() => {
     if (selectedGuildIdForConfig || normalizedSidebarQuery) {
@@ -1765,6 +1784,9 @@ export function ServersWorkspace({
     }
     if (settingsSection === "security_antilink") {
       return `/servers/${encodedGuildId}/security/antilink/`;
+    }
+    if (settingsSection === "security_autorole") {
+      return `/servers/${encodedGuildId}/security/autorole/`;
     }
     if (settingsSection === "security_logs") {
       return `/servers/${encodedGuildId}/security/logs/`;
