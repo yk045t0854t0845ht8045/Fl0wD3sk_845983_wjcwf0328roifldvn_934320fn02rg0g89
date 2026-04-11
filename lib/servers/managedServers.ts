@@ -237,6 +237,10 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
       const currentLicenseBelongsToViewer = Boolean(
         lockedRecord && lockedRecord.userId !== sessionData.authSession.user.id,
       );
+      const selfAccountLockedRecord =
+        lockedRecord && lockedRecord.userId === sessionData.authSession.user.id
+          ? lockedRecord
+          : null;
       const accessMode: ManagedServer["accessMode"] = guild.owner ? "owner" : "viewer";
       const isOwnedPlanGuildInactive = Boolean(
         !currentLicenseBelongsToViewer &&
@@ -259,23 +263,27 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
           ? ownedPlanCoverage.status === "paid" || ownedPlanCoverage.status === "expired"
             ? ownedPlanCoverage.status
             : "off"
+          : selfAccountLockedRecord
+            ? selfAccountLockedRecord.isActive === false
+              ? "off"
+              : selfAccountLockedRecord.status
           : "off";
       const referencePaidAt = currentLicenseBelongsToViewer
         ? lockedRecord?.paidAt || null
-        : ownedPlanGuild?.activated_at || null;
+        : ownedPlanGuild?.activated_at || selfAccountLockedRecord?.paidAt || null;
       const referenceCreatedAt = currentLicenseBelongsToViewer
         ? lockedRecord?.createdAt || null
-        : ownedPlanGuild?.created_at || null;
+        : ownedPlanGuild?.created_at || selfAccountLockedRecord?.createdAt || null;
       const licenseExpiresAt = currentLicenseBelongsToViewer
         ? lockedRecord?.licenseExpiresAt || null
         : ownedPlanGuild
           ? ownedPlanCoverage.expiresAt || null
-          : null;
+          : selfAccountLockedRecord?.licenseExpiresAt || null;
       const graceExpiresAt = currentLicenseBelongsToViewer
         ? lockedRecord?.graceExpiresAt || null
         : ownedPlanGuild
           ? ownedPlanCoverage.graceExpiresAt || null
-          : null;
+          : selfAccountLockedRecord?.graceExpiresAt || null;
       const licenseExpiresAtMs = licenseExpiresAt
         ? Date.parse(licenseExpiresAt)
         : Number.NaN;

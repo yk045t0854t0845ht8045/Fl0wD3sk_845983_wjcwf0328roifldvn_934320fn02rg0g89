@@ -32,6 +32,7 @@ import {
   updateScheduledPlanChangeStatus,
 } from "@/lib/plans/change";
 import { finalizeDowngradeEnforcementAfterApprovedOrder } from "@/lib/plans/downgradeEnforcement";
+import { licenseGuildForUser } from "@/lib/plans/planGuilds";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export type GuildPlanSettingsRecord = {
@@ -1046,6 +1047,21 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
     paidPlanCode: resolvedPlanCode,
     paidMaxLicensedServers: payload.max_licensed_servers,
   });
+
+  if (order.guild_id) {
+    try {
+      await licenseGuildForUser({
+        userId: order.user_id,
+        guildId: order.guild_id,
+        maxLicensedServers: payload.max_licensed_servers,
+        currentPlanCode: payload.plan_code,
+        currentPlanState: result.data,
+      });
+    } catch {
+      // O plano da conta ja foi sincronizado. Se o vinculo do servidor falhar aqui,
+      // a interface ainda pode corrigir isso pelo fluxo de claim sem perder o pagamento.
+    }
+  }
 
   return result.data;
 }
