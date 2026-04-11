@@ -5,8 +5,23 @@ import { LandingHeader } from "@/components/landing/LandingHeader";
 import { LandingHero } from "@/components/landing/LandingHero";
 import { LandingSmoothScroll } from "@/components/landing/LandingSmoothScroll";
 import { TopBetaBanner } from "@/components/landing/TopBetaBanner";
+import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 
-export default function HomePage() {
+function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
+  if (!avatarHash) return null;
+  const extension = avatarHash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
+}
+
+export default async function HomePage() {
+  const user = await getCurrentUserFromSessionCookie();
+  
+  const authenticatedUser = user ? {
+    username: user.username,
+    avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar),
+    href: "/servers"
+  } : null;
+
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
       <Script
@@ -20,7 +35,7 @@ export default function HomePage() {
       <TopBetaBanner />
       <LandingFrameLines />
 
-      <LandingHeader />
+      <LandingHeader authenticatedUser={authenticatedUser} />
 
       <main className="w-full pb-20">
         <LandingHero />

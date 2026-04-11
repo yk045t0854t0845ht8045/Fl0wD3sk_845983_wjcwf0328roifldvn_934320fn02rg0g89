@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
+import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 
 type NavigationItem = {
@@ -1314,23 +1315,30 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
                 </LandingReveal>
 
                 <div className="ml-[30px] flex items-center gap-6">
-                  <LandingReveal delay={570}>
-                    {authenticatedUser ? (
-                      <HeaderAccountButton
-                        user={authenticatedUser}
-                        variant="dark"
-                      />
-                    ) : (
-                      <LandingActionButton href="/login" variant="dark">
-                        Login
+                  {authenticatedUser ? (
+                      <LandingReveal delay={570}>
+                      <LandingActionButton
+                        href="/servers"
+                        variant="light"
+                        className="h-[40px] px-4 text-[14px] sm:h-[46px] sm:px-6 sm:text-[16px]"
+                      >
+                        Dashboard
                       </LandingActionButton>
-                    )}
-                  </LandingReveal>
-                  <LandingReveal delay={640}>
-                    <LandingActionButton href="/login" variant="light">
-                      Sign Up
-                    </LandingActionButton>
-                  </LandingReveal>
+                    </LandingReveal>
+                  ) : (
+                    <>
+                      <LandingReveal delay={570}>
+                        <LandingActionButton href="/login" variant="dark">
+                          Login
+                        </LandingActionButton>
+                      </LandingReveal>
+                      <LandingReveal delay={640}>
+                        <LandingActionButton href="/login" variant="light">
+                          Sign Up
+                        </LandingActionButton>
+                      </LandingReveal>
+                    </>
+                  )}
                 </div>
               </div>
             </LandingReveal>
@@ -1345,11 +1353,13 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
               >
                 <LandingReveal delay={500}>
                   {authenticatedUser ? (
-                    <HeaderAccountButton
-                      user={authenticatedUser}
+                    <LandingActionButton
+                      href="/servers"
                       variant="light"
                       className="h-[40px] px-4 text-[14px] sm:h-[46px] sm:px-6 sm:text-[16px]"
-                    />
+                    >
+                      Dashboard
+                    </LandingActionButton>
                   ) : (
                     <LandingActionButton
                       href="/login"
@@ -1447,14 +1457,25 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
               ))}
 
               <LandingReveal delay={440}>
-                <LandingActionButton
-                  href="/login"
-                  onClick={closeMenu}
-                  variant="light"
-                  className="h-[52px] w-full rounded-[12px] px-6 text-[18px]"
-                >
-                  Login
-                </LandingActionButton>
+                {authenticatedUser ? (
+                  <LandingActionButton
+                    href="/servers"
+                    onClick={closeMenu}
+                    variant="light"
+                    className="h-[52px] w-full rounded-[12px] px-6 text-[18px]"
+                  >
+                    Acessar Dashboard
+                  </LandingActionButton>
+                ) : (
+                  <LandingActionButton
+                    href="/login"
+                    onClick={closeMenu}
+                    variant="light"
+                    className="h-[52px] w-full rounded-[12px] px-6 text-[18px]"
+                  >
+                    Login
+                  </LandingActionButton>
+                )}
               </LandingReveal>
             </div>
           </div>

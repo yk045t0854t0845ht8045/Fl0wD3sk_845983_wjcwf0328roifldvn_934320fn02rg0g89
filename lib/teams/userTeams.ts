@@ -2,11 +2,24 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export type TeamMembershipStatus = "pending" | "accepted" | "declined";
 
+export type TeamRolePermission = "manage_servers" | "manage_members" | "manage_roles" | "view_audit_logs";
+
+export type TeamRole = {
+  id: number;
+  teamId: number;
+  name: string;
+  permissions: TeamRolePermission[];
+  createdAt: string;
+};
+
 export type UserTeamMember = {
   id: number;
   discordUserId: string;
   displayName: string | null;
   status: TeamMembershipStatus;
+  roleId: number | null;
+  roleName: string | null;
+  customPermissions: TeamRolePermission[];
   acceptedAt: string | null;
   createdAt: string;
 };
@@ -16,10 +29,12 @@ export type UserTeam = {
   name: string;
   iconKey: string;
   role: "owner" | "member";
+  currentUserPermissions: TeamRolePermission[];
   ownerUserId: number;
   ownerDisplayName: string;
   linkedGuildIds: string[];
   members: UserTeamMember[];
+  availableRoles: TeamRole[];
   memberCount: number;
   pendingCount: number;
   createdAt: string;
@@ -56,7 +71,17 @@ type TeamMemberRow = {
   invited_auth_user_id: number | null;
   invited_by_user_id: number;
   status: TeamMembershipStatus;
+  role_id: number | null;
+  custom_permissions: TeamRolePermission[];
   accepted_at: string | null;
+  created_at: string;
+};
+
+type TeamRoleRow = {
+  id: number;
+  team_id: number;
+  name: string;
+  permissions: TeamRolePermission[];
   created_at: string;
 };
 
@@ -160,7 +185,7 @@ export async function getUserTeamsSnapshotForUser(input: {
   const memberInvitesResult = await supabase
     .from("auth_user_team_members")
     .select(
-      "id, team_id, invited_discord_user_id, invited_auth_user_id, invited_by_user_id, status, accepted_at, created_at",
+      "id, team_id, invited_discord_user_id, invited_auth_user_id, invited_by_user_id, status, role_id, custom_permissions, accepted_at, created_at",
     )
     .or(
       `invited_discord_user_id.eq.${input.discordUserId},invited_auth_user_id.eq.${input.authUserId}`,
@@ -217,9 +242,11 @@ export async function getUserTeamsSnapshotForUser(input: {
 
   let teamServers: TeamServerRow[] = [];
   let teamMembers: TeamMemberRow[] = [];
+  const teamRolesByTeam = new Map<number, TeamRole[]>();
+  const rolesById = new Map<number, TeamRoleRow>();
 
   if (allKnownTeamIds.length) {
-    const [teamServersResult, teamMembersResult] = await Promise.all([
+    const [teamServersResult, teamMembersResult, teamRolesResult] = await Promise.all([
       supabase
         .from("auth_user_team_servers")
         .select("team_id, guild_id")
@@ -228,22 +255,48 @@ export async function getUserTeamsSnapshotForUser(input: {
       supabase
         .from("auth_user_team_members")
         .select(
-          "id, team_id, invited_discord_user_id, invited_auth_user_id, invited_by_user_id, status, accepted_at, created_at",
+          "id, team_id, invited_discord_user_id, invited_auth_user_id, invited_by_user_id, status, role_id, custom_permissions, accepted_at, created_at",
         )
         .in("team_id", allKnownTeamIds)
         .returns<TeamMemberRow[]>(),
+      supabase
+        .from("auth_user_team_roles")
+        .select("id, team_id, name, permissions, created_at")
+        .in("team_id", allKnownTeamIds)
+        .returns<TeamRoleRow[]>(),
     ]);
 
     if (teamServersResult.error) {
+      console.error("teamServersResult error:", teamServersResult.error);
       throw new Error(teamServersResult.error.message);
     }
 
     if (teamMembersResult.error) {
+      console.error("teamMembersResult error:", teamMembersResult.error);
       throw new Error(teamMembersResult.error.message);
+    }
+
+    if (teamRolesResult.error) {
+      console.error("teamRolesResult error:", teamRolesResult.error);
+      throw new Error(teamRolesResult.error.message);
     }
 
     teamServers = teamServersResult.data || [];
     teamMembers = teamMembersResult.data || [];
+
+    for (const roleRow of teamRolesResult.data || []) {
+      const role: TeamRole = {
+        id: roleRow.id,
+        teamId: roleRow.team_id,
+        name: roleRow.name,
+        permissions: Array.isArray(roleRow.permissions) ? roleRow.permissions : [],
+        createdAt: roleRow.created_at,
+      };
+      const current = teamRolesByTeam.get(roleRow.team_id) || [];
+      current.push(role);
+      teamRolesByTeam.set(roleRow.team_id, current);
+      rolesById.set(roleRow.id, roleRow);
+    }
   }
 
   const userIdsToResolve = uniqueStrings(
@@ -298,31 +351,50 @@ export async function getUserTeamsSnapshotForUser(input: {
       if (!team) return null;
 
       const owner = authUserMap.get(team.owner_user_id);
-      const members = (teamMembersByTeam.get(teamId) || [])
+      const members: UserTeamMember[] = (teamMembersByTeam.get(teamId) || [])
         .filter((member) => member.status !== "declined")
-        .map((member) => ({
-          id: member.id,
-          discordUserId: member.invited_discord_user_id,
-          displayName: member.invited_auth_user_id
-            ? authUserMap.get(member.invited_auth_user_id)?.display_name || null
-            : null,
-          status: member.status,
-          acceptedAt: member.accepted_at,
-          createdAt: member.created_at,
-        }));
+        .map((member) => {
+          const role = member.role_id ? rolesById.get(member.role_id) : null;
+          return {
+            id: member.id,
+            discordUserId: member.invited_discord_user_id,
+            displayName: member.invited_auth_user_id
+              ? authUserMap.get(member.invited_auth_user_id)?.display_name || null
+              : null,
+            status: member.status,
+            roleId: member.role_id,
+            roleName: role?.name || null,
+            customPermissions: Array.isArray(member.custom_permissions) ? member.custom_permissions : [],
+            acceptedAt: member.accepted_at,
+            createdAt: member.created_at,
+          };
+        });
 
       const acceptedCount = members.filter((member) => member.status === "accepted").length;
       const pendingCount = members.filter((member) => member.status === "pending").length;
+
+      const userMembership = teamMembers.find(m => m.team_id === teamId && (m.invited_auth_user_id === input.authUserId || m.invited_discord_user_id === input.discordUserId));
+      const userRoleRow = userMembership?.role_id ? rolesById.get(userMembership.role_id) : null;
+      const isAdminOrOwner = team.owner_user_id === input.authUserId;
+
+      const effectivePerms = uniqueStrings([
+        ...(Array.isArray(userRoleRow?.permissions) ? userRoleRow.permissions : []),
+        ...(Array.isArray(userMembership?.custom_permissions) ? userMembership.custom_permissions : [])
+      ]) as TeamRolePermission[];
 
       return {
         id: team.id,
         name: team.name,
         iconKey: normalizeTeamIconKey(team.icon_key || "aurora"),
-        role: team.owner_user_id === input.authUserId ? "owner" : "member",
+        role: isAdminOrOwner ? "owner" : "member",
+        currentUserPermissions: isAdminOrOwner 
+          ? ["manage_servers", "manage_members", "manage_roles", "view_audit_logs"] as TeamRolePermission[]
+          : effectivePerms,
         ownerUserId: team.owner_user_id,
         ownerDisplayName: owner?.display_name || "Equipe Flowdesk",
         linkedGuildIds: linkedGuildIdsByTeam.get(teamId) || [],
         members,
+        availableRoles: teamRolesByTeam.get(teamId) || [],
         memberCount: 1 + acceptedCount,
         pendingCount,
         createdAt: team.created_at,

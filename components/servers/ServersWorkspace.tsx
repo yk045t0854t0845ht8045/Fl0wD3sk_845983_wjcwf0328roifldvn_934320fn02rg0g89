@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { RefObject } from "react";
@@ -1229,7 +1229,9 @@ export function ServersWorkspace({
         setIsLoading(false);
       } catch (error) {
         if (!isMounted) return;
-        const isAbortError = error instanceof DOMException && error.name === "AbortError";
+        const isAbortError =
+          (error instanceof DOMException && error.name === "AbortError") ||
+          (error instanceof Error && error.message === "unmount");
         const isNonRetryable =
           error instanceof Error &&
           "cause" in error &&
@@ -1265,7 +1267,7 @@ export function ServersWorkspace({
       window.removeEventListener("online", handleOnline);
       clearRetryTimeout();
       clearActiveTimeout();
-      activeController?.abort();
+      activeController?.abort("unmount");
     };
   }, [initialServers, router, serversReloadToken, workspaceCacheKey]);
 
@@ -1382,7 +1384,9 @@ export function ServersWorkspace({
         setIsTeamsLoading(false);
       } catch (error) {
         if (!isMounted) return;
-        const isAbortError = error instanceof DOMException && error.name === "AbortError";
+        const isAbortError =
+          (error instanceof DOMException && error.name === "AbortError") ||
+          (error instanceof Error && error.message === "unmount");
         const isNonRetryable =
           error instanceof Error &&
           "cause" in error &&
@@ -1420,7 +1424,7 @@ export function ServersWorkspace({
       window.removeEventListener("online", handleOnline);
       clearRetryTimeout();
       clearActiveTimeout();
-      activeController?.abort();
+      activeController?.abort("unmount");
     };
   }, [applyTeamsSnapshot, initialTeams, router, teamsReloadToken]);
 
@@ -1906,8 +1910,8 @@ export function ServersWorkspace({
 
   const handleOpenAccountSettings = useCallback(() => {
     setIsProfileMenuOpen(false);
-    window.location.assign("/config");
-  }, []);
+    router.push("/account");
+  }, [router]);
 
   const handleOpenMyAccount = useCallback(() => {
     setIsProfileMenuOpen(false);
