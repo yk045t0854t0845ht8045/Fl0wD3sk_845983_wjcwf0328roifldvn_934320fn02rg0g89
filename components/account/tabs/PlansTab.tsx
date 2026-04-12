@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BadgePercent, ArrowRightLeft, CheckCircle2, Clock, Zap, Crown, Star } from "lucide-react";
+import { BadgePercent, ArrowRightLeft, CheckCircle2, Clock, Zap, Crown, Star, Activity } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 
