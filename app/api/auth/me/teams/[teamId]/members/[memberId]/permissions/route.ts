@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import { assertTeamPermission } from "@/lib/teams/userTeams";
 
 // PATCH /api/auth/me/teams/[teamId]/members/[memberId]/permissions - Update custom perms for member
 export async function PATCH(
@@ -24,16 +25,7 @@ export async function PATCH(
     const { permissions } = body;
 
     const supabase = getSupabaseAdminClientOrThrow();
-
-    const teamCheck = await supabase
-      .from("auth_user_teams")
-      .select("owner_user_id")
-      .eq("id", teamId)
-      .single();
-
-    if (teamCheck.error || teamCheck.data?.owner_user_id !== authSession.user.id) {
-      return applyNoStoreHeaders(NextResponse.json({ ok: false, message: "Somente o dono pode gerenciar permissoes individuais" }, { status: 403 }));
-    }
+    await assertTeamPermission(teamId, authSession.user.id, "manage_roles");
 
     const { error } = await supabase
       .from("auth_user_team_members")

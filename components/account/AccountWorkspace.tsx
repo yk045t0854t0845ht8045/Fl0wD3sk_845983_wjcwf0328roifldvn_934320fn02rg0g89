@@ -1,11 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   BadgePercent,
   ChevronDown,
+  Coins,
   CreditCard,
   History,
   Key,
@@ -14,9 +15,12 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  Server,
+  Activity,
   Ticket,
   UserRound,
   Users,
+  Shield,
   type LucideIcon,
 } from "lucide-react";
 import { LandingReveal } from "@/components/landing/LandingReveal";
@@ -131,6 +135,8 @@ export function AccountWorkspace({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
   const router = useRouter();
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -142,6 +148,10 @@ export function AccountWorkspace({
     } catch {
       setIsLoggingOut(false);
     }
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
   const normalizedSearch = sidebarSearch.trim().toLowerCase();
@@ -163,7 +173,7 @@ export function AccountWorkspace({
       case "payment_methods":
         return <LazyTab id="payment_methods" />;
       case "payment_history":
-        return <LazyTab id="payment_history" />;
+        return <LazyTab id="payment_history" onNavigateTickets={() => setActiveTab("tickets")} />;
       case "api_keys":
         return <LazyTab id="api_keys" />;
       case "teams":
@@ -229,69 +239,10 @@ export function AccountWorkspace({
     "border border-[#111111] bg-[#060606] flex flex-col overflow-hidden";
 
   const renderSidebarContent = () => (
-    <div className="flex h-full flex-col px-[14px] py-[14px]">
-      {/* Profile area — same as ServersWorkspace profile button */}
-      <div ref={profileMenuRef} className="relative">
-        <button
-          type="button"
-          onClick={() => setIsProfileMenuOpen((p) => !p)}
-          className="flex w-full items-center justify-between gap-[12px] rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px] text-left transition-colors hover:border-[#1A1A1A] hover:bg-[#0B0B0B]"
-          aria-expanded={isProfileMenuOpen}
-          aria-haspopup="menu"
-        >
-          <div className="flex min-w-0 items-center gap-[10px]">
-            <AccountAvatar avatarUrl={avatarUrl} displayName={displayName} size={38} />
-            <div className="min-w-0">
-              <p className="truncate text-[15px] leading-none font-medium tracking-[-0.03em] text-[#E5E5E5]">
-                {displayName}
-              </p>
-              <p className="mt-[5px] truncate text-[12px] leading-none text-[#686868]">
-                @{username}
-              </p>
-            </div>
-          </div>
-          <span className="inline-flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[10px] text-[#7E7E7E] transition-colors hover:bg-[#101010] hover:text-[#D8D8D8]">
-            <ChevronDown className={`h-[14px] w-[14px] transition-transform duration-200 ${isProfileMenuOpen ? "rotate-180" : ""}`} />
-          </span>
-        </button>
-
-        {isProfileMenuOpen && (
-          <div
-            className="absolute left-0 right-0 top-[calc(100%+10px)] z-[120] overflow-hidden rounded-[22px] border border-[#151515] bg-[#070707] p-[12px] shadow-[0_26px_80px_rgba(0,0,0,0.54)]"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div className="space-y-[6px]">
-              <button
-                type="button"
-                onClick={() => { setIsProfileMenuOpen(false); router.push("/servers"); }}
-                className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#A7A7A7] transition-colors hover:bg-[#111111] hover:text-[#E6E6E6]"
-              >
-                <Settings2 className="h-[16px] w-[16px] shrink-0" />
-                <span className="text-[14px] leading-none font-medium">Ir para servidores</span>
-              </button>
-              <div className="border-t border-[#141414] pt-[6px]">
-                <button
-                  type="button"
-                  onClick={() => { void handleLogout(); }}
-                  disabled={isLoggingOut}
-                  className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#DB9E9E] transition-colors hover:bg-[#111111] hover:text-[#F1C0C0] disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {isLoggingOut ? (
-                    <ButtonLoader size={16} colorClassName="text-[#DB8A8A]" />
-                  ) : (
-                    <LogOut className="h-[16px] w-[16px] shrink-0" />
-                  )}
-                  <span className="text-[14px] leading-none font-medium">Sair</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
+    <div className="flex h-full flex-col px-[14px] pb-[14px] pt-[20px]">
       {/* Search */}
-      <div className="mt-[14px] flex items-center gap-[10px] rounded-[16px] border border-[#141414] bg-[#080808] px-[14px] py-[12px]">
-        <Search className="h-[15px] w-[15px] shrink-0 text-[#555555]" />
+      <div className="flex items-center gap-[10px] rounded-[16px] border border-[#141414] bg-[#080808] px-[14px] py-[12px]">
+        <Search className="h-[18px] w-[18px] shrink-0 text-[#6F6F6F]" strokeWidth={1.85} aria-hidden="true" />
         <input
           type="text"
           value={sidebarSearch}
@@ -300,77 +251,174 @@ export function AccountWorkspace({
           autoComplete="off"
           className="min-w-0 flex-1 bg-transparent text-[15px] text-[#D5D5D5] outline-none placeholder:text-[#5A5A5A]"
         />
+        <span className="inline-flex h-[28px] min-w-[28px] items-center justify-center rounded-[9px] border border-[#1A1A1A] bg-[#101010] px-[8px] text-[12px] font-medium text-[#A7A7A7]">
+          F
+        </span>
       </div>
 
       {/* Navigation groups */}
-      <div className="mt-[14px] flex-1 overflow-y-auto pr-[2px] space-y-[4px]">
+      <div className="mt-[14px] flex-1 overflow-y-auto pr-[2px]">
         {NAV_GROUPS.map((group, groupIndex) => {
           const visibleItems = group.items.filter(matchesSearch);
           if (!visibleItems.length) return null;
-          // Only show "Conta" group header for the first occurrence
+          // Show title based on category change
           const shouldShowCategory =
             groupIndex === 0 ||
             (group.category !== NAV_GROUPS[groupIndex - 1]?.category);
 
+          const groupKey = `${group.category}-${groupIndex}`;
+          const isCollapsed = collapsedGroups[groupKey] && !normalizedSearch;
+
           return (
-            <div key={`${group.category}-${groupIndex}`}>
-              {shouldShowCategory && groupIndex > 0 && (
-                <div className="mt-[12px] border-t border-[#121212] pt-[12px]">
-                  <p className="mb-[6px] px-[4px] text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">
+            <div key={groupKey} className={groupIndex > 0 && shouldShowCategory ? "mt-[12px] border-t border-[#121212] pt-[12px]" : ""}>
+              {shouldShowCategory && (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(groupKey)}
+                  className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                >
+                  <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#8A8A8A] group-hover:text-[#DADADA]">
+                     {/* Dynamic group icon based on category */}
+                     {group.category === "Conta" && <Settings2 className="h-[16px] w-[16px]" strokeWidth={1.9} />}
+                     {group.category === "Cobrança" && <CreditCard className="h-[16px] w-[16px]" strokeWidth={1.9} />}
+                     {group.category === "Ferramentas" && <Key className="h-[16px] w-[16px]" strokeWidth={1.9} />}
+                     {group.category === "Suporte" && <LifeBuoy className="h-[16px] w-[16px]" strokeWidth={1.9} />}
+                     {group.category === "Zona de perigo" && <Shield className="h-[16px] w-[16px]" strokeWidth={1.9} />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
                     {group.category === "Conta" && groupIndex > 0 ? "Avançado" : group.category}
-                  </p>
-                </div>
-              )}
-              {groupIndex === 0 && (
-                <p className="mb-[6px] px-[4px] text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">
-                  {group.category}
-                </p>
+                  </span>
+                  <span
+                    className={`transition-transform duration-200 ${
+                      !isCollapsed || normalizedSearch
+                        ? "rotate-180 text-[#C9C9C9]"
+                        : "rotate-0 text-[#6F6F6F] group-hover:text-[#BEBEBE]"
+                    }`}
+                  >
+                    <ChevronDown className="h-[14px] w-[14px] shrink-0" strokeWidth={1.9} />
+                  </span>
+                </button>
               )}
 
-              <div className="space-y-[4px]">
-                {visibleItems.map((item) => {
-                  const isActive = activeTab === item.id;
-                  const Icon = item.icon;
-                  const isDanger = item.id === "delete_account";
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        setActiveTab(item.id);
-                      }}
-                      className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
-                        isActive
-                          ? isDanger
-                            ? "bg-[rgba(219,70,70,0.08)] text-[#F0A0A0]"
-                            : "bg-[#1E1E1E] text-[#F0F0F0]"
-                          : isDanger
-                            ? "text-[#B07070] hover:bg-[rgba(219,70,70,0.06)] hover:text-[#F0A0A0]"
-                            : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
-                      }`}
-                    >
-                      <span
-                        className={`inline-flex h-[22px] w-[22px] items-center justify-center ${
+              {/* Sub items inside the group folder! */}
+              {(!isCollapsed || normalizedSearch) && (
+                <div className="mt-[6px] space-y-[4px] pl-[12px]">
+                  {visibleItems.map((item) => {
+                    const isActive = activeTab === item.id;
+                    const Icon = item.icon;
+                    const isDanger = item.id === "delete_account";
+
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setIsProfileMenuOpen(false);
+                          setActiveTab(item.id);
+                        }}
+                        className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
                           isActive
-                            ? isDanger ? "text-[#F0A0A0]" : "text-[#F0F0F0]"
+                            ? isDanger
+                              ? "bg-[rgba(219,70,70,0.08)] text-[#F0A0A0]"
+                              : "bg-[#1A1A1A] text-[#F0F0F0]"
                             : isDanger
-                              ? "text-[#9A5555] group-hover:text-[#F0A0A0]"
-                              : "text-[#8A8A8A] group-hover:text-[#DADADA]"
+                              ? "text-[#B07070] hover:bg-[rgba(219,70,70,0.06)] hover:text-[#F0A0A0]"
+                              : "text-[#AFAFAF] hover:bg-[#101010] hover:text-[#E3E3E3]"
                         }`}
                       >
-                        <Icon className="h-[16px] w-[16px]" strokeWidth={1.9} />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
-                        {item.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                        <span
+                          className={`inline-flex h-[20px] w-[20px] items-center justify-center ${
+                            isActive
+                              ? isDanger ? "text-[#F0A0A0]" : "text-[#F0F0F0]"
+                              : isDanger
+                                ? "text-[#9A5555] group-hover:text-[#F0A0A0]"
+                                : "text-[#7F7F7F] group-hover:text-[#DADADA]"
+                          }`}
+                        >
+                          <Icon className="h-[16px] w-[16px]" strokeWidth={1.9} />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
+                          {item.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
+      </div>
+
+      <div ref={profileMenuRef} className="mt-[14px] border-t border-[#121212] pt-[14px]">
+        <div className="relative">
+          {isProfileMenuOpen && (
+            <div
+              className="absolute inset-x-0 bottom-[calc(100%+10px)] z-[140] overflow-hidden rounded-[22px] border border-[#151515] bg-[#070707] p-[12px] shadow-[0_26px_80px_rgba(0,0,0,0.54)]"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="space-y-[8px]">
+                <button
+                  type="button"
+                  onClick={() => { setIsProfileMenuOpen(false); router.push("/servers"); }}
+                  className="flex w-full items-center gap-[12px] rounded-[16px] border border-[#171717] bg-[#0D0D0D] px-[12px] py-[12px] text-left text-[#D8D8D8] transition-colors hover:border-[#222222] hover:bg-[#111111]"
+                >
+                  <span className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[11px] border border-[#1A1A1A] bg-[#101010] text-[#CFCFCF]">
+                    <Settings2 className="h-[16px] w-[16px] shrink-0" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
+                      Central de servidores
+                    </span>
+                    <span className="mt-[6px] block truncate text-[11px] leading-none text-[#686868]">
+                      Voltar ao painel
+                    </span>
+                  </span>
+                </button>
+                <div className="border-t border-[#121212] pt-[12px]">
+                  <div className="space-y-[4px]">
+                    <button
+                      type="button"
+                      onClick={() => { void handleLogout(); }}
+                      disabled={isLoggingOut}
+                      className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#DB9E9E] transition-colors hover:bg-[#111111] hover:text-[#F1C0C0] disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isLoggingOut ? (
+                        <ButtonLoader size={16} colorClassName="text-[#DB8A8A]" />
+                      ) : (
+                        <LogOut className="h-[17px] w-[17px] shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                      )}
+                      <span className="text-[14px] leading-none font-medium">Sair</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsProfileMenuOpen((p) => !p)}
+            className="flex w-full items-center justify-between gap-[12px] rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px] text-left transition-colors hover:border-[#1A1A1A] hover:bg-[#0B0B0B]"
+            aria-expanded={isProfileMenuOpen}
+            aria-haspopup="menu"
+          >
+            <div className="flex min-w-0 items-center gap-[10px]">
+              <AccountAvatar avatarUrl={avatarUrl} displayName={displayName} size={38} />
+              <div className="min-w-0">
+                <p className="truncate text-[15px] leading-none font-medium tracking-[-0.03em] text-[#E5E5E5]">
+                  {displayName}
+                </p>
+                <p className="mt-[5px] truncate text-[12px] leading-none text-[#686868]">
+                  @{username}
+                </p>
+              </div>
+            </div>
+            <span className="inline-flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[10px] text-[#7E7E7E] transition-colors hover:bg-[#101010] hover:text-[#D8D8D8]">
+              <ChevronDown className="h-[14px] w-[14px] shrink-0" strokeWidth={1.9} aria-hidden="true" />
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -449,10 +497,10 @@ const TAB_COMPONENTS: Record<string, React.ComponentType> = {
   delete_account: dynamic(() => import("@/components/account/tabs/DeleteAccountTab").then((m) => ({ default: m.DeleteAccountTab })), { ssr: false }),
 };
 
-function LazyTab({ id }: { id: string }) {
+function LazyTab({ id, ...props }: { id: string; [key: string]: any }) {
   const Component = TAB_COMPONENTS[id];
   if (!Component) return null;
-  return <Component />;
+  return <Component {...props} />;
 }
 
 // ─── Overview Content ─────────────────────────────────────────────────────────
@@ -473,6 +521,16 @@ const QUICK_CARDS: QuickCard[] = [
   { id: "tickets", icon: Ticket, title: "Tickets de Suporte", description: "Histórico de atendimentos e novos chamados." },
 ];
 
+type AccountSummary = {
+  plan: { name: string; status: string; maxServers: number } | null;
+  teamsCount: number;
+  apiKeysCount: number;
+  paymentMethodsCount: number;
+  ordersCount: number;
+  ticketsCount: number;
+  flowPoints: number;
+};
+
 function OverviewContent({
   onNavigate,
   displayName,
@@ -482,23 +540,136 @@ function OverviewContent({
   displayName: string;
   avatarUrl: string | null;
 }) {
-  return (
-    <div className="space-y-[20px]">
-      {/* Profile card */}
-      <div className="flex items-center gap-[18px] rounded-[20px] border border-[#141414] bg-[#0A0A0A] px-[22px] py-[20px]">
-        <AccountAvatar avatarUrl={avatarUrl} displayName={displayName} size={60} />
-        <div>
-          <p className="text-[22px] font-semibold tracking-tight text-[#EEEEEE]">{displayName}</p>
-          <p className="mt-[5px] text-[14px] text-[#666666]">Membro do Flowdesk</p>
+  const [isLoading, setIsLoading] = useState(true);
+  const [summary, setSummary] = useState<AccountSummary | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me/account/summary")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.ok) {
+          setSummary(data.summary);
+        }
+      })
+      .catch((err) => console.error("Error fetching account summary", err))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-[28px]">
+        {/* Profile Card Skeleton */}
+        <div className="flex items-center justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] px-[22px] py-[20px]">
+          <div className="flex items-center gap-[18px]">
+            <div className="flowdesk-shimmer h-[60px] w-[60px] shrink-0 rounded-full bg-[#1A1A1A]" />
+            <div className="space-y-[8px]">
+              <div className="flowdesk-shimmer h-[22px] w-[140px] rounded-[6px] bg-[#1A1A1A]" />
+              <div className="flowdesk-shimmer h-[14px] w-[110px] rounded-[6px] bg-[#151515]" />
+            </div>
+          </div>
+        </div>
+
+        {/* Overview Stats Skeleton */}
+        <div className="grid gap-[12px] sm:grid-cols-2 lg:grid-cols-4">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="flowdesk-shimmer h-[104px] w-full rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+          ))}
+        </div>
+
+        {/* Quick Access Skeleton */}
+        <div className="grid gap-[10px] sm:grid-cols-2 lg:grid-cols-3">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="flowdesk-shimmer h-[130px] w-full rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+          ))}
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="space-y-[24px]">
+      {/* Profile card */}
+      <div className="flex flex-col gap-[18px] sm:flex-row sm:items-center sm:justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] px-[22px] py-[20px]">
+        <div className="flex items-center gap-[18px]">
+          <AccountAvatar avatarUrl={avatarUrl} displayName={displayName} size={60} />
+          <div>
+            <p className="text-[22px] font-semibold tracking-tight text-[#EEEEEE]">{displayName}</p>
+            <div className="mt-[5px] flex items-center gap-[8px]">
+              <BadgePercent className="h-[14px] w-[14px] text-[#A6A6A6]" />
+              <span className="text-[14px] font-medium text-[#D1D1D1]">
+                {summary?.plan?.name || "Plano Free"}
+              </span>
+              <span className="text-[14px] text-[#666666]">• Membro do Flowdesk</span>
+            </div>
+          </div>
+        </div>
+        
+        {/* Flow Points display on the right */}
+        {summary && summary.flowPoints !== undefined && (
+          <div className="flex items-center gap-[10px]">
+            <Coins className="h-[22px] w-[22px] text-white" />
+            <p className="text-[20px] font-bold tracking-tight text-white leading-none">
+              {summary.flowPoints}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <hr className="border-[#141414] opacity-50" />
+
+      {/* Realtime Stats Grid */}
+      {summary && (
+        <div className="grid gap-[12px] sm:grid-cols-2 lg:grid-cols-4">
+            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
+              <div className="flex items-center gap-[10px]">
+                <Activity className="h-[16px] w-[16px] text-[#D5D5D5]" />
+                <span className="text-[13px] font-medium text-[#8F8F8F]">Plano & Limites</span>
+              </div>
+              <div className="mt-[14px]">
+                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.plan?.maxServers || 1}</p>
+                <p className="text-[13px] text-[#5A5A5A]">Servidores licenciados</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
+              <div className="flex items-center gap-[10px]">
+                <Users className="h-[16px] w-[16px] text-[#D5D5D5]" />
+                <span className="text-[13px] font-medium text-[#8F8F8F]">Equipes</span>
+              </div>
+              <div className="mt-[14px]">
+                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.teamsCount}</p>
+                <p className="text-[13px] text-[#5A5A5A]">{summary.teamsCount === 1 ? 'Equipe ativa' : 'Equipes ativas'}</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
+              <div className="flex items-center gap-[10px]">
+                <History className="h-[16px] w-[16px] text-[#D5D5D5]" />
+                <span className="text-[13px] font-medium text-[#8F8F8F]">Faturas</span>
+              </div>
+              <div className="mt-[14px]">
+                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.ordersCount}</p>
+                <p className="text-[13px] text-[#5A5A5A]">{summary.ordersCount === 1 ? 'Fatura no histórico' : 'Faturas no histórico'}</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
+              <div className="flex items-center gap-[10px]">
+                <Key className="h-[16px] w-[16px] text-[#D5D5D5]" />
+                <span className="text-[13px] font-medium text-[#8F8F8F]">Chaves API</span>
+              </div>
+              <div className="mt-[14px]">
+                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.apiKeysCount}</p>
+                <p className="text-[13px] text-[#5A5A5A]">{summary.apiKeysCount === 1 ? 'Chave criada' : 'Chaves criadas'}</p>
+              </div>
+            </div>
+          </div>
+      )}
+
+      {summary && <hr className="border-[#141414] opacity-50" />}
 
       {/* Quick access grid */}
-      <div>
-        <p className="mb-[12px] text-[11px] uppercase tracking-[0.16em] text-[#555555]">
-          Acesso rápido
-        </p>
-        <div className="grid gap-[10px] sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-[10px] sm:grid-cols-2 lg:grid-cols-3">
           {QUICK_CARDS.map((card) => {
             const Icon = card.icon;
             return (
@@ -506,16 +677,16 @@ function OverviewContent({
                 key={card.id}
                 type="button"
                 onClick={() => onNavigate(card.id)}
-                className="group flex w-full flex-col items-start gap-[12px] rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px] text-left transition-all duration-200 hover:border-[#1C1C1C] hover:bg-[#0D0D0D]"
+                className="group flex w-full flex-col items-start justify-between min-h-[130px] rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[20px] text-left transition-all duration-300 hover:scale-[1.01] hover:border-[#222222] hover:bg-gradient-to-b hover:from-[#0D0D0D] hover:to-[#0A0A0A]"
               >
-                <div className="flex h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-[#1A1A1A] bg-[#111111] transition-colors group-hover:border-[#222222]">
-                  <Icon className="h-[18px] w-[18px] text-[#888888] group-hover:text-[#CCCCCC] transition-colors" strokeWidth={1.8} />
+                <div className="flex h-[38px] w-[38px] items-center justify-center rounded-[12px] border border-[#1A1A1A] bg-[#111111] transition-colors group-hover:border-[#2A2A2A] group-hover:bg-[#151515]">
+                  <Icon className="h-[18px] w-[18px] text-[#888888] group-hover:text-[#E2E2E2] transition-colors" strokeWidth={1.8} />
                 </div>
-                <div>
-                  <p className="text-[15px] font-semibold text-[#DDDDDD] group-hover:text-[#EEEEEE] transition-colors">
+                <div className="mt-[18px]">
+                  <p className="text-[15px] font-semibold text-[#DDDDDD] group-hover:text-[#FFFFFF] transition-colors">
                     {card.title}
                   </p>
-                  <p className="mt-[5px] text-[13px] leading-[1.5] text-[#666666] group-hover:text-[#7A7A7A] transition-colors">
+                  <p className="mt-[6px] text-[13px] leading-[1.4] text-[#666666] group-hover:text-[#888888] transition-colors">
                     {card.description}
                   </p>
                 </div>
@@ -523,7 +694,6 @@ function OverviewContent({
             );
           })}
         </div>
-      </div>
     </div>
   );
 }

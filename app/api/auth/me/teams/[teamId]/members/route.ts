@@ -3,6 +3,7 @@ import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { assertTeamPermission } from "@/lib/teams/userTeams";
 
 export async function POST(
   request: Request,
@@ -44,25 +45,7 @@ export async function POST(
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-
-    // Verify ownership
-    const teamResult = await supabase
-      .from("auth_user_teams")
-      .select("id, owner_user_id")
-      .eq("id", teamId)
-      .maybeSingle<{ id: number; owner_user_id: number }>();
-
-    if (teamResult.error) throw new Error(teamResult.error.message);
-    if (!teamResult.data) {
-      return applyNoStoreHeaders(
-        NextResponse.json({ ok: false, message: "Equipe não encontrada." }, { status: 404 }),
-      );
-    }
-    if (teamResult.data.owner_user_id !== authSession.user.id) {
-      return applyNoStoreHeaders(
-        NextResponse.json({ ok: false, message: "Sem permissão." }, { status: 403 }),
-      );
-    }
+    await assertTeamPermission(teamId, authSession.user.id, "manage_members");
 
     // Avoid duplicate invite
     const existingResult = await supabase

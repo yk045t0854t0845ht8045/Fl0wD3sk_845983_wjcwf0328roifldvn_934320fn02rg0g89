@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import { assertTeamPermission } from "@/lib/teams/userTeams";
 
 // PATCH /api/auth/me/teams/[teamId]/roles/[roleId] - Update role
 export async function PATCH(
@@ -24,16 +25,7 @@ export async function PATCH(
     const { name, permissions } = body;
 
     const supabase = getSupabaseAdminClientOrThrow();
-
-    const teamCheck = await supabase
-      .from("auth_user_teams")
-      .select("owner_user_id")
-      .eq("id", teamId)
-      .single();
-
-    if (teamCheck.error || teamCheck.data?.owner_user_id !== authSession.user.id) {
-      return applyNoStoreHeaders(NextResponse.json({ ok: false, message: "Somente o dono pode gerenciar cargos" }, { status: 403 }));
-    }
+    await assertTeamPermission(teamId, authSession.user.id, "manage_roles");
 
     const updateFields: Record<string, unknown> = {};
     if (name !== undefined) updateFields.name = String(name).trim();
@@ -73,16 +65,7 @@ export async function DELETE(
     const roleId = Number(roleIdStr);
 
     const supabase = getSupabaseAdminClientOrThrow();
-
-    const teamCheck = await supabase
-      .from("auth_user_teams")
-      .select("owner_user_id")
-      .eq("id", teamId)
-      .single();
-
-    if (teamCheck.error || teamCheck.data?.owner_user_id !== authSession.user.id) {
-      return applyNoStoreHeaders(NextResponse.json({ ok: false, message: "Somente o dono pode gerenciar cargos" }, { status: 403 }));
-    }
+    await assertTeamPermission(teamId, authSession.user.id, "manage_roles");
 
     const { error } = await supabase
       .from("auth_user_team_roles")

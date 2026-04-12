@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Users, Trash2, Clock, CheckCircle2, Crown, AlertCircle,
   ChevronDown, ChevronUp, X, Plus, Server, ShieldAlert,
-  Shield, Settings, UserPlus, Edit2, Check, Loader2
+  Shield, Settings, UserPlus, Edit2, Check, Loader2, Search
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DangerActionModal } from "../DangerActionModal";
@@ -99,6 +99,9 @@ export function TeamsTab() {
   // Team delete
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
   const [deletingTeamId, setDeletingTeamId] = useState<number | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState<"all" | "owner" | "member">("all");
 
   const router = useRouter();
 
@@ -310,11 +313,31 @@ export function TeamsTab() {
   // ─── Loading / Empty states ─────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="flex h-[200px] items-center justify-center">
-        <Spinner size={24} />
+      <div className="mt-[32px] space-y-[12px]">
+        {/* Filter skeleton */}
+        <div className="flowdesk-shimmer h-[70px] w-full rounded-[18px] border border-[#141414] bg-[#0A0A0A]" />
+        {[...Array(2)].map((_, i) => (
+          <div key={i} className="flowdesk-shimmer h-[86px] w-full rounded-[18px] border border-[#141414] bg-[#0A0A0A]" />
+        ))}
       </div>
     );
   }
+
+  const filteredTeams = teams.filter((team) => {
+    const q = searchQuery.toLowerCase();
+    const matchSearch = team.name.toLowerCase().includes(q) ||
+                        team.members.some(m => 
+                          (m.displayName?.toLowerCase().includes(q)) || 
+                          (m.discordUserId.toLowerCase().includes(q)) || 
+                          (m.roleName?.toLowerCase().includes(q))
+                        );
+                        
+    const isOwner = team.role === "owner";
+    const matchRole = roleFilter === "all" || 
+                     (roleFilter === "owner" && isOwner) || 
+                     (roleFilter === "member" && !isOwner);
+    return matchSearch && matchRole;
+  });
 
   if (teams.length === 0) {
     return (
@@ -337,14 +360,59 @@ export function TeamsTab() {
   }
 
   return (
-    <div className="mt-[32px] space-y-[12px]">
-      {teams.map((team) => {
+    <div className="mt-[32px] space-y-[24px]">
+      {/* Filter Card */}
+      <div className="rounded-[22px] border border-[#141414] bg-[#0A0A0A] p-[20px]">
+        <div className="flex flex-col gap-[16px] lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-1 items-center gap-[12px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] px-[16px] py-[12px] transition-all focus-within:border-[#222] focus-within:bg-[#0F0F0F]">
+            <Search className="h-[18px] w-[18px] shrink-0 text-[#6F6F6F]" strokeWidth={1.8} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar por equipe, membro ou cargo..."
+              className="w-full bg-transparent text-[15px] text-[#D5D5D5] outline-none placeholder:text-[#4A4A4A]"
+            />
+          </div>
+          
+          <div className="flex items-center gap-[10px]">
+            <div className="flex items-center gap-[6px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] p-[4px]">
+              {(["all", "owner", "member"] as const).map((opt) => {
+                const isActive = roleFilter === opt;
+                return (
+                  <button
+                    key={opt}
+                    onClick={() => setRoleFilter(opt)}
+                    className={`rounded-[10px] px-[16px] py-[8px] text-[13px] font-semibold transition-all ${
+                      isActive
+                        ? "bg-[#1A1A1A] text-[#EEEEEE] shadow-sm"
+                        : "text-[#666666] hover:bg-[#111111] hover:text-[#A6A6A6]"
+                    }`}
+                  >
+                    {opt === "all" ? "Todas" : opt === "owner" ? "Sou Titular" : "Sou Membro"}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-[12px]">
+                {filteredTeams.length === 0 && teams.length > 0 ? (
+          <div className="rounded-[16px] border border-[#141414] bg-[#0A0A0A] p-[24px] text-center">
+            <p className="text-[14px] text-[#777777]">Nenhuma equipe encontrada com os filtros atuais.</p>
+          </div>
+        ) : filteredTeams.map((team) => {
         const isExpanded = expandedTeams.has(team.id);
         const isOwner = team.role === "owner";
         const gradient = TEAM_GRADIENT[team.iconKey] || TEAM_GRADIENT["aurora"];
         const tab = activeTab[team.id] || "members";
         const acceptedMembers = team.members.filter((m) => m.status === "accepted");
         const pendingMembers = team.members.filter((m) => m.status === "pending");
+
+        const canManageRoles = isOwner || team.currentUserPermissions.includes("manage_roles");
+        const canManageMembers = isOwner || team.currentUserPermissions.includes("manage_members");
 
         return (
           <div
@@ -408,8 +476,10 @@ export function TeamsTab() {
                 <div className="flex gap-[2px] px-[18px] pt-[14px]">
                   {[
                     { id: "members", icon: <Users className="h-[13px] w-[13px]" />, label: "Membros" },
-                    ...(isOwner ? [
+                    ...(canManageRoles ? [
                       { id: "roles", icon: <Shield className="h-[13px] w-[13px]" />, label: "Cargos" },
+                    ] : []),
+                    ...(canManageMembers ? [
                       { id: "invite", icon: <UserPlus className="h-[13px] w-[13px]" />, label: "Convidar" },
                     ] : []),
                   ].map((t) => (
@@ -478,7 +548,7 @@ export function TeamsTab() {
                           </div>
                           <div className="flex items-center gap-[8px]">
                             {/* Role badge / selector */}
-                            {isOwner ? (
+                            {canManageRoles ? (
                               <div className="relative">
                                 <select
                                   value={member.roleId || ""}
@@ -494,7 +564,7 @@ export function TeamsTab() {
                                   ))}
                                 </select>
                                 {isUpdatingMemberRole === member.id ? (
-                                  <Spinner size={10} />
+                                  <Loader2 className="h-[10px] w-[10px] animate-spin text-[#555555]" />
                                 ) : (
                                   <ChevronDown className="pointer-events-none absolute right-[8px] top-1/2 -translate-y-1/2 h-[10px] w-[10px] text-[#555555]" />
                                 )}
@@ -509,25 +579,27 @@ export function TeamsTab() {
                               </span>
                             )}
 
-                            {isOwner && (
+                            {canManageMembers && (
                               <>
-                                <button
-                                  onClick={() => setMemberPermsToEdit({ teamId: team.id, member })}
-                                  className={`flex h-[28px] w-[28px] items-center justify-center rounded-[8px] transition-colors ${
-                                    member.customPermissions.length > 0
-                                      ? "bg-[rgba(255,163,47,0.1)] text-[#FFB966]"
-                                      : "text-[#555555] hover:bg-[#111111] hover:text-[#B5B5B5]"
-                                  }`}
-                                  title="Permissões individuais"
-                                >
-                                  <ShieldAlert className="h-[13px] w-[13px]" />
-                                </button>
+                                {canManageRoles && (
+                                  <button
+                                    onClick={() => setMemberPermsToEdit({ teamId: team.id, member })}
+                                    className={`flex h-[28px] w-[28px] items-center justify-center rounded-[8px] transition-colors ${
+                                      member.customPermissions.length > 0
+                                        ? "bg-[rgba(255,163,47,0.1)] text-[#FFB966]"
+                                        : "text-[#555555] hover:bg-[#111111] hover:text-[#B5B5B5]"
+                                    }`}
+                                    title="Permissões individuais"
+                                  >
+                                    <ShieldAlert className="h-[13px] w-[13px]" />
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => setMemberToRemove({ teamId: team.id, member })}
                                   disabled={removingMemberId === member.id}
                                   className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-[#555555] hover:bg-[rgba(219,70,70,0.08)] hover:text-[#DB4646] disabled:opacity-40 transition-colors"
                                 >
-                                  {removingMemberId === member.id ? <Spinner size={12} /> : <X className="h-[13px] w-[13px]" />}
+                                  {removingMemberId === member.id ? <Loader2 className="h-[12px] w-[12px] animate-spin" /> : <X className="h-[13px] w-[13px]" />}
                                 </button>
                               </>
                             )}
@@ -554,7 +626,7 @@ export function TeamsTab() {
                           </div>
                           <div className="flex items-center gap-[8px]">
                             <span className="text-[11px] font-medium text-[#F2C823] bg-[rgba(242,200,35,0.08)] rounded-full px-[8px] py-[3px]">Pendente</span>
-                            {isOwner && (
+                            {canManageMembers && (
                               <button
                                 onClick={() => setMemberToRemove({ teamId: team.id, member })}
                                 disabled={removingMemberId === member.id}
@@ -574,7 +646,7 @@ export function TeamsTab() {
                   )}
 
                   {/* ── TAB: ROLES ─────────────────────────────────────────── */}
-                  {tab === "roles" && isOwner && (
+                  {tab === "roles" && canManageRoles && (
                     <div className="space-y-[20px]">
                       {/* Existing roles */}
                       <div>
@@ -753,8 +825,8 @@ export function TeamsTab() {
                     </div>
                   )}
 
-                  {/* ── TAB: INVITE ───────────────────────────────────────── */}
-                  {tab === "invite" && isOwner && (
+                  {/* ── TAB: INVITE ────────────────────────────────────────── */}
+                  {tab === "invite" && canManageMembers && (
                     <div className="space-y-[16px]">
                       <div className="rounded-[14px] border border-[#141414] bg-[#080808] p-[16px] space-y-[12px]">
                         <p className="text-[13px] font-semibold text-[#DDDDDD]">Convidar novo membro</p>
@@ -824,10 +896,12 @@ export function TeamsTab() {
                   )}
                 </div>
               </div>
-            )}
-          </div>
-        );
-      })}
+              )}
+            </div>
+          );
+        })
+      }
+    </div>
 
       {/* ── MODALS ─────────────────────────────────────────────────────────── */}
       <DangerActionModal

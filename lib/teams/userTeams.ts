@@ -588,3 +588,50 @@ export async function acceptUserTeamInviteForUser(input: {
 
   return membershipResult.data.id;
 }
+
+export async function assertTeamPermission(teamId: number, authUserId: number, requiredPermission: TeamRolePermission) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  
+  const teamCheck = await supabase
+    .from("auth_user_teams")
+    .select("owner_user_id")
+    .eq("id", teamId)
+    .single();
+    
+  if (teamCheck.error) throw new Error("Equipe nao encontrada.");
+  if (teamCheck.data.owner_user_id === authUserId) return true; // Owner has all permissions
+  
+  const memberCheck = await supabase
+    .from("auth_user_team_members")
+    .select("role_id, custom_permissions, status")
+    .eq("team_id", teamId)
+    .eq("invited_auth_user_id", authUserId)
+    .maybeSingle();
+
+  if (!memberCheck.data || memberCheck.data.status !== "accepted") {
+    throw new Error("Voce nao e membro desta equipe.");
+  }
+  
+  const perms = new Set<string>(
+    Array.isArray(memberCheck.data.custom_permissions) ? memberCheck.data.custom_permissions : []
+  );
+
+  if (memberCheck.data.role_id) {
+    const roleCheck = await supabase
+      .from("auth_user_team_roles")
+      .select("permissions")
+      .eq("id", memberCheck.data.role_id)
+      .single();
+      
+    if (roleCheck.data && Array.isArray(roleCheck.data.permissions)) {
+      roleCheck.data.permissions.forEach(p => perms.add(p));
+    }
+  }
+
+  if (!perms.has(requiredPermission)) {
+    throw new Error("Sem permissao necessaria para esta acao.");
+  }
+  
+  return true;
+}
+

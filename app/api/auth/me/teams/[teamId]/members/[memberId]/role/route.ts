@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import { assertTeamPermission } from "@/lib/teams/userTeams";
 
 // PATCH /api/auth/me/teams/[teamId]/members/[memberId]/role - Assign role to member
 export async function PATCH(
@@ -24,16 +25,7 @@ export async function PATCH(
     const { roleId } = body; // roleId can be null to remove role
 
     const supabase = getSupabaseAdminClientOrThrow();
-
-    const teamCheck = await supabase
-      .from("auth_user_teams")
-      .select("owner_user_id")
-      .eq("id", teamId)
-      .single();
-
-    if (teamCheck.error || teamCheck.data?.owner_user_id !== authSession.user.id) {
-      return applyNoStoreHeaders(NextResponse.json({ ok: false, message: "Somente o dono pode gerenciar cargos de membros" }, { status: 403 }));
-    }
+    await assertTeamPermission(teamId, authSession.user.id, "manage_roles");
 
     // If roleId provided, verify it belongs to this team
     if (roleId) {

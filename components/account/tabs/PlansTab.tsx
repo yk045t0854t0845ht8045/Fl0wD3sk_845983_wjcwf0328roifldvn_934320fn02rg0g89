@@ -17,27 +17,45 @@ type PlanData = {
   maxLicensedServers: number;
 };
 
-const PLAN_BADGE_STYLES: Record<string, { bg: string; text: string; icon: React.ElementType }> = {
-  basic: { bg: "bg-[rgba(100,100,100,0.12)]", text: "text-[#A0A0A0]", icon: Star },
-  starter: { bg: "bg-[rgba(0,98,255,0.1)]", text: "text-[#8AB6FF]", icon: Zap },
-  pro: { bg: "bg-[rgba(125,59,255,0.12)]", text: "text-[#C4A9FF]", icon: Crown },
-  enterprise: { bg: "bg-[rgba(255,163,47,0.12)]", text: "text-[#FFB966]", icon: Crown },
+const PLAN_CONFIGS: Record<string, { 
+  color: string; 
+  bg: string; 
+  icon: React.ElementType;
+  description: string;
+  features: string[];
+}> = {
+  basic: { 
+    color: "#A0A0A0", 
+    bg: "rgba(100,100,100,0.12)", 
+    icon: Star,
+    description: "Ideal para começar e gerenciar um servidor pequeno.",
+    features: ["1 Servidor licenciado", "Automações básicas", "Suporte via comunidade", "Painel web padrão"]
+  },
+  starter: { 
+    color: "#8AB6FF", 
+    bg: "rgba(0,98,255,0.1)", 
+    icon: Zap,
+    description: "Para quem quer crescer e profissionalizar seu servidor.",
+    features: ["Até 5 Servidores licenciados", "Automações avançadas", "Logs em tempo real", "Suporte prioritário"]
+  },
+  pro: { 
+    color: "#C4A9FF", 
+    bg: "rgba(125,59,255,0.12)", 
+    icon: Crown,
+    description: "Nível profissional para grandes comunidades.",
+    features: ["Até 15 Servidores licenciados", "Personalização total", "API Access", "Gerente de conta"]
+  },
+  enterprise: { 
+    color: "#FFB966", 
+    bg: "rgba(255,163,47,0.12)", 
+    icon: Crown,
+    description: "Soluções customizadas para necessidades extremas.",
+    features: ["Servidores ilimitados", "White-label completo", "SLA Garantido", "Suporte 24/7 dedicado"]
+  },
 };
-
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function PlanBadge({ code }: { code: string }) {
-  const style = PLAN_BADGE_STYLES[code.toLowerCase()] ?? PLAN_BADGE_STYLES["starter"];
-  const Icon = style.icon;
-  return (
-    <span className={`inline-flex items-center gap-[5px] rounded-full ${style.bg} px-[10px] py-[4px] text-[11px] font-semibold uppercase tracking-wider ${style.text}`}>
-      <Icon className="h-[10px] w-[10px]" />
-      {code.charAt(0).toUpperCase() + code.slice(1)}
-    </span>
-  );
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -65,9 +83,7 @@ export function PlansTab() {
       try {
         const res = await fetch("/api/auth/me/account/plan");
         const json = await res.json();
-        if (json.ok) {
-          setPlan(json.plan);
-        }
+        if (json.ok) setPlan(json.plan);
       } catch (err) {
         console.error(err);
       } finally {
@@ -79,8 +95,13 @@ export function PlansTab() {
 
   if (loading) {
     return (
-      <div className="flex h-[200px] items-center justify-center">
-        <ButtonLoader size={24} />
+      <div className="mt-[32px] space-y-[24px]">
+        <div className="flowdesk-shimmer h-[220px] w-full rounded-[24px] border border-[#141414] bg-[#0A0A0A]" />
+        <div className="grid gap-[14px] sm:grid-cols-3">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="flowdesk-shimmer h-[100px] w-full rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+          ))}
+        </div>
       </div>
     );
   }
@@ -92,95 +113,159 @@ export function PlansTab() {
           <BadgePercent className="text-[#888888] h-[24px] w-[24px]" />
         </div>
         <p className="mt-[16px] text-[15px] font-medium text-[#E5E5E5]">Nenhum plano encontrado</p>
-        <p className="mt-[4px] text-[14px] text-[#777777]">Não foi possível carregar as informações do plano.</p>
       </div>
     );
   }
 
+  const config = PLAN_CONFIGS[plan.code.toLowerCase()] || PLAN_CONFIGS["starter"];
+  const StatusIcon = config.icon;
+
   return (
-    <div className="mt-[32px] space-y-[16px]">
-      {/* Current Plan Card */}
-      <div className="rounded-[20px] border border-[#181818] bg-[#0A0A0A] p-[24px]">
-        <div className="flex flex-col gap-[16px] sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-center gap-[16px]">
-            <div className={`flex h-[52px] w-[52px] items-center justify-center rounded-[16px] ${PLAN_BADGE_STYLES[plan.code.toLowerCase()]?.bg ?? "bg-[rgba(0,98,255,0.1)]"}`}>
-              <BadgePercent className={`h-[24px] w-[24px] ${PLAN_BADGE_STYLES[plan.code.toLowerCase()]?.text ?? "text-[#8AB6FF]"}`} />
-            </div>
-            <div>
-              <div className="flex items-center gap-[10px]">
-                <p className="text-[20px] font-bold text-[#EEEEEE] tracking-tight">
-                  {plan.name}
+    <div className="mt-[32px] space-y-[28px]">
+      {/* Hero Plan Card */}
+      <div className="relative overflow-hidden rounded-[32px] border border-[#141414] bg-[#070707] p-[32px] md:p-[40px]">
+        {/* Abstract background elements */}
+        <div 
+          className="absolute -right-[60px] -top-[60px] h-[300px] w-[300px] blur-[120px] opacity-[0.15] pointer-events-none"
+          style={{ backgroundColor: config.color }}
+        />
+        <div className="absolute right-0 top-0 h-full w-[40%] bg-[linear-gradient(to_left,rgba(0,0,0,0.4)_0%,transparent_100%)] pointer-events-none" />
+        
+        <div className="relative z-10">
+          <div className="flex flex-col gap-[32px] lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-[24px]">
+              <div 
+                className="flex h-[80px] w-[80px] shrink-0 items-center justify-center rounded-[24px] border border-[rgba(255,255,255,0.05)] shadow-[0_20px_50px_rgba(0,0,0,0.5)]"
+                style={{ backgroundColor: config.bg }}
+              >
+                <StatusIcon className="h-[40px] w-[40px]" style={{ color: config.color }} />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-[12px]">
+                  <h2 className="text-[32px] font-bold tracking-tight text-white">{plan.name}</h2>
+                  <StatusBadge status={plan.status} />
+                </div>
+                <p className="mt-[8px] max-w-[480px] text-[16px] leading-relaxed text-[#888888]">
+                  {config.description}
                 </p>
-                <PlanBadge code={plan.code} />
-              </div>
-              <div className="mt-[6px] flex items-center gap-[8px]">
-                <StatusBadge status={plan.status} />
-                {plan.recurrenceLabel !== "N/A" && (
-                  <>
-                    <span className="h-[3px] w-[3px] rounded-full bg-[#333333]" />
-                    <span className="text-[13px] text-[#666666]">{plan.recurrenceLabel}</span>
-                  </>
-                )}
               </div>
             </div>
+
+            <button
+              onClick={() => router.push("/servers/plans")}
+              className="flex h-[52px] items-center gap-[10px] rounded-[16px] bg-[#FFFFFF] px-[24px] text-[15px] font-bold text-[#000000] shadow-[0_4px_20px_rgba(255,255,255,0.1)] transition-all hover:scale-[1.02] active:scale-[0.98] hover:bg-[#F2F2F2]"
+            >
+              <ArrowRightLeft className="h-[18px] w-[18px]" strokeWidth={2.5} />
+              <span>Gerenciar Plano</span>
+            </button>
           </div>
 
-          <button
-            onClick={() => router.push("/#plans")}
-            className="flex h-[40px] items-center justify-center gap-[8px] rounded-[12px] border border-[#1E1E1E] bg-[#111111] px-[18px] text-[13px] font-medium text-[#D8D8D8] transition hover:bg-[#1A1A1A] hover:text-[#FFFFFF]"
-          >
-            <ArrowRightLeft className="h-[14px] w-[14px]" />
-            Alterar Plano
-          </button>
-        </div>
+          <div className="mt-[40px] grid gap-[16px] sm:grid-cols-2 lg:grid-cols-3">
+             <div className="group rounded-[20px] bg-[#0A0A0A] border border-[#141414] p-[20px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D]">
+                <p className="text-[12px] font-semibold uppercase tracking-widest text-[#555555]">Data de Ativação</p>
+                <div className="mt-[12px] flex items-center gap-[10px]">
+                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[10px] bg-[#111111] text-[#666] group-hover:text-[#888] transition-colors">
+                    <Clock className="h-[16px] w-[16px]" />
+                  </div>
+                  <p className="text-[16px] font-semibold text-[#EEEEEE]">{formatDate(plan.activatedAt)}</p>
+                </div>
+             </div>
+             
+             <div className="group rounded-[20px] bg-[#0A0A0A] border border-[#141414] p-[20px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D]">
+                <p className="text-[12px] font-semibold uppercase tracking-widest text-[#555555]">Próxima Renovação</p>
+                <div className="mt-[12px] flex items-center gap-[10px]">
+                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[10px] bg-[#111111] text-[#666] group-hover:text-[#8AB6FF] transition-colors">
+                    <CheckCircle2 className="h-[16px] w-[16px]" />
+                  </div>
+                  <p className={`text-[16px] font-semibold ${plan.status === "expired" ? "text-[#DB4646]" : "text-[#EEEEEE]"}`}>
+                    {formatDate(plan.expiresAt)}
+                  </p>
+                </div>
+             </div>
 
-        {/* Plan Details Grid */}
-        <div className="mt-[20px] grid grid-cols-2 gap-[12px] border-t border-[#141414] pt-[20px] sm:grid-cols-3">
-          <div className="rounded-[12px] border border-[#141414] bg-[#080808] p-[14px]">
-            <p className="text-[11px] uppercase tracking-wider text-[#555555]">Ativado em</p>
-            <p className="mt-[6px] text-[14px] font-semibold text-[#DDDDDD]">{formatDate(plan.activatedAt)}</p>
-          </div>
-          <div className="rounded-[12px] border border-[#141414] bg-[#080808] p-[14px]">
-            <p className="text-[11px] uppercase tracking-wider text-[#555555]">Expira em</p>
-            <p className={`mt-[6px] text-[14px] font-semibold ${plan.status === "expired" ? "text-[#DB4646]" : "text-[#DDDDDD]"}`}>{formatDate(plan.expiresAt)}</p>
-          </div>
-          <div className="rounded-[12px] border border-[#141414] bg-[#080808] p-[14px]">
-            <p className="text-[11px] uppercase tracking-wider text-[#555555]">Servidores máximos</p>
-            <p className="mt-[6px] text-[14px] font-semibold text-[#DDDDDD]">
-              {plan.maxLicensedServers === 0 ? "Sem limite" : plan.maxLicensedServers}
-            </p>
+             <div className="group rounded-[20px] bg-[#0A0A0A] border border-[#141414] p-[20px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D] sm:col-span-2 lg:col-span-1">
+                <p className="text-[12px] font-semibold uppercase tracking-widest text-[#555555]">Ciclo de Cobrança</p>
+                <div className="mt-[12px] flex items-center gap-[10px]">
+                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[10px] bg-[#111111] text-[#666] group-hover:text-[#F2C823] transition-colors">
+                    <Zap className="h-[16px] w-[16px]" />
+                  </div>
+                  <p className="text-[16px] font-semibold text-[#EEEEEE]">{plan.recurrenceLabel}</p>
+                </div>
+             </div>
           </div>
         </div>
       </div>
 
-      {/* Upgrade CTA — only show for basic/inactive plans */}
-      {(plan.code === "basic" || plan.status === "inactive" || plan.status === "expired") && (
-        <div className="rounded-[20px] border border-[#181818] bg-[#0A0A0A] p-[24px]">
-          <div className="flex items-start gap-[16px]">
-            <div className="flex h-[44px] w-[44px] items-center justify-center rounded-[14px] border border-[#1A1A1A] bg-[#111111]">
-              <Zap className="h-[20px] w-[20px] text-[#888888]" />
+      <div className="grid gap-[24px] lg:grid-cols-2">
+        {/* Limits & Usage */}
+        <div className="rounded-[28px] border border-[#141414] bg-[#0A0A0A] p-[28px]">
+          <div className="flex items-center gap-[12px]">
+            <div className="flex h-[36px] w-[36px] items-center justify-center rounded-[10px] bg-[#111111]">
+              <Activity className="h-[18px] w-[18px] text-[#A6A6A6]" />
             </div>
-            <div className="flex-1">
-              <p className="text-[16px] font-semibold text-[#EEEEEE]">Faça upgrade do seu plano</p>
-              <p className="mt-[4px] text-[14px] text-[#666666]">
-                Desbloqueie mais servidores, automações avançadas e suporte prioritário.
-              </p>
-              <button
-                onClick={() => router.push("/#plans")}
-                className="group relative mt-[14px] inline-flex h-[42px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-5 text-[13px] leading-none font-semibold"
-              >
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
-                />
-                <span className="relative z-10 inline-flex items-center gap-[8px] whitespace-nowrap leading-none text-[#111111]">
-                  Ver planos disponíveis
+            <div>
+              <h3 className="text-[18px] font-bold text-white">Limites do Plano</h3>
+              <p className="text-[13px] text-[#666666]">Consumo atual em relação as cotas</p>
+            </div>
+          </div>
+          
+          <div className="mt-[32px] space-y-[24px]">
+            <div>
+              <div className="mb-[10px] flex items-center justify-between px-[2px]">
+                <span className="text-[14px] font-medium text-[#A0A0A0]">Servidores Licenciados</span>
+                <span className="text-[14px] font-bold text-white">
+                  {plan.maxLicensedServers === 0 ? "Ilimitados" : `${plan.maxLicensedServers}`}
                 </span>
-              </button>
+              </div>
+              <div className="h-[8px] w-full overflow-hidden rounded-full bg-[#141414]">
+                <div 
+                  className="h-full rounded-full transition-all duration-700 ease-out"
+                  style={{ 
+                    backgroundColor: config.color,
+                    width: plan.maxLicensedServers === 0 ? "100%" : "33%",
+                    boxShadow: `0 0 20px ${config.color}33`
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="pt-[20px] border-t border-[#141414] grid grid-cols-2 gap-[16px]">
+               <div className="rounded-2xl border border-[#141414] bg-[#080808] p-[16px]">
+                 <p className="text-[11px] font-bold uppercase tracking-widest text-[#444]">Automações</p>
+                 <p className="mt-[6px] text-[15px] font-bold text-[#EEEEEE]">Habilitadas</p>
+               </div>
+               <div className="rounded-2xl border border-[#141414] bg-[#080808] p-[16px]">
+                 <p className="text-[11px] font-bold uppercase tracking-widest text-[#444]">Prioridade</p>
+                 <p className="mt-[6px] text-[15px] font-bold text-[#EEEEEE]">Normal</p>
+               </div>
             </div>
           </div>
         </div>
-      )}
+
+        {/* Benefits List */}
+        <div className="rounded-[28px] border border-[#141414] bg-[#0A0A0A] p-[28px]">
+          <div className="flex items-center gap-[12px]">
+            <div className="flex h-[36px] w-[36px] items-center justify-center rounded-[10px] bg-[#111111]">
+              <CheckCircle2 className="h-[18px] w-[18px] text-[#A6A6A6]" />
+            </div>
+            <div>
+              <h3 className="text-[18px] font-bold text-white">Vantagens Incluídas</h3>
+              <p className="text-[13px] text-[#666666]">Funcionalidades liberadas no seu nível</p>
+            </div>
+          </div>
+          
+          <div className="mt-[32px] grid gap-[12px]">
+            {config.features.map((feature, i) => (
+              <div key={i} className="group flex items-center gap-[14px] rounded-[18px] border border-[#141414] bg-[#080808] px-[18px] py-[14px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D]">
+                <div className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-[rgba(52,168,83,0.1)] text-[#34A853] transition-colors group-hover:bg-[rgba(52,168,83,0.2)]">
+                  <CheckCircle2 className="h-[14px] w-[14px]" />
+                </div>
+                <span className="text-[14px] font-medium text-[#D1D1D1] group-hover:text-white transition-colors">{feature}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

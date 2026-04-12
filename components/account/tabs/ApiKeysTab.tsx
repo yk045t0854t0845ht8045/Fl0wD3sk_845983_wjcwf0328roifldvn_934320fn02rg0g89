@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Key, Plus, Trash, Copy, Check } from "lucide-react";
+import { useEffect, useState, useMemo } from "react";
+import { Key, Plus, Trash, Copy, Check, Search } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { DangerActionModal } from "../DangerActionModal";
 
@@ -31,6 +31,20 @@ export function ApiKeysTab() {
   useEffect(() => {
     loadKeys();
   }, []);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "revoked">("all");
+
+  const filteredKeys = useMemo(() => {
+    return keys.filter((key) => {
+      const matchSearch = key.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const isRevoked = !!key.revoked_at;
+      const matchStatus = statusFilter === "all" || 
+                         (statusFilter === "active" && !isRevoked) || 
+                         (statusFilter === "revoked" && isRevoked);
+      return matchSearch && matchStatus;
+    });
+  }, [keys, searchQuery, statusFilter]);
 
   async function handleCreateKey(e: React.FormEvent) {
     e.preventDefault();
@@ -81,14 +95,55 @@ export function ApiKeysTab() {
 
   if (loading && keys.length === 0) {
     return (
-      <div className="flex h-[200px] items-center justify-center">
-        <ButtonLoader size={24} />
+      <div className="mt-[32px] space-y-[24px]">
+        <div className="flowdesk-shimmer h-[160px] w-full rounded-[18px] border border-[#141414] bg-[#090909]" />
+        <div className="space-y-[12px]">
+           {[...Array(2)].map((_, i) => (
+             <div key={i} className="flowdesk-shimmer h-[70px] w-full rounded-[16px] border border-[#141414] bg-[#0A0A0A]" />
+           ))}
+        </div>
       </div>
     );
   }
-
   return (
-    <div className="mt-[32px]">
+    <div className="mt-[32px] space-y-[24px]">
+      {/* Filter Card */}
+      <div className="rounded-[22px] border border-[#141414] bg-[#0A0A0A] p-[20px]">
+        <div className="flex flex-col gap-[16px] lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-1 items-center gap-[12px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] px-[16px] py-[12px] transition-all focus-within:border-[#222] focus-within:bg-[#0F0F0F]">
+            <Search className="h-[18px] w-[18px] shrink-0 text-[#6F6F6F]" strokeWidth={1.8} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar chaves de API..."
+              className="w-full bg-transparent text-[15px] text-[#D5D5D5] outline-none placeholder:text-[#4A4A4A]"
+            />
+          </div>
+          
+          <div className="flex items-center gap-[10px]">
+            <div className="flex items-center gap-[6px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] p-[4px]">
+              {(["all", "active", "revoked"] as const).map((opt) => {
+                const isActive = statusFilter === opt;
+                return (
+                  <button
+                    key={opt}
+                    onClick={() => setStatusFilter(opt)}
+                    className={`rounded-[10px] px-[16px] py-[8px] text-[13px] font-semibold transition-all ${
+                      isActive
+                        ? "bg-[#1A1A1A] text-[#EEEEEE] shadow-sm"
+                        : "text-[#666666] hover:bg-[#111111] hover:text-[#A6A6A6]"
+                    }`}
+                  >
+                    {opt === "all" ? "Todas" : opt === "active" ? "Ativas" : "Revogadas"}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="rounded-[18px] border border-[#141414] bg-[#090909] p-[24px]">
          <h2 className="text-[18px] font-semibold text-[#E9E9E9]">Criar nova chave API</h2>
          <p className="mt-[4px] text-[14px] text-[#888888]">As chaves permitem integração com bots externos e painéis próprios.</p>
@@ -125,11 +180,11 @@ export function ApiKeysTab() {
       </div>
 
       <div className="mt-[24px] space-y-[12px]">
-        <h3 className="text-[14px] font-semibold uppercase tracking-wide text-[#555555]">Chaves Ativas</h3>
-        {keys.length === 0 ? (
-          <p className="text-[14px] text-[#777777]">Nenhuma chave de API registrada.</p>
+        <h3 className="text-[14px] font-semibold uppercase tracking-wide text-[#555555]">Chaves Registradas</h3>
+        {filteredKeys.length === 0 ? (
+          <p className="text-[14px] text-[#777777]">Nenhuma chave encontrada com os filtros atuais.</p>
         ) : (
-          keys.map((key) => {
+          filteredKeys.map((key) => {
             const isRevoked = !!key.revoked_at;
             return (
               <div key={key.id} className="flex items-center justify-between rounded-[16px] border border-[#131313] bg-[#0A0A0A] p-[16px]">

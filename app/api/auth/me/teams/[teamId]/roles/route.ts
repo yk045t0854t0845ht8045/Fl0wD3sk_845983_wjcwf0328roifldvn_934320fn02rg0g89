@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import { assertTeamPermission } from "@/lib/teams/userTeams";
 
 // POST /api/auth/me/teams/[teamId]/roles - Create a new role
 export async function POST(
@@ -27,17 +28,7 @@ export async function POST(
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-
-    // Verify ownership
-    const teamCheck = await supabase
-      .from("auth_user_teams")
-      .select("owner_user_id")
-      .eq("id", teamId)
-      .single();
-
-    if (teamCheck.error || teamCheck.data?.owner_user_id !== authSession.user.id) {
-      return applyNoStoreHeaders(NextResponse.json({ ok: false, message: "Somente o dono pode gerenciar cargos" }, { status: 403 }));
-    }
+    await assertTeamPermission(teamId, authSession.user.id, "manage_roles");
 
     const { data, error } = await supabase
       .from("auth_user_team_roles")
