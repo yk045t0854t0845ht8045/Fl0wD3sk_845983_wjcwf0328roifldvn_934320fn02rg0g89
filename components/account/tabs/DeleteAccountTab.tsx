@@ -39,14 +39,14 @@ export function DeleteAccountTab() {
           <AlertTriangle className="h-[24px] w-[24px]" />
           <h2 className="text-[18px] font-semibold text-[#E9E9E9]">Gostaria mesmo de excluir sua conta?</h2>
         </div>
-        <p className="mt-[12px] text-[#B0B0B0] max-w-[600px] leading-[1.6]">
-          Ao excluir sua conta:
+        <div className="mt-[12px] text-[#B0B0B0] max-w-[600px] leading-[1.6]">
+          <span>Ao excluir sua conta:</span>
           <ul className="mt-[8px] list-disc ml-[20px] space-y-[4px]">
              <li>Você perderá o acesso aos seus dados de pagamento e configurações em todos os painéis.</li>
              <li>Suas equipes ativas perderão a posse caso você seja o administrador primário.</li>
              <li>Quaisquer assinaturas ou chaves de API ligadas à sua conta serão invalidadas / tornadas inacessíveis.</li>
           </ul>
-        </p>
+        </div>
         <button 
           onClick={handleOpenModal}
           disabled={loading}

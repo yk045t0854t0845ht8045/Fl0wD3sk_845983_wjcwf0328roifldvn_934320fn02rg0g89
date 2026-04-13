@@ -26,8 +26,6 @@ import {
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
-import { useAccountSummary } from "@/hooks/useAccountData";
-
 
 import { type AccountTab, ACCOUNT_TABS, validateTab } from "@/lib/account/tabs";
 export { validateTab };
@@ -127,63 +125,29 @@ export function AccountWorkspace({
   initialTab = "overview",
   children,
 }: AccountWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<AccountTab>(initialTab);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [mountedTabs, setMountedTabs] = useState<Record<AccountTab, boolean>>(() => ({
-    overview: true,
-    plans: false,
-    payment_methods: false,
-    payment_history: false,
-    api_keys: false,
-    teams: false,
-    tickets: false,
-    delete_account: false,
-    [initialTab]: true,
-  }));
 
   const router = useRouter();
   const pathname = usePathname();
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    setActiveTab(initialTab);
-    setMountedTabs((prev) => (prev[initialTab] ? prev : { ...prev, [initialTab]: true }));
-  }, [initialTab]);
-
-  const ACCOUNT_TABS: AccountTab[] = [
-    "overview",
-    "plans",
-    "payment_methods",
-    "payment_history",
-    "api_keys",
-    "teams",
-    "tickets",
-    "delete_account",
-  ];
+  // Derive active tab from pathname reactively
+  const segments = pathname.split("/").filter(Boolean);
+  // segments could be ["account"] or ["account", "plans"]
+  const lastSegment = segments[segments.length - 1];
+  const activeTab: AccountTab = (lastSegment && lastSegment !== "account") 
+    ? validateTab(lastSegment) 
+    : "overview";
 
   function buildTabHref(tab: AccountTab) {
     return tab === "overview" ? "/account" : `/account/${tab}`;
   }
 
-  function prefetchTab(tab: AccountTab) {
-    const href = buildTabHref(tab);
-    router.prefetch(href);
-    const component = TAB_COMPONENTS[tab];
-    
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dynComponent = component as any;
-    if (dynComponent && typeof dynComponent.preload === "function") {
-      dynComponent.preload();
-    }
-  }
-
   function navigateToTab(tab: AccountTab) {
     setIsProfileMenuOpen(false);
-    setActiveTab(tab);
-    setMountedTabs((prev) => (prev[tab] ? prev : { ...prev, [tab]: true }));
     const href = buildTabHref(tab);
     if (pathname !== href) {
       router.push(href);
@@ -220,32 +184,6 @@ export function AccountWorkspace({
   function matchesSearch(item: NavItem) {
     if (!normalizedSearch) return true;
     return item.label.toLowerCase().includes(normalizedSearch);
-  }
-
-  // ── Content resolver ─────────────────────────────────────────────────────────
-
-  function renderTab(tab: AccountTab) {
-    // Dynamic import of each tab at render time
-    switch (tab) {
-      case "overview":
-        return <OverviewContent onNavigate={navigateToTab} displayName={displayName} avatarUrl={avatarUrl} />;
-      case "plans":
-        return <LazyTab id="plans" />;
-      case "payment_methods":
-        return <LazyTab id="payment_methods" />;
-      case "payment_history":
-        return <LazyTab id="payment_history" onNavigateTickets={() => navigateToTab("tickets")} />;
-      case "api_keys":
-        return <LazyTab id="api_keys" />;
-      case "teams":
-        return <LazyTab id="teams" />;
-      case "tickets":
-        return <LazyTab id="tickets" />;
-      case "delete_account":
-        return <LazyTab id="delete_account" />;
-      default:
-        return null;
-    }
   }
 
   // ── Page title / description ─────────────────────────────────────────────────
@@ -367,12 +305,7 @@ export function AccountWorkspace({
                       <button
                         key={item.id}
                         type="button"
-                        onClick={() => {
-                          setIsProfileMenuOpen(false);
-                          setActiveTab(item.id);
-                        }}
-                        onMouseEnter={() => prefetchTab(item.id)}
-                        onFocus={() => prefetchTab(item.id)}
+                        onClick={() => navigateToTab(item.id)}
                         className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
                           isActive
                             ? isDanger
@@ -524,238 +457,12 @@ export function AccountWorkspace({
 
             <LandingReveal delay={180}>
               <div className="mt-[28px]">
-                {ACCOUNT_TABS.map((tab) => {
-                  if (!mountedTabs[tab]) return null;
-                  return (
-                    <div
-                      key={tab}
-                      style={{ display: activeTab === tab ? "block" : "none" }}
-                    >
-                      {renderTab(tab)}
-                    </div>
-                  );
-                })}
+                {children}
               </div>
             </LandingReveal>
           </section>
         </div>
       </main>
-      <div style={{ display: "none" }}>{children}</div>
-    </div>
-  );
-}
-
-// ─── Lazy Tab Loader ─────────────────────────────────────────────────────────
-
-import dynamic from "next/dynamic";
-
-const TAB_COMPONENTS: Record<string, React.ComponentType> = {
-  plans: dynamic(() => import("@/components/account/tabs/PlansTab").then((m) => ({ default: m.PlansTab })), { ssr: false }),
-  payment_methods: dynamic(() => import("@/components/account/tabs/PaymentMethodsTab").then((m) => ({ default: m.PaymentMethodsTab })), { ssr: false }),
-  payment_history: dynamic(() => import("@/components/account/tabs/PaymentHistoryTab").then((m) => ({ default: m.PaymentHistoryTab })), { ssr: false }),
-  api_keys: dynamic(() => import("@/components/account/tabs/ApiKeysTab").then((m) => ({ default: m.ApiKeysTab })), { ssr: false }),
-  teams: dynamic(() => import("@/components/account/tabs/TeamsTab").then((m) => ({ default: m.TeamsTab })), { ssr: false }),
-  tickets: dynamic(() => import("@/components/account/tabs/TicketsTab").then((m) => ({ default: m.TicketsTab })), { ssr: false }),
-  delete_account: dynamic(() => import("@/components/account/tabs/DeleteAccountTab").then((m) => ({ default: m.DeleteAccountTab })), { ssr: false }),
-};
-
-function LazyTab({ id, ...props }: { id: string; [key: string]: any }) {
-  const Component = TAB_COMPONENTS[id];
-  if (!Component) return null;
-  return <Component {...props} />;
-}
-
-// ─── Overview Content ─────────────────────────────────────────────────────────
-
-type QuickCard = {
-  id: AccountTab;
-  icon: LucideIcon;
-  title: string;
-  description: string;
-};
-
-const QUICK_CARDS: QuickCard[] = [
-  { id: "plans", icon: BadgePercent, title: "Planos", description: "Visualize seu plano atual, status e opções de upgrade." },
-  { id: "payment_methods", icon: CreditCard, title: "Métodos de Pagamento", description: "Adicione ou remova cartões e métodos de pagamento." },
-  { id: "payment_history", icon: History, title: "Histórico de Pagamentos", description: "Timeline de cobranças e transações aprovadas." },
-  { id: "api_keys", icon: Key, title: "Chaves de API", description: "Crie chaves para integrar o Flowdesk externamente." },
-  { id: "teams", icon: Users, title: "Equipes e Membros", description: "Gerencie equipes, convite membros e ajuste permissões." },
-  { id: "tickets", icon: Ticket, title: "Tickets de Suporte", description: "Histórico de atendimentos e novos chamados." },
-];
-
-type AccountSummary = {
-  plan: { name: string; status: string; maxServers: number } | null;
-  teamsCount: number;
-  apiKeysCount: number;
-  paymentMethodsCount: number;
-  ordersCount: number;
-  ticketsCount: number;
-  flowPoints: number;
-};
-
-function OverviewContent({
-  onNavigate,
-  displayName,
-  avatarUrl,
-}: {
-  onNavigate: (tab: AccountTab) => void;
-  displayName: string;
-  avatarUrl: string | null;
-}) {
-  const [isLoading, setIsLoading] = useState(true);
-  const [summary, setSummary] = useState<AccountSummary | null>(null);
-
-  useEffect(() => {
-    fetch("/api/auth/me/account/summary")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.ok) {
-          setSummary(data.summary);
-        }
-      })
-      .catch((err) => console.error("Error fetching account summary", err))
-      .finally(() => setIsLoading(false));
-  }, []);
-
-  if (isLoading) {
-    return (
-      <div className="space-y-[28px]">
-        {/* Profile Card Skeleton */}
-        <div className="flex items-center justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] px-[22px] py-[20px]">
-          <div className="flex items-center gap-[18px]">
-            <div className="flowdesk-shimmer h-[60px] w-[60px] shrink-0 rounded-full bg-[#1A1A1A]" />
-            <div className="space-y-[8px]">
-              <div className="flowdesk-shimmer h-[22px] w-[140px] rounded-[6px] bg-[#1A1A1A]" />
-              <div className="flowdesk-shimmer h-[14px] w-[110px] rounded-[6px] bg-[#151515]" />
-            </div>
-          </div>
-        </div>
-
-        {/* Overview Stats Skeleton */}
-        <div className="grid gap-[12px] sm:grid-cols-2 lg:grid-cols-4">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="flowdesk-shimmer h-[104px] w-full rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
-          ))}
-        </div>
-
-        {/* Quick Access Skeleton */}
-        <div className="grid gap-[10px] sm:grid-cols-2 lg:grid-cols-3">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="flowdesk-shimmer h-[130px] w-full rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-[24px]">
-      {/* Profile card */}
-      <div className="flex flex-col gap-[18px] sm:flex-row sm:items-center sm:justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] px-[22px] py-[20px]">
-        <div className="flex items-center gap-[18px]">
-          <AccountAvatar avatarUrl={avatarUrl} displayName={displayName} size={60} />
-          <div>
-            <p className="text-[22px] font-semibold tracking-tight text-[#EEEEEE]">{displayName}</p>
-            <div className="mt-[5px] flex items-center gap-[8px]">
-              <BadgePercent className="h-[14px] w-[14px] text-[#A6A6A6]" />
-              <span className="text-[14px] font-medium text-[#D1D1D1]">
-                {summary?.plan?.name || "Plano Free"}
-              </span>
-              <span className="text-[14px] text-[#666666]">• Membro do Flowdesk</span>
-            </div>
-          </div>
-        </div>
-        
-        {/* Flow Points display on the right */}
-        {summary && summary.flowPoints !== undefined && (
-          <div className="flex items-center gap-[10px]">
-            <Coins className="h-[22px] w-[22px] text-white" />
-            <p className="text-[20px] font-bold tracking-tight text-white leading-none">
-              {summary.flowPoints}
-            </p>
-          </div>
-        )}
-      </div>
-
-      <hr className="border-[#141414] opacity-50" />
-
-      {/* Realtime Stats Grid */}
-      {summary && (
-        <div className="grid gap-[12px] sm:grid-cols-2 lg:grid-cols-4">
-            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
-              <div className="flex items-center gap-[10px]">
-                <Activity className="h-[16px] w-[16px] text-[#D5D5D5]" />
-                <span className="text-[13px] font-medium text-[#8F8F8F]">Plano & Limites</span>
-              </div>
-              <div className="mt-[14px]">
-                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.plan?.maxServers || 1}</p>
-                <p className="text-[13px] text-[#5A5A5A]">Servidores licenciados</p>
-              </div>
-            </div>
-
-            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
-              <div className="flex items-center gap-[10px]">
-                <Users className="h-[16px] w-[16px] text-[#D5D5D5]" />
-                <span className="text-[13px] font-medium text-[#8F8F8F]">Equipes</span>
-              </div>
-              <div className="mt-[14px]">
-                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.teamsCount}</p>
-                <p className="text-[13px] text-[#5A5A5A]">{summary.teamsCount === 1 ? 'Equipe ativa' : 'Equipes ativas'}</p>
-              </div>
-            </div>
-
-            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
-              <div className="flex items-center gap-[10px]">
-                <History className="h-[16px] w-[16px] text-[#D5D5D5]" />
-                <span className="text-[13px] font-medium text-[#8F8F8F]">Faturas</span>
-              </div>
-              <div className="mt-[14px]">
-                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.ordersCount}</p>
-                <p className="text-[13px] text-[#5A5A5A]">{summary.ordersCount === 1 ? 'Fatura no histórico' : 'Faturas no histórico'}</p>
-              </div>
-            </div>
-
-            <div className="flex flex-col justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[18px]">
-              <div className="flex items-center gap-[10px]">
-                <Key className="h-[16px] w-[16px] text-[#D5D5D5]" />
-                <span className="text-[13px] font-medium text-[#8F8F8F]">Chaves API</span>
-              </div>
-              <div className="mt-[14px]">
-                <p className="text-[24px] font-semibold text-[#EEEEEE]">{summary.apiKeysCount}</p>
-                <p className="text-[13px] text-[#5A5A5A]">{summary.apiKeysCount === 1 ? 'Chave criada' : 'Chaves criadas'}</p>
-              </div>
-            </div>
-          </div>
-      )}
-
-      {summary && <hr className="border-[#141414] opacity-50" />}
-
-      {/* Quick access grid */}
-      <div className="grid gap-[10px] sm:grid-cols-2 lg:grid-cols-3">
-          {QUICK_CARDS.map((card) => {
-            const Icon = card.icon;
-            return (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => onNavigate(card.id)}
-                className="group flex w-full flex-col items-start justify-between min-h-[130px] rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[20px] text-left transition-all duration-300 hover:scale-[1.01] hover:border-[#222222] hover:bg-gradient-to-b hover:from-[#0D0D0D] hover:to-[#0A0A0A]"
-              >
-                <div className="flex h-[38px] w-[38px] items-center justify-center rounded-[12px] border border-[#1A1A1A] bg-[#111111] transition-colors group-hover:border-[#2A2A2A] group-hover:bg-[#151515]">
-                  <Icon className="h-[18px] w-[18px] text-[#888888] group-hover:text-[#E2E2E2] transition-colors" strokeWidth={1.8} />
-                </div>
-                <div className="mt-[18px]">
-                  <p className="text-[15px] font-semibold text-[#DDDDDD] group-hover:text-[#FFFFFF] transition-colors">
-                    {card.title}
-                  </p>
-                  <p className="mt-[6px] text-[13px] leading-[1.4] text-[#666666] group-hover:text-[#888888] transition-colors">
-                    {card.description}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
-        </div>
     </div>
   );
 }
