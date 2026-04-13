@@ -15,8 +15,10 @@ const TAB_COMPONENTS: Record<string, any> = {
   api_keys: dynamic(() => import("@/components/account/tabs/ApiKeysTab").then((m) => ({ default: m.ApiKeysTab })), { ssr: false }),
   teams: dynamic(() => import("@/components/account/tabs/TeamsTab").then((m) => ({ default: m.TeamsTab })), { ssr: false }),
   tickets: dynamic(() => import("@/components/account/tabs/TicketsTab").then((m) => ({ default: m.TicketsTab })), { ssr: false }),
+  status: dynamic(() => import("@/components/account/tabs/StatusTab").then((m) => ({ default: m.StatusTab })), { ssr: false }),
   delete_account: dynamic(() => import("@/components/account/tabs/DeleteAccountTab").then((m) => ({ default: m.DeleteAccountTab })), { ssr: false }),
 };
+
 
 export function TabRenderer({ id, ...props }: { id: AccountTab; [key: string]: any }) {
   if (id === "overview") return <OverviewContent {...props} />;

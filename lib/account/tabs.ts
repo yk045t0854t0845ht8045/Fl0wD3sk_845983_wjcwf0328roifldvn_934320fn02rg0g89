@@ -6,6 +6,7 @@ export type AccountTab =
   | "api_keys"
   | "teams"
   | "tickets"
+  | "status"
   | "delete_account";
 
 export const ACCOUNT_TABS: AccountTab[] = [
@@ -16,6 +17,7 @@ export const ACCOUNT_TABS: AccountTab[] = [
   "api_keys",
   "teams",
   "tickets",
+  "status",
   "delete_account"
 ];
 

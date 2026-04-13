@@ -21,11 +21,13 @@ import {
   UserRound,
   Users,
   Shield,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useAccountStatus } from "@/hooks/useAccountData";
 
 import { type AccountTab, ACCOUNT_TABS, validateTab } from "@/lib/account/tabs";
 export { validateTab };
@@ -68,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     category: "Conta",
     items: [
+      { id: "status", label: "Status da Conta", icon: ShieldCheck },
       { id: "delete_account", label: "Excluir Conta", icon: ShieldAlert },
     ],
   },
@@ -129,6 +132,10 @@ export function AccountWorkspace({
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  const { statusData } = useAccountStatus();
+  const isSuspended = (statusData?.statusLevel ?? 0) >= 4;
+  const isAtRisk = (statusData?.statusLevel ?? 0) >= 1;
 
   const router = useRouter();
   const pathname = usePathname();
@@ -224,6 +231,11 @@ export function AccountWorkspace({
       title: "Tickets de Suporte",
       subtitle: "Visualize o histórico de atendimentos e abra novos chamados.",
     },
+    status: {
+      eyebrow: "Avançado",
+      title: "Status da Conta",
+      subtitle: "Visualize o histórico de violações e integridade da sua conta.",
+    },
     delete_account: {
       eyebrow: "Zona de perigo",
       title: "Excluir Conta",
@@ -263,6 +275,7 @@ export function AccountWorkspace({
 
           const groupKey = `${group.category}-${groupIndex}`;
           const isCollapsed = collapsedGroups[groupKey] && !normalizedSearch;
+          const isGroupActive = group.items.some((item) => item.id === activeTab);
 
           return (
             <div key={groupKey} className={groupIndex > 0 && shouldShowCategory ? "mt-[12px] border-t border-[#121212] pt-[12px]" : ""}>
@@ -270,9 +283,9 @@ export function AccountWorkspace({
                 <button
                   type="button"
                   onClick={() => toggleGroup(groupKey)}
-                  className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                  className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3] ${isGroupActive ? "text-[#E3E3E3] font-semibold" : "text-[#B5B5B5]"}`}
                 >
-                  <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#8A8A8A] group-hover:text-[#DADADA]">
+                  <span className={`inline-flex h-[22px] w-[22px] items-center justify-center group-hover:text-[#DADADA] ${isGroupActive ? "text-[#DADADA]" : "text-[#8A8A8A]"}`}>
                      {group.category === "Conta" && <Settings2 className="h-[16px] w-[16px]" strokeWidth={1.9} />}
                      {group.category === "Cobrança" && <CreditCard className="h-[16px] w-[16px]" strokeWidth={1.9} />}
                      {group.category === "Ferramentas" && <Key className="h-[16px] w-[16px]" strokeWidth={1.9} />}
@@ -457,6 +470,31 @@ export function AccountWorkspace({
 
             <LandingReveal delay={180}>
               <div className="mt-[28px]">
+                {/* Suspension Banner */}
+                {isSuspended && activeTab !== "status" && (
+                  <div className="mb-[20px] flex items-start gap-[16px] rounded-[18px] border border-[#DB4646]/40 bg-[rgba(219,70,70,0.08)] px-[20px] py-[18px]">
+                    <Shield className="mt-[2px] h-[22px] w-[22px] shrink-0 text-[#DB4646]" strokeWidth={2} />
+                    <div className="min-w-0">
+                      <p className="text-[15px] font-semibold text-[#DB4646]">Conta Suspensa</p>
+                      <p className="mt-[4px] text-[13px] text-[#B06060] leading-[1.5]">
+                        Sua conta está suspensa e o acesso às funcionalidades está limitado.{" "}
+                        <a href="/account/status" className="underline hover:text-[#DB4646]">Ver detalhes na aba Status</a>.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {isAtRisk && !isSuspended && activeTab !== "status" && (
+                  <div className="mb-[20px] flex items-start gap-[16px] rounded-[18px] border border-[#E7A540]/30 bg-[rgba(231,165,64,0.07)] px-[20px] py-[18px]">
+                    <ShieldAlert className="mt-[2px] h-[22px] w-[22px] shrink-0 text-[#E7A540]" strokeWidth={2} />
+                    <div className="min-w-0">
+                      <p className="text-[15px] font-semibold text-[#E7A540]">Conta com Restrições</p>
+                      <p className="mt-[4px] text-[13px] text-[#A08040] leading-[1.5]">
+                        Sua conta possui violações ativas que podem afetar seus serviços.{" "}
+                        <a href="/account/status" className="underline hover:text-[#E7A540]">Ver na aba Status</a>.
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {children}
               </div>
             </LandingReveal>

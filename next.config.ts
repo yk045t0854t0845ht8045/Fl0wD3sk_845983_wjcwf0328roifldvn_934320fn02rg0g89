@@ -20,6 +20,20 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: appRoot,
   },
+  async redirects() {
+    return [
+      {
+        source: "/tos/",
+        destination: "/terms/",
+        permanent: true,
+      },
+      {
+        source: "/rules/",
+        destination: "/privacy/",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;
