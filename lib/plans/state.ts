@@ -1055,24 +1055,15 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
     fallbackPlanCode: resolvedPlanCode,
   });
   const resolvedBillingPeriodMonths =
-    resolveBillingPeriodMonthsFromCycleDays(resolvedBillingCycleDays) || 1;
+    resolveBillingPeriodMonthsFromCycleDays(resolvedBillingCycleDays);
   const resolvedBillingPeriodCode =
-    resolvedBillingPeriodMonths >= 12
+    resolvedBillingPeriodMonths && resolvedBillingPeriodMonths >= 12
       ? ("annual" as const)
-      : resolvedBillingPeriodMonths >= 6
+      : resolvedBillingPeriodMonths && resolvedBillingPeriodMonths >= 6
         ? ("semiannual" as const)
-        : resolvedBillingPeriodMonths >= 3
+        : resolvedBillingPeriodMonths && resolvedBillingPeriodMonths >= 3
           ? ("quarterly" as const)
           : ("monthly" as const);
-  const expiresAt =
-    normalizeValidIso(order.expires_at) ||
-    resolvePlanLicenseExpiresAtIso({
-      baseTimestamp: activatedAt,
-      billingCycleDays: resolvedBillingCycleDays,
-      billingPeriodMonths: resolvedBillingPeriodMonths,
-      planCode: resolvedPlanCode,
-      fallbackPlanCode: resolvedPlanCode,
-    });
   const [currentPlanStateResult, approvedOrderBenefits, expirationResolution] = await Promise.all([
     supabase
       .from("auth_user_plan_state")
@@ -1091,6 +1082,8 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
     }),
   ]);
 
+  const expiresAt = normalizeValidIso(order.expires_at) || expirationResolution.expiresAt;
+
   if (currentPlanStateResult.error) {
     throw new Error(
       currentPlanStateResult.error.message ||
@@ -1106,7 +1099,7 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
     plan: buildPlanMetadata({
       planCode: resolvedPlanCode,
       billingCycleDays: resolvedBillingCycleDays,
-      billingPeriodMonths: resolvedBillingPeriodMonths,
+      billingPeriodMonths: resolvedBillingPeriodMonths || 0,
     }),
   };
 

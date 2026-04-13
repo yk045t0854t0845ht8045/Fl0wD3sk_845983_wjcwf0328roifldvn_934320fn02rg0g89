@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -18,6 +18,7 @@ import {
   TimerOff,
   Trash2,
   UserRoundX,
+  Users,
 } from "lucide-react";
 import { ClientErrorBoundary } from "@/components/common/ClientErrorBoundary";
 import { BotMissingModal } from "@/components/config/BotMissingModal";
@@ -111,10 +112,14 @@ type WelcomeSettingsDraft = {
   entryLogChannelId: string | null;
   exitPublicChannelId: string | null;
   exitLogChannelId: string | null;
-  entryLayout: TicketPanelLayout;
-  exitLayout: TicketPanelLayout;
-  entryThumbnailMode: WelcomeThumbnailMode;
-  exitThumbnailMode: WelcomeThumbnailMode;
+  entryPublicLayout: TicketPanelLayout;
+  entryLogLayout: TicketPanelLayout;
+  exitPublicLayout: TicketPanelLayout;
+  exitLogLayout: TicketPanelLayout;
+  entryPublicThumbnailMode: WelcomeThumbnailMode;
+  entryLogThumbnailMode: WelcomeThumbnailMode;
+  exitPublicThumbnailMode: WelcomeThumbnailMode;
+  exitLogThumbnailMode: WelcomeThumbnailMode;
 };
 
 type AntiLinkEnforcementAction = "delete_only" | "timeout" | "kick" | "ban";
@@ -487,10 +492,14 @@ function normalizeWelcomeSettingsDraft(
     entryLogChannelId: draft.entryLogChannelId,
     exitPublicChannelId: draft.exitPublicChannelId,
     exitLogChannelId: draft.exitLogChannelId,
-    entryLayout: normalizeTicketPanelLayout(draft.entryLayout),
-    exitLayout: normalizeTicketPanelLayout(draft.exitLayout),
-    entryThumbnailMode: draft.entryThumbnailMode,
-    exitThumbnailMode: draft.exitThumbnailMode,
+    entryPublicLayout: normalizeTicketPanelLayout(draft.entryPublicLayout),
+    entryLogLayout: normalizeTicketPanelLayout(draft.entryLogLayout),
+    exitPublicLayout: normalizeTicketPanelLayout(draft.exitPublicLayout),
+    exitLogLayout: normalizeTicketPanelLayout(draft.exitLogLayout),
+    entryPublicThumbnailMode: draft.entryPublicThumbnailMode,
+    entryLogThumbnailMode: draft.entryLogThumbnailMode,
+    exitPublicThumbnailMode: draft.exitPublicThumbnailMode,
+    exitLogThumbnailMode: draft.exitLogThumbnailMode,
   };
 }
 
@@ -1650,15 +1659,25 @@ export function ServerSettingsEditor({
   const [entryLogChannelId, setEntryLogChannelId] = useState<string | null>(null);
   const [exitPublicChannelId, setExitPublicChannelId] = useState<string | null>(null);
   const [exitLogChannelId, setExitLogChannelId] = useState<string | null>(null);
-  const [entryLayout, setEntryLayout] = useState<TicketPanelLayout>(
+  const [entryPublicLayout, setEntryPublicLayout] = useState<TicketPanelLayout>(
     createDefaultWelcomeEntryLayout(),
   );
-  const [exitLayout, setExitLayout] = useState<TicketPanelLayout>(
+  const [entryLogLayout, setEntryLogLayout] = useState<TicketPanelLayout>(
+    createDefaultWelcomeEntryLayout(),
+  );
+  const [exitPublicLayout, setExitPublicLayout] = useState<TicketPanelLayout>(
     createDefaultWelcomeExitLayout(),
   );
-  const [entryThumbnailMode, setEntryThumbnailMode] =
+  const [exitLogLayout, setExitLogLayout] = useState<TicketPanelLayout>(
+    createDefaultWelcomeExitLayout(),
+  );
+  const [entryPublicThumbnailMode, setEntryPublicThumbnailMode] =
     useState<WelcomeThumbnailMode>("custom");
-  const [exitThumbnailMode, setExitThumbnailMode] =
+  const [entryLogThumbnailMode, setEntryLogThumbnailMode] =
+    useState<WelcomeThumbnailMode>("custom");
+  const [exitPublicThumbnailMode, setExitPublicThumbnailMode] =
+    useState<WelcomeThumbnailMode>("custom");
+  const [exitLogThumbnailMode, setExitLogThumbnailMode] =
     useState<WelcomeThumbnailMode>("custom");
   const [antiLinkEnabled, setAntiLinkEnabled] = useState(false);
   const [antiLinkLogChannelId, setAntiLinkLogChannelId] = useState<string | null>(
@@ -1670,9 +1689,15 @@ export function ServerSettingsEditor({
   const [antiLinkIgnoredRoleIds, setAntiLinkIgnoredRoleIds] = useState<string[]>(
     [],
   );
-  const [, setAntiLinkBlockExternalLinks] = useState(true);
-  const [, setAntiLinkBlockDiscordInvites] = useState(true);
-  const [, setAntiLinkBlockObfuscatedLinks] = useState(true);
+  const [antiLinkBlockExternalLinks, setAntiLinkBlockExternalLinks] = useState<boolean>(
+    ANTILINK_DEFAULT_DETECTION.blockExternalLinks
+  );
+  const [antiLinkBlockDiscordInvites, setAntiLinkBlockDiscordInvites] = useState<boolean>(
+    ANTILINK_DEFAULT_DETECTION.blockDiscordInvites
+  );
+  const [antiLinkBlockObfuscatedLinks, setAntiLinkBlockObfuscatedLinks] = useState<boolean>(
+    ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks
+  );
   const [autoRoleEnabled, setAutoRoleEnabled] = useState(false);
   const [autoRoleRoleIds, setAutoRoleRoleIds] = useState<string[]>([]);
   const [autoRoleAssignmentDelayMinutes, setAutoRoleAssignmentDelayMinutes] =
@@ -1718,15 +1743,20 @@ export function ServerSettingsEditor({
   const [welcomeMessageTab, setWelcomeMessageTab] = useState<"entry" | "exit">(
     "entry",
   );
+  const [welcomeSubTab, setWelcomeSubTab] = useState<"public" | "log">(
+    "public",
+  );
   const [isWelcomeActivationModalOpen, setIsWelcomeActivationModalOpen] =
     useState(false);
-  const [, setHasDismissedWelcomeModal] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [hasDismissedWelcomeModal, setHasDismissedWelcomeModal] = useState(false);
   const [isActivatingWelcome, setIsActivatingWelcome] = useState(false);
   const [isAntiLinkActivationModalOpen, setIsAntiLinkActivationModalOpen] =
     useState(false);
   const [hasDismissedAntiLinkModal, setHasDismissedAntiLinkModal] =
     useState(false);
   const [isActivatingAntiLink, setIsActivatingAntiLink] = useState(false);
+  const [isVariablesModalOpen, setIsVariablesModalOpen] = useState(false);
 
   const [isPaymentsLoading, setIsPaymentsLoading] = useState(true);
   const [paymentsError, setPaymentsError] = useState<string | null>(null);
@@ -1882,24 +1912,48 @@ export function ServerSettingsEditor({
           ? payload.welcomeSettings.exitLogChannelId
           : null
         : defaultTextChannelId;
-      const nextEntryLayout = hasWelcomeSettings
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawWelcome = payload.welcomeSettings as any;
+      const nextEntryPublicLayout = hasWelcomeSettings
         ? normalizeWelcomeLayout(
-            payload.welcomeSettings?.entryLayout,
+            rawWelcome?.entryPublicLayout || payload.welcomeSettings?.entryLayout,
             defaultEntryLayout,
           )
         : defaultEntryLayout;
-      const nextExitLayout = hasWelcomeSettings
+      const nextEntryLogLayout = hasWelcomeSettings
         ? normalizeWelcomeLayout(
-            payload.welcomeSettings?.exitLayout,
+            rawWelcome?.entryLogLayout || payload.welcomeSettings?.entryLayout,
+            defaultEntryLayout,
+          )
+        : defaultEntryLayout;
+      const nextExitPublicLayout = hasWelcomeSettings
+        ? normalizeWelcomeLayout(
+            rawWelcome?.exitPublicLayout || payload.welcomeSettings?.exitLayout,
             defaultExitLayout,
           )
         : defaultExitLayout;
-      const nextEntryThumbnailMode =
-        payload.welcomeSettings?.entryThumbnailMode === "avatar"
+      const nextExitLogLayout = hasWelcomeSettings
+        ? normalizeWelcomeLayout(
+            rawWelcome?.exitLogLayout || payload.welcomeSettings?.exitLayout,
+            defaultExitLayout,
+          )
+        : defaultExitLayout;
+
+      const nextEntryPublicThumbnailMode =
+        (rawWelcome?.entryPublicThumbnailMode || payload.welcomeSettings?.entryThumbnailMode) === "avatar"
           ? "avatar"
           : "custom";
-      const nextExitThumbnailMode =
-        payload.welcomeSettings?.exitThumbnailMode === "avatar"
+      const nextEntryLogThumbnailMode =
+        (rawWelcome?.entryLogThumbnailMode || payload.welcomeSettings?.entryThumbnailMode) === "avatar"
+          ? "avatar"
+          : "custom";
+      const nextExitPublicThumbnailMode =
+        (rawWelcome?.exitPublicThumbnailMode || payload.welcomeSettings?.exitThumbnailMode) === "avatar"
+          ? "avatar"
+          : "custom";
+      const nextExitLogThumbnailMode =
+        (rawWelcome?.exitLogThumbnailMode || payload.welcomeSettings?.exitThumbnailMode) === "avatar"
           ? "avatar"
           : "custom";
 
@@ -2086,10 +2140,14 @@ export function ServerSettingsEditor({
       setEntryLogChannelId(nextEntryLogChannelId);
       setExitPublicChannelId(nextExitPublicChannelId);
       setExitLogChannelId(nextExitLogChannelId);
-      setEntryLayout(nextEntryLayout);
-      setExitLayout(nextExitLayout);
-      setEntryThumbnailMode(nextEntryThumbnailMode);
-      setExitThumbnailMode(nextExitThumbnailMode);
+      setEntryPublicLayout(nextEntryPublicLayout);
+      setEntryLogLayout(nextEntryLogLayout);
+      setExitPublicLayout(nextExitPublicLayout);
+      setExitLogLayout(nextExitLogLayout);
+      setEntryPublicThumbnailMode(nextEntryPublicThumbnailMode);
+      setEntryLogThumbnailMode(nextEntryLogThumbnailMode);
+      setExitPublicThumbnailMode(nextExitPublicThumbnailMode);
+      setExitLogThumbnailMode(nextExitLogThumbnailMode);
       setAntiLinkEnabled(nextAntiLinkEnabled);
       setAntiLinkLogChannelId(nextAntiLinkLogChannelId);
       setAntiLinkEnforcementAction(nextAntiLinkEnforcementAction);
@@ -2133,10 +2191,14 @@ export function ServerSettingsEditor({
           entryLogChannelId: nextEntryLogChannelId,
           exitPublicChannelId: nextExitPublicChannelId,
           exitLogChannelId: nextExitLogChannelId,
-          entryLayout: nextEntryLayout,
-          exitLayout: nextExitLayout,
-          entryThumbnailMode: nextEntryThumbnailMode,
-          exitThumbnailMode: nextExitThumbnailMode,
+          entryPublicLayout: nextEntryPublicLayout,
+          entryLogLayout: nextEntryLogLayout,
+          exitPublicLayout: nextExitPublicLayout,
+          exitLogLayout: nextExitLogLayout,
+          entryPublicThumbnailMode: nextEntryPublicThumbnailMode,
+          entryLogThumbnailMode: nextEntryLogThumbnailMode,
+          exitPublicThumbnailMode: nextExitPublicThumbnailMode,
+          exitLogThumbnailMode: nextExitLogThumbnailMode,
         }),
       );
       setSavedAntiLinkSettingsDraft(
@@ -2175,6 +2237,7 @@ export function ServerSettingsEditor({
     setSuccessMessage(null);
     setShowSaveSuccessBar(false);
     setWelcomeMessageTab("entry");
+    setWelcomeSubTab("public");
     setIsWelcomeActivationModalOpen(false);
     setHasDismissedWelcomeModal(false);
     setIsActivatingWelcome(false);
@@ -2232,10 +2295,14 @@ export function ServerSettingsEditor({
     setEntryLogChannelId(null);
     setExitPublicChannelId(null);
     setExitLogChannelId(null);
-    setEntryLayout(createDefaultWelcomeEntryLayout());
-    setExitLayout(createDefaultWelcomeExitLayout());
-    setEntryThumbnailMode("custom");
-    setExitThumbnailMode("custom");
+    setEntryPublicLayout(createDefaultWelcomeEntryLayout());
+    setEntryLogLayout(createDefaultWelcomeEntryLayout());
+    setExitPublicLayout(createDefaultWelcomeExitLayout());
+    setExitLogLayout(createDefaultWelcomeExitLayout());
+    setEntryPublicThumbnailMode("custom");
+    setEntryLogThumbnailMode("custom");
+    setExitPublicThumbnailMode("custom");
+    setExitLogThumbnailMode("custom");
     setAntiLinkEnabled(false);
     setAntiLinkLogChannelId(null);
     setAntiLinkEnforcementAction("delete_only");
@@ -2856,8 +2923,14 @@ export function ServerSettingsEditor({
     entryPublicChannelId || entryLogChannelId,
   );
   const exitChannelsProvided = Boolean(exitPublicChannelId || exitLogChannelId);
-  const isEntryLayoutValid = !entryChannelsProvided || welcomeLayoutHasContent(entryLayout);
-  const isExitLayoutValid = !exitChannelsProvided || welcomeLayoutHasContent(exitLayout);
+  const isEntryLayoutValid =
+    !welcomeEnabled ||
+    ((!entryPublicChannelId || welcomeLayoutHasContent(entryPublicLayout)) &&
+     (!entryLogChannelId || welcomeLayoutHasContent(entryLogLayout)));
+  const isExitLayoutValid =
+    !welcomeEnabled ||
+    ((!exitPublicChannelId || welcomeLayoutHasContent(exitPublicLayout)) &&
+     (!exitLogChannelId || welcomeLayoutHasContent(exitLogLayout)));
 
   const canSaveTicket = Boolean(
     !settingsReadOnly &&
@@ -2982,20 +3055,28 @@ export function ServerSettingsEditor({
         entryLogChannelId,
         exitPublicChannelId,
         exitLogChannelId,
-        entryLayout,
-        exitLayout,
-        entryThumbnailMode,
-        exitThumbnailMode,
+        entryPublicLayout,
+        entryLogLayout,
+        exitPublicLayout,
+        exitLogLayout,
+        entryPublicThumbnailMode,
+        entryLogThumbnailMode,
+        exitPublicThumbnailMode,
+        exitLogThumbnailMode,
       }),
     [
-      entryLayout,
+      entryPublicLayout,
+      entryLogLayout,
+      exitPublicLayout,
+      exitLogLayout,
       entryLogChannelId,
       entryPublicChannelId,
-      entryThumbnailMode,
-      exitLayout,
+      entryPublicThumbnailMode,
+      entryLogThumbnailMode,
+      exitPublicThumbnailMode,
+      exitLogThumbnailMode,
       exitLogChannelId,
       exitPublicChannelId,
-      exitThumbnailMode,
       welcomeEnabled,
     ],
   );
@@ -3319,10 +3400,34 @@ export function ServerSettingsEditor({
     };
   }, [showSaveSuccessBar]);
 
-  const activeWelcomeLayout =
-    welcomeMessageTab === "entry" ? entryLayout : exitLayout;
-  const activeWelcomeThumbnailMode =
-    welcomeMessageTab === "entry" ? entryThumbnailMode : exitThumbnailMode;
+  const activeWelcomeLayout = useMemo(() => {
+    if (welcomeMessageTab === "entry") {
+      return welcomeSubTab === "public" ? entryPublicLayout : entryLogLayout;
+    }
+    return welcomeSubTab === "public" ? exitPublicLayout : exitLogLayout;
+  }, [
+    welcomeMessageTab,
+    welcomeSubTab,
+    entryPublicLayout,
+    entryLogLayout,
+    exitPublicLayout,
+    exitLogLayout,
+  ]);
+
+  const activeWelcomeThumbnailMode = useMemo(() => {
+    if (welcomeMessageTab === "entry") {
+      return welcomeSubTab === "public" ? entryPublicThumbnailMode : entryLogThumbnailMode;
+    }
+    return welcomeSubTab === "public" ? exitPublicThumbnailMode : exitLogThumbnailMode;
+  }, [
+    welcomeMessageTab,
+    welcomeSubTab,
+    entryPublicThumbnailMode,
+    entryLogThumbnailMode,
+    exitPublicThumbnailMode,
+    exitLogThumbnailMode,
+  ]);
+
   const activeWelcomeThumbnailPreviewUrl =
     activeWelcomeThumbnailMode === "avatar"
       ? "/cdn/icons/discord-icon.svg"
@@ -3330,24 +3435,31 @@ export function ServerSettingsEditor({
 
   const handleWelcomeLayoutChange = useCallback(
     (nextLayout: TicketPanelLayout) => {
-      if (welcomeMessageTab === "entry") {
-        setEntryLayout(nextLayout);
-        return;
-      }
-      setExitLayout(nextLayout);
-    },
-    [welcomeMessageTab],
-  );
+      const hasUserThumbnail = nextLayout.some(
+        (comp) => comp.type === "content" && comp.accessory?.type === "user_thumbnail",
+      );
+      const nextMode: WelcomeThumbnailMode = hasUserThumbnail ? "avatar" : "custom";
 
-  const handleWelcomeThumbnailModeChange = useCallback(
-    (mode: WelcomeThumbnailMode) => {
       if (welcomeMessageTab === "entry") {
-        setEntryThumbnailMode(mode);
+        if (welcomeSubTab === "public") {
+          setEntryPublicLayout(nextLayout);
+          setEntryPublicThumbnailMode(nextMode);
+        } else {
+          setEntryLogLayout(nextLayout);
+          setEntryLogThumbnailMode(nextMode);
+        }
         return;
       }
-      setExitThumbnailMode(mode);
+
+      if (welcomeSubTab === "public") {
+        setExitPublicLayout(nextLayout);
+        setExitPublicThumbnailMode(nextMode);
+      } else {
+        setExitLogLayout(nextLayout);
+        setExitLogThumbnailMode(nextMode);
+      }
     },
-    [welcomeMessageTab],
+    [welcomeMessageTab, welcomeSubTab],
   );
 
   useEffect(() => {
@@ -4061,10 +4173,14 @@ export function ServerSettingsEditor({
       setEntryLogChannelId(savedWelcomeSettingsDraft.entryLogChannelId);
       setExitPublicChannelId(savedWelcomeSettingsDraft.exitPublicChannelId);
       setExitLogChannelId(savedWelcomeSettingsDraft.exitLogChannelId);
-      setEntryLayout(savedWelcomeSettingsDraft.entryLayout);
-      setExitLayout(savedWelcomeSettingsDraft.exitLayout);
-      setEntryThumbnailMode(savedWelcomeSettingsDraft.entryThumbnailMode);
-      setExitThumbnailMode(savedWelcomeSettingsDraft.exitThumbnailMode);
+      setEntryPublicLayout(savedWelcomeSettingsDraft.entryPublicLayout);
+      setEntryLogLayout(savedWelcomeSettingsDraft.entryLogLayout);
+      setExitPublicLayout(savedWelcomeSettingsDraft.exitPublicLayout);
+      setExitLogLayout(savedWelcomeSettingsDraft.exitLogLayout);
+      setEntryPublicThumbnailMode(savedWelcomeSettingsDraft.entryPublicThumbnailMode);
+      setEntryLogThumbnailMode(savedWelcomeSettingsDraft.entryLogThumbnailMode);
+      setExitPublicThumbnailMode(savedWelcomeSettingsDraft.exitPublicThumbnailMode);
+      setExitLogThumbnailMode(savedWelcomeSettingsDraft.exitLogThumbnailMode);
     } else if (savedSettingsDraft) {
       setTicketEnabled(savedSettingsDraft.enabled);
       setMenuChannelId(savedSettingsDraft.menuChannelId);
@@ -4161,9 +4277,9 @@ export function ServerSettingsEditor({
             enforcementAction: antiLinkEnforcementAction,
             timeoutMinutes: antiLinkTimeoutValue,
             ignoredRoleIds: antiLinkIgnoredRoleIds,
-            blockExternalLinks: ANTILINK_DEFAULT_DETECTION.blockExternalLinks,
-            blockDiscordInvites: ANTILINK_DEFAULT_DETECTION.blockDiscordInvites,
-            blockObfuscatedLinks: ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks,
+            blockExternalLinks: antiLinkBlockExternalLinks,
+            blockDiscordInvites: antiLinkBlockDiscordInvites,
+            blockObfuscatedLinks: antiLinkBlockObfuscatedLinks,
           }),
         });
 
@@ -4211,10 +4327,14 @@ export function ServerSettingsEditor({
             entryLogChannelId,
             exitPublicChannelId,
             exitLogChannelId,
-            entryLayout,
-            exitLayout,
-            entryThumbnailMode,
-            exitThumbnailMode,
+            entryPublicLayout,
+            entryLogLayout,
+            exitPublicLayout,
+            exitLogLayout,
+            entryPublicThumbnailMode,
+            entryLogThumbnailMode,
+            exitPublicThumbnailMode,
+            exitLogThumbnailMode,
           }),
         });
 
@@ -4343,6 +4463,9 @@ export function ServerSettingsEditor({
       setIsSaving(false);
     }
   }, [
+    antiLinkBlockDiscordInvites,
+    antiLinkBlockExternalLinks,
+    antiLinkBlockObfuscatedLinks,
     antiLinkEnabled,
     antiLinkEnforcementAction,
     antiLinkIgnoredRoleIds,
@@ -4359,14 +4482,18 @@ export function ServerSettingsEditor({
     currentAntiLinkDraft,
     currentAutoRoleDraft,
     currentWelcomeDraft,
-    entryLayout,
+    entryPublicLayout,
+    entryLogLayout,
     entryLogChannelId,
     entryPublicChannelId,
-    entryThumbnailMode,
-    exitLayout,
+    entryPublicThumbnailMode,
+    entryLogThumbnailMode,
+    exitPublicLayout,
+    exitLogLayout,
     exitLogChannelId,
     exitPublicChannelId,
-    exitThumbnailMode,
+    exitPublicThumbnailMode,
+    exitLogThumbnailMode,
     guildId,
     isAntiLinkSection,
     isAutoRoleSection,
@@ -4456,10 +4583,14 @@ export function ServerSettingsEditor({
           entryLogChannelId: nextEntryLogId,
           exitPublicChannelId: nextExitPublicId,
           exitLogChannelId: nextExitLogId,
-          entryLayout,
-          exitLayout,
-          entryThumbnailMode,
-          exitThumbnailMode,
+          entryPublicLayout,
+          entryLogLayout,
+          exitPublicLayout,
+          exitLogLayout,
+          entryPublicThumbnailMode,
+          entryLogThumbnailMode,
+          exitPublicThumbnailMode,
+          exitLogThumbnailMode,
         }),
       });
 
@@ -4480,10 +4611,14 @@ export function ServerSettingsEditor({
           entryLogChannelId: nextEntryLogId,
           exitPublicChannelId: nextExitPublicId,
           exitLogChannelId: nextExitLogId,
-          entryLayout,
-          exitLayout,
-          entryThumbnailMode,
-          exitThumbnailMode,
+          entryPublicLayout,
+          entryLogLayout,
+          exitPublicLayout,
+          exitLogLayout,
+          entryPublicThumbnailMode,
+          entryLogThumbnailMode,
+          exitPublicThumbnailMode,
+          exitLogThumbnailMode,
         }),
       );
       setShowSaveSuccessBar(true);
@@ -4497,14 +4632,18 @@ export function ServerSettingsEditor({
       setIsActivatingWelcome(false);
     }
   }, [
-    entryLayout,
+    entryPublicLayout,
+    entryLogLayout,
     entryLogChannelId,
     entryPublicChannelId,
-    entryThumbnailMode,
-    exitLayout,
+    entryPublicThumbnailMode,
+    entryLogThumbnailMode,
+    exitPublicLayout,
+    exitLogLayout,
     exitLogChannelId,
     exitPublicChannelId,
-    exitThumbnailMode,
+    exitPublicThumbnailMode,
+    exitLogThumbnailMode,
     guildId,
     isActivatingWelcome,
     settingsReadOnly,
@@ -5433,86 +5572,59 @@ export function ServerSettingsEditor({
                             </p>
                           </div>
 
-                          <div className="inline-flex items-center rounded-full border border-[#151515] bg-[#0B0B0B] p-[4px]">
-                            {(["entry", "exit"] as const).map((tab) => {
-                              const isActive = welcomeMessageTab === tab;
-                              return (
-                                <button
-                                  key={tab}
-                                  type="button"
-                                  onClick={() => setWelcomeMessageTab(tab)}
-                                  disabled={welcomeControlsDisabled}
-                                  className={`rounded-full px-[16px] py-[8px] text-[12px] font-medium uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                                    isActive
-                                      ? "bg-[#1E1E1E] text-[#F0F0F0]"
-                                      : "text-[#7A7A7A] hover:text-[#DADADA]"
-                                  }`}
-                                >
-                                  {tab === "entry" ? "Entrada" : "Saida"}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="mt-[18px] grid grid-cols-1 gap-[16px] lg:grid-cols-[1.2fr_1fr]">
-                          <div className="rounded-[18px] border border-[#161616] bg-[#0A0A0A] px-[16px] py-[14px]">
-                            <p className="text-[12px] uppercase tracking-[0.16em] text-[#6D6D6D]">
-                              Variaveis disponiveis
-                            </p>
-                            <div className="mt-[12px] grid grid-cols-1 gap-[8px] sm:grid-cols-2">
-                              {WELCOME_VARIABLES.map((variable) => (
-                                <div
-                                  key={variable.token}
-                                  className="rounded-[12px] border border-[#141414] bg-[#070707] px-[12px] py-[10px]"
-                                >
-                                  <p className="text-[13px] font-semibold text-[#E2E2E2]">
-                                    {variable.token}
-                                  </p>
-                                  <p className="mt-[4px] text-[12px] leading-[1.5] text-[#6F6F6F]">
-                                    {variable.description}
-                                  </p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="rounded-[18px] border border-[#161616] bg-[#0A0A0A] px-[16px] py-[14px]">
-                            <p className="text-[12px] uppercase tracking-[0.16em] text-[#6D6D6D]">
-                              Miniatura do embed
-                            </p>
-                            <p className="mt-[8px] text-[13px] leading-[1.55] text-[#7A7A7A]">
-                              Escolha se a miniatura usa o link informado no embed ou a foto do usuario automaticamente.
-                            </p>
-                            <div className="mt-[14px] flex flex-col gap-[10px]">
-                              {(["custom", "avatar"] as const).map((mode) => {
-                                const isActive = activeWelcomeThumbnailMode === mode;
+                          <div className="flex flex-wrap items-center gap-[12px]">
+                            <div className="inline-flex items-center rounded-full border border-[#151515] bg-[#0B0B0B] p-[4px]">
+                              {(["entry", "exit"] as const).map((tab) => {
+                                const isActive = welcomeMessageTab === tab;
                                 return (
                                   <button
-                                    key={mode}
+                                    key={tab}
                                     type="button"
-                                    onClick={() => handleWelcomeThumbnailModeChange(mode)}
+                                    onClick={() => setWelcomeMessageTab(tab)}
                                     disabled={welcomeControlsDisabled}
-                                    className={`flex items-center justify-between rounded-[14px] border px-[12px] py-[10px] text-left text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                    className={`rounded-full px-[16px] py-[8px] text-[12px] font-medium uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                                       isActive
-                                        ? "border-[#2A2A2A] bg-[#121212] text-[#F0F0F0]"
-                                        : "border-[#141414] bg-[#0B0B0B] text-[#8A8A8A] hover:text-[#D8D8D8]"
+                                        ? "bg-[#1E1E1E] text-[#F0F0F0]"
+                                        : "text-[#7A7A7A] hover:text-[#DADADA]"
                                     }`}
                                   >
-                                    <span>
-                                      {mode === "custom"
-                                        ? "Usar link manual"
-                                        : "Usar foto do usuario"}
-                                    </span>
-                                    <span className={`inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border ${isActive ? "border-[#6AE25A] bg-[#6AE25A]" : "border-[#2A2A2A]"}`}>
-                                      {isActive ? (
-                                        <span className="text-[10px] font-semibold text-black">OK</span>
-                                      ) : null}
-                                    </span>
+                                    {tab === "entry" ? "Entrada" : "Saida"}
                                   </button>
                                 );
                               })}
                             </div>
+
+                            <div className="inline-flex items-center rounded-full border border-[#151515] bg-[#0B0B0B] p-[4px]">
+                              {(["public", "log"] as const).map((tab) => {
+                                const isActive = welcomeSubTab === tab;
+                                const Icon = tab === "public" ? Users : ShieldCheck;
+                                return (
+                                  <button
+                                    key={tab}
+                                    type="button"
+                                    onClick={() => setWelcomeSubTab(tab)}
+                                    disabled={welcomeControlsDisabled}
+                                    className={`inline-flex items-center gap-[8px] rounded-full px-[14px] py-[8px] text-[12px] font-medium uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                      isActive
+                                        ? "bg-[#1E1E1E] text-[#F0F0F0]"
+                                        : "text-[#7A7A7A] hover:text-[#DADADA]"
+                                    }`}
+                                  >
+                                    <Icon size={14} strokeWidth={2.2} />
+                                    {tab === "public" ? "Publica" : "Privada"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setIsVariablesModalOpen(true)}
+                              className="inline-flex h-[44px] w-[44px] items-center justify-center rounded-full border border-[#171717] bg-[#0C0C0C] text-[#8A8A8A] transition-colors hover:border-[#262626] hover:bg-[#111111] hover:text-[#D8D8D8]"
+                              title="Variaveis e ajuda"
+                            >
+                              <CircleHelp size={20} strokeWidth={2.1} />
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -5525,17 +5637,6 @@ export function ServerSettingsEditor({
                         canSendEmbed={false}
                         isSendingEmbed={false}
                         onSendEmbed={undefined}
-                        eyebrow={
-                          welcomeMessageTab === "entry"
-                            ? "Mensagem de entrada"
-                            : "Mensagem de saida"
-                        }
-                        headline={
-                          welcomeMessageTab === "entry"
-                            ? "Monte a recepcao do servidor"
-                            : "Confirme a saida com clareza"
-                        }
-                        description="O Flowdesk envia este embed automaticamente quando o evento acontecer."
                         hideSendButton
                         thumbnailPreviewUrl={activeWelcomeThumbnailPreviewUrl}
                       />
@@ -6755,6 +6856,96 @@ export function ServerSettingsEditor({
                   </button>
                 </div>
               </div>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {isPortalMounted && isVariablesModalOpen ? createPortal(
+        <div className="fixed inset-y-0 left-0 right-0 z-[2600] isolate overflow-y-auto overscroll-contain xl:left-[318px]">
+          <button
+            type="button"
+            aria-label="Fechar modal de variaveis"
+            className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[7px]"
+            onClick={() => setIsVariablesModalOpen(false)}
+          />
+
+          <div className="relative z-[10] min-h-full px-[20px] py-[32px] md:px-6 lg:px-8 xl:pl-[40px] xl:pr-[42px]">
+            <div className="mx-auto flex min-h-[calc(100vh-64px)] w-full max-w-[1220px] items-center justify-center">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Variaveis disponiveis"
+                className="flowdesk-stage-fade relative w-full max-w-[720px] overflow-hidden rounded-[32px] bg-transparent px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
+              >
+                <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[32px] border border-[#0E0E0E]" />
+                <span aria-hidden="true" className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[32px]" />
+                <span aria-hidden="true" className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[32px]" />
+                <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+
+                <div className="relative z-10">
+                  <div className="flex flex-col gap-[14px] sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <LandingGlowTag className="px-[18px]">
+                        Ajuda e Variaveis
+                      </LandingGlowTag>
+
+                      <div className="mt-[18px]">
+                        <h2 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[30px] leading-[0.98] font-normal tracking-[-0.05em] text-transparent sm:text-[36px]">
+                          Variaveis Disponiveis
+                        </h2>
+                        <p className="mt-[14px] max-w-[560px] text-[14px] leading-[1.62] text-[#787878]">
+                          Use estas etiquetas para personalizar suas mensagens. O Flowdesk as substituira automaticamente pelos dados reais.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsVariablesModalOpen(false)}
+                      className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+                      aria-label="Fechar modal"
+                    >
+                      <span className="text-[18px] leading-none">x</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-[28px] grid grid-cols-1 gap-[12px] sm:grid-cols-2">
+                    {WELCOME_VARIABLES.map((variable) => (
+                      <div
+                        key={variable.token}
+                        className="group rounded-[20px] border border-[#141414] bg-[#080808] px-[16px] py-[14px] transition-colors hover:border-[#1C1C1C] hover:bg-[#0A0A0A]"
+                      >
+                        <div className="flex items-center gap-[8px]">
+                          <span className="rounded-[8px] bg-[#111111] px-[8px] py-[4px] text-[13px] font-bold tracking-tight text-[#E2E2E2] group-hover:bg-[#161616]">
+                            {variable.token}
+                          </span>
+                        </div>
+                        <p className="mt-[10px] text-[13px] leading-[1.5] text-[#6F6F6F] group-hover:text-[#888888]">
+                          {variable.description}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-[32px] flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setIsVariablesModalOpen(false)}
+                      className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-8 text-[14px] leading-none font-semibold"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="absolute inset-0 rounded-[12px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+                      />
+                      <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+                        Entendi
+                      </span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
