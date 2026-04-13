@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { validateTab, type AccountTab } from "@/lib/account/tabs";
 import { TabRenderer } from "@/components/account/TabRegistry";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
