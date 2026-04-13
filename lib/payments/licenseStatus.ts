@@ -591,7 +591,7 @@ export function resolveRenewalPaymentDecision<
 
 export async function getApprovedOrdersForGuild<
   TOrder extends LicenseApprovedOrderRecord,
->(guildId: string, selectColumns: string, limit = 120) {
+>(guildId: string | null, selectColumns: string, limit = 120) {
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
     .from("payment_orders")
@@ -612,7 +612,7 @@ export async function getApprovedOrdersForGuild<
 
 export async function getLatestLicenseCoverageForGuild<
   TOrder extends LicenseApprovedOrderRecord,
->(guildId: string, selectColumns: string, nowMs = Date.now()) {
+>(guildId: string | null, selectColumns: string, nowMs = Date.now()) {
   const approvedOrders = await getApprovedOrdersForGuild<TOrder>(
     guildId,
     selectColumns,
@@ -623,7 +623,7 @@ export async function getLatestLicenseCoverageForGuild<
 export async function getOrderCoverageForGuild<
   TOrder extends LicenseApprovedOrderRecord,
 >(
-  guildId: string,
+  guildId: string | null,
   targetOrder: TOrder,
   selectColumns: string,
   nowMs = Date.now(),
@@ -702,7 +702,7 @@ export function resolveGuildLicenseStatusFromLatestApprovedOrder(
   return resolveGuildLicenseStatusFromApprovedOrders([latestApprovedOrder], nowMs);
 }
 
-export async function getLatestApprovedOrderForGuild(guildId: string) {
+export async function getLatestApprovedOrderForGuild(guildId: string | null) {
   const orders = await getApprovedOrdersForGuild<ApprovedOrderRecord>(
     guildId,
     "paid_at, created_at",
@@ -712,9 +712,10 @@ export async function getLatestApprovedOrderForGuild(guildId: string) {
 }
 
 export async function getGuildLicenseStatus(
-  guildId: string,
+  guildId: string | null,
   options?: LicenseStatusQueryOptions,
 ) {
+  if (!guildId) return "not_paid";
   const normalizedGuildId = guildId.trim();
   if (!options?.forceFresh) {
     const cached = readCacheEntry(guildLicenseStatusCache, normalizedGuildId);
@@ -753,9 +754,10 @@ export async function getGuildLicenseStatus(
 }
 
 export async function getLockedGuildLicenseByGuildId(
-  guildId: string,
+  guildId: string | null,
   options?: LicenseStatusQueryOptions,
 ) {
+  if (!guildId) return null;
   const normalizedGuildId = guildId.trim();
   if (!options?.forceFresh) {
     const cached = readCacheEntry(lockedGuildLicenseCache, normalizedGuildId);
@@ -913,4 +915,38 @@ export async function getLockedGuildLicenseMap(guildIds: string[]) {
   }
 
   return lockedMap;
+}
+
+export async function getLockedGuildLicenseMapByUserId(userId: number) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  // Buscar todos os IDs de guildas vinculados a este usuário (seja diretamente ou via histórico)
+  const [planGuildsResult, ordersResult] = await Promise.all([
+    supabase
+      .from("auth_user_plan_guilds")
+      .select("guild_id")
+      .eq("user_id", userId)
+      .returns<{ guild_id: string }[]>(),
+    supabase
+      .from("payment_orders")
+      .select("guild_id")
+      .eq("user_id", userId)
+      .eq("status", "approved")
+      .not("guild_id", "is", null)
+      .returns<{ guild_id: string }[]>(),
+  ]);
+
+  if (planGuildsResult.error) {
+    throw new Error(`Erro ao buscar guilda de planos: ${planGuildsResult.error.message}`);
+  }
+  if (ordersResult.error) {
+    throw new Error(`Erro ao buscar histórico de pedidos: ${ordersResult.error.message}`);
+  }
+
+  const guildIds = new Set([
+    ...(planGuildsResult.data || []).map((r) => r.guild_id),
+    ...(ordersResult.data || []).map((r) => r.guild_id),
+  ]);
+
+  return getLockedGuildLicenseMap(Array.from(guildIds));
 }

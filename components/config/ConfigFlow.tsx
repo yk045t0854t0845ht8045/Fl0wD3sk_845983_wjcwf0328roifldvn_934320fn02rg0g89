@@ -692,9 +692,7 @@ export function ConfigFlow({
             : checkoutQuery?.guildId || queryGuildId || mergedContext.activeGuildId;
         const resolvedActiveStep =
           shouldForceFresh
-            ? isServersPlansSource && resolvedActiveGuildId
-              ? 4
-              : 1
+            ? 4
             : checkoutQuery
               ? 4
               : shouldRespectHash && resolvedActiveGuildId
@@ -1149,6 +1147,13 @@ export function ConfigFlow({
     setStepHash(1);
   }, [setAndSyncContext]);
 
+  const handleStepFourApproved = useCallback(() => {
+    // Quando aprovado, liberamos a entrada nos passos de config (1, 2, 3)
+    setAndSyncContext({ activeStep: 1 }, true);
+    setIsTransitioningStep(true);
+    setStepHash(1);
+  }, [setAndSyncContext]);
+
   const handleServerSwitcherSelect = useCallback(
     async (guildId: string) => {
       if (!guildId) return;
@@ -1382,6 +1387,7 @@ export function ConfigFlow({
           forceFreshCheckout={forceFreshCheckout}
           initialDraft={stepFourDraft}
           onDraftChange={handleStepFourDraftChange}
+          onApproved={handleStepFourApproved}
         />
       );
     }

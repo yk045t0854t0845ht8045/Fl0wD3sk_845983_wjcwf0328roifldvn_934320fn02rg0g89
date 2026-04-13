@@ -53,6 +53,7 @@ type ConfigStepFourProps = {
   forceFreshCheckout?: boolean;
   initialDraft?: StepFourDraft | null;
   onDraftChange?: (guildId: string, draft: StepFourDraft) => void;
+  onApproved?: (order: PixOrder) => void;
 };
 
 type PaymentMethod = "pix" | "card";
@@ -63,7 +64,7 @@ type CardBrand = "visa" | "mastercard" | "amex" | "elo" | null;
 type PixOrder = {
   id: number;
   orderNumber: number;
-  guildId: string;
+  guildId: string | null;
   method: "pix" | "card" | "trial";
   status: string;
   amount: number;
@@ -275,6 +276,7 @@ type PlanChangeSummary = {
   currentCreditAmount: number;
   remainingDaysExact: number;
   immediateSubtotalAmount: number;
+  targetTotalAmount: number;
   flowPointsBalance: number;
   flowPointsGrantPreview: number;
   effectiveAt: string | null;
@@ -392,6 +394,7 @@ function buildFallbackPlanChangeSummary(
     currentCreditAmount: 0,
     remainingDaysExact: 0,
     immediateSubtotalAmount: plan.totalAmount,
+    targetTotalAmount: plan.totalAmount,
     flowPointsBalance: normalizedFlowPointsBalance,
     flowPointsGrantPreview: 0,
     effectiveAt: null,
@@ -400,13 +403,14 @@ function buildFallbackPlanChangeSummary(
 }
 
 function resolveFlowPointsGrantFromSubtotal(input: {
-  planChange: Pick<PlanChangeSummary, "kind" | "currentCreditAmount">;
+  planChange: Pick<PlanChangeSummary, "kind" | "currentCreditAmount" | "targetTotalAmount">;
   subtotalAmount: number;
 }) {
   if (input.planChange.kind !== "upgrade") return 0;
   const normalizedCredit = roundMoney(Math.max(0, input.planChange.currentCreditAmount));
-  const normalizedSubtotal = roundMoney(Math.max(0, input.subtotalAmount));
-  return roundMoney(Math.max(0, normalizedCredit - normalizedSubtotal));
+  // Usar preço ORIGINAL do novo plano — cupons/gift cards não devem aumentar o grant.
+  const targetTotalAmount = roundMoney(Math.max(0, input.planChange.targetTotalAmount));
+  return roundMoney(Math.max(0, normalizedCredit - targetTotalAmount));
 }
 
 function toPlanSummaryFromApi(
@@ -769,8 +773,9 @@ function buildConfigUrlWithHashRoute(
   return `${normalizedPathname}${search}${hash}`;
 }
 
-function readCachedOrderByGuild(guildId: string): PixOrder | null {
+function readCachedOrderByGuild(guildId: string | null): PixOrder | null {
   if (typeof window === "undefined") return null;
+  const activeKey = guildId || "__global__";
 
   try {
     const raw = window.sessionStorage.getItem(PAYMENT_ORDER_CACHE_STORAGE_KEY);
@@ -779,22 +784,23 @@ function readCachedOrderByGuild(guildId: string): PixOrder | null {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
 
-    const item = (parsed as Record<string, unknown>)[guildId];
+    const item = (parsed as Record<string, unknown>)[activeKey];
     return isCachedPixOrder(item) ? item : null;
   } catch {
     return null;
   }
 }
 
-function writeCachedOrderByGuild(guildId: string, order: PixOrder) {
+function writeCachedOrderByGuild(guildId: string | null, order: PixOrder) {
   if (typeof window === "undefined") return;
+  const activeKey = guildId || "__global__";
 
   try {
     const raw = window.sessionStorage.getItem(PAYMENT_ORDER_CACHE_STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     const next = {
       ...(parsed && typeof parsed === "object" ? parsed : {}),
-      [guildId]: order,
+      [activeKey]: order,
     };
 
     window.sessionStorage.setItem(
@@ -806,8 +812,9 @@ function writeCachedOrderByGuild(guildId: string, order: PixOrder) {
   }
 }
 
-function removeCachedOrderByGuild(guildId: string) {
+function removeCachedOrderByGuild(guildId: string | null) {
   if (typeof window === "undefined") return;
+  const activeKey = guildId || "__global__";
 
   try {
     const raw = window.sessionStorage.getItem(PAYMENT_ORDER_CACHE_STORAGE_KEY);
@@ -817,7 +824,7 @@ function removeCachedOrderByGuild(guildId: string) {
     if (!parsed || typeof parsed !== "object") return;
 
     const next = { ...(parsed as Record<string, unknown>) };
-    delete next[guildId];
+    delete next[activeKey];
 
     window.sessionStorage.setItem(
       PAYMENT_ORDER_CACHE_STORAGE_KEY,
@@ -2938,6 +2945,7 @@ export function ConfigStepFour({
   forceFreshCheckout = false,
   initialDraft = null,
   onDraftChange,
+  onApproved,
 }: ConfigStepFourProps) {
   const cardPaymentsEnabled = areCardPaymentsEnabled();
   const initialStepFourDraft = useMemo(
@@ -3482,44 +3490,22 @@ export function ConfigStepFour({
 
   useEffect(() => {
     if (!guildId) {
+      // Se houver mudanca real de contexto de guild para nulo, apenas garantimos a hidratacao do ref
       hydratedGuildIdRef.current = null;
-      clearCheckoutStatusQuery();
-      setPhase("cart");
-      setView("methods");
-      setSelectedRail(null);
-      setSelectedPlanCode(initialPlanCode);
-      setSelectedBillingPeriodCode(initialBillingPeriodCode);
-      setResolvedPlan(
-        resolvePlanSummary(initialPlanCode, initialBillingPeriodCode, []),
-      );
-      setAvailablePlans([]);
-      setMethodMessage(null);
-      setCouponCode("");
-      setGiftCardCode("");
-      setBillingFullName("");
-      setBillingEmail("");
-      setBillingCountry("Brasil");
-      setBillingPostalCode("");
-      setBillingRegion("");
-      setBillingCity("");
-      setBillingAddressLine1("");
-      setBillingAddressLine2("");
-      setDiscountPreview(null);
-      setDiscountMessage(null);
-      setIsDiscountEditorOpen(false);
-      setPayerDocument("");
-      setPayerName("");
-      setCardNumber("");
-      setCardHolderName("");
-      setCardExpiry("");
-      setCardCvv("");
-      setCardDocument("");
-      setCardBillingZipCode("");
-      setIsSubmittingCard(false);
-      setPixOrder(null);
-      setLastKnownOrderNumber(null);
-      setCopied(false);
-      setIsLoadingOrder(false);
+      
+      // Nao limpamos os dados do formulario (payerName, etc) se estivermos em um fluxo de 'Pagamento Primeiro'.
+      // Mas limpamos se houver um status query de outra guild.
+      const checkoutQuery = readCheckoutStatusQuery();
+      if (checkoutQuery.guild) {
+         clearCheckoutStatusQuery();
+      }
+
+      // Se for o render inicial e nao houver guildId, configuramos o modo global mas mantemos os dados do formulário/draft
+      if (!isPlanLoading) {
+        setView("methods");
+        setResolvedPlan(resolvePlanSummary(initialPlanCode, initialBillingPeriodCode, []));
+        setIsLoadingOrder(false);
+      }
       return;
     }
 
@@ -3648,6 +3634,17 @@ export function ConfigStepFour({
     setIsLoadingOrder(true);
 
     async function loadLatestPixOrder() {
+      if (!activeGuildId) {
+        setPhase("cart");
+        setSelectedRail(null);
+        setPixOrder(null);
+        setLastKnownOrderNumber(null);
+        setView("methods");
+        setMethodMessage(null);
+        setIsLoadingOrder(false);
+        return;
+      }
+
       if (activePlanSummary.isTrial && !shouldLoadOrderByCode) {
         setPhase("cart");
         setSelectedRail(null);
@@ -4135,10 +4132,12 @@ export function ConfigStepFour({
     selectedBillingPeriodCode,
     selectedPlanCode,
     view,
+    onApproved,
   ]);
 
   useEffect(() => {
-    if (!guildId || !pendingPixOrderId || !pendingPixOrderNumber) return;
+    if (!pendingPixOrderId || !pendingPixOrderNumber) return;
+    if (!guildId) return;
     const activeGuildId = guildId;
     const activeOrderCode = pendingPixOrderNumber;
     const checkoutQuery = readCheckoutStatusQuery();
@@ -4208,6 +4207,9 @@ export function ConfigStepFour({
                 : "Pagamento aprovado para a conta.",
             );
             setCheckoutStatusQuery({ order: payload.order, guildId: activeGuildId });
+            if (onApproved) {
+              onApproved(payload.order);
+            }
           } else if (payload.order.method === "card") {
             setMethodMessage(null);
             setCheckoutStatusQuery({ order: payload.order, guildId: activeGuildId });
@@ -4248,6 +4250,7 @@ export function ConfigStepFour({
     pixOrder?.checkoutAccessToken,
     pixOrder?.method,
     pixOrder?.status,
+    onApproved,
   ]);
 
   useEffect(() => {
@@ -4593,7 +4596,7 @@ export function ConfigStepFour({
   }, []);
 
   const handleActiveLicenseCheckoutBlock = useCallback(
-    (blockedGuildId: string, licenseExpiresAt?: string | null) => {
+    (blockedGuildId: string | null, licenseExpiresAt?: string | null) => {
       clearPendingCardRedirectState(blockedGuildId);
       removeCachedOrderByGuild(blockedGuildId);
       clearCheckoutStatusQuery();
@@ -5121,6 +5124,9 @@ export function ConfigStepFour({
             : "Pagamento aprovado para a conta.",
         );
         setCheckoutStatusQuery({ order: payload.order, guildId });
+        if (onApproved) {
+          onApproved(payload.order);
+        }
       } else if (payload.order.status === "pending" && payload.order.qrCodeText) {
         setView("pix_checkout");
         setMethodMessage(
@@ -5154,6 +5160,7 @@ export function ConfigStepFour({
     payerName,
     selectedBillingPeriodCode,
     selectedPlanCode,
+    onApproved,
   ]);
 
   useEffect(() => {
@@ -5229,6 +5236,10 @@ export function ConfigStepFour({
             : "Plano gratuito ativado com sucesso. Redirecionando...",
       );
 
+      if (onApproved) {
+        onApproved(payload.order);
+      }
+
       const redirectConfig = resolveApprovedRedirectConfig(guildId);
       trialActivationRedirectTimeoutRef.current = window.setTimeout(() => {
         window.location.assign(redirectConfig.targetUrl);
@@ -5248,6 +5259,7 @@ export function ConfigStepFour({
     isSubmittingTrial,
     selectedBillingPeriodCode,
     selectedPlanCode,
+    onApproved,
   ]);
 
   const handleSchedulePlanChange = useCallback(async () => {
@@ -5376,6 +5388,9 @@ export function ConfigStepFour({
           : "Troca aplicada com sucesso usando o credito disponivel da conta.",
       );
       setCheckoutStatusQuery({ order: payload.order, guildId });
+      if (onApproved) {
+        onApproved(payload.order);
+      }
     } catch (error) {
       setMethodMessage(
         parseUnknownErrorMessage(error) ||
@@ -5393,6 +5408,7 @@ export function ConfigStepFour({
     isPlanLoading,
     selectedBillingPeriodCode,
     selectedPlanCode,
+    onApproved,
   ]);
 
   const handleContinueToCheckout = useCallback(() => {
@@ -5451,7 +5467,7 @@ export function ConfigStepFour({
   );
 
   const handleSubmitPixPayment = useCallback(async () => {
-    if (!guildId || isSubmittingPix) return;
+    if (isSubmittingPix) return;
     if (
       !(pixOrder?.orderNumber || lastKnownOrderNumber) ||
       isLoadingOrder ||
@@ -5527,6 +5543,9 @@ export function ConfigStepFour({
             : "Pagamento aprovado para a conta.",
         );
         setCheckoutStatusQuery({ order: payload.order, guildId });
+        if (onApproved) {
+          onApproved(payload.order);
+        }
       } else if (payload.order.status === "pending" && payload.order.qrCodeText) {
         setView("pix_checkout");
         setMethodMessage("QR Code PIX gerado. Finalize o pagamento no card principal.");
@@ -5576,10 +5595,11 @@ export function ConfigStepFour({
     selectedBillingPeriodCode,
     selectedPlanCode,
     triggerPixFormValidationError,
+    onApproved,
   ]);
 
   const handleSubmitCardPayment = useCallback(async () => {
-    if (!guildId || isSubmittingCard) return;
+    if (isSubmittingCard) return;
 
     if (
       cardClientCooldownUntil &&
@@ -5772,6 +5792,9 @@ export function ConfigStepFour({
             : "Pagamento com cartao aprovado.",
         );
         setCheckoutStatusQuery({ order: payload.order, guildId });
+        if (onApproved) {
+          onApproved(payload.order);
+        }
       } else if (payload.order.status === "pending") {
         setMethodMessage("Pagamento com cartao em analise.");
         setCheckoutStatusQuery({ order: payload.order, guildId });
@@ -5838,6 +5861,7 @@ export function ConfigStepFour({
     selectedBillingPeriodCode,
     selectedPlanCode,
     triggerCardFormValidationError,
+    onApproved,
   ]);
 
   const handleCopyPixCode = useCallback(async () => {
@@ -6673,15 +6697,19 @@ export function ConfigStepFour({
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between gap-[14px]">
-                      <span className="text-[#DDDDDD]">Cupom</span>
-                      <span className="font-medium text-[#F5F5F5]">{couponDiscountLabel}</span>
-                    </div>
+                    {activeDiscountPreview.coupon && activeDiscountPreview.coupon.amount > 0 ? (
+                      <div className="flex items-center justify-between gap-[14px]">
+                        <span className="text-[#DDDDDD]">Cupom</span>
+                        <span className="font-medium text-[#0ECF9C]">{couponDiscountLabel}</span>
+                      </div>
+                    ) : null}
 
-                    <div className="flex items-center justify-between gap-[14px]">
-                      <span className="text-[#DDDDDD]">Vale-presente</span>
-                      <span className="font-medium text-[#F5F5F5]">{giftCardDiscountLabel}</span>
-                    </div>
+                    {activeDiscountPreview.giftCard && activeDiscountPreview.giftCard.amount > 0 ? (
+                      <div className="flex items-center justify-between gap-[14px]">
+                        <span className="text-[#DDDDDD]">Vale-presente</span>
+                        <span className="font-medium text-[#0ECF9C]">{giftCardDiscountLabel}</span>
+                      </div>
+                    ) : null}
 
                     <div className="flex items-center justify-between gap-[14px]">
                       <span className="text-[#DDDDDD]">FlowPoints</span>
@@ -6863,4 +6891,3 @@ export function ConfigStepFour({
     </main>
   );
 }
-

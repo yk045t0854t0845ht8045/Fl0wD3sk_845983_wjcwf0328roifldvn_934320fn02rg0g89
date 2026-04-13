@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState, useMemo } from "react";
 import { History, CheckCircle2, XCircle, AlertCircle, QrCode, CreditCard, Search, ChevronDown, MessageSquare } from "lucide-react";
-import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { usePaymentHistory } from "@/hooks/useAccountData";
 
 type OrderMethod = "pix" | "card" | "trial" | string;
 type OrderStatus = "approved" | "pending" | "rejected" | "cancelled" | "expired" | "failed" | string;
@@ -67,31 +67,13 @@ function groupOrdersByMonth(orders: Order[]) {
 }
 
 export function PaymentHistoryTab({ onNavigateTickets }: { onNavigateTickets?: () => void }) {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { orders, loading } = usePaymentHistory();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "failed">("all");
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
 
-  useEffect(() => {
-    async function loadHistory() {
-      try {
-        const res = await fetch("/api/auth/me/payments/history");
-        const json = await res.json();
-        if (json.ok) {
-          setOrders(json.orders || []);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadHistory();
-  }, []);
-
-  const filteredOrders = React.useMemo(() => {
-    return orders.filter((order) => {
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order: Order) => {
       const matchSearch = String(order.orderNumber).includes(searchQuery);
       let mapStatus = order.status;
       if (order.status !== "approved" && order.status !== "pending") mapStatus = "failed";

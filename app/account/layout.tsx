@@ -1,4 +1,4 @@
-import { validateTab, type AccountTab } from "@/lib/account/tabs";
+import { validateTab } from "@/lib/account/tabs";
 import { redirect } from "next/navigation";
 import { AccountWorkspace } from "@/components/account/AccountWorkspace";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
@@ -30,6 +30,7 @@ export default async function AccountLayout({
       displayName={user.display_name}
       username={user.username}
       avatarUrl={buildDiscordAvatarUrl(user.discord_user_id, user.avatar)}
+      initialTab={activeTab}
     >
       {children}
     </AccountWorkspace>

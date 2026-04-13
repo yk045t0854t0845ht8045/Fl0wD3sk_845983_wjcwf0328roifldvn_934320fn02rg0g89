@@ -1,16 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveSessionAccessToken } from "@/lib/auth/discordGuildAccess";
 import {
-  buildSavedMethods,
-  extractCardSnapshot,
-} from "@/lib/payments/savedMethods";
-import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
-import {
-  mergeSavedMethodsWithStored,
-  toSavedMethodFromStoredRecord,
-  type StoredPaymentMethodRecord,
-} from "@/lib/payments/userPaymentMethods";
-import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
 } from "@/lib/security/errors";
@@ -23,6 +13,8 @@ import {
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { getManagedHistoryForUser } from "@/lib/account/managedHistory";
+
 
 type PaymentOrderStatus =
   | "pending"
@@ -159,23 +151,15 @@ export async function GET(request: Request) {
       sessionId: sessionData.authSession.id,
       userId: sessionData.authSession.user.id,
     });
+
     const rateLimit = await enforceRequestRateLimit({
       action: "payment_history_read",
-      windowMs: 10 * 60 * 1000,
-      maxAttempts: 60,
+      windowMs: 5 * 60 * 1000,
+      maxAttempts: 100,
       context: auditContext,
     });
 
     if (!rateLimit.ok) {
-      await logSecurityAuditEventSafe(auditContext, {
-        action: "payment_history_read",
-        outcome: "blocked",
-        metadata: {
-          reason: "rate_limit",
-          retryAfterSeconds: rateLimit.retryAfterSeconds,
-        },
-      });
-
       const response = respond(
         { ok: false, message: "Muitas consultas. Tente novamente em instantes." },
         { status: 429 },
@@ -184,153 +168,21 @@ export async function GET(request: Request) {
       return response;
     }
 
-    await logSecurityAuditEventSafe(auditContext, {
-      action: "payment_history_read",
-      outcome: "started",
-    });
-
-    const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("payment_orders")
-      .select(PAYMENT_HISTORY_SELECT_COLUMNS)
-      .eq("user_id", sessionData.authSession.user.id)
-      .order("created_at", { ascending: false })
-      .limit(500)
-      .returns<PaymentOrderRecord[]>();
-
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
-
-    let rawOrders = result.data || [];
-    const candidates = rawOrders
-      .filter(
-        (order) =>
-          !!order.provider_payment_id &&
-          (order.status === "pending" ||
-            order.status === "failed" ||
-            order.status === "expired" ||
-            order.status === "rejected"),
-      )
-      .slice(0, 4);
-
-    let reconciledAnything = false;
-    for (const order of candidates) {
-      try {
-        const reconciled = await reconcilePaymentOrderRecord(order, {
-          source: "auth_payment_history",
-        });
-        if (reconciled.changed) {
-          reconciledAnything = true;
-        }
-      } catch {
-        // nao quebrar historico por falha em reconciliacao oportunista
-      }
-    }
-
-    if (reconciledAnything) {
-      const refreshedResult = await supabase
-        .from("payment_orders")
-        .select(PAYMENT_HISTORY_SELECT_COLUMNS)
-        .eq("user_id", sessionData.authSession.user.id)
-        .order("created_at", { ascending: false })
-        .limit(500)
-        .returns<PaymentOrderRecord[]>();
-
-      if (refreshedResult.error) {
-        throw new Error(refreshedResult.error.message);
-      }
-
-      rawOrders = refreshedResult.data || [];
-    }
-
-    const orderIds = rawOrders.map((order) => order.id);
-    let paymentEventsByOrderId = new Map<number, PaymentOrderEventRecord[]>();
-
-    if (orderIds.length > 0) {
-      const eventsResult = await supabase
-        .from("payment_order_events")
-        .select(PAYMENT_HISTORY_EVENT_SELECT_COLUMNS)
-        .in("payment_order_id", orderIds)
-        .order("created_at", { ascending: false })
-        .returns<PaymentOrderEventRecord[]>();
-
-      if (eventsResult.error) {
-        throw new Error(eventsResult.error.message);
-      }
-
-      paymentEventsByOrderId = (eventsResult.data || []).reduce(
-        (map, event) => {
-          const current = map.get(event.payment_order_id) || [];
-          current.push(event);
-          map.set(event.payment_order_id, current);
-          return map;
-        },
-        new Map<number, PaymentOrderEventRecord[]>(),
-      );
-    }
-
-    const orders = rawOrders.map((order) =>
-      toHistoryOrder(order, paymentEventsByOrderId.get(order.id) || []),
-    );
-    const allMethods = buildSavedMethods(
-      rawOrders.map((order) => ({
-        payment_method: order.payment_method,
-        provider_payload: order.provider_payload,
-        created_at: order.created_at,
-      })),
-    );
-
-    const hiddenMethodsResult = await supabase
-      .from("auth_user_hidden_payment_methods")
-      .select("method_id")
-      .eq("user_id", sessionData.authSession.user.id)
-      .returns<Array<{ method_id: string }>>();
-
-    if (hiddenMethodsResult.error) {
-      throw new Error(hiddenMethodsResult.error.message);
-    }
-
-    const hiddenMethodSet = new Set(
-      (hiddenMethodsResult.data || []).map((item) => item.method_id),
-    );
-
-    const storedMethodsResult = await supabase
-      .from("auth_user_payment_methods")
-      .select(
-        "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, verified_at, last_context_guild_id, created_at, updated_at",
-      )
-      .eq("user_id", sessionData.authSession.user.id)
-      .eq("is_active", true)
-      .returns<StoredPaymentMethodRecord[]>();
-
-    if (storedMethodsResult.error) {
-      throw new Error(storedMethodsResult.error.message);
-    }
-
-    const storedMethods = (storedMethodsResult.data || [])
-      .map((row) => toSavedMethodFromStoredRecord(row))
-      .filter((method): method is NonNullable<typeof method> => Boolean(method));
-
-    const methods = mergeSavedMethodsWithStored({
-      derivedMethods: allMethods,
-      storedMethods,
-      hiddenMethodSet,
-    });
+    const history = await getManagedHistoryForUser(sessionData.authSession.user.id);
 
     await logSecurityAuditEventSafe(auditContext, {
       action: "payment_history_read",
       outcome: "succeeded",
       metadata: {
-        orderCount: orders.length,
-        methodCount: methods.length,
+        orderCount: history.orders.length,
+        methodCount: history.methods.length,
       },
     });
 
     return respond({
       ok: true,
-      orders,
-      methods,
+      orders: history.orders,
+      methods: history.methods,
     });
   } catch (error) {
     await logSecurityAuditEventSafe(requestContext, {
@@ -353,3 +205,4 @@ export async function GET(request: Request) {
     );
   }
 }
+

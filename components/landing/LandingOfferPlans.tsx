@@ -105,35 +105,48 @@ function PlanCta({
   plan,
   accountPlanCode,
   accountPlanStatus,
+  isInitialLoading,
+  isGlobalLoading,
+  onStartLoading,
 }: {
-  plan: PlanPricingDefinition;
+  plan: PlanPricingDefinition & { isAvailable: boolean };
   accountPlanCode: string | null;
   accountPlanStatus: string | null;
+  isInitialLoading?: boolean;
+  isGlobalLoading: boolean;
+  onStartLoading: (planCode: string) => void;
 }) {
   const planHref = `${buildConfigCheckoutPath({
     planCode: plan.code,
     billingPeriodCode: plan.billingPeriodCode,
   })}?fresh=1`;
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLocalLoading, setIsLocalLoading] = useState(false);
   const isCurrentPlan =
     !!accountPlanCode &&
     accountPlanCode === plan.code &&
     (accountPlanStatus === "active" || accountPlanStatus === "trial");
 
+  const isDisabled = isCurrentPlan || !plan.isAvailable || isInitialLoading || isGlobalLoading;
+
   return (
     <LandingActionButton
-      href={isCurrentPlan ? undefined : planHref}
+      href={isDisabled ? undefined : planHref}
       variant="light"
       className="mt-[20px] h-[50px] w-full rounded-[12px] px-6 text-[16px]"
-      disabled={isCurrentPlan}
+      disabled={isDisabled}
       onClick={() => {
-        if (isCurrentPlan) return;
-        setIsLoading(true);
+        if (isDisabled) return;
+        setIsLocalLoading(true);
+        onStartLoading(plan.code);
       }}
     >
-      {isCurrentPlan ? (
+      {isInitialLoading ? (
+        <ButtonLoader size={18} colorClassName="text-[#2B2B2B]" />
+      ) : isCurrentPlan ? (
         "Plano atual"
-      ) : isLoading ? (
+      ) : !plan.isAvailable ? (
+        "Indisponivel"
+      ) : isLocalLoading ? (
         <ButtonLoader size={18} colorClassName="text-[#2B2B2B]" />
       ) : (
         "Escolher plano"
@@ -147,11 +160,17 @@ function OfferPlanCard({
   delay,
   accountPlanCode,
   accountPlanStatus,
+  isInitialLoading,
+  isGlobalLoading,
+  onStartLoading,
 }: {
-  plan: PlanPricingDefinition;
+  plan: PlanPricingDefinition & { isAvailable: boolean };
   delay: number;
   accountPlanCode: string | null;
   accountPlanStatus: string | null;
+  isInitialLoading?: boolean;
+  isGlobalLoading: boolean;
+  onStartLoading: (planCode: string) => void;
 }) {
   const isPopular = plan.code === "pro";
   const cardBodyClass =
@@ -214,6 +233,9 @@ function OfferPlanCard({
             plan={plan}
             accountPlanCode={accountPlanCode}
             accountPlanStatus={accountPlanStatus}
+            isInitialLoading={isInitialLoading}
+            isGlobalLoading={isGlobalLoading}
+            onStartLoading={onStartLoading}
           />
 
           <p className="mt-[16px] min-h-[48px] text-[13px] leading-[1.22] font-normal text-[rgba(218,218,218,0.3)]">
@@ -260,10 +282,18 @@ export function LandingOfferPlans() {
     useState<PlanBillingPeriodCode>("monthly");
   const [accountPlanCode, setAccountPlanCode] = useState<string | null>(null);
   const [accountPlanStatus, setAccountPlanStatus] = useState<string | null>(null);
+  const [isBasicAvailable, setIsBasicAvailable] = useState<boolean>(true);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
+  const [isGlobalLoading, setIsGlobalLoading] = useState<boolean>(false);
+  const [refreshTick, setRefreshTick] = useState<number>(0);
 
   const plans = useMemo(
-    () => getAllPlanPricingDefinitions(selectedBillingPeriodCode),
-    [selectedBillingPeriodCode],
+    () =>
+      getAllPlanPricingDefinitions(selectedBillingPeriodCode).map((plan) => ({
+        ...plan,
+        isAvailable: plan.code === "basic" ? isBasicAvailable : true,
+      })),
+    [isBasicAvailable, selectedBillingPeriodCode],
   );
 
   useEffect(() => {
@@ -277,20 +307,23 @@ export function LandingOfferPlans() {
           signal: controller.signal,
         });
         const payload = (await response.json().catch(() => null)) as
-          | { ok?: boolean; plan?: { planCode?: string; status?: string } | null }
+          | { ok?: boolean; plan?: { planCode?: string; status?: string } | null; isBasicAvailable?: boolean }
           | null;
         if (!isMounted) return;
-        if (!response.ok || !payload?.ok || !payload.plan?.planCode) {
-          setAccountPlanCode(null);
-          setAccountPlanStatus(null);
-          return;
-        }
-        setAccountPlanCode(payload.plan.planCode || null);
-        setAccountPlanStatus(payload.plan.status || null);
+        const isSuccess = response.ok && payload?.ok === true;
+        
+        setAccountPlanCode(payload?.plan?.planCode || null);
+        setAccountPlanStatus(payload?.plan?.status || null);
+        setIsBasicAvailable(isSuccess ? (payload?.isBasicAvailable ?? true) : true);
       } catch {
         if (!isMounted) return;
         setAccountPlanCode(null);
         setAccountPlanStatus(null);
+        setIsBasicAvailable(true);
+      } finally {
+        if (isMounted) {
+          setIsInitialLoading(false);
+        }
       }
     })();
 
@@ -298,6 +331,13 @@ export function LandingOfferPlans() {
       isMounted = false;
       controller.abort();
     };
+  }, [refreshTick]);
+
+  // Sincronização Inteligente: Revalida quando o usuário volta para a aba
+  useEffect(() => {
+    const handleFocus = () => setRefreshTick((t) => t + 1);
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
   }, []);
 
   return (
@@ -319,6 +359,9 @@ export function LandingOfferPlans() {
             delay={2040 + index * 90}
             accountPlanCode={accountPlanCode}
             accountPlanStatus={accountPlanStatus}
+            isInitialLoading={isInitialLoading}
+            isGlobalLoading={isGlobalLoading}
+            onStartLoading={() => setIsGlobalLoading(true)}
           />
         ))}
       </div>

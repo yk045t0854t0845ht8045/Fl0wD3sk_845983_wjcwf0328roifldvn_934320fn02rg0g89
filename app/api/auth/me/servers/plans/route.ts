@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
   hasAcceptedTeamAccessToGuild,
@@ -363,6 +363,7 @@ function toPlanResponse(input: {
       currentCreditAmount: selectedPlanChange.currentCreditAmount,
       remainingDaysExact: selectedPlanChange.remainingDaysExact,
       immediateSubtotalAmount: selectedPlanChange.immediateSubtotalAmount,
+      targetTotalAmount: selectedPlanChange.targetTotalAmount,
       flowPointsBalance: selectedPlanChange.flowPointsBalance,
       flowPointsGrantPreview: selectedPlanChange.flowPointsGrantPreview,
       effectiveAt: selectedPlanChange.effectiveAt,

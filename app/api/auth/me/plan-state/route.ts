@@ -1,18 +1,11 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
 import { resolveSessionAccessToken } from "@/lib/auth/discordGuildAccess";
-import { buildAccountPlanUsageSnapshot } from "@/lib/plans/accountPlanUsage";
-import { getUserPlanScheduledChange } from "@/lib/plans/change";
-import {
-  ensureDowngradeEnforcementForUser,
-  getDowngradeEnforcementSummaryForUser,
-} from "@/lib/plans/downgradeEnforcement";
-import { countPlanGuildsForUser, getPlanGuildsForUser } from "@/lib/plans/planGuilds";
-import { PLAN_ORDER, resolvePlanPricing, type PlanCode } from "@/lib/plans/catalog";
-import {
-  getUserPlanState,
-  repairOrphanPlanGuildLinkForUser,
-} from "@/lib/plans/state";
+import { getManagedPlanStateForUser } from "@/lib/account/managedPlanState";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
@@ -22,6 +15,12 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+import {
+  PLAN_ORDER,
+  resolvePlanPricing,
+  type PlanCode,
+} from "@/lib/plans/catalog";
+
 
 function resolveUpgradeRecommendation(input: {
   currentPlanCode: PlanCode | null;
@@ -109,85 +108,26 @@ export async function GET(request: Request) {
       return response;
     }
 
-    const userId = sessionData.authSession.user.id;
-    const userPlanState = await getUserPlanState(sessionData.authSession.user.id);
-    await repairOrphanPlanGuildLinkForUser({
-      userId,
-      userPlanState,
-      source: "auth_me_plan_state",
-    });
-    const [licensedServersCount, allPlanGuilds, scheduledChange] = await Promise.all([
-      countPlanGuildsForUser(userId),
-      getPlanGuildsForUser(userId, { includeInactive: true }),
-      getUserPlanScheduledChange(userId),
-    ]);
-    await ensureDowngradeEnforcementForUser({
-      userId,
-      userPlanState,
-      scheduledChange,
-    });
-    const downgradeEnforcement = await getDowngradeEnforcementSummaryForUser(userId);
-    const usage = buildAccountPlanUsageSnapshot(
-      userPlanState,
-      licensedServersCount,
-    );
-    const totalLinkedServersCount = allPlanGuilds.length;
-    const requiredServersForRecommendation = downgradeEnforcement
-      ? totalLinkedServersCount
-      : usage.licensedServersCount;
-    const upgradeRecommendation = resolveUpgradeRecommendation({
-      currentPlanCode: userPlanState?.plan_code || null,
-      requiredServersCount: requiredServersForRecommendation,
-    });
+    const data = await getManagedPlanStateForUser(sessionData.authSession.user.id);
 
     await logSecurityAuditEventSafe(auditContext, {
       action: "plan_state_get",
       outcome: "succeeded",
       metadata: {
-        hasPlanState: Boolean(userPlanState),
-        planCode: userPlanState?.plan_code || null,
-        status: userPlanState?.status || null,
-        licensedServersCount: usage.licensedServersCount,
-        maxLicensedServers: usage.maxLicensedServers,
-        limitReached: usage.hasReachedLicensedServersLimit,
-        totalLinkedServersCount,
-        hasDowngradeEnforcement: Boolean(downgradeEnforcement),
-        downgradeStatus: downgradeEnforcement?.status || null,
+        hasPlanState: Boolean(data.plan),
+        planCode: data.plan?.planCode || null,
+        status: data.plan?.status || null,
+        licensedServersCount: data.usage.licensedServersCount,
+        maxLicensedServers: data.usage.maxLicensedServers,
+        hasDowngradeEnforcement: Boolean(data.downgradeEnforcement),
       },
     });
 
     return respond({
       ok: true,
-      plan: userPlanState
-        ? {
-            planCode: userPlanState.plan_code,
-            planName: userPlanState.plan_name,
-            status: userPlanState.status,
-            amount: Number(userPlanState.amount),
-            currency: userPlanState.currency,
-            billingCycleDays: userPlanState.billing_cycle_days,
-            maxLicensedServers: userPlanState.max_licensed_servers,
-            activatedAt: userPlanState.activated_at,
-            expiresAt: userPlanState.expires_at,
-          }
-        : null,
-      usage,
-      totalLinkedServersCount,
-      downgradeEnforcement: downgradeEnforcement
-        ? {
-            id: downgradeEnforcement.id,
-            status: downgradeEnforcement.status,
-            effectiveAt: downgradeEnforcement.effectiveAt,
-            targetPlanCode: downgradeEnforcement.targetPlanCode,
-            targetBillingPeriodCode: downgradeEnforcement.targetBillingPeriodCode,
-            targetBillingCycleDays: downgradeEnforcement.targetBillingCycleDays,
-            targetMaxLicensedServers: downgradeEnforcement.targetMaxLicensedServers,
-            selectedGuildIds: downgradeEnforcement.selectedGuildIds,
-            scheduledChangeId: downgradeEnforcement.scheduledChangeId,
-          }
-        : null,
-      upgradeRecommendation,
+      ...data,
     });
+
   } catch (error) {
     return respond(
       {

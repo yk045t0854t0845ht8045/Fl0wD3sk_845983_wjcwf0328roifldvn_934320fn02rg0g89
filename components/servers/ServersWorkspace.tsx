@@ -778,7 +778,7 @@ function ServerListRow({
               data-server-card-menu-root="true"
             >
               <button type="button" onClick={(event) => { event.stopPropagation(); onToggleMenu(server.guildId); }} className="flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#101010] text-[#7B7B7B] transition-colors hover:border-[#222222] hover:text-[#D0D0D0]" aria-label="Abrir menu do servidor"><MenuDotsIcon /></button>
-              {openCardMenuGuildId === server.guildId ? <div className="absolute right-0 top-[48px] z-[160] min-w-[186px] rounded-[16px] border border-[#171717] bg-[#0A0A0A] p-[8px] shadow-[0_22px_60px_rgba(0,0,0,0.44)]"><button type="button" onClick={(event) => { event.stopPropagation(); onOpen(server.guildId); onToggleMenu(server.guildId); }} className="flex w-full items-center rounded-[12px] px-[12px] py-[10px] text-left text-[13px] text-[#D0D0D0] transition-colors hover:bg-[#111111]">Abrir configuracoes</button><button type="button" onClick={(event) => { event.stopPropagation(); onCopyFromMenu(server.guildId); }} className="mt-[4px] flex w-full items-center rounded-[12px] px-[12px] py-[10px] text-left text-[13px] text-[#D0D0D0] transition-colors hover:bg-[#111111]">Copiar ID</button>{server.accessMode === "owner" ? <button type="button" onClick={(event) => { event.stopPropagation(); onDeactivate(); }} className="mt-[4px] flex w-full items-center rounded-[12px] px-[12px] py-[10px] text-left text-[13px] text-[#DB8A8A] transition-colors hover:bg-[#111111]">Desativar bot</button> : null}</div> : null}
+              {openCardMenuGuildId === server.guildId ? <div className="absolute right-0 top-[48px] z-[160] min-w-[186px] rounded-[16px] border border-[#171717] bg-[#0A0A0A] p-[8px] shadow-[0_22px_60px_rgba(0,0,0,0.44)]"><button type="button" onClick={(event) => { event.stopPropagation(); onOpen(server.guildId); onToggleMenu(server.guildId); }} className="flex w-full items-center rounded-[12px] px-[12px] py-[10px] text-left text-[13px] text-[#D0D0D0] transition-colors hover:bg-[#111111]">Abrir configuracoes</button><button type="button" onClick={(event) => { event.stopPropagation(); onCopyFromMenu(server.guildId); }} className="mt-[4px] flex w-full items-center rounded-[12px] px-[12px] py-[10px] text-left text-[13px] text-[#D0D0D0] transition-colors hover:bg-[#111111]">Copiar ID</button></div> : null}
             </div>
           </div>
         </div>
@@ -898,18 +898,6 @@ function ServerGridCard({
                   >
                     Copiar ID
                   </button>
-                  {server.accessMode === "owner" ? (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeactivate();
-                      }}
-                      className="mt-[4px] flex w-full items-center rounded-[12px] px-[12px] py-[10px] text-left text-[13px] text-[#DB8A8A] transition-colors hover:bg-[#111111]"
-                    >
-                      Desativar bot
-                    </button>
-                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1644,10 +1632,26 @@ export function ServersWorkspace({
   }, [selectedTeam, servers]);
 
   const filteredServers = useMemo(() => {
-    return visibleServers.map((server) => ({ server, score: getSearchScore(server.guildName, normalizedQuery) }))
+    const baseServers =
+      statusFilter === "all"
+        ? visibleServers
+        : visibleServers.filter((server) => server.status === statusFilter);
+
+    if (!normalizedQuery) {
+      return baseServers;
+    }
+
+    return baseServers
+      .map((server) => ({
+        server,
+        score: getSearchScore(server.guildName, normalizedQuery),
+      }))
       .filter((item) => item.score > 0)
-      .filter((item) => (statusFilter === "all" ? true : item.server.status === statusFilter))
-      .sort((a, b) => (a.score !== b.score ? b.score - a.score : a.server.guildName.localeCompare(b.server.guildName, "pt-BR")))
+      .sort((a, b) =>
+        a.score !== b.score
+          ? b.score - a.score
+          : a.server.guildName.localeCompare(b.server.guildName, "pt-BR"),
+      )
       .map((item) => item.server);
   }, [normalizedQuery, visibleServers, statusFilter]);
   const filteredProjectsSidebarItems = useMemo(() => {

@@ -1,32 +1,22 @@
-import { useEffect, useState, useMemo } from "react";
-import { CreditCard, Trash, Search, Filter } from "lucide-react";
-import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useMemo, useState } from "react";
+import { CreditCard, Trash, Search } from "lucide-react";
+import { usePaymentHistory } from "@/hooks/useAccountData";
+
+type SavedMethod = {
+  id?: string;
+  brand: string;
+  lastFour: string;
+  expMonth: number | string;
+  expYear: number | string;
+};
 
 export function PaymentMethodsTab() {
-  const [methods, setMethods] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { methods, loading } = usePaymentHistory();
   const [searchQuery, setSearchQuery] = useState("");
   const [brandFilter, setBrandFilter] = useState("all");
 
-  useEffect(() => {
-    async function loadMethods() {
-      try {
-        const res = await fetch("/api/auth/me/payments/history");
-        const json = await res.json();
-        if (json.ok) {
-          setMethods(json.methods || []);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadMethods();
-  }, []);
-
   const filteredMethods = useMemo(() => {
-    return methods.filter((m) => {
+    return (methods as SavedMethod[]).filter((m) => {
       const brand = (m.brand || "").toLowerCase();
       const lastFour = (m.lastFour || "").toLowerCase();
       const query = searchQuery.toLowerCase();
@@ -39,8 +29,8 @@ export function PaymentMethodsTab() {
   }, [methods, searchQuery, brandFilter]);
 
   const uniqueBrands = useMemo(() => {
-    const brands = new Set(methods.map(m => (m.brand || "Desconhecido").toLowerCase()));
-    return Array.from(brands);
+    const brands = new Set((methods as SavedMethod[]).map((m) => (m.brand || "Desconhecido").toLowerCase()));
+    return Array.from(brands) as string[];
   }, [methods]);
 
   if (loading) {
@@ -117,7 +107,7 @@ export function PaymentMethodsTab() {
         </div>
       ) : (
         <div className="space-y-[12px]">
-          {filteredMethods.map((method) => {
+          {(filteredMethods as SavedMethod[]).map((method) => {
             return (
               <div key={method.id || Math.random()} className="flex items-center justify-between rounded-[16px] border border-[#131313] bg-[#0A0A0A] p-[16px] transition hover:border-[#222222]">
                 <div className="flex items-center gap-[16px]">

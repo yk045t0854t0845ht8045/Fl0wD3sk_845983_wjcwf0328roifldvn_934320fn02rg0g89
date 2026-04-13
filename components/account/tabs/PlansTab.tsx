@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React from "react";
 import { BadgePercent, ArrowRightLeft, CheckCircle2, Clock, Zap, Crown, Star, Activity } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { usePlanInfo } from "@/hooks/useAccountData";
 
 type PlanData = {
   code: string;
@@ -53,6 +53,7 @@ const PLAN_CONFIGS: Record<string, {
     features: ["Servidores ilimitados", "White-label completo", "SLA Garantido", "Suporte 24/7 dedicado"]
   },
 };
+
 function formatDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
@@ -74,24 +75,8 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function PlansTab() {
-  const [plan, setPlan] = useState<PlanData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { plan, loading } = usePlanInfo();
   const router = useRouter();
-
-  useEffect(() => {
-    async function loadPlan() {
-      try {
-        const res = await fetch("/api/auth/me/account/plan");
-        const json = await res.json();
-        if (json.ok) setPlan(json.plan);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadPlan();
-  }, []);
 
   if (loading) {
     return (

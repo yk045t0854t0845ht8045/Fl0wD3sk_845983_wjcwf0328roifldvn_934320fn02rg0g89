@@ -1,4 +1,8 @@
 import Script from "next/script";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import { LandingFooter } from "@/components/landing/LandingFooter";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
 import { LandingHeader } from "@/components/landing/LandingHeader";

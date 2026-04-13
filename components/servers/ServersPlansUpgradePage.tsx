@@ -183,12 +183,14 @@ function PlanCta({
   preferredGuildId,
   pendingKey,
   onStartNavigation,
+  isInitialLoading,
 }: {
   plan: DisplayPlanDefinition;
   currentPlan: CurrentPlanSnapshot | null;
   preferredGuildId: string | null;
   pendingKey: string | null;
   onStartNavigation: (key: string) => void;
+  isInitialLoading?: boolean;
 }) {
   const current = isCurrentPlan(currentPlan, plan);
   const key = `${plan.code}:${plan.billingPeriodCode}`;
@@ -206,16 +208,18 @@ function PlanCta({
 
   return (
     <LandingActionButton
-      href={current || !plan.isAvailable ? undefined : href}
+      href={current || !plan.isAvailable || isInitialLoading ? undefined : href}
       variant="light"
       className="mt-[20px] h-[50px] w-full rounded-[12px] px-6 text-[16px]"
-      disabled={current || !plan.isAvailable}
+      disabled={current || !plan.isAvailable || isInitialLoading}
       onClick={() => {
-        if (current || !plan.isAvailable) return;
+        if (current || !plan.isAvailable || isInitialLoading) return;
         onStartNavigation(key);
       }}
     >
-      {current ? (
+      {isInitialLoading ? (
+        <ButtonLoader size={18} colorClassName="text-[#2B2B2B]" />
+      ) : current ? (
         "Plano atual"
       ) : !plan.isAvailable ? (
         "Indisponivel"
@@ -238,6 +242,7 @@ function OfferPlanCard({
   onStartNavigation,
   compact = false,
   reveal = false,
+  isInitialLoading,
 }: {
   plan: DisplayPlanDefinition;
   delay?: number;
@@ -248,6 +253,7 @@ function OfferPlanCard({
   onStartNavigation: (key: string) => void;
   compact?: boolean;
   reveal?: boolean;
+  isInitialLoading?: boolean;
 }) {
   const isRecommended = plan.code === recommendedPlanCode;
   const cardBodyClass =
@@ -317,6 +323,7 @@ function OfferPlanCard({
           preferredGuildId={preferredGuildId}
           pendingKey={pendingKey}
           onStartNavigation={onStartNavigation}
+          isInitialLoading={isInitialLoading}
         />
 
         {!compact ? (
@@ -680,6 +687,11 @@ export function ServersPlansUpgradePage({
       resolveInitialBillingPeriodCode(currentPlan),
     );
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   const plans = useMemo(
     () =>
@@ -742,6 +754,7 @@ export function ServersPlansUpgradePage({
               pendingKey={pendingKey}
               onStartNavigation={setPendingKey}
               reveal
+              isInitialLoading={!isMounted}
             />
           ))}
         </div>

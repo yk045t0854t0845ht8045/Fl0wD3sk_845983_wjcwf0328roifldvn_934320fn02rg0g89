@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
   hasAcceptedTeamAccessToGuild,
@@ -257,7 +257,7 @@ async function finalizeHostedCheckoutFallbackOrder(input: {
   return nextOrder;
 }
 
-async function ensureGuildAccess(guildId: string) {
+async function ensureGuildAccess(guildId: string | null) {
   const sessionData = await resolveSessionAccessToken();
   if (!sessionData?.authSession) {
     return {
@@ -280,6 +280,15 @@ async function ensureGuildAccess(guildId: string) {
           { status: 401 },
         ),
       ),
+    };
+  }
+
+  if (!guildId) {
+    return {
+      ok: true as const,
+      context: {
+        sessionData,
+      },
     };
   }
 

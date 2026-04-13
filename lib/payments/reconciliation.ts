@@ -649,39 +649,52 @@ export async function reconcileRecentPaymentOrders(
     errors: [],
   };
 
-  for (const order of orders) {
-    try {
-      const reconciled = await reconcilePaymentOrderRecord(order, { source });
-      summary.orders.push({
-        orderId: reconciled.order.id,
-        orderNumber: reconciled.order.order_number,
-        status: reconciled.order.status,
-        action: reconciled.action,
-        providerStatus: reconciled.providerStatus,
-        providerStatusDetail: reconciled.providerStatusDetail,
-      });
-
-      if (
-        reconciled.action === "refunded_duplicate" ||
-        reconciled.action === "refunded_timeout"
-      ) {
-        summary.changed += 1;
-        summary.refunded += 1;
-      } else if (reconciled.action === "updated") {
-        summary.changed += 1;
-      } else if (reconciled.action === "provider_unreachable") {
-        summary.providerUnavailable += 1;
-        summary.unchanged += 1;
-      } else {
-        summary.unchanged += 1;
+  const results = await Promise.all(
+    orders.map(async (order) => {
+      try {
+        const reconciled = await reconcilePaymentOrderRecord(order, { source });
+        return { reconciled, error: null };
+      } catch (error) {
+        return { reconciled: null, order, error };
       }
-    } catch (error) {
+    }),
+  );
+
+  for (const result of results) {
+    if (result.error) {
       summary.failed += 1;
       summary.errors.push({
-        orderId: order.id,
-        orderNumber: order.order_number,
-        message: error instanceof Error ? error.message : "unknown_error",
+        orderId: result.order!.id,
+        orderNumber: result.order!.order_number,
+        message:
+          result.error instanceof Error ? result.error.message : "unknown_error",
       });
+      continue;
+    }
+
+    const reconciled = result.reconciled!;
+    summary.orders.push({
+      orderId: reconciled.order.id,
+      orderNumber: reconciled.order.order_number,
+      status: reconciled.order.status,
+      action: reconciled.action,
+      providerStatus: reconciled.providerStatus,
+      providerStatusDetail: reconciled.providerStatusDetail,
+    });
+
+    if (
+      reconciled.action === "refunded_duplicate" ||
+      reconciled.action === "refunded_timeout"
+    ) {
+      summary.changed += 1;
+      summary.refunded += 1;
+    } else if (reconciled.action === "updated") {
+      summary.changed += 1;
+    } else if (reconciled.action === "provider_unreachable") {
+      summary.providerUnavailable += 1;
+      summary.unchanged += 1;
+    } else {
+      summary.unchanged += 1;
     }
   }
 

@@ -6,6 +6,7 @@ import {
 import type { DiscordGuild } from "@/lib/auth/discord";
 import {
   getLockedGuildLicenseMap,
+  getLockedGuildLicenseMapByUserId,
 } from "@/lib/payments/licenseStatus";
 import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
@@ -26,6 +27,12 @@ import {
   getAcceptedTeamGuildIdsForUser,
   getGlobalTeamLinkedGuildIds
 } from "@/lib/teams/userTeams";
+
+const managedServersCache = new Map<number, { servers: ManagedServer[]; timestamp: number }>();
+const refreshingUserIds = new Set<number>();
+const CACHE_TTL_MS = 600000; // 10 minutos (TTL global)
+const STALE_THRESHOLD_MS = 20000; // 20 segundos (tempo até disparar refresh em background)
+
 
 export type ManagedServerStatus = "paid" | "expired" | "off" | "pending_payment";
 
@@ -88,49 +95,79 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
     throw new Error("Token OAuth ausente na sessao.");
   }
 
-  try {
-    await cleanupExpiredUnpaidServerSetups({
-      userId: sessionData.authSession.user.id,
-      source: "auth_servers",
-    });
-  } catch {
-    // melhor esforco; nao bloquear dashboard por limpeza de onboarding
-  }
-
-  try {
-    await reconcileRecentPaymentOrders({
-      userId: sessionData.authSession.user.id,
-      limit: 6,
-      source: "auth_servers",
-    });
-  } catch {
-    // melhor esforco; nao bloquear dashboard por reconciliacao oportunista
-  }
-
   const userId = sessionData.authSession.user.id;
-  const [userPlanState, scheduledChange] = await Promise.all([
+
+  // 1. Verificar Cache (SWR Pattern)
+  const cached = managedServersCache.get(userId);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    const isStale = Date.now() - cached.timestamp > STALE_THRESHOLD_MS;
+
+    // Se estiver "stale" (velho demais pro tempo ideal), atualiza em background
+    if (isStale && !refreshingUserIds.has(userId)) {
+      refreshingUserIds.add(userId);
+      // Fire and forget: atualiza o cache silenciosamente
+      void fetchManagedServersFresh(sessionData)
+        .catch(() => null)
+        .finally(() => refreshingUserIds.delete(userId));
+    }
+
+    return cached.servers;
+  }
+
+  // Se for MISS (primeira vez ou expirou tudo), espera o fresh carregar
+  return fetchManagedServersFresh(sessionData);
+}
+
+// Helper para carga TOTALMENTE PARALELA (Fase Única)
+async function fetchManagedServersFresh(
+  sessionData: Awaited<ReturnType<typeof resolveSessionAccessToken>>,
+): Promise<ManagedServer[]> {
+  if (!sessionData?.authSession) return [];
+  if (!sessionData.accessToken) {
+    throw new Error("Token OAuth ausente na sessao.");
+  }
+  const userId = sessionData.authSession.user.id;
+
+  void cleanupExpiredUnpaidServerSetups({ userId, source: "auth_servers" }).catch(() => null);
+  void reconcileRecentPaymentOrders({ userId, limit: 6, source: "auth_servers" }).catch(() => null);
+
+  // DISPARAR TUDO EM PARALELO (Fase Única - Estilo Microsoft/Google)
+  const [
+    userPlanState,
+    scheduledChange,
+    accessibleGuilds,
+    acceptedTeamGuildIdsList,
+    ownedPlanGuilds,
+    lockedGuildMap,
+    downgradeEnforcement,
+  ] = await Promise.all([
     getUserPlanState(userId),
     getUserPlanScheduledChange(userId),
+    getAccessibleGuildsForSession({
+      authSession: sessionData.authSession,
+      accessToken: sessionData.accessToken,
+    }),
+    getAcceptedTeamGuildIdsForUser({
+      authUserId: userId,
+      discordUserId: sessionData.authSession.user.discord_user_id,
+    }),
+    getPlanGuildsForUser(userId, { includeInactive: true }),
+    getLockedGuildLicenseMapByUserId(userId),
+    getDowngradeEnforcementSummaryForUser(userId),
   ]);
-  await repairOrphanPlanGuildLinkForUser({
+
+  void repairOrphanPlanGuildLinkForUser({
     userId,
     userPlanState,
     source: "managed_servers_session",
-  });
-  await ensureDowngradeEnforcementForUser({
+  }).catch(() => null);
+  void ensureDowngradeEnforcementForUser({
     userId,
     userPlanState,
     scheduledChange,
-  });
-  const [downgradeEnforcement, ownedPlanGuilds] = await Promise.all([
-    getDowngradeEnforcementSummaryForUser(userId),
-    getPlanGuildsForUser(userId, { includeInactive: true }),
-  ]);
-  const hasPendingDowngradePayment = Boolean(
-    downgradeEnforcement &&
-      (downgradeEnforcement.status === "selection_required" ||
-        downgradeEnforcement.status === "awaiting_payment"),
-  );
+  }).catch(() => null);
+
+  const acceptedTeamGuildIds = new Set(acceptedTeamGuildIdsList);
   const ownedPlanGuildsByGuildId = new Map(
     ownedPlanGuilds.map((record) => [record.guild_id, record]),
   );
@@ -140,37 +177,28 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
       .filter((record) => record.is_active !== false)
       .map((record) => record.guild_id),
   );
+
+  const hasPendingDowngradePayment = Boolean(
+    downgradeEnforcement &&
+      (downgradeEnforcement.status === "selection_required" ||
+        downgradeEnforcement.status === "awaiting_payment"),
+  );
+
   const ownedPlanCoverage = resolveGuildLicenseFromUserPlanState({
     userPlanState,
     guildLicensed: ownedPlanGuildIds.size > 0 || ownedActivePlanGuildIds.size > 0,
   });
 
-  const accessibleGuilds = await getAccessibleGuildsForSession({
-    authSession: sessionData.authSession,
-    accessToken: sessionData.accessToken,
-  });
   const accessibleGuildLookup = buildGuildLookup(accessibleGuilds);
   const sessionGuildLookup = buildGuildLookup(
     sessionData.authSession.discordGuildsCache,
   );
 
-  const acceptedTeamGuildIds = new Set(
-    await getAcceptedTeamGuildIdsForUser({
-      authUserId: sessionData.authSession.user.id,
-      discordUserId: sessionData.authSession.user.discord_user_id,
-    }),
-  );
-  const guildIdsForLookup = Array.from(
-    new Set([
-      ...accessibleGuilds.map((guild) => guild.id),
-      ...acceptedTeamGuildIds,
-      ...ownedPlanGuildIds,
-    ]),
-  );
   const missingTeamGuildIds = Array.from(acceptedTeamGuildIds).filter(
     (guildId) => !accessibleGuildLookup.has(guildId),
   );
 
+  // 5. Resolvê Guildas de Time Suplementares
   const supplementalTeamGuilds = await Promise.all(
     missingTeamGuildIds.map(async (guildId) => {
       const cachedGuild = sessionGuildLookup.get(guildId);
@@ -189,7 +217,7 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
           };
         }
       } catch {
-        // fallback local abaixo; nao bloquear a listagem inteira por um resumo individual
+        // fallback local
       }
 
       return {
@@ -200,6 +228,7 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
       };
     }),
   );
+
   const guildCatalog = new Map(
     [
       ...accessibleGuilds.map((guild) => ({
@@ -212,36 +241,10 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
     ].map((guild) => [guild.id, guild]),
   );
 
-  const [lockedGuildMap, globalTeamLinkedGuildIds] = await Promise.all([
-    getLockedGuildLicenseMap(guildIdsForLookup),
-    getGlobalTeamLinkedGuildIds(guildIdsForLookup),
-  ]);
+  const guildIdsForLookup = Array.from(guildCatalog.keys());
+  const globalTeamLinkedGuildIds = await getGlobalTeamLinkedGuildIds(guildIdsForLookup);
 
-  if (!ownedPlanGuildIds.size && !lockedGuildMap.size) {
-    return Array.from(guildCatalog.values())
-      .filter((guild) => acceptedTeamGuildIds.has(guild.id))
-      .map((guild) => ({
-        guildId: guild.id,
-        guildName: guild.name,
-        iconUrl: buildGuildIconUrl(guild.id, guild.icon),
-        status: "off" as const,
-        accessMode: guild.owner ? ("owner" as const) : ("viewer" as const),
-        canManage: 
-          ownedPlanGuildIds.has(guild.id) || 
-          acceptedTeamGuildIds.has(guild.id) || 
-          (!globalTeamLinkedGuildIds.has(guild.id) && (guild.owner || false)),
-        blockedByPlanLimit: false,
-        pendingDowngradePayment: false,
-        licenseOwnerUserId: sessionData.authSession.user.id,
-        licensePaidAt: new Date().toISOString(),
-        licenseExpiresAt: new Date().toISOString(),
-        graceExpiresAt: new Date().toISOString(),
-        daysUntilExpire: 0,
-        daysUntilOff: 0,
-      }));
-  }
-
-  return Array.from(guildCatalog.values())
+  const servers = Array.from(guildCatalog.values())
     .filter(
       (guild) =>
         ownedPlanGuildIds.has(guild.id) ||
@@ -277,14 +280,15 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
         : isPendingDowngradePayment
           ? "pending_payment"
           : ownedPlanGuild
-          ? ownedPlanCoverage.status === "paid" || ownedPlanCoverage.status === "expired"
-            ? ownedPlanCoverage.status
-            : "off"
-          : selfAccountLockedRecord
-            ? selfAccountLockedRecord.isActive === false
-              ? "off"
-              : selfAccountLockedRecord.status
-          : "off";
+            ? ownedPlanCoverage.status === "paid" || ownedPlanCoverage.status === "expired"
+              ? ownedPlanCoverage.status
+              : "off"
+            : selfAccountLockedRecord
+              ? selfAccountLockedRecord.isActive === false
+                ? "off"
+                : selfAccountLockedRecord.status
+              : "off";
+
       const referencePaidAt = currentLicenseBelongsToViewer
         ? lockedRecord?.paidAt || null
         : ownedPlanGuild?.activated_at || selfAccountLockedRecord?.paidAt || null;
@@ -301,12 +305,9 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
         : ownedPlanGuild
           ? ownedPlanCoverage.graceExpiresAt || null
           : selfAccountLockedRecord?.graceExpiresAt || null;
-      const licenseExpiresAtMs = licenseExpiresAt
-        ? Date.parse(licenseExpiresAt)
-        : Number.NaN;
-      const graceExpiresAtMs = graceExpiresAt
-        ? Date.parse(graceExpiresAt)
-        : Number.NaN;
+
+      const licenseExpiresAtMs = licenseExpiresAt ? Date.parse(licenseExpiresAt) : Number.NaN;
+      const graceExpiresAtMs = graceExpiresAt ? Date.parse(graceExpiresAt) : Number.NaN;
 
       return {
         guildId: guild.id,
@@ -317,36 +318,29 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
         canManage:
           ownedPlanGuildIds.has(guild.id) ||
           acceptedTeamGuildIds.has(guild.id) ||
-          (!globalTeamLinkedGuildIds.has(guild.id) && accessibleGuildLookup.has(guild.id)),
+          (!globalTeamLinkedGuildIds.has(guild.id) && (guild.owner || false)),
         blockedByPlanLimit: isOwnedPlanGuildInactive || isPendingDowngradePayment,
         pendingDowngradePayment: isPendingDowngradePayment,
-        licenseOwnerUserId:
-          lockedRecord?.userId || sessionData.authSession.user.id,
-        licensePaidAt:
-          referencePaidAt || referenceCreatedAt || new Date().toISOString(),
-        licenseExpiresAt:
-          licenseExpiresAt || referenceCreatedAt || new Date().toISOString(),
-        graceExpiresAt:
-          graceExpiresAt || referenceCreatedAt || new Date().toISOString(),
-        daysUntilExpire: Number.isFinite(licenseExpiresAtMs)
-          ? daysLeft(licenseExpiresAtMs)
-          : 0,
-        daysUntilOff: Number.isFinite(graceExpiresAtMs)
-          ? daysLeft(graceExpiresAtMs)
-          : 0,
+        licenseOwnerUserId: lockedRecord?.userId || sessionData.authSession.user.id,
+        licensePaidAt: referencePaidAt || referenceCreatedAt || new Date().toISOString(),
+        licenseExpiresAt: licenseExpiresAt || referenceCreatedAt || new Date().toISOString(),
+        graceExpiresAt: graceExpiresAt || referenceCreatedAt || new Date().toISOString(),
+        daysUntilExpire: Number.isFinite(licenseExpiresAtMs) ? daysLeft(licenseExpiresAtMs) : 0,
+        daysUntilOff: Number.isFinite(graceExpiresAtMs) ? daysLeft(graceExpiresAtMs) : 0,
       };
     })
     .sort((a, b) => {
-      const priority = {
-        paid: 0,
-        expired: 1,
-        pending_payment: 2,
-        off: 3,
-      } as const;
-
+      const priority = { paid: 0, expired: 1, pending_payment: 2, off: 3 } as const;
       const statusDiff = priority[a.status] - priority[b.status];
       if (statusDiff !== 0) return statusDiff;
-
       return a.guildName.localeCompare(b.guildName, "pt-BR");
     });
+
+  // Atualizar Cache
+  managedServersCache.set(userId, {
+    servers,
+    timestamp: Date.now(),
+  });
+
+  return servers;
 }

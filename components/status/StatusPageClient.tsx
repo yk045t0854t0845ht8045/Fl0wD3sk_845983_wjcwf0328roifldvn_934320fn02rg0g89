@@ -60,6 +60,22 @@ const INCIDENT_STATUS_LABELS: Record<IncidentStatus, string> = {
   resolved: "Resolvido"
 };
 
+function buildUtcDay(daysAgo: number) {
+  const now = new Date();
+  const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  day.setUTCDate(day.getUTCDate() - daysAgo);
+  return day;
+}
+
+function formatUtcDayLabel(date: Date) {
+  return date.toLocaleDateString("pt-BR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 function SkeletonBar({ width, height, className = "" }: { width: number | string; height: number | string; className?: string }) {
   return (
     <div
@@ -289,16 +305,33 @@ const SubscribeModalContent = ({ resetSubscribeModal, subscribing, setSubscribin
 };
 
 const StatusHistoryBar = memo(({ componentId, history, incidents }: { componentId: string; history: { date: string; status: SystemStatus }[]; incidents: Incident[] }) => {
+  const historyByDate = useMemo(() => {
+    const map = new Map<string, SystemStatus>();
+    for (const entry of history) {
+      map.set(entry.date, entry.status);
+    }
+    return map;
+  }, [history]);
+
+  const incidentDaySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const incident of incidents) {
+      if (incident.created_at) {
+        set.add(incident.created_at.slice(0, 10));
+      }
+    }
+    return set;
+  }, [incidents]);
+
   return (
     <div className="flex h-[34px] gap-[2px]">
       {Array.from({ length: 90 }).map((_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - (89 - i));
-        const dateIso = d.toISOString().split('T')[0];
-        const dateStr = d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
+        const d = buildUtcDay(89 - i);
+        const dateIso = d.toISOString().slice(0, 10);
+        const dateStr = formatUtcDayLabel(d);
         
-        const dayStatus = history.find(h => h.date === dateIso)?.status || 'operational';
-        const hasIncident = incidents.some(inc => inc.created_at.startsWith(dateIso));
+        const dayStatus = historyByDate.get(dateIso) || "operational";
+        const hasIncident = incidentDaySet.has(dateIso);
         
         return (
           <div key={i} className="group/bar relative flex-1">
@@ -338,6 +371,21 @@ export default function StatusPageClient() {
   const [error, setError] = useState<string | null>(null);
   const [showSubscribe, setShowSubscribe] = useState(false);
   const [subscribing, setSubscribing] = useState(false);
+
+  const incidentsByDay = useMemo(() => {
+    const map = new Map<string, Incident[]>();
+    for (const incident of data?.incidents || []) {
+      const dayKey = incident.created_at ? incident.created_at.slice(0, 10) : "";
+      if (!dayKey) continue;
+      const current = map.get(dayKey);
+      if (current) {
+        current.push(incident);
+      } else {
+        map.set(dayKey, [incident]);
+      }
+    }
+    return map;
+  }, [data?.incidents]);
   
   const resetSubscribeModal = () => {
     setShowSubscribe(false);
@@ -523,12 +571,11 @@ export default function StatusPageClient() {
           <div className="space-y-12">
             {/* Group incidents by date */}
             {Array.from({ length: 7 }).map((_, i) => {
-              const date = new Date();
-              date.setDate(date.getDate() - i);
-              const dateStr = date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
-              const dateIso = date.toISOString().split('T')[0];
+              const date = buildUtcDay(i);
+              const dateStr = formatUtcDayLabel(date);
+              const dateIso = date.toISOString().slice(0, 10);
               
-              const dayIncidents = data?.incidents.filter(inc => inc.created_at.startsWith(dateIso)) || [];
+              const dayIncidents = incidentsByDay.get(dateIso) || [];
 
               return (
                 <div key={i} className="border-t border-[#1A1A1A] pt-8">
@@ -549,7 +596,7 @@ export default function StatusPageClient() {
                               <p className="text-[14px] font-bold text-white">
                                 {INCIDENT_STATUS_LABELS[update.status]} - 
                                 <span className="font-normal text-[#999] ml-2">
-                                  {new Date(update.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} UTC
+                                  {new Date(update.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC
                                 </span>
                               </p>
                               <p className="text-[14px] text-[#EDEDED] leading-relaxed">

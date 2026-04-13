@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
   hasAcceptedTeamAccessToGuild,
@@ -36,7 +36,13 @@ import {
   resolveLatestLicenseCoverageFromApprovedOrders,
   resolveRenewalPaymentDecision,
 } from "@/lib/payments/licenseStatus";
-import type { PlanPricingDefinition } from "@/lib/plans/catalog";
+import {
+  type PlanPricingDefinition,
+  resolvePlanPricing,
+  normalizePlanCode,
+  normalizePlanBillingPeriodCode,
+} from "@/lib/plans/catalog";
+
 import {
   resolveApprovedOrderLicenseExpiresAt,
   resolveEffectivePlanSelection,
@@ -219,13 +225,12 @@ function resolveFlowPointsGrantedFromSubtotal(input: {
   discountedSubtotalAmount: number;
 }) {
   if (input.planChange.kind !== "upgrade") return 0;
-  const normalizedCredit = roundCurrencyAmount(
-    Math.max(0, input.planChange.currentCreditAmount),
-  );
-  const normalizedSubtotal = roundCurrencyAmount(
-    Math.max(0, input.discountedSubtotalAmount),
-  );
-  return roundCurrencyAmount(Math.max(0, normalizedCredit - normalizedSubtotal));
+  const normalizedCredit = roundCurrencyAmount(Math.max(0, input.planChange.currentCreditAmount));
+  // O grant é o excesso do crédito sobre o preço ORIGINAL do novo plano.
+  // Não usamos o subtotal com desconto: cupom/gift card reduzem o que o usuário paga,
+  // mas não devem aumentar os FlowPoints devolvidos — senão doamos dinheiro extra.
+  const targetTotalAmount = roundCurrencyAmount(Math.max(0, input.planChange.targetTotalAmount));
+  return roundCurrencyAmount(Math.max(0, normalizedCredit - targetTotalAmount));
 }
 
 function normalizeCurrency(value: string | null | undefined) {
@@ -371,12 +376,46 @@ function resolveFriendlyPixProviderErrorMessage(message: string) {
   return "Nao foi possivel gerar o PIX agora. Tente novamente em instantes.";
 }
 
-async function resolveCheckoutPlanForGuild(input: {
+async function resolveCheckoutPlanWithoutGuild(input: {
   userId: number;
-  guildId: string;
   requestedPlanCode?: unknown;
   requestedBillingPeriodCode?: unknown;
 }) {
+  const plan = resolvePlanPricing(
+    normalizePlanCode(input.requestedPlanCode),
+    normalizePlanBillingPeriodCode(input.requestedBillingPeriodCode),
+  );
+
+  const planChange = resolvePlanChangePreview({
+    userPlanState: null,
+    targetPlan: plan,
+    flowPointsBalance: 0,
+    scheduledChange: null,
+  });
+
+  return {
+    plan,
+    amount: plan.totalAmount,
+    currency: plan.currency || resolvePixCurrency(),
+    currentPlanRepurchaseBlocked: false,
+    userPlanState: null,
+    flowPointsBalance: 0,
+    scheduledChange: null,
+    planChange,
+  };
+}
+
+
+async function resolveCheckoutPlanForGuild(input: {
+  userId: number;
+  guildId: string | null;
+  requestedPlanCode?: unknown;
+  requestedBillingPeriodCode?: unknown;
+}) {
+  if (!input.guildId) {
+    return resolveCheckoutPlanWithoutGuild(input);
+  }
+
   const selection = await resolveEffectivePlanSelection({
     userId: input.userId,
     guildId: input.guildId,
@@ -499,7 +538,7 @@ function normalizeCheckoutToken(value: unknown) {
   return normalized || null;
 }
 
-async function ensureGuildAccess(guildId: string) {
+async function ensureGuildAccess(guildId: string | null) {
   const sessionData = await resolveSessionAccessToken();
   if (!sessionData?.authSession) {
     return {
@@ -518,6 +557,15 @@ async function ensureGuildAccess(guildId: string) {
         { ok: false, message: "Token OAuth ausente na sessao." },
         { status: 401 },
       ),
+    };
+  }
+
+  if (!guildId) {
+    return {
+      ok: true as const,
+      context: {
+        sessionData,
+      },
     };
   }
 
@@ -601,7 +649,7 @@ async function createPaymentOrderEventSafe(
   }
 }
 
-async function getLatestOrderForUserAndGuild(userId: number, guildId: string) {
+async function getLatestOrderForUserAndGuild(userId: number, guildId: string | null) {
   const supabase = getSupabaseAdminClientOrThrow();
 
   const result = await supabase
@@ -620,7 +668,7 @@ async function getLatestOrderForUserAndGuild(userId: number, guildId: string) {
   return result.data || null;
 }
 
-async function getOrderByCodeForGuild(guildId: string, orderCode: number) {
+async function getOrderByCodeForGuild(guildId: string | null, orderCode: number) {
   const supabase = getSupabaseAdminClientOrThrow();
 
   const result = await supabase
@@ -639,7 +687,7 @@ async function getOrderByCodeForGuild(guildId: string, orderCode: number) {
 
 async function getOrderByCodeForUserAndGuild(
   userId: number,
-  guildId: string,
+  guildId: string | null,
   orderCode: number,
 ) {
   const order = await getOrderByCodeForGuild(guildId, orderCode);
@@ -652,7 +700,7 @@ async function getOrderByCodeForUserAndGuild(
 }
 
 async function getLatestApprovedLicenseCoverageForGuild(
-  guildId: string,
+  guildId: string | null,
   excludedOrderId?: number,
 ) {
   const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
@@ -708,10 +756,13 @@ async function reconcilePixOrderFromProvider(
     providerPayment.external_reference || order.provider_external_reference || null;
 
   if (resolvedStatus === "approved") {
-    const existingCoverage = await getLatestApprovedLicenseCoverageForGuild(
-      order.guild_id,
-      order.id,
-    );
+    const existingCoverage = order.guild_id
+      ? await getLatestApprovedLicenseCoverageForGuild(
+          order.guild_id,
+          order.id,
+        )
+      : null;
+
     const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
     const canBypassRenewalWindow = orderTransitionAllowsImmediateApproval(
       order.provider_payload,
@@ -839,7 +890,7 @@ async function reconcilePixOrderFromProvider(
 
 async function createDraftOrderForCheckout(input: {
   userId: number;
-  guildId: string;
+  guildId: string | null;
   amount: number;
   currency: string;
   plan: PlanPricingDefinition;
@@ -1210,47 +1261,69 @@ export async function GET(request: Request) {
         ? latestOrder
         : null;
 
+    // Rascunho puro: pending sem PIX gerado (sem provider_payment_id) — pode ser reutilizado.
+    const latestDraftOrder =
+      latestPendingPixOrder && !latestPendingPixOrder.provider_payment_id
+        ? latestPendingPixOrder
+        : null;
+
     let order = latestPendingPixOrder;
     if (forceNew) {
-      order = await createDraftOrderForCheckout({
-        userId: sessionData.authSession.user.id,
-        guildId,
-        amount: checkoutPlan.amount,
-        currency: checkoutPlan.currency,
-        plan: checkoutPlan.plan,
-        providerPayload: buildCheckoutTransitionProviderPayload({
-          planChange: checkoutPlan.planChange,
-          flowPointsApplied: 0,
-        }),
-      });
+      // forceNew só cria novo se não há rascunho reutilizável — evita multiplos rascunhos
+      if (latestDraftOrder && !isOrderExpiredOrExpiringSoon(latestDraftOrder, ORDER_EXPIRATION_SAFETY_BUFFER_MS)) {
+        order = await reuseDraftOrderForCheckout({
+          order: latestDraftOrder,
+          amount: checkoutPlan.amount,
+          currency: checkoutPlan.currency,
+          plan: checkoutPlan.plan,
+          providerPayload: buildCheckoutTransitionProviderPayload({
+            planChange: checkoutPlan.planChange,
+            flowPointsApplied: 0,
+          }),
+        });
+      } else {
+        order = await createDraftOrderForCheckout({
+          userId: sessionData.authSession.user.id,
+          guildId,
+          amount: checkoutPlan.amount,
+          currency: checkoutPlan.currency,
+          plan: checkoutPlan.plan,
+          providerPayload: buildCheckoutTransitionProviderPayload({
+            planChange: checkoutPlan.planChange,
+            flowPointsApplied: 0,
+          }),
+        });
+      }
     } else if (
       latestPendingPixOrder &&
       !doesOrderMatchCheckoutPlan(latestPendingPixOrder, checkoutPlan)
     ) {
-      order =
-        latestPendingPixOrder.provider_payment_id ||
-        !canReuseDraftCheckoutOrder(latestPendingPixOrder)
-        ? await createDraftOrderForCheckout({
-            userId: sessionData.authSession.user.id,
-            guildId,
-            amount: checkoutPlan.amount,
-            currency: checkoutPlan.currency,
-            plan: checkoutPlan.plan,
-            providerPayload: buildCheckoutTransitionProviderPayload({
-              planChange: checkoutPlan.planChange,
-              flowPointsApplied: 0,
-            }),
-          })
-        : await reuseDraftOrderForCheckout({
-            order: latestPendingPixOrder,
-            amount: checkoutPlan.amount,
-            currency: checkoutPlan.currency,
-            plan: checkoutPlan.plan,
-            providerPayload: buildCheckoutTransitionProviderPayload({
-              planChange: checkoutPlan.planChange,
-              flowPointsApplied: 0,
-            }),
-          });
+      if (latestDraftOrder && !isOrderExpiredOrExpiringSoon(latestDraftOrder, ORDER_EXPIRATION_SAFETY_BUFFER_MS)) {
+        // Tem rascunho sem PIX: atualiza no lugar sem criar novo pedido
+        order = await reuseDraftOrderForCheckout({
+          order: latestDraftOrder,
+          amount: checkoutPlan.amount,
+          currency: checkoutPlan.currency,
+          plan: checkoutPlan.plan,
+          providerPayload: buildCheckoutTransitionProviderPayload({
+            planChange: checkoutPlan.planChange,
+            flowPointsApplied: 0,
+          }),
+        });
+      } else {
+        // PIX já foi gerado ou rascunho expirado: cria novo
+        order = await createDraftOrderForCheckout({
+          userId: sessionData.authSession.user.id,
+          guildId,
+          amount: checkoutPlan.amount,
+          currency: checkoutPlan.currency,
+          plan: checkoutPlan.plan,
+          providerPayload: buildCheckoutTransitionProviderPayload({
+            planChange: checkoutPlan.planChange,
+            flowPointsApplied: 0,
+          }),
+        });
+      }
     } else if (
       latestPendingPixOrder &&
       isOrderExpiredOrExpiringSoon(
@@ -1335,13 +1408,6 @@ export async function POST(request: Request) {
     const requestedPayerDocument = normalizePayerDocument(body.payerDocument);
     const forceNew = parseForceNewFlag(body.forceNew);
 
-    if (!guildId) {
-      return respond(
-        { ok: false, message: "Guild ID invalido para pagamento." },
-        { status: 400 },
-      );
-    }
-
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {
       return attachRequestId(access.response, baseRequestContext.requestId);
@@ -1385,11 +1451,13 @@ export async function POST(request: Request) {
     });
 
     const user = access.context.sessionData.authSession.user;
-    await cleanupExpiredUnpaidServerSetups({
-      userId: user.id,
-      guildId,
-      source: "payment_pix_post",
-    });
+    if (guildId) {
+      await cleanupExpiredUnpaidServerSetups({
+        userId: user.id,
+        guildId,
+        source: "payment_pix_post",
+      });
+    }
 
     const checkoutPlan = await resolveCheckoutPlanForGuild({
       userId: user.id,
@@ -1410,16 +1478,16 @@ export async function POST(request: Request) {
       );
     }
 
-    const latestCoverage = await getLatestApprovedLicenseCoverageForGuild(guildId);
+    const latestCoverage = guildId ? await getLatestApprovedLicenseCoverageForGuild(guildId) : null;
     const renewalDecision =
-      checkoutPlan.planChange.kind === "upgrade"
+      (guildId && checkoutPlan.planChange.kind === "upgrade")
         ? {
             allowed: true as const,
             reason: "immediate_upgrade" as const,
             licenseStartsAtMs: Date.now(),
           }
         : resolveRenewalPaymentDecision(latestCoverage);
-    if (latestCoverage && !renewalDecision.allowed) {
+    if (guildId && latestCoverage && !renewalDecision.allowed) {
       return respond({
         ok: false,
         blockedByActiveLicense: true,
@@ -1431,7 +1499,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-    let latestOrder = await getLatestOrderForUserAndGuild(user.id, guildId);
+    let latestOrder = guildId ? await getLatestOrderForUserAndGuild(user.id, guildId) : null;
 
     if (
       latestOrder &&
@@ -1738,7 +1806,11 @@ export async function POST(request: Request) {
           flowdesk_order_number: String(createdOrder.order_number),
           flowdesk_user_id: String(user.id),
           flowdesk_discord_user_id: user.discord_user_id,
-          flowdesk_guild_id: guildId,
+          ...(guildId
+            ? {
+                flowdesk_guild_id: guildId,
+              }
+            : {}),
           flowdesk_plan_code: checkoutPlan.plan.code,
           flowdesk_plan_name: checkoutPlan.plan.name,
           flowdesk_pricing_total: String(amount),
