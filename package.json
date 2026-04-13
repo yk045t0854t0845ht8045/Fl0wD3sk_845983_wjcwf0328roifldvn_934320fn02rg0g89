@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@studio-freight/lenis": "^1.0.42",
+    "@studio-freight/react-lenis": "^0.0.47",
     "@supabase/supabase-js": "^2.99.2",
     "lucide-react": "^1.7.0",
     "motion": "^12.38.0",
