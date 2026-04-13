@@ -40,6 +40,8 @@ import type {
   AffiliateStats,
   AffiliateLink,
   AffiliateRankEntry,
+  AffiliateCommission,
+  AffiliateWithdrawal,
 } from "@/lib/affiliates/affiliateTypes";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -701,7 +703,7 @@ function LinksTab({ links, reload }: { links: AffiliateLink[]; reload: () => voi
               <div className="space-y-[12px]">
                 <div className="flex flex-wrap items-center gap-[8px]">
                   <span className="rounded-full border border-[#181818] bg-[#0C0C0C] px-[9px] py-[3px] text-[11px] font-semibold text-[#D0D0D0]">
-                    {PLAN_LABELS[link.plan_slug as any] || link.plan_slug}
+                    {PLAN_LABELS[link.plan as any] || link.plan}
                   </span>
                   <span className="rounded-full border border-[#181818] bg-[#0C0C0C] px-[9px] py-[3px] text-[11px] text-[#888]">
                     {PERIOD_LABELS[link.period as any] || link.period}
@@ -709,9 +711,9 @@ function LinksTab({ links, reload }: { links: AffiliateLink[]; reload: () => voi
                 </div>
                 <div className="flex items-center gap-[8px]">
                   <code className="min-w-0 flex-1 truncate rounded-[10px] border border-[#131313] bg-[#0A0A0A] px-[12px] py-[8px] font-mono text-[13px] text-[#C0C0C0]">
-                    {link.short_url}
+                    {link.shortUrl}
                   </code>
-                  <CopyButton text={link.target_url} />
+                  <CopyButton text={link.url} />
                 </div>
               </div>
 
