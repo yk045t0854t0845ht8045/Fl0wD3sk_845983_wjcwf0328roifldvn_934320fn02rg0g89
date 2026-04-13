@@ -219,7 +219,7 @@ export async function GET(request: Request) {
       supabase
         .from("guild_antilink_settings")
         .select(
-          "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
+          "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, ignored_channel_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
         )
         .eq("guild_id", guildId)
         .maybeSingle(),
@@ -233,7 +233,7 @@ export async function GET(request: Request) {
       supabase
         .from("guild_security_logs_settings")
         .select(
-          "enabled, use_default_channel, default_channel_id, nickname_change_enabled, nickname_change_channel_id, avatar_change_enabled, avatar_change_channel_id, voice_join_enabled, voice_join_channel_id, voice_leave_enabled, voice_leave_channel_id, message_delete_enabled, message_delete_channel_id, message_edit_enabled, message_edit_channel_id, member_ban_enabled, member_ban_channel_id, member_unban_enabled, member_unban_channel_id, member_kick_enabled, member_kick_channel_id, member_timeout_enabled, member_timeout_channel_id, voice_move_enabled, voice_move_channel_id, voice_mute_enabled, voice_mute_channel_id, updated_at",
+          "enabled, use_default_channel, default_channel_id, nickname_change_enabled, nickname_change_channel_id, avatar_change_enabled, avatar_change_channel_id, voice_join_enabled, voice_join_channel_id, voice_leave_enabled, voice_leave_channel_id, message_delete_enabled, message_delete_channel_id, message_edit_enabled, message_edit_channel_id, member_ban_enabled, member_ban_channel_id, member_unban_enabled, member_unban_channel_id, member_kick_enabled, member_kick_channel_id, member_timeout_enabled, member_timeout_channel_id, voice_mute_enabled, voice_mute_channel_id, updated_at",
         )
         .eq("guild_id", guildId)
         .maybeSingle(),
@@ -442,6 +442,12 @@ export async function GET(request: Request) {
                       typeof roleId === "string" && roleSet.has(roleId),
                   )
                 : [],
+              ignoredChannelIds: Array.isArray(antiLinkResult.data.ignored_channel_ids)
+                ? antiLinkResult.data.ignored_channel_ids.filter(
+                    (channelId): channelId is string =>
+                      typeof channelId === "string" && textSet.has(channelId),
+                  )
+                : [],
               blockExternalLinks: true,
               blockDiscordInvites: true,
               blockObfuscatedLinks: true,
@@ -571,14 +577,6 @@ export async function GET(request: Request) {
                   {
                     enabledColumn: "member_timeout_enabled",
                     channelColumn: "member_timeout_channel_id",
-                    textSet,
-                  },
-                ),
-                voiceMove: resolveSecurityLogEvent(
-                  securityLogsResult.data as Record<string, unknown>,
-                  {
-                    enabledColumn: "voice_move_enabled",
-                    channelColumn: "voice_move_channel_id",
                     textSet,
                   },
                 ),

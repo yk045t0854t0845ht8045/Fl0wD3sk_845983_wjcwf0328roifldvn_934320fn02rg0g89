@@ -22,7 +22,8 @@ export type TicketPanelButtonStyle =
 export type TicketPanelContentAccessoryType =
   | "button"
   | "link_button"
-  | "thumbnail";
+  | "thumbnail"
+  | "user_thumbnail";
 
 type TicketPanelComponentBase = {
   id: string;
@@ -32,6 +33,11 @@ type TicketPanelComponentBase = {
 export type TicketPanelThumbnailAccessory = {
   type: "thumbnail";
   imageUrl: string;
+  alt: string;
+};
+
+export type TicketPanelUserThumbnailAccessory = {
+  type: "user_thumbnail";
   alt: string;
 };
 
@@ -50,6 +56,7 @@ export type TicketPanelLinkButtonAccessory = {
 
 export type TicketPanelContentAccessory =
   | TicketPanelThumbnailAccessory
+  | TicketPanelUserThumbnailAccessory
   | TicketPanelButtonAccessory
   | TicketPanelLinkButtonAccessory;
 
@@ -229,6 +236,13 @@ export function createTicketPanelContentAccessoryByType(
     };
   }
 
+  if (type === "user_thumbnail") {
+    return {
+      type,
+      alt: "",
+    };
+  }
+
   if (type === "link_button") {
     return {
       type,
@@ -374,6 +388,13 @@ function normalizeContentAccessory(
     return {
       type: "thumbnail",
       imageUrl: getCandidateString(candidate, "imageUrl", "", 1000),
+      alt: "",
+    };
+  }
+
+  if (candidate.type === "user_thumbnail") {
+    return {
+      type: "user_thumbnail",
       alt: "",
     };
   }

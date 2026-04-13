@@ -439,9 +439,20 @@ export function ServersDashboard({
     setIsLoggingOut(true);
 
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+      });
+    } catch {
+      // Mesmo com erro de rede, redireciona para login
     } finally {
-      window.location.assign("/login");
+      try {
+        window.localStorage.removeItem("flowdesk_pending_account_switch_v1");
+      } catch {
+        // noop
+      }
+      window.location.replace("/login");
     }
   }, [isLoggingOut]);
 

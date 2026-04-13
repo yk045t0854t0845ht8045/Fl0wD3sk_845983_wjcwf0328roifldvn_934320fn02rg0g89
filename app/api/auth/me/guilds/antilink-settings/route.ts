@@ -40,6 +40,7 @@ type AntiLinkSettingsBody = {
   enforcementAction?: unknown;
   timeoutMinutes?: unknown;
   ignoredRoleIds?: unknown;
+  ignoredChannelIds?: unknown;
   blockExternalLinks?: unknown;
   blockDiscordInvites?: unknown;
   blockObfuscatedLinks?: unknown;
@@ -92,6 +93,17 @@ function normalizeRoleIdList(value: unknown) {
   ).slice(0, MAX_IGNORED_ROLE_IDS);
 }
 
+function normalizeChannelIdList(value: unknown) {
+  if (!Array.isArray(value)) return [] as string[];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => isGuildId(item)),
+    ),
+  ).slice(0, 30);
+}
+
 function isValidTextChannelType(type?: number) {
   return type === GUILD_TEXT || type === GUILD_ANNOUNCEMENT;
 }
@@ -109,6 +121,7 @@ async function upsertAntiLinkSettingsWithRetry(input: {
   enforcementAction: AntiLinkEnforcementAction;
   timeoutMinutes: number;
   ignoredRoleIds: string[];
+  ignoredChannelIds: string[];
   blockExternalLinks: boolean;
   blockDiscordInvites: boolean;
   blockObfuscatedLinks: boolean;
@@ -129,6 +142,7 @@ async function upsertAntiLinkSettingsWithRetry(input: {
           enforcement_action: input.enforcementAction,
           timeout_minutes: input.timeoutMinutes,
           ignored_role_ids: input.ignoredRoleIds,
+          ignored_channel_ids: input.ignoredChannelIds,
           block_external_links: input.blockExternalLinks,
           block_discord_invites: input.blockDiscordInvites,
           block_obfuscated_links: input.blockObfuscatedLinks,
@@ -137,7 +151,7 @@ async function upsertAntiLinkSettingsWithRetry(input: {
         { onConflict: "guild_id" },
       )
       .select(
-        "guild_id, enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
+        "guild_id, enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, ignored_channel_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
       )
       .single();
 
@@ -246,7 +260,7 @@ export async function GET(request: Request) {
     const result = await supabase
       .from("guild_antilink_settings")
       .select(
-        "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
+        "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, ignored_channel_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
       )
       .eq("guild_id", guildId)
       .maybeSingle();
@@ -275,6 +289,11 @@ export async function GET(request: Request) {
           ignoredRoleIds: Array.isArray(result.data.ignored_role_ids)
             ? result.data.ignored_role_ids.filter(
                 (roleId): roleId is string => typeof roleId === "string",
+              )
+            : [],
+          ignoredChannelIds: Array.isArray(result.data.ignored_channel_ids)
+            ? result.data.ignored_channel_ids.filter(
+                (channelId): channelId is string => typeof channelId === "string",
               )
             : [],
           blockExternalLinks: true,
@@ -333,6 +352,7 @@ export async function POST(request: Request) {
     const enforcementAction = normalizeAction(body.enforcementAction);
     const timeoutMinutes = normalizeTimeoutMinutes(body.timeoutMinutes);
     const ignoredRoleIds = normalizeRoleIdList(body.ignoredRoleIds);
+    const ignoredChannelIds = normalizeChannelIdList(body.ignoredChannelIds);
     const blockExternalLinks = true;
     const blockDiscordInvites = true;
     const blockObfuscatedLinks = true;
@@ -514,6 +534,29 @@ export async function POST(request: Request) {
       );
     }
 
+    const hasInvalidChannel = ignoredChannelIds.some((channelId) => !textChannelIds.has(channelId));
+    if (hasInvalidChannel) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        authUserId,
+        accessMode,
+        licenseStatus,
+        outcome: "validation_failed",
+        httpStatus: 400,
+        detail: "Lista de canais ignorados contem IDs invalidos.",
+      });
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Um ou mais canais ignorados nao existem mais neste servidor.",
+          },
+          { status: 400 },
+        ),
+      );
+    }
+
     await cleanupExpiredUnpaidServerSetups({
       userId: authUserId,
       guildId,
@@ -529,6 +572,7 @@ export async function POST(request: Request) {
         enforcementAction,
         timeoutMinutes,
         ignoredRoleIds,
+        ignoredChannelIds,
         blockExternalLinks,
         blockDiscordInvites,
         blockObfuscatedLinks,
@@ -575,6 +619,11 @@ export async function POST(request: Request) {
           ignoredRoleIds: Array.isArray(savedSettings.ignored_role_ids)
             ? savedSettings.ignored_role_ids.filter(
                 (roleId): roleId is string => typeof roleId === "string",
+              )
+            : [],
+          ignoredChannelIds: Array.isArray(savedSettings.ignored_channel_ids)
+            ? savedSettings.ignored_channel_ids.filter(
+                (channelId): channelId is string => typeof channelId === "string",
               )
             : [],
           blockExternalLinks: true,

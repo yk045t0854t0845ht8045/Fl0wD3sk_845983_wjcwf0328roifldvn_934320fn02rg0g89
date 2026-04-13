@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -3343,6 +3343,8 @@ export function ConfigStepFour({
       hasManualDiscountCode ? current || localFallbackPreview : localFallbackPreview,
     );
     if (!hasManualDiscountCode) {
+      setDiscountMessage(null);
+    } else {
       setDiscountMessage(null);
     }
     setIsDiscountLoading(hasManualDiscountCode);
@@ -6786,7 +6788,7 @@ export function ConfigStepFour({
                             className="h-[52px] w-full rounded-[16px] border border-[#242424] bg-[#121212] px-[16px] text-[14px] text-[#F5F5F5] outline-none placeholder:text-[#5B5B5B]"
                           />
 
-                          {discountMessage ? (
+                          {discountMessage && !isDiscountLoading ? (
                             <p className="flowdesk-slide-down text-[13px] leading-[1.6] text-[#A8A8A8]">
                               {discountMessage}
                             </p>

@@ -137,12 +137,23 @@ export function AccountWorkspace({
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
   async function handleLogout() {
+    if (isLoggingOut) return;
     setIsLoggingOut(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
-      router.push("/");
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+      });
     } catch {
-      setIsLoggingOut(false);
+      // Mesmo com erro de rede, redireciona para login
+    } finally {
+      try {
+        window.localStorage.removeItem("flowdesk_pending_account_switch_v1");
+      } catch {
+        // noop
+      }
+      window.location.replace("/login");
     }
   }
 

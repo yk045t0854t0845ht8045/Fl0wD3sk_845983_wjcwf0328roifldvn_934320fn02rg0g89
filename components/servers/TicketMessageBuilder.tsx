@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
@@ -111,6 +111,7 @@ const ACCESSORY_ITEMS: MenuItem<TicketPanelContentAccessoryType>[] = [
   { value: "button", label: "Botao", description: "Acao do lado direito do texto.", icon: Plus },
   { value: "link_button", label: "Botao de link", description: "Link lateral ao lado do texto.", icon: Link2 },
   { value: "thumbnail", label: "Miniatura", description: "Miniatura posicionada na direita.", icon: ImageIcon },
+  { value: "user_thumbnail", label: "Foto do usuario", description: "Usa a foto do usuario como miniatura.", icon: Shapes },
 ];
 
 const BUTTON_STYLES: Array<{ value: TicketPanelButtonStyle; label: string; preview: string }> = [
@@ -836,6 +837,15 @@ function previewAccessory(
     const previewUrl = accessory.imageUrl || thumbnailPreviewUrl || "";
     return <div className="inline-flex h-[72px] w-[72px] shrink-0 overflow-hidden rounded-[18px] border border-[#2B2D31] bg-[#17181B]">{previewUrl ? <img src={previewUrl} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[#7D7D7D]"><ImageIcon className="h-[24px] w-[24px]" /></div>}</div>;
   }
+  if (accessory.type === "user_thumbnail") {
+    return (
+      <div className="inline-flex h-[72px] w-[72px] shrink-0 overflow-hidden rounded-[18px] border border-[#2B2D31] bg-[#17181B]">
+        <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#2B2D31_0%,#1E1F22_100%)] text-[#B5BAC1]">
+          <Shapes className="h-[28px] w-[28px]" strokeWidth={2.1} />
+        </div>
+      </div>
+    );
+  }
   if (accessory.type === "link_button") {
     const safeUrl = normalizeExternalUrl(accessory.url || "");
     return <button type="button" disabled={!safeUrl} onClick={() => safeUrl ? onOpenLink(safeUrl, accessory.label || "Abrir link") : undefined} className="inline-flex min-h-[36px] items-center justify-center rounded-[12px] border border-[#2B2D31] bg-[#26282C] px-[13px] text-[12px] font-medium text-[#F2F3F5] disabled:cursor-not-allowed disabled:opacity-55">{accessory.label || "Abrir link"}</button>;
@@ -1185,8 +1195,9 @@ function TicketMessageBuilder({
       </div>
       {content.accessory ? (
         <div className="space-y-[12px] rounded-[16px] border border-[#171717] bg-[#080808] p-[12px] xl:col-span-2">
-          <div className="flex items-center justify-between gap-[12px]"><p className="text-[13px] font-medium text-[#E8E8E8]">{content.accessory.type === "thumbnail" ? "Miniatura" : content.accessory.type === "link_button" ? "Botao de link" : "Botao"}</p><IconButton label="Remover acessorio" disabled={disabled} onClick={() => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" ? { ...current, accessory: null } : current) : updateRoot(scope.componentId, (current) => current.type === "content" ? { ...current, accessory: null } : current)}><Trash2 className="h-[15px] w-[15px]" strokeWidth={2.1} /></IconButton></div>
+          <div className="flex items-center justify-between gap-[12px]"><p className="text-[13px] font-medium text-[#E8E8E8]">{content.accessory.type === "thumbnail" ? "Miniatura" : content.accessory.type === "user_thumbnail" ? "Foto do usuario" : content.accessory.type === "link_button" ? "Botao de link" : "Botao"}</p><IconButton label="Remover acessorio" disabled={disabled} onClick={() => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" ? { ...current, accessory: null } : current) : updateRoot(scope.componentId, (current) => current.type === "content" ? { ...current, accessory: null } : current)}><Trash2 className="h-[15px] w-[15px]" strokeWidth={2.1} /></IconButton></div>
           {content.accessory.type === "thumbnail" ? <div className="grid gap-[12px]"><Field value={content.accessory.imageUrl} onChange={(next) => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" && current.accessory?.type === "thumbnail" ? { ...current, accessory: { ...current.accessory, imageUrl: next.slice(0, 1000), alt: "" } } : current) : updateRoot(scope.componentId, (current) => current.type === "content" && current.accessory?.type === "thumbnail" ? { ...current, accessory: { ...current.accessory, imageUrl: next.slice(0, 1000), alt: "" } } : current)} placeholder="URL da miniatura" disabled={disabled} /></div> : null}
+          {content.accessory.type === "user_thumbnail" ? <div className="rounded-[14px] border border-[#141414] bg-[#0A0A0A] px-[12px] py-[12px]"><p className="text-[12px] leading-[1.6] text-[#7A7A7A]">A miniatura sera puxada automaticamente da foto do usuario que disparar o evento, sem precisar de link manual.</p></div> : null}
           {content.accessory.type === "button" ? <div className="space-y-[12px]"><Field value={content.accessory.label} onChange={(next) => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" && current.accessory?.type === "button" ? { ...current, accessory: { ...current.accessory, label: next.slice(0, 80) } } : current) : updateRoot(scope.componentId, (current) => current.type === "content" && current.accessory?.type === "button" ? { ...current, accessory: { ...current.accessory, label: next.slice(0, 80) } } : current)} placeholder="Texto do botao funcional" disabled={disabled} /><p className="text-[12px] leading-[1.55] text-[#787878]">A mensagem inteira aceita apenas um botao funcional para abrir o ticket.</p><div className="grid grid-cols-2 gap-[8px] min-[920px]:grid-cols-4">{BUTTON_STYLES.map((style) => <button key={style.value} type="button" disabled={disabled} onClick={() => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" && current.accessory?.type === "button" ? { ...current, accessory: { ...current.accessory, style: style.value } } : current) : updateRoot(scope.componentId, (current) => current.type === "content" && current.accessory?.type === "button" ? { ...current, accessory: { ...current.accessory, style: style.value } } : current)} className={cn("rounded-[14px] border px-[10px] py-[10px] text-[12px] font-medium transition-colors duration-200", content.accessory?.type === "button" && content.accessory.style === style.value ? "border-[#F2F2F2] bg-[#111111] text-[#F2F2F2]" : "border-[#171717] bg-[#0A0A0A] text-[#818181] hover:bg-[#101010]")}>{style.label}</button>)}</div></div> : null}
           {content.accessory.type === "link_button" ? <div className="grid gap-[12px]"><Field value={content.accessory.label} onChange={(next) => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" && current.accessory?.type === "link_button" ? { ...current, accessory: { ...current.accessory, label: next.slice(0, 80) } } : current) : updateRoot(scope.componentId, (current) => current.type === "content" && current.accessory?.type === "link_button" ? { ...current, accessory: { ...current.accessory, label: next.slice(0, 80) } } : current)} placeholder="Texto do botao" disabled={disabled} /><Field value={content.accessory.url} onChange={(next) => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "content" && current.accessory?.type === "link_button" ? { ...current, accessory: { ...current.accessory, url: next.slice(0, 1000) } } : current) : updateRoot(scope.componentId, (current) => current.type === "content" && current.accessory?.type === "link_button" ? { ...current, accessory: { ...current.accessory, url: next.slice(0, 1000) } } : current)} placeholder="https://seu-link.com" disabled={disabled} /></div> : null}
         </div>
@@ -1508,65 +1519,75 @@ function TicketMessageBuilder({
     return null;
   });
 
+  const showHeader = Boolean(eyebrow || headline || description || !hideSendButton);
+
   return (
     <section className="relative isolate space-y-[20px] overflow-visible">
-      <div className="relative isolate overflow-visible rounded-[30px] border border-[#121212] bg-[#080808] p-[22px] shadow-[0_26px_70px_rgba(0,0,0,0.3)]">
-        <div className="flex flex-col gap-[18px] lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-[720px]">
-            <p className="text-[12px] font-medium uppercase tracking-[0.2em] text-[#666666]">
-              {eyebrow}
-            </p>
-            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#DCDCDC]">
-              {headline}
-            </h3>
-            <p className="mt-[12px] max-w-[660px] text-[14px] leading-[1.7] text-[#7C7C7C]">
-              {description}
-            </p>
-          </div>
+      {showHeader ? (
+        <div className="relative isolate overflow-visible rounded-[30px] border border-[#121212] bg-[#080808] p-[22px] shadow-[0_26px_70px_rgba(0,0,0,0.3)]">
+          <div className="flex flex-col gap-[18px] lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-[720px]">
+              {eyebrow ? (
+                <p className="text-[12px] font-medium uppercase tracking-[0.2em] text-[#666666]">
+                  {eyebrow}
+                </p>
+              ) : null}
+              {headline ? (
+                <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#DCDCDC]">
+                  {headline}
+                </h3>
+              ) : null}
+              {description ? (
+                <p className="mt-[12px] max-w-[660px] text-[14px] leading-[1.7] text-[#7C7C7C]">
+                  {description}
+                </p>
+              ) : null}
+            </div>
 
-          {!hideSendButton ? (
-            <div className="flex flex-wrap items-center gap-[10px]">
-            <button
-              type="button"
-              disabled={disabled || !canSendEmbed || isSendingEmbed}
-              onClick={() => onSendEmbed?.()}
-              className={cn(
-                "group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[16px] leading-none font-semibold",
-                disabled || !canSendEmbed ? "cursor-not-allowed" : "",
-              )}
-              >
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out",
-                    disabled || !canSendEmbed
-                      ? "bg-[#111111]"
-                      : "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]",
-                  )}
-                />
-                <span
-                  className={cn(
-                    "relative z-10 inline-flex items-center justify-center gap-[8px] whitespace-nowrap leading-none",
-                    disabled || !canSendEmbed ? "text-[#B7B7B7]" : "text-[#282828]",
-                  )}
+            {!hideSendButton ? (
+              <div className="flex flex-wrap items-center gap-[10px]">
+              <button
+                type="button"
+                disabled={disabled || !canSendEmbed || isSendingEmbed}
+                onClick={() => onSendEmbed?.()}
+                className={cn(
+                  "group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[16px] leading-none font-semibold",
+                  disabled || !canSendEmbed ? "cursor-not-allowed" : "",
+                )}
                 >
-                  {isSendingEmbed ? (
-                    <>
-                      <ButtonLoader
-                        size={16}
-                        colorClassName={disabled || !canSendEmbed ? "text-[#B7B7B7]" : "text-[#282828]"}
-                      />
-                      Enviando embed
-                    </>
-                  ) : (
-                    sendButtonLabel
-                  )}
-                </span>
-            </button>
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out",
+                      disabled || !canSendEmbed
+                        ? "bg-[#111111]"
+                        : "bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]",
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      "relative z-10 inline-flex items-center justify-center gap-[8px] whitespace-nowrap leading-none",
+                      disabled || !canSendEmbed ? "text-[#B7B7B7]" : "text-[#282828]",
+                    )}
+                  >
+                    {isSendingEmbed ? (
+                      <>
+                        <ButtonLoader
+                          size={16}
+                          colorClassName={disabled || !canSendEmbed ? "text-[#B7B7B7]" : "text-[#282828]"}
+                        />
+                        Enviando embed
+                      </>
+                    ) : (
+                      sendButtonLabel
+                    )}
+                  </span>
+              </button>
+            </div>
+            ) : null}
           </div>
-          ) : null}
         </div>
-      </div>
+      ) : null}
 
       <div className="relative isolate overflow-visible grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_436px]">
         <div className="relative z-[30] space-y-[16px] overflow-visible">

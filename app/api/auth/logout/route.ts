@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { authConfig } from "@/lib/auth/config";
 import {
   extractAuditErrorMessage,
@@ -15,6 +16,14 @@ import {
 } from "@/lib/security/requestSecurity";
 import { revokeCurrentSessionFromCookie } from "@/lib/auth/session";
 
+/** Nomes de todos os cookies criados pelo sistema de auth. */
+const AUTH_COOKIE_NAMES = [
+  authConfig.sessionCookieName,
+  authConfig.oauthStateCookieName,
+  authConfig.oauthRedirectUriCookieName,
+  authConfig.oauthNextPathCookieName,
+] as const;
+
 export async function POST(request: Request) {
   const requestContext = createSecurityRequestContext(request);
   try {
@@ -28,8 +37,22 @@ export async function POST(request: Request) {
 
     await revokeCurrentSessionFromCookie();
 
+    // Apagar todos os cookies de auth da resposta e do cookie store do servidor.
+    const cookieStore = await cookies();
     const response = NextResponse.json({ ok: true });
-    response.cookies.delete(authConfig.sessionCookieName);
+    for (const name of AUTH_COOKIE_NAMES) {
+      // Remove do store do Next.js (server-side)
+      try { cookieStore.delete(name); } catch { /* noop */ }
+      // Remove do header Set-Cookie da resposta (garante expiração no browser)
+      response.cookies.set(name, "", {
+        maxAge: 0,
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+      });
+    }
+
     await logSecurityAuditEventSafe(requestContext, {
       action: "auth_logout",
       outcome: "succeeded",

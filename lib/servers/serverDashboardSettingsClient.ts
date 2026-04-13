@@ -56,6 +56,7 @@ type ServerDashboardSettingsPayload = {
     enforcementAction: "delete_only" | "timeout" | "kick" | "ban";
     timeoutMinutes: number;
     ignoredRoleIds: string[];
+    ignoredChannelIds: string[];
     blockExternalLinks: boolean;
     blockDiscordInvites: boolean;
     blockObfuscatedLinks: boolean;
@@ -87,7 +88,6 @@ type ServerDashboardSettingsPayload = {
       memberUnban: { enabled: boolean; channelId: string | null };
       memberKick: { enabled: boolean; channelId: string | null };
       memberTimeout: { enabled: boolean; channelId: string | null };
-      voiceMove: { enabled: boolean; channelId: string | null };
       voiceMute: { enabled: boolean; channelId: string | null };
     };
     updatedAt: string | null;

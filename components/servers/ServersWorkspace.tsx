@@ -1897,7 +1897,23 @@ export function ServersWorkspace({
   const handleLogout = useCallback(async () => {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
-    try { await fetch("/api/auth/logout", { method: "POST" }); } finally { window.location.assign("/login"); }
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+      });
+    } catch {
+      // Mesmo com erro de rede, redireciona para login
+    } finally {
+      // Limpa qualquer estado persistido no localStorage antes de redirecionar
+      try {
+        window.localStorage.removeItem("flowdesk_pending_account_switch_v1");
+      } catch {
+        // noop
+      }
+      window.location.replace("/login");
+    }
   }, [isLoggingOut]);
 
   const openDiscordLoginFlow = useCallback(() => {
