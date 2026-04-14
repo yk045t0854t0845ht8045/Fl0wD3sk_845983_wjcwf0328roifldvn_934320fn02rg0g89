@@ -329,12 +329,31 @@ export function AffiliatesLanding({ isAuthenticated }: { isAuthenticated: boolea
       {/* Background surface */}
       <div className="absolute inset-0 bg-[#040404]" />
 
+      {/* Background Blocks Pattern */}
+      <LandingReveal delay={140}>
+        <div className="pointer-events-none absolute inset-x-0 top-[180px] -translate-y-1/2">
+          <div className="flowdesk-landing-soft-motion relative left-1/2 aspect-[1542/492] w-[160%] max-w-none -translate-x-1/2 scale-[1.05] transform-gpu min-[861px]:w-[98%] min-[861px]:scale-100">
+            <Image
+              src="/cdn/hero-blocks-1.svg"
+              alt=""
+              fill
+              sizes="(max-width: 860px) 170vw, (max-width: 1640px) 126vw, 1772px"
+              className="pointer-events-none select-none object-contain opacity-80"
+              draggable={false}
+              priority
+            />
+          </div>
+        </div>
+      </LandingReveal>
+
       {/* ───── Hero ───────────────────────────────────────────────── */}
       <section className="relative mx-auto flex max-w-[1220px] flex-col items-center px-[20px] pt-[120px] pb-[80px] text-center md:px-6 lg:px-8">
         <LandingReveal delay={60}>
-          <LandingGlowTag className="px-[28px]">
-            Programa de Afiliados Flowdesk
-          </LandingGlowTag>
+          <div className="flex w-full justify-center">
+            <LandingGlowTag className="px-[28px]">
+              Programa de Afiliados Flowdesk
+            </LandingGlowTag>
+          </div>
         </LandingReveal>
 
         <LandingReveal delay={120}>
@@ -455,6 +474,19 @@ export function AffiliatesLanding({ isAuthenticated }: { isAuthenticated: boolea
         </div>
       </section>
 
+      {/* Background Blocks Pattern Middle */}
+      <div className="pointer-events-none absolute inset-x-0 top-[2200px] -translate-y-1/2 opacity-40">
+        <div className="flowdesk-landing-soft-motion relative left-1/2 aspect-[1542/492] w-[160%] max-w-none -translate-x-1/2 scale-[1.05] transform-gpu">
+          <Image
+            src="/cdn/hero-blocks-1.svg"
+            alt=""
+            fill
+            className="pointer-events-none select-none object-contain"
+            draggable={false}
+          />
+        </div>
+      </div>
+
       {/* ───── Ranking ao vivo ────────────────────────────────────── */}
       <section className="relative z-10 mx-auto max-w-[1220px] px-[20px] py-[80px] md:px-6 lg:px-8">
         <LandingReveal>
@@ -529,6 +561,20 @@ export function AffiliatesLanding({ isAuthenticated }: { isAuthenticated: boolea
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.035)_0%,transparent_70%)]"
             />
+            
+            {/* Background Blocks Pattern */}
+            <div className="pointer-events-none absolute inset-x-0 top-[20%] -translate-y-1/2 opacity-60">
+              <div className="flowdesk-landing-soft-motion relative left-1/2 aspect-[1542/492] w-[140%] max-w-none -translate-x-1/2 scale-[1.05] transform-gpu">
+                <Image
+                  src="/cdn/hero-blocks-1.svg"
+                  alt=""
+                  fill
+                  sizes="(max-width: 860px) 140vw, 1200px"
+                  className="pointer-events-none select-none object-contain"
+                  draggable={false}
+                />
+              </div>
+            </div>
             
             <div className="relative z-10 mx-auto mb-10 h-[42px] w-[180px]">
               <Image 

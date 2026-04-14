@@ -17,6 +17,8 @@ function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null)
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }
 
+import { TopBetaBanner } from "@/components/landing/TopBetaBanner";
+
 export default async function AffiliatesPage() {
   const user = await getCurrentUserFromSessionCookie();
 
@@ -30,6 +32,7 @@ export default async function AffiliatesPage() {
 
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
+      <TopBetaBanner />
       <LandingFrameLines />
       <LandingHeader authenticatedUser={authenticatedUser} />
       <main className="w-full">
