@@ -86,7 +86,8 @@ type ServerSettingsSection =
   | "entry_exit_message"
   | "security_antilink"
   | "security_autorole"
-  | "security_logs";
+  | "security_logs"
+  | "ticket_ai";
 type FilterOption = "all" | ManagedServerStatus;
 type ViewMode = "overview" | "list";
 type CreateTeamStep = "name" | "servers" | "members";
@@ -175,6 +176,23 @@ const TICKET_SIDEBAR_ITEMS: SidebarItem[] = [
       "descricao",
       "botao",
       "ticket",
+    ],
+  },
+  {
+    label: "Configurando FlowAI",
+    kind: "ticket",
+    tab: "settings",
+    settingsSection: "ticket_ai",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: [
+      "ia",
+      "ai",
+      "flowai",
+      "inteligencia",
+      "robo",
+      "sugestao",
+      "regras",
+      "empresa",
     ],
   },
 ];
@@ -385,13 +403,16 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const ticketSectionMatch = pathname.match(
-    /^\/servers\/(\d{10,25})\/tickets?\/(overview|message)\/?$/,
+    /^\/servers\/(\d{10,25})\/tickets?\/(overview|message|flowai)\/?$/,
   );
   if (ticketSectionMatch) {
     return {
       guildId: ticketSectionMatch[1],
       tab: "settings",
-      settingsSection: ticketSectionMatch[2] as ServerSettingsSection,
+      settingsSection:
+        ticketSectionMatch[2] === "flowai"
+          ? "ticket_ai"
+          : (ticketSectionMatch[2] as ServerSettingsSection),
     };
   }
 
@@ -1801,6 +1822,9 @@ export function ServersWorkspace({
     const encodedGuildId = encodeURIComponent(guildId);
     if (settingsSection === "message") {
       return `/servers/${encodedGuildId}/tickets/message/`;
+    }
+    if (settingsSection === "ticket_ai") {
+      return `/servers/${encodedGuildId}/tickets/flowai/`;
     }
     if (settingsSection === "entry_exit_message") {
       return `/servers/${encodedGuildId}/entry-exit/message/`;

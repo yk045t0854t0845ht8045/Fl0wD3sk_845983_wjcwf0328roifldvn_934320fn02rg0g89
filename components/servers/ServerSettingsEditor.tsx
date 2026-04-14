@@ -38,6 +38,7 @@ import type { ServerDashboardSettingsPayload } from "@/lib/servers/serverDashboa
 import {
   countTicketPanelFunctionButtons,
   createDefaultTicketPanelLayout,
+  deriveLegacyTicketPanelFields,
   normalizeTicketPanelLayout,
   ticketPanelLayoutHasAtMostOneFunctionButton,
   ticketPanelLayoutHasRequiredParts,
@@ -72,7 +73,8 @@ type ServerSettingsSection =
   | "entry_exit_message"
   | "security_antilink"
   | "security_autorole"
-  | "security_logs";
+  | "security_logs"
+  | "ticket_ai";
 type PaymentStatus =
   | "pending"
   | "approved"
@@ -94,6 +96,54 @@ type SelectOption = {
   name: string;
 };
 
+const FLOW_AI_TONE_OPTIONS = [
+  {
+    id: "formal",
+    label: "Profissional",
+    description: "Direto, seguro e mais corporativo.",
+    badge: "PRO",
+  },
+  {
+    id: "friendly",
+    label: "Amigavel",
+    description: "Mais proximo, leve e acolhedor.",
+    badge: "HUM",
+  },
+] as const;
+
+const FLOW_AI_RULE_PRESETS = [
+  {
+    id: "saas",
+    label: "SaaS",
+    description: "Onboarding, bugs e acesso",
+    rules: [
+      "Priorize respostas objetivas sobre onboarding, acesso, erros e cobrancas.",
+      "Quando houver duvida tecnica, entregue passos curtos em ordem e confirme o resultado esperado.",
+      "Se depender de acao interna, informe isso com clareza e encaminhe para atendimento humano.",
+    ].join("\n"),
+  },
+  {
+    id: "store",
+    label: "Loja",
+    description: "Pedidos, pagamentos e trocas",
+    rules: [
+      "Priorize pedidos, pagamento, entrega, trocas e cancelamentos.",
+      "Nunca invente prazos ou politicas; use apenas regras confirmadas da operacao.",
+      "Se houver risco financeiro, chargeback ou excecao comercial, direcione para um atendente.",
+    ].join("\n"),
+  },
+  {
+    id: "community",
+    label: "Comunidade",
+    description: "Membros, cargos e suporte",
+    rules: [
+      "Foque em suporte para membros, cargos, canais, moderacao e automacoes.",
+      "Use linguagem clara e acolhedora, sem parecer robotico.",
+      "Quando a solucao exigir permissao de staff ou ajuste interno, sinalize isso sem enrolacao.",
+    ].join("\n"),
+  },
+] as const;
+
 type ServerSettingsDraft = {
   enabled: boolean;
   menuChannelId: string | null;
@@ -105,6 +155,11 @@ type ServerSettingsDraft = {
   claimRoleIds: string[];
   closeRoleIds: string[];
   notifyRoleIds: string[];
+  aiRules: string;
+  aiCompanyName: string;
+  aiCompanyBio: string;
+  aiTone: string;
+  aiEnabled: boolean;
 };
 
 type WelcomeSettingsDraft = {
@@ -466,6 +521,11 @@ function normalizeServerSettingsDraft(
     claimRoleIds: normalizeDraftIds(draft.claimRoleIds),
     closeRoleIds: normalizeDraftIds(draft.closeRoleIds),
     notifyRoleIds: normalizeDraftIds(draft.notifyRoleIds),
+    aiRules: typeof draft.aiRules === "string" ? draft.aiRules : "",
+    aiCompanyName: typeof draft.aiCompanyName === "string" ? draft.aiCompanyName : "",
+    aiCompanyBio: typeof draft.aiCompanyBio === "string" ? draft.aiCompanyBio : "",
+    aiTone: typeof draft.aiTone === "string" ? draft.aiTone : "formal",
+    aiEnabled: Boolean(draft.aiEnabled),
   };
 }
 
@@ -1646,6 +1706,13 @@ export function ServerSettingsEditor({
   const [ticketsCategoryId, setTicketsCategoryId] = useState<string | null>(null);
   const [logsCreatedChannelId, setLogsCreatedChannelId] = useState<string | null>(null);
   const [logsClosedChannelId, setLogsClosedChannelId] = useState<string | null>(null);
+  const [aiRules, setAiRules] = useState("");
+  const [aiCompanyName, setAiCompanyName] = useState("");
+  const [aiCompanyBio, setAiCompanyBio] = useState("");
+  const [aiTone, setAiTone] = useState("formal");
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [isAiRulesModalOpen, setIsAiRulesModalOpen] = useState(false);
+  const [aiRulesDraft, setAiRulesDraft] = useState("");
   const [panelLayout, setPanelLayout] = useState<TicketPanelLayout>(
     createDefaultTicketPanelLayout(),
   );
@@ -1845,6 +1912,7 @@ export function ServerSettingsEditor({
         security_antilink: "server_manage_antilink",
         security_autorole: "server_manage_autorole",
         security_logs: "server_view_security_logs",
+        ticket_ai: "server_manage_tickets_overview",
       };
       const required = map[section];
       if (!required) return true;
@@ -1996,6 +2064,38 @@ export function ServerSettingsEditor({
       const nextNotifyRoleIds = Array.isArray(payload.staffSettings?.notifyRoleIds)
           ? payload.staffSettings.notifyRoleIds.filter((id) => roleSet.has(id))
           : [];
+      const nextAiRulesRaw = typeof payload.ticketSettings?.aiRules === "string" 
+          ? payload.ticketSettings.aiRules 
+          : "";
+      
+      let nextAiRules = typeof payload.ticketSettings?.aiRules === "string" 
+          ? payload.ticketSettings.aiRules 
+          : "";
+      let nextAiCompanyName = typeof payload.ticketSettings?.aiCompanyName === "string"
+          ? payload.ticketSettings.aiCompanyName
+          : "";
+      let nextAiCompanyBio = typeof payload.ticketSettings?.aiCompanyBio === "string"
+          ? payload.ticketSettings.aiCompanyBio
+          : "";
+      let nextAiTone = typeof payload.ticketSettings?.aiTone === "string"
+          ? payload.ticketSettings.aiTone
+          : "formal";
+      let nextAiEnabled = Boolean(payload.ticketSettings?.aiEnabled);
+
+      // Legacy fallback for JSON ai_rules
+      try {
+        if (nextAiRules.startsWith("{")) {
+          const parsed = JSON.parse(nextAiRules);
+          nextAiRules = parsed.rules || nextAiRules;
+          nextAiCompanyName = parsed.companyName || nextAiCompanyName;
+          nextAiCompanyBio = parsed.companyBio || nextAiCompanyBio;
+          nextAiTone = parsed.tone || nextAiTone;
+          nextAiEnabled = typeof parsed.enabled === "boolean" ? parsed.enabled : nextAiEnabled;
+        }
+      } catch {
+        // Fallback to existing rules
+      }
+
       const nextAntiLinkEnabled = Boolean(payload.antiLinkSettings?.enabled);
       const nextAntiLinkLogChannelId =
         payload.antiLinkSettings?.logChannelId &&
@@ -2157,6 +2257,11 @@ export function ServerSettingsEditor({
       setLogsClosedChannelId(nextLogsClosedChannelId);
       setPanelLayout(nextPanelLayout);
       setTicketEnabled(nextTicketEnabled);
+      setAiRules(nextAiRules);
+      setAiCompanyName(nextAiCompanyName);
+      setAiCompanyBio(nextAiCompanyBio);
+      setAiTone(nextAiTone);
+      setAiEnabled(nextAiEnabled);
       setWelcomeEnabled(nextWelcomeEnabled);
       setEntryPublicChannelId(nextEntryPublicChannelId);
       setEntryLogChannelId(nextEntryLogChannelId);
@@ -2205,6 +2310,11 @@ export function ServerSettingsEditor({
           claimRoleIds: nextClaimRoleIds,
           closeRoleIds: nextCloseRoleIds,
           notifyRoleIds: nextNotifyRoleIds,
+          aiRules: nextAiRules,
+          aiCompanyName: nextAiCompanyName,
+          aiCompanyBio: nextAiCompanyBio,
+          aiTone: nextAiTone,
+          aiEnabled: nextAiEnabled,
         }),
       );
       setSavedWelcomeSettingsDraft(
@@ -2947,7 +3057,8 @@ export function ServerSettingsEditor({
   const isSecuritySection =
     isAntiLinkSection || isAutoRoleSection || isSecurityLogsSection;
   const isTicketSection =
-    settingsSection === "overview" || settingsSection === "message";
+    settingsSection === "overview" || settingsSection === "message" || settingsSection === "ticket_ai";
+  const isTicketAiSection = settingsSection === "ticket_ai";
   const isWelcomeSection =
     settingsSection === "entry_exit_overview" ||
     settingsSection === "entry_exit_message";
@@ -2984,6 +3095,48 @@ export function ServerSettingsEditor({
           closeRoleIds.length &&
           notifyRoleIds.length)),
   );
+
+  const canSaveTicketAi = Boolean(
+    !settingsReadOnly &&
+      !isLoading &&
+      !isSaving &&
+      (!aiEnabled || (aiCompanyName && aiCompanyBio))
+  );
+  const flowAiToneLabel =
+    FLOW_AI_TONE_OPTIONS.find((option) => option.id === aiTone)?.label ||
+    "Profissional";
+  const flowAiRulesCount = aiRules.trim().length;
+  const flowAiChecklist = [
+    {
+      id: "module",
+      label: "Modulo",
+      value: aiEnabled ? "Ativo" : "Desligado",
+      complete: aiEnabled,
+    },
+    {
+      id: "identity",
+      label: "Identidade",
+      value:
+        aiCompanyName.trim() && aiCompanyBio.trim() ? "Completa" : "Pendente",
+      complete: !aiEnabled || Boolean(aiCompanyName.trim() && aiCompanyBio.trim()),
+    },
+    {
+      id: "rules",
+      label: "Diretrizes",
+      value: flowAiRulesCount ? `${flowAiRulesCount} chars` : "Sem regras",
+      complete: !aiEnabled || Boolean(flowAiRulesCount),
+    },
+    {
+      id: "tone",
+      label: "Tom",
+      value: flowAiToneLabel,
+      complete: !aiEnabled || Boolean(aiTone),
+    },
+  ];
+  const flowAiCompletedCount = flowAiChecklist.filter((item) => item.complete).length;
+  const flowAiHeaderDescription = aiEnabled
+    ? `${flowAiCompletedCount}/${flowAiChecklist.length} pontos principais configurados.`
+    : "Ative o modulo para configurar identidade, tom e diretrizes.";
 
   const canSaveWelcome = Boolean(
     !settingsReadOnly &&
@@ -3067,6 +3220,11 @@ export function ServerSettingsEditor({
         claimRoleIds,
         closeRoleIds,
         notifyRoleIds,
+        aiRules,
+        aiCompanyName,
+        aiCompanyBio,
+        aiTone,
+        aiEnabled,
       }),
     [
       adminRoleId,
@@ -3079,6 +3237,11 @@ export function ServerSettingsEditor({
       notifyRoleIds,
       panelLayout,
       ticketsCategoryId,
+      aiRules,
+      aiCompanyName,
+      aiCompanyBio,
+      aiTone,
+      aiEnabled,
     ],
   );
 
@@ -3258,6 +3421,8 @@ export function ServerSettingsEditor({
         ? canSaveSecurityLogs
       : isWelcomeSection
         ? canSaveWelcome
+      : isTicketAiSection
+        ? canSaveTicketAi
         : canSaveTicket) && hasUnsavedChanges,
   );
   const showFloatingSaveBar =
@@ -3270,6 +3435,7 @@ export function ServerSettingsEditor({
     isViewerOnly || isUnauthorizedForSection || locked || errorMessage,
   );
   const ticketControlsDisabled = isSaving || settingsReadOnly || !ticketEnabled;
+  const aiControlsDisabled = isSaving || settingsReadOnly || !aiEnabled;
   const welcomeControlsDisabled =
     isSaving || settingsReadOnly || !welcomeEnabled || isActivatingWelcome;
   const antiLinkControlsDisabled =
@@ -4229,6 +4395,11 @@ export function ServerSettingsEditor({
       setClaimRoleIds(savedSettingsDraft.claimRoleIds);
       setCloseRoleIds(savedSettingsDraft.closeRoleIds);
       setNotifyRoleIds(savedSettingsDraft.notifyRoleIds);
+      setAiRules(savedSettingsDraft.aiRules);
+      setAiCompanyName(savedSettingsDraft.aiCompanyName);
+      setAiCompanyBio(savedSettingsDraft.aiCompanyBio);
+      setAiTone(savedSettingsDraft.aiTone);
+      setAiEnabled(savedSettingsDraft.aiEnabled);
     } else {
       return;
     }
@@ -4391,6 +4562,7 @@ export function ServerSettingsEditor({
               closeRoleIds.length &&
               notifyRoleIds.length,
           );
+        const legacyFields = deriveLegacyTicketPanelFields(panelLayout);
         const ticketRes = await fetch("/api/auth/me/guilds/ticket-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4402,6 +4574,14 @@ export function ServerSettingsEditor({
             logsCreatedChannelId,
             logsClosedChannelId,
             panelLayout,
+            aiRules,
+            aiEnabled,
+            aiCompanyName,
+            aiCompanyBio,
+            aiTone,
+            panelTitle: legacyFields.panelTitle,
+            panelDescription: legacyFields.panelDescription,
+            panelButtonLabel: legacyFields.panelButtonLabel,
           }),
         });
 
@@ -4478,6 +4658,11 @@ export function ServerSettingsEditor({
           claimRoleIds: nextStaffSettings.claimRoleIds,
           closeRoleIds: nextStaffSettings.closeRoleIds,
           notifyRoleIds: nextStaffSettings.notifyRoleIds,
+          aiRules: aiRules,
+          aiCompanyName: aiCompanyName,
+          aiCompanyBio: aiCompanyBio,
+          aiTone: aiTone,
+          aiEnabled: aiEnabled,
         });
 
         setTicketEnabled(nextSavedTicketDraft.enabled);
@@ -4490,6 +4675,11 @@ export function ServerSettingsEditor({
         setClaimRoleIds(nextSavedTicketDraft.claimRoleIds);
         setCloseRoleIds(nextSavedTicketDraft.closeRoleIds);
         setNotifyRoleIds(nextSavedTicketDraft.notifyRoleIds);
+        setAiRules(nextSavedTicketDraft.aiRules);
+        setAiCompanyName(nextSavedTicketDraft.aiCompanyName);
+        setAiCompanyBio(nextSavedTicketDraft.aiCompanyBio);
+        setAiTone(nextSavedTicketDraft.aiTone);
+        setAiEnabled(nextSavedTicketDraft.aiEnabled);
         setSavedSettingsDraft(nextSavedTicketDraft);
       }
 
@@ -4501,6 +4691,11 @@ export function ServerSettingsEditor({
       setIsSaving(false);
     }
   }, [
+    aiEnabled,
+    aiRules,
+    aiCompanyName,
+    aiCompanyBio,
+    aiTone,
     antiLinkBlockDiscordInvites,
     antiLinkBlockExternalLinks,
     antiLinkBlockObfuscatedLinks,
@@ -5054,6 +5249,229 @@ export function ServerSettingsEditor({
                             </div>
                           </div>
                         ) : null}
+                      </div>
+                    </div>
+                  ) : settingsSection === "ticket_ai" ? (
+                    <div className="space-y-[14px]">
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="inline-flex items-center gap-[6px] rounded-full border border-[rgba(0,98,255,0.18)] bg-[rgba(0,98,255,0.06)] px-[10px] py-[5px] text-[10px] font-bold uppercase tracking-[0.16em] text-[#4A93FF]">
+                              Inteligencia Artificial
+                            </div>
+                            <h3 className="mt-[14px] text-[26px] leading-tight font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Otimize seu atendimento com FlowAI
+                            </h3>
+                            <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.62] text-[#7B7B7B]">
+                              Personalize a forma como a IA entende sua empresa e as regras de atendimento para sugestoes proativas e precisas.
+                            </p>
+                            <p className="mt-[12px] text-[12px] uppercase tracking-[0.14em] text-[#5B5B5B]">
+                              {flowAiHeaderDescription}
+                            </p>
+                          </div>
+                          
+                          <div className="shrink-0">
+                            <div className="flex items-center">
+                              <DashboardInlineSwitch
+                                checked={aiEnabled}
+                                onChange={() => {
+                                  if (isSaving || settingsReadOnly) return;
+                                  setAiEnabled((current) => !current);
+                                }}
+                                disabled={isSaving || settingsReadOnly}
+                                ariaLabel="Ativar ou desativar modulo FlowAI"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-2 xl:grid-cols-4">
+                        {flowAiChecklist.map((item) => (
+                          <div
+                            key={item.id}
+                            className={`rounded-[20px] border px-[16px] py-[14px] ${
+                              item.complete
+                                ? "border-[rgba(0,98,255,0.2)] bg-[rgba(0,98,255,0.06)]"
+                                : "border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)]"
+                            }`}
+                          >
+                            <p className="text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">
+                              {item.label}
+                            </p>
+                            <p
+                              className={`mt-[10px] text-[16px] font-medium tracking-[-0.02em] ${
+                                item.complete ? "text-[#D7E6FF]" : "text-[#D1D1D1]"
+                              }`}
+                            >
+                              {item.value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-[14px] lg:grid-cols-2">
+                        <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Identidade da Empresa</p>
+                            <h3 className="mt-[10px] text-[18px] leading-none font-medium tracking-[-0.03em] text-[#D1D1D1]">
+                              Como a IA ve seu negocio
+                            </h3>
+                            <p className="mt-[10px] text-[13px] leading-[1.55] text-[#6A6A6A]">
+                              Defina o nome e o objetivo principal para que a IA se comporte como um membro da sua equipe.
+                            </p>
+                            
+                            <div className="mt-[20px] space-y-[14px]">
+                              <div>
+                                <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Nome da Empresa / Marca</label>
+                                <input 
+                                  type="text"
+                                  value={aiCompanyName}
+                                  onChange={(e) => setAiCompanyName(e.target.value)}
+                                  placeholder="Ex: Flowdesk, Loja do Anderson..."
+                                  maxLength={100}
+                                  disabled={aiControlsDisabled}
+                                  className={`h-[44px] w-full rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                                />
+                                <div className="mt-[6px] flex justify-end">
+                                  <span className={`text-[10px] font-medium tracking-wide ${aiCompanyName.length >= 100 ? "text-[#FF4A4A]" : "text-[#404040]"}`}>
+                                    {aiCompanyName.length}/100
+                                  </span>
+                                </div>
+                              </div>
+                              <div>
+                                <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Descricao do que vendem / fazem</label>
+                                <textarea 
+                                  rows={3}
+                                  value={aiCompanyBio}
+                                  onChange={(e) => setAiCompanyBio(e.target.value)}
+                                  placeholder="Somos uma empresa focada em automacao para Discord..."
+                                  maxLength={1000}
+                                  disabled={aiControlsDisabled}
+                                  className={`w-full resize-none rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] py-[12px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                                />
+                                <div className="mt-[6px] flex justify-end">
+                                  <span className={`text-[10px] font-medium tracking-wide ${aiCompanyBio.length >= 1000 ? "text-[#FF4A4A]" : "text-[#404040]"}`}>
+                                    {aiCompanyBio.length}/1000
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Personalizacao FlowAI</p>
+                            <h3 className="mt-[10px] text-[18px] leading-none font-medium tracking-[-0.03em] text-[#D1D1D1]">
+                              Regras e Tom de Voz
+                            </h3>
+                            <p className="mt-[10px] text-[13px] leading-[1.55] text-[#6A6A6A]">
+                              Configure as diretrizes e como a IA deve se comunicar com seus clientes no dia a dia.
+                            </p>
+
+                            <div className="mt-[24px] space-y-[16px]">
+                              <div>
+                                <p className="mb-[10px] text-[12px] font-medium text-[#5F5F5F]">Modelos rapidos</p>
+                                <div className="grid grid-cols-1 gap-[8px] sm:grid-cols-3">
+                                  {FLOW_AI_RULE_PRESETS.map((preset) => (
+                                    <button
+                                      key={preset.id}
+                                      type="button"
+                                      onClick={() => {
+                                        if (aiControlsDisabled) return;
+                                        setAiRulesDraft(preset.rules);
+                                        setIsAiRulesModalOpen(true);
+                                      }}
+                                      disabled={aiControlsDisabled}
+                                      className={`rounded-[16px] border px-[12px] py-[12px] text-left transition-all ${
+                                        aiControlsDisabled
+                                          ? "cursor-not-allowed border-[#171717] bg-[#090909] opacity-40"
+                                          : "border-[#171717] bg-[#090909] hover:border-[#232323] hover:bg-[#0C0C0C]"
+                                      }`}
+                                    >
+                                      <span className="block text-[13px] font-medium text-[#D1D1D1]">
+                                        {preset.label}
+                                      </span>
+                                      <span className="mt-[5px] block text-[11px] leading-[1.5] text-[#5A5A5A]">
+                                        {preset.description}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <button 
+                                type="button"
+                                onClick={() => {
+                                  if (aiControlsDisabled) return;
+                                  setAiRulesDraft(aiRules);
+                                  setIsAiRulesModalOpen(true);
+                                }}
+                                disabled={aiControlsDisabled}
+                                className={`group relative flex w-full items-center justify-between gap-[16px] rounded-[18px] border border-[#1A1A1A] bg-[#0A0A0A] p-[4px] pr-[14px] transition-all ${
+                                  aiControlsDisabled 
+                                    ? "cursor-not-allowed opacity-40 grayscale-[0.5]" 
+                                    : "hover:border-[#222222] hover:bg-[#0D0D0D]"
+                                }`}
+                              >
+                                <div className="flex items-center gap-[12px]">
+                                  <span className="flex h-[42px] w-[42px] items-center justify-center rounded-[14px] border border-[#1C1C1C] bg-[#0E0E0E] text-[#6D6D6D] group-hover:text-[#A1A1A1]">
+                                    <svg viewBox="0 0 20 20" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 5h14M3 10h14M3 15h10" strokeLinecap="round"/></svg>
+                                  </span>
+                                  <div className="text-left">
+                                    <span className="block text-[14px] font-medium text-[#D1D1D1]">
+                                      {flowAiRulesCount ? "Editar Diretrizes" : "Criar Regras"}
+                                    </span>
+                                    <span className="block text-[11px] text-[#5A5A5A]">
+                                      {flowAiRulesCount
+                                        ? `${flowAiRulesCount} caracteres configurados`
+                                        : "Defina diretrizes de atendimento"}
+                                    </span>
+                                  </div>
+                                </div>
+                                <span className="text-[#454545] transition-transform group-hover:translate-x-[2px]"><svg viewBox="0 0 20 20" className="h-[14px] w-[14px]" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7.5 15l5-5-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg></span>
+                              </button>
+
+                              <div className="rounded-[18px] border border-[#171717] bg-[#090909] px-[14px] py-[12px]">
+                                <p className="text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">Resumo atual</p>
+                                <p className="mt-[8px] text-[13px] leading-[1.6] text-[#767676]">
+                                  {flowAiRulesCount
+                                    ? aiRules.trim().slice(0, 180)
+                                    : "Nenhuma diretriz salva ainda. Use um modelo rapido ou escreva suas regras manuais."}
+                                  {flowAiRulesCount > 180 ? "..." : ""}
+                                </p>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-[10px]">
+                                {[
+                                  { id: "formal", label: "Profissional", icon: "🏢" },
+                                  { id: "friendly", label: "Amigavel", icon: "✨" },
+                                ].map((tone) => (
+                                  <button
+                                    key={tone.id}
+                                    type="button"
+                                    onClick={() => {
+                                      if (aiControlsDisabled) return;
+                                      setAiTone(tone.id);
+                                    }}
+                                    disabled={aiControlsDisabled}
+                                    className={`flex flex-col items-center justify-center gap-[8px] rounded-[18px] border py-[16px] transition-all ${
+                                      aiControlsDisabled ? "opacity-40 cursor-not-allowed grayscale-[0.5]" : ""
+                                    } ${
+                                      aiTone === tone.id 
+                                        ? "border-[#4A93FF] bg-[rgba(0,98,255,0.06)] shadow-[0_0_12px_rgba(0,98,255,0.12)]" 
+                                        : aiControlsDisabled ? "border-[#171717] bg-[#090909]" : "border-[#171717] bg-[#090909] hover:border-[#1E1E1E] hover:bg-[#0B0B0B]"
+                                    }`}
+                                  >
+                                    <span className={`text-[20px] transition-transform ${aiTone === tone.id ? "scale-110" : ""}`}>{tone.icon}</span>
+                                    <span className={`text-[12px] font-medium transition-colors ${aiTone === tone.id ? "text-[#4A93FF]" : "text-[#8A8A8A]"}`}>{tone.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ) : settingsSection === "message" ? (
@@ -7045,6 +7463,139 @@ export function ServerSettingsEditor({
         description="O modulo de seguranca AntiLink ainda nao esta ativo neste servidor. Deseja ativar agora?"
         scope="workspace-main"
       />
+
+      {isPortalMounted && isAiRulesModalOpen ? createPortal(
+        <div className="fixed inset-y-0 left-0 right-0 z-[2600] isolate overflow-y-auto overscroll-contain xl:left-[318px]">
+          <button
+            type="button"
+            aria-label="Fechar modal de regras"
+            className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[7px]"
+            onClick={() => setIsAiRulesModalOpen(false)}
+          />
+
+          <div className="relative z-[10] min-h-full px-[20px] py-[32px] md:px-6 lg:px-8 xl:pl-[40px] xl:pr-[42px]">
+            <div className="mx-auto flex min-h-[calc(100vh-64px)] w-full max-w-[1220px] items-center justify-center">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Configurar Regras FlowAI"
+                className="flowdesk-stage-fade relative w-full max-w-[820px] overflow-hidden rounded-[32px] bg-transparent px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
+              >
+                <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[32px] border border-[#0E0E0E]" />
+                <span aria-hidden="true" className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[32px]" />
+                <span aria-hidden="true" className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[32px]" />
+                <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+
+                <div className="relative z-10">
+                  <div className="flex flex-col gap-[14px] sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <LandingGlowTag className="px-[18px]">
+                        Diretrizes FlowAI
+                      </LandingGlowTag>
+
+                      <div className="mt-[18px]">
+                        <h2 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[30px] leading-[0.98] font-normal tracking-[-0.05em] text-transparent sm:text-[36px]">
+                          Regras da Empresa
+                        </h2>
+                        <p className="mt-[14px] max-w-[560px] text-[14px] leading-[1.62] text-[#787878]">
+                          Escreva abaixo todas as regras, termos e diretrizes que a IA deve respeitar ao sugerir solucoes para seus clientes.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsAiRulesModalOpen(false)}
+                      className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+                      aria-label="Fechar modal"
+                    >
+                      <span className="text-[18px] leading-none">x</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-[28px]">
+                    <div className="relative rounded-[24px] border border-[#161616] bg-[#0A0A0A] p-[10px]">
+                      <textarea
+                        value={aiRulesDraft}
+                        onChange={(e) => setAiRulesDraft(e.target.value)}
+                        placeholder="Ex: 1. Nao damos reembolso apos 7 dias. 2. Nosso horario de atendimento humano e das 08h as 18h..."
+                        rows={12}
+                        maxLength={4000}
+                        disabled={aiControlsDisabled}
+                        className={`w-full resize-none rounded-[18px] bg-[#080808] p-[16px] text-[15px] font-medium leading-[1.6] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:bg-[#090909] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                      />
+                      <div className="absolute right-[22px] top-[22px]">
+                        <span className={`text-[10px] font-bold tracking-[0.12em] ${aiRulesDraft.length >= 4000 ? "text-[#FF4A4A]" : "text-[#3A3A3A]"}`}>
+                          {aiRulesDraft.length}/4000
+                        </span>
+                      </div>
+                      
+                      <div className="mt-[10px] flex flex-wrap gap-[8px] px-[6px]">
+                        {["Politica de Reembolso", "Horarios", "Links uteis", "FAQ"].map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            disabled={aiControlsDisabled}
+                            onClick={() => {
+                              if (aiControlsDisabled) return;
+                              setAiRulesDraft(prev => prev + (prev ? "\n" : "") + `- ${tag}: `);
+                            }}
+                            className={`rounded-full border border-[#151515] bg-[#0D0D0D] px-[10px] py-[4px] text-[11px] font-medium text-[#5F5F5F] transition-colors ${
+                              aiControlsDisabled ? "cursor-not-allowed opacity-30" : "hover:border-[#1A1A1A] hover:text-[#8D8D8D]"
+                            }`}
+                          >
+                            + {tag}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-[32px] flex items-center justify-end gap-[12px]">
+                    <button
+                      type="button"
+                      disabled={aiControlsDisabled}
+                      onClick={() => {
+                        if (aiControlsDisabled) return;
+                        setIsAiRulesModalOpen(false);
+                      }}
+                      className={`inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors ${
+                        aiControlsDisabled ? "cursor-not-allowed opacity-50" : "hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1]"
+                      }`}
+                    >
+                      Cancelar
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={aiControlsDisabled}
+                      onClick={() => {
+                        if (aiControlsDisabled) return;
+                        setAiRules(aiRulesDraft);
+                        setIsAiRulesModalOpen(false);
+                      }}
+                      className={`group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold ${
+                        aiControlsDisabled ? "cursor-not-allowed" : ""
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`absolute inset-0 rounded-[12px] bg-[linear-gradient(180deg,rgba(0,98,255,0.95)_0%,rgba(0,78,204,0.95)_100%)] transition-transform duration-150 ease-out ${
+                          aiControlsDisabled ? "opacity-50" : "group-hover:scale-[1.02] group-active:scale-[0.985]"
+                        }`}
+                      />
+                      <span className={`relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-white ${aiControlsDisabled ? "opacity-70" : ""}`}>
+                        Concluir e Salvar
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
       </section>
     </ClientErrorBoundary>
   );

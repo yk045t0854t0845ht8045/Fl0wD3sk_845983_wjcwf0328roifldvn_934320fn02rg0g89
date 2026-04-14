@@ -29,6 +29,11 @@ type ServerDashboardSettingsPayload = {
     panelTitle: string;
     panelDescription: string;
     panelButtonLabel: string;
+    aiRules: string;
+    aiEnabled: boolean;
+    aiCompanyName: string;
+    aiCompanyBio: string;
+    aiTone: string;
     updatedAt: string | null;
   } | null;
   staffSettings: {

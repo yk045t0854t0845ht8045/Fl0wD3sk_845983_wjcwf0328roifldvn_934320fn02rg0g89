@@ -30,6 +30,11 @@ import {
   type TicketPanelLayout,
 } from "@/lib/servers/ticketPanelBuilder";
 import {
+  encodeLegacyTicketAiSettings,
+  isMissingDedicatedTicketAiColumnsError,
+  normalizeTicketAiSettings,
+} from "@/lib/servers/ticketAiSettings";
+import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
@@ -41,6 +46,15 @@ const GUILD_ANNOUNCEMENT = 5;
 const PANEL_TITLE_MAX_LENGTH = 80;
 const PANEL_DESCRIPTION_MAX_LENGTH = 400;
 const PANEL_BUTTON_LABEL_MAX_LENGTH = 40;
+const AI_COMPANY_NAME_MAX_LENGTH = 100;
+const AI_COMPANY_BIO_MAX_LENGTH = 1000;
+const AI_RULES_MAX_LENGTH = 4000;
+const AI_ALLOWED_TONES = ["formal", "friendly"];
+const TICKET_SETTINGS_SELECT_BASE =
+  "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, ai_rules, updated_at";
+const TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI = `${TICKET_SETTINGS_SELECT_BASE}, ai_enabled, ai_company_name, ai_company_bio, ai_tone`;
+const TICKET_SETTINGS_RETURNING_SELECT_BASE = `guild_id, ${TICKET_SETTINGS_SELECT_BASE}`;
+const TICKET_SETTINGS_RETURNING_SELECT_WITH_DEDICATED_AI = `guild_id, ${TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI}`;
 
 type TicketSettingsBody = {
   guildId?: unknown;
@@ -53,12 +67,11 @@ type TicketSettingsBody = {
   panelTitle?: unknown;
   panelDescription?: unknown;
   panelButtonLabel?: unknown;
-};
-
-type GuildAccessContext = {
-  sessionData: NonNullable<Awaited<ReturnType<typeof resolveSessionAccessToken>>>;
-  accessibleGuild: Awaited<ReturnType<typeof assertUserAdminInGuildOrNull>>;
-  hasTeamAccess: boolean;
+  aiRules?: unknown;
+  aiEnabled?: unknown;
+  aiCompanyName?: unknown;
+  aiCompanyBio?: unknown;
+  aiTone?: unknown;
 };
 
 function getTrimmedId(value: unknown) {
@@ -103,6 +116,91 @@ function wait(ms: number) {
   });
 }
 
+async function loadGuildTicketSettingsRecord(guildId: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const modernResult = await supabase
+    .from("guild_ticket_settings")
+    .select(TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (!modernResult.error) {
+    return modernResult.data;
+  }
+
+  if (!isMissingDedicatedTicketAiColumnsError(modernResult.error)) {
+    throw new Error(modernResult.error.message);
+  }
+
+  const legacyResult = await supabase
+    .from("guild_ticket_settings")
+    .select(TICKET_SETTINGS_SELECT_BASE)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (legacyResult.error) {
+    throw new Error(legacyResult.error.message);
+  }
+
+  return legacyResult.data;
+}
+
+function buildTicketSettingsResponse(
+  record: Record<string, unknown> | null | undefined,
+) {
+  if (!record) {
+    return null;
+  }
+
+  const ticketAiSettings = normalizeTicketAiSettings(record);
+
+  return {
+    guildId: typeof record.guild_id === "string" ? record.guild_id : null,
+    enabled: Boolean(record.enabled),
+    menuChannelId:
+      typeof record.menu_channel_id === "string" ? record.menu_channel_id : null,
+    ticketsCategoryId:
+      typeof record.tickets_category_id === "string"
+        ? record.tickets_category_id
+        : null,
+    logsCreatedChannelId:
+      typeof record.logs_created_channel_id === "string"
+        ? record.logs_created_channel_id
+        : null,
+    logsClosedChannelId:
+      typeof record.logs_closed_channel_id === "string"
+        ? record.logs_closed_channel_id
+        : null,
+    panelLayout: normalizeTicketPanelLayout(record.panel_layout, {
+      panelTitle:
+        typeof record.panel_title === "string" ? record.panel_title : "",
+      panelDescription:
+        typeof record.panel_description === "string"
+          ? record.panel_description
+          : "",
+      panelButtonLabel:
+        typeof record.panel_button_label === "string"
+          ? record.panel_button_label
+          : "",
+    }),
+    panelTitle: typeof record.panel_title === "string" ? record.panel_title : "",
+    panelDescription:
+      typeof record.panel_description === "string"
+        ? record.panel_description
+        : "",
+    panelButtonLabel:
+      typeof record.panel_button_label === "string"
+        ? record.panel_button_label
+        : "",
+    aiRules: ticketAiSettings.aiRules,
+    aiEnabled: ticketAiSettings.aiEnabled,
+    aiCompanyName: ticketAiSettings.aiCompanyName,
+    aiCompanyBio: ticketAiSettings.aiCompanyBio,
+    aiTone: ticketAiSettings.aiTone,
+    updatedAt: typeof record.updated_at === "string" ? record.updated_at : null,
+  };
+}
+
 async function upsertTicketSettingsWithRetry(input: {
   guildId: string;
   enabled: boolean;
@@ -114,41 +212,84 @@ async function upsertTicketSettingsWithRetry(input: {
   panelTitle: string;
   panelDescription: string;
   panelButtonLabel: string;
+  aiRules: string;
+  aiEnabled: boolean;
+  aiCompanyName: string;
+  aiCompanyBio: string;
+  aiTone: string;
   configuredByUserId: number;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
   const maxAttempts = 2;
   let lastError: Error | null = null;
+  const modernPayload = {
+    guild_id: input.guildId,
+    enabled: input.enabled,
+    menu_channel_id: input.menuChannelId,
+    tickets_category_id: input.ticketsCategoryId,
+    logs_created_channel_id: input.logsCreatedChannelId,
+    logs_closed_channel_id: input.logsClosedChannelId,
+    panel_layout: input.panelLayout,
+    panel_title: input.panelTitle,
+    panel_description: input.panelDescription,
+    panel_button_label: input.panelButtonLabel,
+    ai_rules: input.aiRules,
+    ai_enabled: input.aiEnabled,
+    ai_company_name: input.aiCompanyName,
+    ai_company_bio: input.aiCompanyBio,
+    ai_tone: input.aiTone,
+    configured_by_user_id: input.configuredByUserId,
+  };
+  const legacyPayload = {
+    guild_id: input.guildId,
+    enabled: input.enabled,
+    menu_channel_id: input.menuChannelId,
+    tickets_category_id: input.ticketsCategoryId,
+    logs_created_channel_id: input.logsCreatedChannelId,
+    logs_closed_channel_id: input.logsClosedChannelId,
+    panel_layout: input.panelLayout,
+    panel_title: input.panelTitle,
+    panel_description: input.panelDescription,
+    panel_button_label: input.panelButtonLabel,
+    ai_rules: encodeLegacyTicketAiSettings({
+      aiRules: input.aiRules,
+      aiEnabled: input.aiEnabled,
+      aiCompanyName: input.aiCompanyName,
+      aiCompanyBio: input.aiCompanyBio,
+      aiTone: input.aiTone === "friendly" ? "friendly" : "formal",
+    }),
+    configured_by_user_id: input.configuredByUserId,
+  };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const result = await supabase
       .from("guild_ticket_settings")
       .upsert(
-        {
-          guild_id: input.guildId,
-          enabled: input.enabled,
-          menu_channel_id: input.menuChannelId,
-          tickets_category_id: input.ticketsCategoryId,
-          logs_created_channel_id: input.logsCreatedChannelId,
-          logs_closed_channel_id: input.logsClosedChannelId,
-          panel_layout: input.panelLayout,
-          panel_title: input.panelTitle,
-          panel_description: input.panelDescription,
-          panel_button_label: input.panelButtonLabel,
-          configured_by_user_id: input.configuredByUserId,
-        },
+        modernPayload,
         { onConflict: "guild_id" },
       )
-      .select(
-        "guild_id, enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
-      )
+      .select(TICKET_SETTINGS_RETURNING_SELECT_WITH_DEDICATED_AI)
       .single();
 
     if (!result.error) {
       return result.data;
     }
 
-    lastError = new Error(result.error.message);
+    if (isMissingDedicatedTicketAiColumnsError(result.error)) {
+      const legacyResult = await supabase
+        .from("guild_ticket_settings")
+        .upsert(legacyPayload, { onConflict: "guild_id" })
+        .select(TICKET_SETTINGS_RETURNING_SELECT_BASE)
+        .single();
+
+      if (!legacyResult.error) {
+        return legacyResult.data;
+      }
+
+      lastError = new Error(legacyResult.error.message);
+    } else {
+      lastError = new Error(result.error.message);
+    }
 
     if (attempt < maxAttempts) {
       await wait(240 * attempt);
@@ -249,20 +390,9 @@ export async function GET(request: Request) {
       source: "guild_ticket_settings_get",
     });
 
-    const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("guild_ticket_settings")
-      .select(
-        "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
-      )
-      .eq("guild_id", guildId)
-      .maybeSingle();
+    const result = await loadGuildTicketSettingsRecord(guildId);
 
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
-
-    if (!result.data) {
+    if (!result) {
       return applyNoStoreHeaders(
         NextResponse.json({
         ok: true,
@@ -274,22 +404,9 @@ export async function GET(request: Request) {
     return applyNoStoreHeaders(
       NextResponse.json({
       ok: true,
-      settings: {
-        enabled: Boolean(result.data.enabled),
-        menuChannelId: result.data.menu_channel_id,
-        ticketsCategoryId: result.data.tickets_category_id,
-        logsCreatedChannelId: result.data.logs_created_channel_id,
-        logsClosedChannelId: result.data.logs_closed_channel_id,
-        panelLayout: normalizeTicketPanelLayout(result.data.panel_layout, {
-          panelTitle: result.data.panel_title,
-          panelDescription: result.data.panel_description,
-          panelButtonLabel: result.data.panel_button_label,
-        }),
-        panelTitle: result.data.panel_title,
-        panelDescription: result.data.panel_description,
-        panelButtonLabel: result.data.panel_button_label,
-        updatedAt: result.data.updated_at,
-      },
+      settings: buildTicketSettingsResponse(
+        result as Record<string, unknown>,
+      ),
       }),
     );
   } catch (error) {
@@ -341,6 +458,18 @@ export async function POST(request: Request) {
     const ticketsCategoryId = getTrimmedId(body.ticketsCategoryId);
     const logsCreatedChannelId = getTrimmedId(body.logsCreatedChannelId);
     const logsClosedChannelId = getTrimmedId(body.logsClosedChannelId);
+    const aiRules = typeof body.aiRules === "string"
+      ? body.aiRules.trim().slice(0, AI_RULES_MAX_LENGTH)
+      : "";
+    const aiEnabled = typeof body.aiEnabled === "boolean" ? body.aiEnabled : false;
+    const aiCompanyName = typeof body.aiCompanyName === "string"
+      ? body.aiCompanyName.trim().slice(0, AI_COMPANY_NAME_MAX_LENGTH)
+      : "";
+    const aiCompanyBio = typeof body.aiCompanyBio === "string"
+      ? body.aiCompanyBio.trim().slice(0, AI_COMPANY_BIO_MAX_LENGTH)
+      : "";
+    const aiToneRaw = typeof body.aiTone === "string" ? body.aiTone.trim().toLowerCase() : "formal";
+    const aiTone = AI_ALLOWED_TONES.includes(aiToneRaw) ? aiToneRaw : "formal";
     const panelLayout = normalizeTicketPanelLayout(body.panelLayout, {
       panelTitle: getTrimmedText(body.panelTitle),
       panelDescription: getTrimmedText(body.panelDescription),
@@ -396,42 +525,46 @@ export async function POST(request: Request) {
       );
     }
 
-    if (enabled && !hasValidIncomingPanelDraft) {
+    if (enabled && !ticketPanelLayoutHasRequiredParts(panelLayout)) {
+      const detail = "O layout da mensagem do ticket esta vazio ou invalido.";
       recordServerSaveDiagnostic({
         context: diagnostic,
         outcome: "payload_invalid",
         httpStatus: 400,
-        detail: "O layout da mensagem do ticket esta vazio ou invalido.",
+        detail,
       });
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          {
-            ok: false,
-            message:
-              "Adicione pelo menos um conteudo com texto e uma acao valida na mensagem do ticket. O embed tambem aceita apenas um botao funcional.",
-          },
-          { status: 400 },
-        ),
+      const response = NextResponse.json(
+        {
+          ok: false,
+          message: "Adicione pelo menos um conteudo com texto e uma acao valida na mensagem do ticket. O embed tambem aceita apenas um botao funcional.",
+        },
+        { status: 400 }
       );
+      return applyNoStoreHeaders(response);
     }
 
-    if (enabled && incomingPanelTextExceedsLimit) {
-      recordServerSaveDiagnostic({
-        context: diagnostic,
-        outcome: "payload_invalid",
-        httpStatus: 400,
-        detail: "Mensagem principal excedeu o limite de caracteres.",
-      });
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          {
-            ok: false,
-            message:
-              "A mensagem principal do ticket excedeu o limite permitido de caracteres.",
-          },
-          { status: 400 },
-        ),
-      );
+    if (aiEnabled) {
+      if (aiCompanyName.length > AI_COMPANY_NAME_MAX_LENGTH) {
+        const res = NextResponse.json(
+          { ok: false, message: `O nome da empresa nao pode exceder ${AI_COMPANY_NAME_MAX_LENGTH} caracteres.` },
+          { status: 400 }
+        );
+        return applyNoStoreHeaders(res);
+      }
+      if (aiCompanyBio.length > AI_COMPANY_BIO_MAX_LENGTH) {
+        const res = NextResponse.json(
+          { ok: false, message: `A descricao do negocio nao pode exceder ${AI_COMPANY_BIO_MAX_LENGTH} caracteres.` },
+          { status: 400 }
+        );
+        return applyNoStoreHeaders(res);
+      }
+      if (aiRules.length > AI_RULES_MAX_LENGTH) {
+        const res = NextResponse.json(
+          { ok: false, message: `As regras da IA nao podem exceder ${AI_RULES_MAX_LENGTH} caracteres.` },
+          { status: 400 }
+        );
+        return applyNoStoreHeaders(res);
+      }
     }
 
     const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
@@ -526,20 +659,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const supabase = getSupabaseAdminClientOrThrow();
-    const existingSettingsResult = await supabase
-      .from("guild_ticket_settings")
-      .select(
-        "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
-      )
-      .eq("guild_id", guildId)
-      .maybeSingle();
-
-    if (existingSettingsResult.error) {
-      throw new Error(existingSettingsResult.error.message);
-    }
-
-    const existingSettings = existingSettingsResult.data;
+    const existingSettings = await loadGuildTicketSettingsRecord(guildId);
+    const existingSettingsResponse = buildTicketSettingsResponse(
+      existingSettings as Record<string, unknown> | null | undefined,
+    );
     const fallbackPanelLayout = existingSettings
       ? normalizeTicketPanelLayout(existingSettings.panel_layout, {
           panelTitle: existingSettings.panel_title,
@@ -646,6 +769,11 @@ export async function POST(request: Request) {
             panelTitle: resolvedPanelTitle,
             panelDescription: resolvedPanelDescription,
             panelButtonLabel: resolvedPanelButtonLabel,
+            aiRules: existingSettingsResponse?.aiRules || "",
+            aiEnabled: existingSettingsResponse?.aiEnabled || false,
+            aiCompanyName: existingSettingsResponse?.aiCompanyName || "",
+            aiCompanyBio: existingSettingsResponse?.aiCompanyBio || "",
+            aiTone: existingSettingsResponse?.aiTone || "formal",
             updatedAt:
               typeof existingSettings?.updated_at === "string"
                 ? existingSettings.updated_at
@@ -769,6 +897,11 @@ export async function POST(request: Request) {
       panelTitle: resolvedPanelTitle,
       panelDescription: resolvedPanelDescription,
       panelButtonLabel: resolvedPanelButtonLabel,
+      aiRules: aiRules,
+      aiEnabled: aiEnabled,
+      aiCompanyName: aiCompanyName,
+      aiCompanyBio: aiCompanyBio,
+      aiTone: aiTone,
       configuredByUserId: authUserId,
     });
 
@@ -788,23 +921,9 @@ export async function POST(request: Request) {
     return applyNoStoreHeaders(
       NextResponse.json({
       ok: true,
-      settings: {
-        guildId: savedSettings.guild_id,
-        enabled: Boolean(savedSettings.enabled),
-        menuChannelId: savedSettings.menu_channel_id,
-        ticketsCategoryId: savedSettings.tickets_category_id,
-        logsCreatedChannelId: savedSettings.logs_created_channel_id,
-        logsClosedChannelId: savedSettings.logs_closed_channel_id,
-        panelLayout: normalizeTicketPanelLayout(savedSettings.panel_layout, {
-          panelTitle: savedSettings.panel_title,
-          panelDescription: savedSettings.panel_description,
-          panelButtonLabel: savedSettings.panel_button_label,
-        }),
-        panelTitle: savedSettings.panel_title,
-        panelDescription: savedSettings.panel_description,
-        panelButtonLabel: savedSettings.panel_button_label,
-        updatedAt: savedSettings.updated_at,
-      },
+      settings: buildTicketSettingsResponse(
+        savedSettings as Record<string, unknown>,
+      ),
       }),
     );
   } catch (error) {

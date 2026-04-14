@@ -3,7 +3,6 @@ import {
   assertUserAdminInGuildOrNull,
   fetchGuildChannelsByBot,
   fetchGuildRolesByBot,
-  hasAcceptedTeamAccessToGuild,
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
@@ -16,11 +15,15 @@ import {
   createDefaultWelcomeExitLayout,
   normalizeWelcomeLayout,
 } from "@/lib/servers/welcomeMessageBuilder";
+import { isMissingDedicatedTicketAiColumnsError, normalizeTicketAiSettings } from "@/lib/servers/ticketAiSettings";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_CATEGORY = 4;
 const GUILD_TEXT = 0;
 const GUILD_ANNOUNCEMENT = 5;
+const TICKET_SETTINGS_SELECT_BASE =
+  "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, ai_rules, updated_at";
+const TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI = `${TICKET_SETTINGS_SELECT_BASE}, ai_enabled, ai_company_name, ai_company_bio, ai_tone`;
 
 type ChannelOption = {
   id: string;
@@ -100,9 +103,33 @@ function resolveOptionalTextChannelId(
   return typeof value === "string" && textSet.has(value) ? value : null;
 }
 
+async function loadGuildTicketSettings(
+  supabase: ReturnType<typeof getSupabaseAdminClientOrThrow>,
+  guildId: string,
+) {
+  const modernResult = await supabase
+    .from("guild_ticket_settings")
+    .select(TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (!modernResult.error) {
+    return modernResult;
+  }
+
+  if (!isMissingDedicatedTicketAiColumnsError(modernResult.error)) {
+    return modernResult;
+  }
+
+  return await supabase
+    .from("guild_ticket_settings")
+    .select(TICKET_SETTINGS_SELECT_BASE)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+}
+
 import { 
   getEffectiveDashboardPermissions, 
-  type TeamRolePermission 
 } from "@/lib/teams/userTeams";
 
 async function ensureGuildAccess(guildId: string) {
@@ -195,13 +222,7 @@ export async function GET(request: Request) {
     const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult, autoRoleResult, securityLogsResult] = await Promise.all([
       fetchGuildChannelsByBot(guildId),
       fetchGuildRolesByBot(guildId),
-      supabase
-        .from("guild_ticket_settings")
-        .select(
-            "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, updated_at",
-          )
-        .eq("guild_id", guildId)
-        .maybeSingle(),
+      loadGuildTicketSettings(supabase, guildId),
       supabase
         .from("guild_ticket_staff_settings")
         .select(
@@ -327,6 +348,9 @@ export async function GET(request: Request) {
 
     const defaultEntryLayout = createDefaultWelcomeEntryLayout();
     const defaultExitLayout = createDefaultWelcomeExitLayout();
+    const ticketAiSettings = normalizeTicketAiSettings(
+      ticketResult.data as Record<string, unknown> | null | undefined,
+    );
 
     return applyNoStoreHeaders(
       NextResponse.json({
@@ -358,6 +382,11 @@ export async function GET(request: Request) {
               panelTitle: ticketResult.data.panel_title,
               panelDescription: ticketResult.data.panel_description,
               panelButtonLabel: ticketResult.data.panel_button_label,
+              aiRules: ticketAiSettings.aiRules,
+              aiEnabled: ticketAiSettings.aiEnabled,
+              aiCompanyName: ticketAiSettings.aiCompanyName,
+              aiCompanyBio: ticketAiSettings.aiCompanyBio,
+              aiTone: ticketAiSettings.aiTone,
               updatedAt: ticketResult.data.updated_at,
             }
           : null,

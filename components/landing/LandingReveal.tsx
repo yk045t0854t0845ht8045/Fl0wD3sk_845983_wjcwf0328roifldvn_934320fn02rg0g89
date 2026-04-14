@@ -50,6 +50,7 @@ export function LandingReveal({
       ...(childProps.style ?? {}),
       "--flowdesk-reveal-delay": `${delay}ms`,
     } as CSSProperties,
+    // We explicitly use a string "false" during the first render to match hydration
     "data-flowdesk-visible": isVisible ? "true" : "false",
   });
 }

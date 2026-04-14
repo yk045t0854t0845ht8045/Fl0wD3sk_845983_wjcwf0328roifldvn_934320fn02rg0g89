@@ -161,7 +161,13 @@ function FooterLink({ item }: { item: FooterLinkItem }) {
   );
 }
 
-export function LandingFooter() {
+export function LandingFooter({ 
+  baseDelay = 3160, 
+  bottomDelay = 3600 
+}: { 
+  baseDelay?: number; 
+  bottomDelay?: number; 
+}) {
   return (
     <footer className="relative overflow-hidden border-t border-[rgba(255,255,255,0.03)]">
       <div className="pointer-events-none absolute inset-x-0 top-0 left-1/2 h-[2px] w-screen -translate-x-1/2 bg-[linear-gradient(90deg,rgba(14,14,14,0.2)_0%,rgba(14,14,14,1)_50%,rgba(14,14,14,0.2)_100%)]" />
@@ -169,7 +175,7 @@ export function LandingFooter() {
       <div className="mx-auto w-full max-w-[1582px] px-[20px] pb-[22px] pt-[56px] md:px-6 lg:px-8 xl:px-10 2xl:px-[20px]">
         <div className="grid grid-cols-2 gap-x-[28px] gap-y-[34px] md:grid-cols-3 xl:grid-cols-5">
           {FOOTER_GROUPS.map((group, index) => (
-            <LandingReveal key={group.title} delay={3160 + index * 70}>
+            <LandingReveal key={group.title} delay={baseDelay + index * 70}>
               <div className="flex min-h-[176px] flex-col">
                 <p className="text-[13px] leading-none font-semibold uppercase tracking-[0.08em] text-[rgba(218,218,218,0.92)]">
                   {group.title}
@@ -187,7 +193,7 @@ export function LandingFooter() {
           ))}
         </div>
 
-        <LandingReveal delay={3600}>
+        <LandingReveal delay={bottomDelay}>
           <div className="mt-[30px] flex flex-col gap-[18px] border-t border-[rgba(255,255,255,0.03)] pt-[18px] md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-[10px]">
               <span className="h-[10px] w-[10px] rounded-[2px] bg-[#0062FF]" />
