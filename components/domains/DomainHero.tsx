@@ -5,7 +5,11 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { DomainSearchSection } from "./DomainSearchSection";
 
-export function DomainHero() {
+type DomainHeroProps = {
+  initialTab?: "register" | "ai";
+};
+
+export function DomainHero({ initialTab = "register" }: DomainHeroProps) {
   return (
     <div className="relative isolate min-h-[600px] overflow-visible">
       {/* Background Blocks Pattern */}
@@ -43,8 +47,8 @@ export function DomainHero() {
           </LandingReveal>
 
           <LandingReveal delay={400}>
-            <div className="mt-[48px] w-full max-w-[800px]">
-              <DomainSearchSection />
+            <div className="mt-[48px] w-full max-w-[1200px]">
+              <DomainSearchSection initialTab={initialTab} />
             </div>
           </LandingReveal>
         </div>

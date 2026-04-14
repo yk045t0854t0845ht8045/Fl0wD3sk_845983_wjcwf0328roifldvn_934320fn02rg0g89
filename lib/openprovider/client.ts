@@ -1,126 +1,320 @@
-import { OpenProviderError } from "./types";
+import {
+  AuthLoginResponseData,
+  OpenProviderApiResponse,
+  OpenProviderErrorPayload,
+} from "./types";
 
-/**
- * OpenProvider REST Client
- * Handles authentication, timeouts, and error parsing.
- */
+type QueryValue = string | number | boolean | null | undefined | Array<string | number | boolean>;
+
+interface RequestOptions extends RequestInit {
+  query?: Record<string, QueryValue>;
+  requireAuth?: boolean;
+  retryOnAuthFailure?: boolean;
+  requestId?: string;
+}
+
+export class OpenProviderRequestError extends Error {
+  status: number;
+  code?: number;
+  details?: unknown;
+  maintenance: boolean;
+
+  constructor(
+    message: string,
+    {
+      status = 500,
+      code,
+      details,
+      maintenance = false,
+    }: {
+      status?: number;
+      code?: number;
+      details?: unknown;
+      maintenance?: boolean;
+    } = {},
+  ) {
+    super(message);
+    this.name = "OpenProviderRequestError";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+    this.maintenance = maintenance;
+  }
+}
+
+function parseJsonResponse<TData>(rawText: string): OpenProviderApiResponse<TData> {
+  if (!rawText.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(rawText) as OpenProviderApiResponse<TData>;
+  } catch {
+    return {
+      desc: rawText.trim(),
+      data: rawText.trim() as unknown as TData,
+    };
+  }
+}
+
+function buildUrl(baseUrl: string, endpoint: string, query?: Record<string, QueryValue>) {
+  const normalizedBase = baseUrl.replace(/\/$/, "");
+  const normalizedEndpoint = endpoint.replace(/^\//, "");
+  const url = new URL(`${normalizedBase}/${normalizedEndpoint}`);
+
+  if (!query) {
+    return url.toString();
+  }
+
+  for (const [key, rawValue] of Object.entries(query)) {
+    if (rawValue === undefined || rawValue === null || rawValue === "") {
+      continue;
+    }
+
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    for (const value of values) {
+      url.searchParams.append(key, String(value));
+    }
+  }
+
+  return url.toString();
+}
+
 export class OpenProviderClient {
-  private baseUrl: string;
-  private username: string;
-  private password: string;
-  private token: string = "";
-  private timeoutMs: number;
+  private readonly baseUrl: string;
+  private readonly username: string;
+  private readonly password: string;
+  private readonly ip: string;
+  private readonly timeoutMs: number;
+
+  private token = "";
+  private loginPromise: Promise<string> | null = null;
 
   constructor() {
     this.baseUrl = process.env.OPENPROVIDER_BASE_URL || "https://api.openprovider.eu/v1beta";
-    this.username = process.env.OPENPROVIDER_USERNAME || "";
+    this.username = process.env.OPENPROVIDER_USERNAME?.trim() || "";
     this.password = process.env.OPENPROVIDER_PASSWORD || "";
+    this.ip = process.env.OPENPROVIDER_IP?.trim() || "";
     this.timeoutMs = Number(process.env.OPENPROVIDER_TIMEOUT_MS) || 12000;
   }
 
-  /**
-   * Performs authentication to obtain a Bearer Token.
-   */
-  private async login(requestId: string): Promise<string> {
-    console.log(`[OpenProvider][${requestId}] Logging in...`);
-    const url = `${this.baseUrl.replace(/\/$/, "")}/auth/login`;
+  private ensureConfigured() {
+    const missing: string[] = [];
 
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: this.username,
-          password: this.password,
-        }),
-      });
+    if (!this.username) {
+      missing.push("OPENPROVIDER_USERNAME");
+    }
 
-      const payload = await response.json();
+    if (!this.password) {
+      missing.push("OPENPROVIDER_PASSWORD");
+    }
 
-      if (!response.ok) {
-        throw new Error(payload.desc || "Falha na autenticação com a OpenProvider");
-      }
-
-      this.token = payload.data?.token;
-      console.log(`[OpenProvider][${requestId}] Login successful.`);
-      return this.token;
-    } catch (err: any) {
-      console.error(`[OpenProvider][${requestId}] Login failed:`, err.message, err.cause || "");
-      throw err;
+    if (missing.length > 0) {
+      throw new OpenProviderRequestError(
+        `Configuracao incompleta da Openprovider. Defina: ${missing.join(", ")}`,
+        { status: 500 },
+      );
     }
   }
 
-  async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const requestId = Math.random().toString(36).substring(7);
-    
-    // Ensure we have a token
-    if (!this.token) {
-      await this.login(requestId);
+  private buildAuthHeaders(token: string) {
+    return {
+      Authorization: `Bearer ${token}`,
+    };
+  }
+
+  private isAuthenticationFailure(error: unknown) {
+    if (!(error instanceof OpenProviderRequestError)) {
+      return false;
     }
 
-    const url = `${this.baseUrl.replace(/\/$/, "")}/${endpoint.replace(/^\//, "")}`;
-    console.log(`[OpenProvider][${requestId}] Request: ${options.method || 'GET'} ${url}`);
+    if (error.status === 401) {
+      return true;
+    }
 
+    return /Authentication\/Authorization Failed/i.test(error.message);
+  }
+
+  private async doRequest<TData>(
+    endpoint: string,
+    {
+      query,
+      requireAuth = true,
+      retryOnAuthFailure = true,
+      requestId = Math.random().toString(36).slice(2, 8),
+      headers,
+      ...options
+    }: RequestOptions = {},
+  ): Promise<OpenProviderApiResponse<TData>> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const response = await fetch(url, {
+      const mergedHeaders = new Headers(headers);
+      const hasBody = options.body !== undefined && options.body !== null;
+
+      if (hasBody && !mergedHeaders.has("Content-Type")) {
+        mergedHeaders.set("Content-Type", "application/json");
+      }
+
+      if (requireAuth) {
+        const token = await this.login(requestId);
+        for (const [key, value] of Object.entries(this.buildAuthHeaders(token))) {
+          mergedHeaders.set(key, value);
+        }
+      }
+
+      const response = await fetch(buildUrl(this.baseUrl, endpoint, query), {
         ...options,
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${this.token}`,
-          ...options.headers,
-        },
+        headers: mergedHeaders,
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      const rawText = await response.text();
+      const payload = parseJsonResponse<TData>(rawText);
 
-      const data = await response.json().catch(() => ({}));
-
-      // Detect Maintenance State
-      if (data.maintenance === true) {
-        console.warn(`[OpenProvider][${requestId}] SYSTEM MAINTENANCE detected.`);
-        throw new Error("O provedor de domínios está em manutenção programada.");
+      if (payload.maintenance) {
+        throw new OpenProviderRequestError(
+          "A Openprovider informou manutencao temporaria na API.",
+          {
+            status: response.status || 503,
+            code: payload.code,
+            details: payload,
+            maintenance: true,
+          },
+        );
       }
 
-      // Handle specific Auth errors (Token expired)
-      const currentHeaders = (options.headers || {}) as Record<string, string>;
-      if (response.status === 401 && !currentHeaders["X-Retry"]) {
-        console.log(`[OpenProvider][${requestId}] Token expired. Retrying login...`);
-        this.token = "";
-        return this.request(endpoint, { 
-          ...options, 
-          headers: { ...currentHeaders, "X-Retry": "true" } 
+      if (!response.ok || (typeof payload.code === "number" && payload.code !== 0)) {
+        throw new OpenProviderRequestError(
+          payload.desc || `A Openprovider respondeu com status ${response.status}.`,
+          {
+            status: response.status || 500,
+            code: payload.code,
+            details: payload,
+          },
+        );
+      }
+
+      return payload;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new OpenProviderRequestError("Timeout ao consultar a Openprovider.", {
+          status: 504,
         });
       }
 
-      if (!response.ok) {
-        const error = data as OpenProviderError;
-        console.error(`[OpenProvider][${requestId}] Error ${response.status}:`, error.desc);
+      if (retryOnAuthFailure && requireAuth && this.isAuthenticationFailure(error)) {
+        this.token = "";
+        await this.login(requestId);
 
-        if (error.code === 81) {
-          console.warn(`[OpenProvider][${requestId}] Code 81: Check URL/Method.`);
-        }
-
-        throw new Error(error.desc || "Erro desconhecido na API");
+        return this.doRequest<TData>(endpoint, {
+          ...options,
+          headers,
+          query,
+          requireAuth,
+          retryOnAuthFailure: false,
+          requestId,
+        });
       }
 
-      return data as T;
-    } catch (err: any) {
+      if (error instanceof OpenProviderRequestError) {
+        throw error;
+      }
+
+      const unknownError = error as Error;
+      throw new OpenProviderRequestError(
+        unknownError?.message || "Falha inesperada ao consultar a Openprovider.",
+      );
+    } finally {
       clearTimeout(timeoutId);
-      console.error(`[OpenProvider][${requestId}] Request failed:`, err.message, err.cause || "");
-      throw err;
     }
   }
 
-  async post<T>(endpoint: string, body: any): Promise<T> {
-    return this.request<T>(endpoint, {
-      method: "POST",
-      body: JSON.stringify(body),
+  private async login(requestId: string): Promise<string> {
+    this.ensureConfigured();
+
+    if (this.token) {
+      return this.token;
+    }
+
+    if (!this.loginPromise) {
+      this.loginPromise = (async () => {
+        const payload: Record<string, string> = {
+          username: this.username,
+          password: this.password,
+        };
+
+        if (this.ip) {
+          payload.ip = this.ip;
+        }
+
+        console.log(`[OpenProvider][${requestId}] Authenticating`);
+
+        const response = await this.doRequest<AuthLoginResponseData>("auth/login", {
+          method: "POST",
+          body: JSON.stringify(payload),
+          requireAuth: false,
+          retryOnAuthFailure: false,
+          requestId,
+        });
+
+        const token = response.data?.token?.trim();
+        if (!token) {
+          throw new OpenProviderRequestError(
+            "A Openprovider nao retornou token de autenticacao.",
+            {
+              status: 502,
+              details: response,
+            },
+          );
+        }
+
+        console.log(`[OpenProvider][${requestId}] Authentication succeeded`);
+        this.token = token;
+        return token;
+      })().finally(() => {
+        this.loginPromise = null;
+      });
+    }
+
+    return this.loginPromise;
+  }
+
+  async get<TData>(endpoint: string, query?: Record<string, QueryValue>) {
+    return this.doRequest<TData>(endpoint, {
+      method: "GET",
+      query,
     });
   }
+
+  async post<TData>(endpoint: string, body?: unknown, options: Omit<RequestOptions, "body" | "method"> = {}) {
+    return this.doRequest<TData>(endpoint, {
+      ...options,
+      method: "POST",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+}
+
+export function getOpenProviderErrorMessage(error: unknown) {
+  if (error instanceof OpenProviderRequestError) {
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Erro desconhecido ao consultar a Openprovider.";
+}
+
+export function getOpenProviderErrorDetails(error: unknown): OpenProviderErrorPayload | null {
+  if (error instanceof OpenProviderRequestError && error.details && typeof error.details === "object") {
+    return error.details as OpenProviderErrorPayload;
+  }
+
+  return null;
 }
 
 export const openProviderClient = new OpenProviderClient();

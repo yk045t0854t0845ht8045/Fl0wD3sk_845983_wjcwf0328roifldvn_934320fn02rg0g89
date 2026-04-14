@@ -1,15 +1,13 @@
 import Script from "next/script";
-
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 import { LandingFooter } from "@/components/landing/LandingFooter";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
 import { LandingHeader } from "@/components/landing/LandingHeader";
-import { LandingHero } from "@/components/landing/LandingHero";
 import { LandingSmoothScroll } from "@/components/landing/LandingSmoothScroll";
 import { TopBetaBanner } from "@/components/landing/TopBetaBanner";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
+import { DomainHero } from "@/components/domains/DomainHero";
+
+type DomainMode = "register" | "ai";
 
 function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
   if (!avatarHash) return null;
@@ -17,14 +15,16 @@ function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null)
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }
 
-export default async function HomePage() {
+export async function DomainsPageShell({ initialMode = "register" }: { initialMode?: DomainMode }) {
   const user = await getCurrentUserFromSessionCookie();
-  
-  const authenticatedUser = user ? {
-    username: user.username,
-    avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar),
-    href: "/servers"
-  } : null;
+
+  const authenticatedUser = user
+    ? {
+        username: user.username,
+        avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar),
+        href: "/servers",
+      }
+    : null;
 
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
@@ -42,11 +42,13 @@ export default async function HomePage() {
 
         <LandingHeader authenticatedUser={authenticatedUser} />
 
-        <main className="w-full pb-20">
-          <LandingHero />
+        <main className="relative z-10 w-full pt-[35px] pb-24">
+          <div className="mx-auto w-full max-w-[1582px] px-[20px] md:px-6 lg:px-8 xl:px-10 2xl:px-[20px]">
+            <DomainHero initialTab={initialMode} />
+          </div>
         </main>
 
-        <LandingFooter />
+        <LandingFooter baseDelay={600} bottomDelay={1000} />
       </div>
     </div>
   );

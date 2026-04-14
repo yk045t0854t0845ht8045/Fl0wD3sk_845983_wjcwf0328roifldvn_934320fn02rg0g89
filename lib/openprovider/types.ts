@@ -1,10 +1,24 @@
-/**
- * OpenProvider REST API - Type Definitions
- */
+export interface OpenProviderWarning {
+  code?: number;
+  desc?: string;
+  data?: unknown;
+}
 
-export interface OpenProviderError {
-  desc: string;
-  code: number;
+export interface OpenProviderErrorPayload {
+  code?: number;
+  desc?: string;
+  data?: unknown;
+  maintenance?: boolean;
+  warnings?: OpenProviderWarning[];
+}
+
+export interface OpenProviderApiResponse<TData> extends OpenProviderErrorPayload {
+  data?: TData;
+}
+
+export interface AuthLoginResponseData {
+  reseller_id?: number;
+  token?: string;
 }
 
 export interface DomainCheckItem {
@@ -17,29 +31,65 @@ export interface DomainCheckRequest {
   additional_data?: {
     idn_script?: string;
   };
-  withPrice?: boolean;
+  with_price?: boolean;
+}
+
+export interface DomainPriceValue {
+  price?: number;
+  currency?: string;
+}
+
+export interface DomainPriceGroup {
+  product?: DomainPriceValue;
+  reseller?: DomainPriceValue;
+}
+
+export interface DomainPremiumPrice {
+  currency?: string;
+  price?: {
+    create?: number;
+  };
 }
 
 export interface DomainCheckResult {
-  domain: {
-    name: string;
-    extension: string;
-  };
-  status: "free" | "active" | "taken" | "unknown";
-  price?: {
-    reseller?: {
-      price: number;
-      currency: string;
-    };
-  };
-  isPremium?: boolean;
+  claim_key?: string;
+  domain: string;
+  is_premium?: boolean;
+  premium?: DomainPremiumPrice;
+  price?: DomainPriceGroup;
+  reason?: string;
+  status?: string;
+  whois?: string;
 }
 
-export interface DomainCheckResponse {
-  code: number;
-  desc?: string;
-  maintenance?: boolean;
-  data: {
-    results: DomainCheckResult[];
-  };
+export interface DomainCheckResponseData {
+  results?: DomainCheckResult[];
+}
+
+export interface DomainPriceResponseData {
+  is_premium?: boolean;
+  is_promotion?: boolean;
+  price?: DomainPriceGroup;
+  tier_price?: DomainPriceGroup;
+  membership_price?: DomainPriceGroup;
+}
+
+export interface DomainSearchResult {
+  domain: string;
+  extension: string;
+  status: string;
+  isAvailable: boolean;
+  price: number;
+  currency: string;
+  isPremium: boolean;
+  reason: string;
+  whois: string;
+}
+
+export interface DomainSearchResponse {
+  query: string;
+  baseName: string;
+  exactDomain: string | null;
+  searchedTlds: string[];
+  results: DomainSearchResult[];
 }

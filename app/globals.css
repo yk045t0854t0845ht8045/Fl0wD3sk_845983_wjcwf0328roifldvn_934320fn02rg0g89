@@ -638,6 +638,20 @@ html.lenis body {
   pointer-events: none;
 }
 
+.flowdesk-page-scale-80 {
+  zoom: 0.8;
+}
+
+@supports not (zoom: 1) {
+  .flowdesk-page-scale-80 {
+    --flowdesk-page-scale: 0.8;
+    width: calc(100% / var(--flowdesk-page-scale));
+    min-height: calc(100vh / var(--flowdesk-page-scale));
+    transform: scale(var(--flowdesk-page-scale));
+    transform-origin: top center;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .flowdesk-landing-reveal {
     opacity: 1;

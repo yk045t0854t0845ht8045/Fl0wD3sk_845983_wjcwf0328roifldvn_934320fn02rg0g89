@@ -12,7 +12,6 @@ type NavigationItem = {
   label: string;
   href: string;
   hasChevron?: boolean;
-  hideFirstOnTightDesktop?: boolean;
 };
 
 type LandingHeaderAuthenticatedUser = {
@@ -64,12 +63,7 @@ const LEFT_NAV_ITEMS: NavigationItem[] = [
   { label: "Servicos", href: "/#services", hasChevron: true },
   { label: "Produtos", href: "/#products", hasChevron: true },
   { label: "Solucoes", href: "/#solutions", hasChevron: true },
-  {
-    label: "Sobre",
-    href: "/#about",
-    hasChevron: true,
-    hideFirstOnTightDesktop: true,
-  },
+  { label: "Afiliados", href: "/affiliates" },
   { label: "Planos", href: "/#plans" },
 ];
 
@@ -78,6 +72,8 @@ const MOBILE_MENU_ITEMS: NavigationItem[] = [
   { label: "Servicos", href: "/#services" },
   { label: "Produtos", href: "/#products" },
   { label: "Solucoes", href: "/#solutions" },
+  { label: "Afiliados", href: "/affiliates" },
+  { label: "Planos", href: "/#plans" },
 ];
 const DESKTOP_MENU_LABELS = LEFT_NAV_ITEMS.filter((item) => item.hasChevron).map(
   (item) => item.label,
@@ -525,7 +521,6 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
   const [isFloatingHeaderVisible, setIsFloatingHeaderVisible] = useState(true);
   const resolvedViewportWidth = viewportWidth ?? 1920;
   const isTabletMode = resolvedViewportWidth < TABLET_NAV_BREAKPOINT;
-  const showAboutLink = resolvedViewportWidth >= 1420;
   const shouldForceHeaderVisible = isMenuMounted || isMenuOpen;
   const desktopMenus: Record<string, DesktopMenuPanelData> = useMemo(() => ({
     Servicos: {
@@ -534,15 +529,15 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
           title: "ATENDIMENTO",
           items: [
             {
-              title: "Tickets inteligentes",
-              description: "Estruture atendimentos com controle e prioridade.",
+              title: "Bot Discord",
+              description: "Automacao, tickets e operacao completa para o seu servidor.",
               href: "/#services",
               icon: "ticket",
             },
             {
-              title: "Filas e equipes",
-              description: "Distribua moderadores e organize a operacao.",
-              href: "/#services",
+              title: "Registro de Dominio",
+              description: "Pesquise, valide e registre dominios para a sua marca.",
+              href: "/domains",
               icon: "team",
             },
           ],
@@ -999,7 +994,7 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
       observer.disconnect();
       window.removeEventListener("resize", syncHeaderHeight);
     };
-  }, [isTabletMode, showAboutLink]);
+  }, [isTabletMode]);
 
   useEffect(() => {
     lastScrollYRef.current = window.scrollY;
@@ -1155,13 +1150,9 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
             >
               <nav className="flex min-w-0 items-center">
                 {LEFT_NAV_ITEMS.map((item, index) => {
-                  const itemWrapperClassName = item.hideFirstOnTightDesktop
-                    ? `${responsiveTransitionClassName} ${
-                        showAboutLink
-                          ? "ml-5 max-w-[220px] translate-y-0 overflow-visible opacity-100"
-                          : "pointer-events-none ml-0 max-w-0 -translate-y-1 overflow-hidden opacity-0"
-                      }`
-                    : `${responsiveTransitionClassName} overflow-visible ${index === 0 ? "" : "ml-5"}`;
+                  const itemWrapperClassName = `${responsiveTransitionClassName} overflow-visible ${
+                    index === 0 ? "" : "ml-5"
+                  }`;
 
                   return (
                     <div
