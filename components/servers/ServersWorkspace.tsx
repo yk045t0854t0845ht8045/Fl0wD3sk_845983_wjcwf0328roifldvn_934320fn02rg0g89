@@ -455,6 +455,10 @@ function normalizeComparablePath(value: string) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+function isServersWorkspacePath(pathname: string) {
+  return pathname === "/servers" || pathname.startsWith("/servers/");
+}
+
 function statusStyle(status: ManagedServerStatus) {
   if (status === "paid") {
     return {
@@ -744,7 +748,6 @@ function ServerListRow({
   onCopy,
   onToggleMenu,
   onCopyFromMenu,
-  onDeactivate,
 }: {
   server: ManagedServer;
   index: number;
@@ -756,7 +759,6 @@ function ServerListRow({
   onCopy: (guildId: string) => void;
   onToggleMenu: (guildId: string) => void;
   onCopyFromMenu: (guildId: string) => void;
-  onDeactivate: () => void;
 }) {
   const style = statusStyle(server.status);
 
@@ -819,7 +821,6 @@ function ServerGridCard({
   onCopy,
   onToggleMenu,
   onCopyFromMenu,
-  onDeactivate,
 }: {
   server: ManagedServer;
   index: number;
@@ -831,7 +832,6 @@ function ServerGridCard({
   onCopy: (guildId: string) => void;
   onToggleMenu: (guildId: string) => void;
   onCopyFromMenu: (guildId: string) => void;
-  onDeactivate: () => void;
 }) {
   const style = statusStyle(server.status);
 
@@ -1856,18 +1856,58 @@ export function ServersWorkspace({
     const currentPathname = window.location.pathname;
     const nextPathname = nextUrl.split("?")[0]?.split("#")[0] || "";
     const isInternalServersPath =
-      currentPathname.startsWith("/servers/") &&
-      nextPathname.startsWith("/servers/");
+      isServersWorkspacePath(currentPathname) &&
+      isServersWorkspacePath(nextPathname);
 
-    // Evita remount da arvore ao trocar apenas secao interna do workspace.
-    if (mode === "replace" && isInternalServersPath) {
-      window.history.replaceState(window.history.state, "", nextUrl);
+    // Atualiza a URL imediatamente enquanto mantemos a arvore viva no mesmo workspace.
+    if (isInternalServersPath) {
+      if (mode === "replace") {
+        window.history.replaceState(window.history.state, "", nextUrl);
+        return;
+      }
+
+      window.history.pushState(window.history.state, "", nextUrl);
       return;
     }
 
+    void router.prefetch(nextPathname || nextUrl);
     if (mode === "replace") router.replace(nextUrl, { scroll: false });
     else router.push(nextUrl, { scroll: false });
   }, [router]);
+
+  const applySelectedServerRouteState = useCallback((
+    guildId: string | null,
+    tab: ServerEditorTab,
+    settingsSection: ServerSettingsSection,
+  ) => {
+    setSelectedGuildIdForConfig(guildId);
+    setSelectedEditorTabForConfig(tab);
+    setSelectedSettingsSectionForConfig(settingsSection);
+  }, []);
+
+  const openProjectsOverview = useCallback((mode: "push" | "replace" = "push") => {
+    navigateToUrl("/servers/", mode);
+    startOpenServerTransition(() => {
+      applySelectedServerRouteState(null, "settings", "overview");
+      setErrorMessage(null);
+    });
+  }, [applySelectedServerRouteState, navigateToUrl, startOpenServerTransition]);
+
+  const prefetchWorkspaceSections = useCallback((guildId: string) => {
+    void prefetchServerDashboardSettings(guildId);
+    [
+      buildServerConfigUrl(guildId, "settings", "overview"),
+      buildServerConfigUrl(guildId, "settings", "message"),
+      buildServerConfigUrl(guildId, "settings", "ticket_ai"),
+      buildServerConfigUrl(guildId, "settings", "entry_exit_overview"),
+      buildServerConfigUrl(guildId, "settings", "entry_exit_message"),
+      buildServerConfigUrl(guildId, "settings", "security_antilink"),
+      buildServerConfigUrl(guildId, "settings", "security_autorole"),
+      buildServerConfigUrl(guildId, "settings", "security_logs"),
+    ].forEach((url) => {
+      router.prefetch(url);
+    });
+  }, [buildServerConfigUrl, router]);
 
   const handleSidebarSettingsSectionNavigation = useCallback(
     (input: {
@@ -1889,9 +1929,7 @@ export function ServersWorkspace({
         return;
       }
 
-      setSelectedGuildIdForConfig(input.guildId);
-      setSelectedEditorTabForConfig(input.tab);
-      setSelectedSettingsSectionForConfig(input.settingsSection);
+      prefetchWorkspaceSections(input.guildId);
       navigateToUrl(
         buildServerConfigUrl(
           input.guildId,
@@ -1901,14 +1939,21 @@ export function ServersWorkspace({
         ),
         "replace",
       );
+      startOpenServerTransition(() => {
+        applySelectedServerRouteState(input.guildId, input.tab, input.settingsSection);
+        setErrorMessage(null);
+      });
     },
     [
+      applySelectedServerRouteState,
       buildServerConfigUrl,
       hasUnsavedSettingsChanges,
       isEditingServer,
       navigateToUrl,
+      prefetchWorkspaceSections,
       selectedEditorTabForConfig,
       selectedSettingsSectionForConfig,
+      startOpenServerTransition,
     ],
   );
 
@@ -2012,11 +2057,6 @@ export function ServersWorkspace({
     void handleCopyGuildId(guildId);
     setOpenCardMenuGuildId(null);
   }, [handleCopyGuildId]);
-
-  const handleCardMenuDeactivate = useCallback(() => {
-    setOpenCardMenuGuildId(null);
-    setErrorMessage("Opcao de desativacao sera liberada em breve.");
-  }, []);
 
   const resetCreateTeamForm = useCallback(() => {
     setCreateTeamStep("name");
@@ -2194,17 +2234,17 @@ export function ServersWorkspace({
       return;
     }
 
-    void prefetchServerDashboardSettings(guildId);
+    prefetchWorkspaceSections(guildId);
+    navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
     startOpenServerTransition(() => {
-      setSelectedGuildIdForConfig(guildId);
-      setSelectedEditorTabForConfig(tab);
-      setSelectedSettingsSectionForConfig(nextSettingsSection);
+      applySelectedServerRouteState(guildId, tab, nextSettingsSection);
       setErrorMessage(null);
-      navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
     });
   }, [
+    applySelectedServerRouteState,
     buildServerConfigUrl,
     navigateToUrl,
+    prefetchWorkspaceSections,
     selectedEditorTabForConfig,
     selectedGuildIdForConfig,
     selectedSettingsSectionForConfig,
@@ -2212,9 +2252,21 @@ export function ServersWorkspace({
   ]);
 
   const prefetchServerConfig = useCallback((guildId: string, tab: ServerEditorTab = "settings") => {
-    void prefetchServerDashboardSettings(guildId);
+    prefetchWorkspaceSections(guildId);
     router.prefetch(buildServerConfigUrl(guildId, tab));
-  }, [buildServerConfigUrl, router]);
+  }, [buildServerConfigUrl, prefetchWorkspaceSections, router]);
+
+  useEffect(() => {
+    if (!selectedGuildIdForConfig) return;
+
+    const timeoutId = window.setTimeout(() => {
+      prefetchWorkspaceSections(selectedGuildIdForConfig);
+    }, 100);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [prefetchWorkspaceSections, selectedGuildIdForConfig]);
 
   const selectedServer = useMemo(
     () => servers.find((server) => server.guildId === selectedGuildIdForConfig) || null,
@@ -2537,17 +2589,14 @@ export function ServersWorkspace({
                   const isActive = !isEditingServer;
 
                   return (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={() => {
-                        setSelectedGuildIdForConfig(null);
-                        setSelectedEditorTabForConfig("settings");
-                        setSelectedSettingsSectionForConfig("overview");
-                        navigateToUrl("/servers/", "push");
-                      }}
-                      className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
-                        isActive
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => {
+                          openProjectsOverview("push");
+                        }}
+                        className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                          isActive
                           ? "bg-[#1E1E1E] text-[#F0F0F0]"
                           : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
                       }`}
@@ -2602,13 +2651,29 @@ export function ServersWorkspace({
                             isEditingServer,
                         );
 
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => {
-                            if (isDisabled || !selectedServer || !item.tab) return;
-                            handleSidebarSettingsSectionNavigation({
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onMouseEnter={() => {
+                              if (!isDisabled || selectedServer) {
+                                const guildId = selectedServer?.guildId;
+                                if (guildId && item.tab) {
+                                  prefetchWorkspaceSections(guildId);
+                                }
+                              }
+                            }}
+                            onFocus={() => {
+                              if (!isDisabled || selectedServer) {
+                                const guildId = selectedServer?.guildId;
+                                if (guildId && item.tab) {
+                                  prefetchWorkspaceSections(guildId);
+                                }
+                              }
+                            }}
+                            onClick={() => {
+                              if (isDisabled || !selectedServer || !item.tab) return;
+                              handleSidebarSettingsSectionNavigation({
                               guildId: selectedServer.guildId,
                               tab: item.tab,
                               settingsSection: item.settingsSection || "overview",
@@ -2677,13 +2742,29 @@ export function ServersWorkspace({
                             isEditingServer,
                         );
 
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => {
-                            if (isDisabled || !selectedServer || !item.tab) return;
-                            handleSidebarSettingsSectionNavigation({
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onMouseEnter={() => {
+                              if (!isDisabled || selectedServer) {
+                                const guildId = selectedServer?.guildId;
+                                if (guildId && item.tab) {
+                                  prefetchWorkspaceSections(guildId);
+                                }
+                              }
+                            }}
+                            onFocus={() => {
+                              if (!isDisabled || selectedServer) {
+                                const guildId = selectedServer?.guildId;
+                                if (guildId && item.tab) {
+                                  prefetchWorkspaceSections(guildId);
+                                }
+                              }
+                            }}
+                            onClick={() => {
+                              if (isDisabled || !selectedServer || !item.tab) return;
+                              handleSidebarSettingsSectionNavigation({
                               guildId: selectedServer.guildId,
                               tab: item.tab,
                               settingsSection: item.settingsSection || "overview",
@@ -2752,13 +2833,29 @@ export function ServersWorkspace({
                             isEditingServer,
                         );
 
-                      return (
-                        <button
-                          key={item.label}
-                          type="button"
-                          onClick={() => {
-                            if (isDisabled || !selectedServer || !item.tab) return;
-                            handleSidebarSettingsSectionNavigation({
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onMouseEnter={() => {
+                              if (!isDisabled || selectedServer) {
+                                const guildId = selectedServer?.guildId;
+                                if (guildId && item.tab) {
+                                  prefetchWorkspaceSections(guildId);
+                                }
+                              }
+                            }}
+                            onFocus={() => {
+                              if (!isDisabled || selectedServer) {
+                                const guildId = selectedServer?.guildId;
+                                if (guildId && item.tab) {
+                                  prefetchWorkspaceSections(guildId);
+                                }
+                              }
+                            }}
+                            onClick={() => {
+                              if (isDisabled || !selectedServer || !item.tab) return;
+                              handleSidebarSettingsSectionNavigation({
                               guildId: selectedServer.guildId,
                               tab: item.tab,
                               settingsSection: item.settingsSection || "overview",
@@ -3133,10 +3230,7 @@ export function ServersWorkspace({
                       onPermissionsChange={setCurrentDashboardPermissions}
                       navigationBlockSignal={navigationBlockSignal}
                       onClose={() => {
-                        setSelectedGuildIdForConfig(null);
-                        setSelectedEditorTabForConfig("settings");
-                        setSelectedSettingsSectionForConfig("overview");
-                        navigateToUrl("/servers/", "push");
+                        openProjectsOverview("push");
                       }}
                     />
                   </div>
@@ -3155,10 +3249,7 @@ export function ServersWorkspace({
                         <div className="py-[60px]">
                           <PermissionDeniedState 
                             onAction={() => {
-                              setSelectedGuildIdForConfig(null);
-                              setSelectedEditorTabForConfig("settings");
-                              setSelectedSettingsSectionForConfig("overview");
-                              navigateToUrl("/servers/", "replace");
+                              openProjectsOverview("replace");
                             }}
                           />
                         </div>
@@ -3186,10 +3277,7 @@ export function ServersWorkspace({
                             <button
                               type="button"
                               onClick={() => {
-                                setSelectedGuildIdForConfig(null);
-                                setSelectedEditorTabForConfig("settings");
-                                setSelectedSettingsSectionForConfig("overview");
-                                navigateToUrl("/servers/", "replace");
+                                openProjectsOverview("replace");
                               }}
                               className="inline-flex h-[46px] items-center justify-center rounded-[12px] border border-[#181818] bg-[#101010] px-6 text-[15px] font-medium text-[#B7B7B7] transition-colors hover:border-[#222222] hover:bg-[#141414] hover:text-[#E5E5E5]"
                             >
@@ -3245,7 +3333,6 @@ export function ServersWorkspace({
                                 setOpenCardMenuGuildId((current) => current === guildId ? null : guildId);
                               }}
                               onCopyFromMenu={handleCardMenuCopyId}
-                              onDeactivate={handleCardMenuDeactivate}
                             />
                           ))}
                         </div>
@@ -3256,7 +3343,7 @@ export function ServersWorkspace({
                   ) : (
                     <div className={`${shellClass} ${workspacePaneRevealClass} overflow-visible`}>
                       <div className="border-b border-[#141414] px-[18px] py-[18px]"><div className="flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">Projetos</p><h2 className="mt-[10px] text-[26px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">{selectedTeam ? `Servidores da equipe ${selectedTeam.name}` : "Todos os servidores"}</h2></div><p className="text-[13px] leading-[1.5] text-[#6F6F6F]">{filteredServers.length} resultado(s) exibidos de {activeTeamServerCount} servidor(es).</p></div></div>
-                      {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} onDeactivate={handleCardMenuDeactivate} />)}</div> : <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{selectedTeam ? "Nenhum servidor vinculado ou encontrado para essa equipe." : "Nenhum servidor encontrado para esse filtro."}</div>}
+                      {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} />)}</div> : <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{selectedTeam ? "Nenhum servidor vinculado ou encontrado para essa equipe." : "Nenhum servidor encontrado para esse filtro."}</div>}
                     </div>
                   )}
                 </LandingReveal>

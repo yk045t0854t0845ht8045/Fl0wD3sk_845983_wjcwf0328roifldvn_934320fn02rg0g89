@@ -46,7 +46,7 @@ type TabRendererProps = {
   [key: string]: unknown;
 };
 
-const TAB_COMPONENTS: Record<string, ComponentType<any>> = {
+const TAB_COMPONENTS: Record<string, ComponentType<Record<string, unknown>>> = {
   plans: dynamic(() => import("@/components/account/tabs/PlansTab").then((m) => ({ default: m.PlansTab })), { ssr: false }),
   payment_methods: dynamic(() => import("@/components/account/tabs/PaymentMethodsTab").then((m) => ({ default: m.PaymentMethodsTab })), { ssr: false }),
   payment_history: dynamic(() => import("@/components/account/tabs/PaymentHistoryTab").then((m) => ({ default: m.PaymentHistoryTab })), { ssr: false }),
@@ -122,21 +122,46 @@ function OverviewContent({
   avatarUrl?: string | null;
   initialSummary?: AccountSummaryData | null;
 }) {
-  const { data, error, isLoading } = useSWR<AccountSummaryResponse>(
+  const hasInitialSummary = Boolean(initialSummary);
+  const { data, isLoading } = useSWR<AccountSummaryResponse>(
     "/api/auth/me/account/summary",
     async (url) => {
-      const response = await fetch(url);
-      if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        throw new Error(errorPayload.message || "Falha na requisicao");
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          return {
+            ok: false,
+            summary: null,
+            message:
+              typeof payload.message === "string"
+                ? payload.message
+                : "Falha ao atualizar o resumo da conta.",
+          } satisfies AccountSummaryResponse;
+        }
+
+        return {
+          ok: payload?.ok !== false,
+          summary: payload?.summary ?? null,
+          message:
+            typeof payload?.message === "string" ? payload.message : undefined,
+        } satisfies AccountSummaryResponse;
+      } catch {
+        return {
+          ok: false,
+          summary: null,
+          message: "Nao foi possivel atualizar o resumo da conta agora.",
+        } satisfies AccountSummaryResponse;
       }
-      return (await response.json()) as AccountSummaryResponse;
     },
     {
-      fallbackData: initialSummary ? { ok: true, summary: initialSummary } : undefined,
+      fallbackData: hasInitialSummary ? { ok: true, summary: initialSummary } : undefined,
+      revalidateOnMount: !hasInitialSummary,
+      revalidateIfStale: !hasInitialSummary,
       revalidateOnFocus: false,
-      shouldRetryOnError: true,
-      errorRetryCount: 3,
+      shouldRetryOnError: false,
+      errorRetryCount: 0,
     },
   );
 
@@ -144,11 +169,9 @@ function OverviewContent({
   const onNavigate = (tab: AccountTab) =>
     router.push(tab === "overview" ? "/account" : `/account/${tab}`);
 
-  const summary = data?.ok ? data.summary ?? null : null;
-
-  if (error) {
-    console.error("[TabRegistry] SWR Error:", error);
-  }
+  const summary = data?.ok ? data.summary ?? null : initialSummary ?? null;
+  const summaryWarning =
+    data && !data.ok ? data.message || "Nao foi possivel atualizar o resumo da conta." : null;
 
   if (isLoading) {
     return (
@@ -178,6 +201,12 @@ function OverviewContent({
 
   return (
     <div className="space-y-[24px]">
+      {summaryWarning && !summary ? (
+        <div className="rounded-[18px] border border-[rgba(219,70,70,0.22)] bg-[rgba(42,12,12,0.82)] px-[18px] py-[14px]">
+          <p className="text-[14px] font-medium text-[#F1D3D3]">{summaryWarning}</p>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-[18px] rounded-[20px] border border-[#141414] bg-[#0A0A0A] px-[22px] py-[20px] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-[18px]">
           {avatarUrl ? (

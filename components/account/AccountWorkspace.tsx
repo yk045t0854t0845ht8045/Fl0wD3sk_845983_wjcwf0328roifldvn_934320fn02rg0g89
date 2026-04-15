@@ -1,12 +1,12 @@
 "use client";
 
-import { useRef, useState, useEffect, type ReactNode } from "react";
+import { useCallback, useRef, useState, useEffect, useTransition } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BadgePercent,
   ChevronDown,
-  Coins,
   CreditCard,
   History,
   Key,
@@ -15,8 +15,6 @@ import {
   Search,
   Settings2,
   ShieldAlert,
-  Server,
-  Activity,
   Ticket,
   UserRound,
   Users,
@@ -32,6 +30,12 @@ import { useAccountStatus } from "@/hooks/useAccountData";
 import { type AccountTab, ACCOUNT_TABS, validateTab } from "@/lib/account/tabs";
 export { validateTab };
 export type { AccountTab };
+
+function normalizeComparablePath(value: string) {
+  if (!value) return "/";
+  if (value === "/") return value;
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
 
 type NavItem = {
   id: AccountTab;
@@ -117,7 +121,6 @@ type AccountWorkspaceProps = {
   displayName: string;
   username: string;
   avatarUrl: string | null;
-  initialTab?: AccountTab;
   children?: React.ReactNode;
 };
 
@@ -125,13 +128,14 @@ export function AccountWorkspace({
   displayName,
   username,
   avatarUrl,
-  initialTab = "overview",
   children,
 }: AccountWorkspaceProps) {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [pendingTab, setPendingTab] = useState<AccountTab | null>(null);
+  const [, startSidebarNavigationTransition] = useTransition();
 
   const { statusData } = useAccountStatus();
   const isSuspended = (statusData?.statusLevel ?? 0) >= 4;
@@ -148,18 +152,44 @@ export function AccountWorkspace({
   const activeTab: AccountTab = (lastSegment && lastSegment !== "account") 
     ? validateTab(lastSegment) 
     : "overview";
+  const highlightedTab = pendingTab ?? activeTab;
 
-  function buildTabHref(tab: AccountTab) {
+  const buildTabHref = useCallback((tab: AccountTab) => {
     return tab === "overview" ? "/account" : `/account/${tab}`;
-  }
+  }, []);
 
-  function navigateToTab(tab: AccountTab) {
+  const prefetchTab = useCallback((tab: AccountTab) => {
+    router.prefetch(buildTabHref(tab));
+  }, [buildTabHref, router]);
+
+  const navigateToTab = useCallback((tab: AccountTab) => {
     setIsProfileMenuOpen(false);
     const href = buildTabHref(tab);
-    if (pathname !== href) {
-      router.push(href);
+    if (normalizeComparablePath(pathname) !== normalizeComparablePath(href)) {
+      setPendingTab(tab);
+      prefetchTab(tab);
+      startSidebarNavigationTransition(() => {
+        router.push(href, { scroll: false });
+      });
     }
-  }
+  }, [buildTabHref, pathname, prefetchTab, router, startSidebarNavigationTransition]);
+
+  useEffect(() => {
+    setPendingTab(null);
+  }, [pathname]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      ACCOUNT_TABS.forEach((tab) => {
+        prefetchTab(tab);
+      });
+      router.prefetch("/servers");
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [prefetchTab, router]);
 
   async function handleLogout() {
     if (isLoggingOut) return;
@@ -310,7 +340,7 @@ export function AccountWorkspace({
               {(!isCollapsed || normalizedSearch) && (
                 <div className="mt-[6px] space-y-[4px] pl-[12px]">
                   {visibleItems.map((item) => {
-                    const isActive = activeTab === item.id;
+                    const isActive = highlightedTab === item.id;
                     const Icon = item.icon;
                     const isDanger = item.id === "delete_account";
 
@@ -319,6 +349,8 @@ export function AccountWorkspace({
                         key={item.id}
                         type="button"
                         onClick={() => navigateToTab(item.id)}
+                        onMouseEnter={() => prefetchTab(item.id)}
+                        onFocus={() => prefetchTab(item.id)}
                         className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
                           isActive
                             ? isDanger
@@ -363,7 +395,14 @@ export function AccountWorkspace({
               <div className="space-y-[8px]">
                 <button
                   type="button"
-                  onClick={() => { setIsProfileMenuOpen(false); router.push("/servers"); }}
+                  onMouseEnter={() => router.prefetch("/servers")}
+                  onFocus={() => router.prefetch("/servers")}
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    startSidebarNavigationTransition(() => {
+                      router.push("/servers", { scroll: false });
+                    });
+                  }}
                   className="flex w-full items-center gap-[12px] rounded-[16px] border border-[#171717] bg-[#0D0D0D] px-[12px] py-[12px] text-left text-[#D8D8D8] transition-colors hover:border-[#222222] hover:bg-[#111111]"
                 >
                   <span className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[11px] border border-[#1A1A1A] bg-[#101010] text-[#CFCFCF]">
@@ -478,7 +517,7 @@ export function AccountWorkspace({
                       <p className="text-[15px] font-semibold text-[#DB4646]">Conta Suspensa</p>
                       <p className="mt-[4px] text-[13px] text-[#B06060] leading-[1.5]">
                         Sua conta está suspensa e o acesso às funcionalidades está limitado.{" "}
-                        <a href="/account/status" className="underline hover:text-[#DB4646]">Ver detalhes na aba Status</a>.
+                        <Link href="/account/status" className="underline hover:text-[#DB4646]">Ver detalhes na aba Status</Link>.
                       </p>
                     </div>
                   </div>
@@ -490,7 +529,7 @@ export function AccountWorkspace({
                       <p className="text-[15px] font-semibold text-[#E7A540]">Conta com Restrições</p>
                       <p className="mt-[4px] text-[13px] text-[#A08040] leading-[1.5]">
                         Sua conta possui violações ativas que podem afetar seus serviços.{" "}
-                        <a href="/account/status" className="underline hover:text-[#E7A540]">Ver na aba Status</a>.
+                        <Link href="/account/status" className="underline hover:text-[#E7A540]">Ver na aba Status</Link>.
                       </p>
                     </div>
                   </div>
