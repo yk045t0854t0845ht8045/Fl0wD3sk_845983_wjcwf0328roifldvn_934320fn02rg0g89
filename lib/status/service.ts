@@ -9,6 +9,14 @@ import {
   checkDiscordCdnStatus,
   stabilizeFlowAiStatusResponse,
   stabilizeStatusCheckResult,
+  emptyTaskStats,
+  type ApiStatusResponse,
+  type FlowAiStatusResponse,
+  type ScheduledTasksStatusResponse,
+  type DomainsStatusResponse,
+  type DiscordBotStatusResponse,
+  type SquareCloudStatusResponse,
+  type DiscordCdnStatusResponse,
 } from "./monitors";
 import { generateCriticalTeamNote, generateIncidentSummary } from "./intelligence";
 import type {
@@ -68,6 +76,8 @@ type MonitorSignal = {
   message: string | null;
   checkedAt: string | null;
   latencyMs: number | null;
+  ok?: boolean;
+  source?: string;
 };
 
 type TableProbeResult = {
@@ -520,7 +530,14 @@ export async function getSystemStatus() {
     }, 0);
 
     const isStale = Date.now() - lastUpdate > 120_000; // 2 minutes
-    let apiLive, flowAiLive, scheduledTasksLive, domainsLive, discordBotLive, squareCloudLive, discordCdnLive, internalSignals;
+    let apiLive: ApiStatusResponse, 
+        flowAiLive: FlowAiStatusResponse, 
+        scheduledTasksLive: ScheduledTasksStatusResponse, 
+        domainsLive: DomainsStatusResponse, 
+        discordBotLive: DiscordBotStatusResponse, 
+        squareCloudLive: SquareCloudStatusResponse, 
+        discordCdnLive: DiscordCdnStatusResponse, 
+        internalSignals: { payments: MonitorSignal; audit: MonitorSignal; discord: MonitorSignal };
 
     if (isStale) {
       [apiLive, flowAiLive, scheduledTasksLive, domainsLive, discordBotLive, squareCloudLive, discordCdnLive, internalSignals] = await Promise.all([
@@ -563,17 +580,29 @@ export async function getSystemStatus() {
     } else {
       // Use cached signals from DB for most requests to keep it fast
       const lastCheckIso = new Date(lastUpdate).toISOString();
-      apiLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso };
-      flowAiLive = { overall: { status: "operational", latencyMs: null, message: null }, checkedAt: lastCheckIso, integrations: {} as any, ok: true, upstream: {} as any };
-      scheduledTasksLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso };
-      domainsLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso };
-      discordBotLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso };
-      squareCloudLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso };
-      discordCdnLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso };
+      apiLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "api" };
+      flowAiLive = { 
+        overall: { status: "operational", latencyMs: null, message: null }, 
+        checkedAt: lastCheckIso, 
+        integrations: {
+          domainSuggestions: { status: "operational", message: null, latencyMs: null },
+          ticketAi: { status: "operational", message: null, latencyMs: null },
+          discordMessageAi: { status: "operational", message: null, latencyMs: null }
+        }, 
+        ok: true, 
+        upstream: {
+          openai: { status: "operational", latencyMs: null, message: null, baseUrl: "" }
+        } 
+      };
+      scheduledTasksLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, stats: emptyTaskStats(), ok: true, source: "scheduled_tasks" };
+      domainsLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "domains", circuitBreaker: { state: "closed", failures: 0, lastFailureTime: 0 } };
+      discordBotLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "discord", ready: true, wsStatus: 0, guildCount: 0, uptimeMs: 0, url: "" };
+      squareCloudLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "squarecloud" };
+      discordCdnLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "discord_cdn" };
       internalSignals = { 
-        payments: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null } as MonitorSignal,
-        audit: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null } as MonitorSignal,
-        discord: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null } as MonitorSignal
+        payments: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null, ok: true, source: "internal" },
+        audit: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null, ok: true, source: "internal" },
+        discord: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null, ok: true, source: "internal" }
       };
     }
     
@@ -684,6 +713,8 @@ export async function getSystemStatus() {
       internalSignals.payments,
     );
     const auditStable = stabilizeStatusCheckResult("audit", internalSignals.audit);
+    const squareStable = stabilizeStatusCheckResult("squarecloud", squareCloudLive);
+    const cdnStable = stabilizeStatusCheckResult("discord_cdn", discordCdnLive);
 
     const signals: Record<string, MonitorSignal> = {
       api: {
@@ -711,25 +742,25 @@ export async function getSystemStatus() {
         latencyMs: domainsStable.latencyMs,
       },
       discord: {
-        status: (discordBotLive as any).status,
-        message: (discordBotLive as any).message,
-        checkedAt: (discordBotLive as any).checkedAt,
-        latencyMs: (discordBotLive as any).latencyMs,
+        status: discordStable.status,
+        message: discordStable.message,
+        checkedAt: discordStable.checkedAt,
+        latencyMs: discordStable.latencyMs,
       },
       squarecloud: {
-        status: (squareCloudLive as any).status,
-        message: (squareCloudLive as any).message,
-        checkedAt: (squareCloudLive as any).checkedAt,
-        latencyMs: (squareCloudLive as any).latencyMs,
+        status: squareStable.status,
+        message: squareStable.message,
+        checkedAt: squareStable.checkedAt,
+        latencyMs: squareStable.latencyMs,
       },
       discord_cdn: {
-        status: (discordCdnLive as any).status,
-        message: (discordCdnLive as any).message,
-        checkedAt: (discordCdnLive as any).checkedAt,
-        latencyMs: (discordCdnLive as any).latencyMs,
+        status: cdnStable.status,
+        message: cdnStable.message,
+        checkedAt: cdnStable.checkedAt,
+        latencyMs: cdnStable.latencyMs,
       },
-      payments: internalSignals.payments,
-      audit: internalSignals.audit,
+      payments: paymentsStable,
+      audit: auditStable,
     };
 
     const historyByComponent = new Map<string, HistoryRow[]>();
@@ -824,9 +855,9 @@ export async function getSystemStatus() {
         scheduledTasks: scheduledStable,
         domains: domainsStable,
         discordBot: discordStable,
-        squareCloud: (signals as any).squarecloud || null,
-        discordCdn: (signals as any).discord_cdn || null,
-        audit: (signals as any).audit || null,
+        squareCloud: squareStable,
+        discordCdn: cdnStable,
+        audit: auditStable,
       },
     };
   } catch (error: unknown) {

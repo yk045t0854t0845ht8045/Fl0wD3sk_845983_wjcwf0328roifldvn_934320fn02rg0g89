@@ -138,7 +138,7 @@ function stabilizeSystemStatus(
 }
 
 export function stabilizeStatusCheckResult<
-  T extends { status: SystemStatus; message: string | null; latencyMs: number | null; ok?: boolean },
+  T extends { status: SystemStatus; message: string | null; latencyMs: number | null; ok?: boolean; checkedAt?: string | null; [key: string]: any },
 >(sourceKey: string, payload: T): T {
   const stabilizedStatus = stabilizeSystemStatus(
     sourceKey,
@@ -191,7 +191,7 @@ function getOpenAiBaseUrl() {
   );
 }
 
-function emptyTaskStats() {
+export function emptyTaskStats() {
   return {
     pendingTasks: 0,
     overdueTasks: 0,
