@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState, useEffect } from "react";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 
 type FooterLinkItem = {
@@ -21,6 +22,7 @@ const FOOTER_GROUPS: FooterGroup[] = [
   {
     title: "Produto",
     links: [
+      { label: "Dominios", href: "/domains" },
       { label: "Planos", href: "/#plans" },
       { label: "Solucoes", href: "/#solutions" },
       { label: "Servicos", href: "/#services" },
@@ -92,10 +94,10 @@ const FOOTER_GROUPS: FooterGroup[] = [
     title: "Empresa",
     links: [
       { label: "Sobre", href: "/#about" },
+      { label: "Afiliados", href: "/affiliates" },
       { label: "Clientes", href: "#" },
-      { label: "Parcerias", href: "#" },
       { label: "Roadmap", href: "#" },
-      { label: "Status", href: "#" },
+      { label: "Status", href: "/status" },
     ],
   },
   {
@@ -168,6 +170,52 @@ export function LandingFooter({
   baseDelay?: number; 
   bottomDelay?: number; 
 }) {
+  const [overallStatus, setOverallStatus] = useState<string>("operational");
+  const [statusMessage, setStatusMessage] = useState<string>("Todos sistemas normais");
+
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchStatus() {
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        if (isMounted && data.ok) {
+          setOverallStatus(data.overallStatus);
+          if (data.overallStatus === "operational") {
+            setStatusMessage("Todos sistemas normais");
+          } else if (data.overallStatus === "major_outage") {
+            setStatusMessage("Instabilidade detectada");
+          } else {
+            setStatusMessage("Sistemas com oscilação");
+          }
+        }
+      } catch (e) {
+        // Fallback silently
+      }
+    }
+    
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 60000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const getStatusColor = () => {
+    switch (overallStatus) {
+      case "operational": return "#0062FF";
+      case "degraded_performance":
+      case "partial_outage": return "#EAB308";
+      case "major_outage": return "#EF4444";
+      default: return "#0062FF";
+    }
+  };
+
+  const statusColor = getStatusColor();
+
   return (
     <footer className="relative overflow-hidden border-t border-[rgba(255,255,255,0.03)]">
       <div className="pointer-events-none absolute inset-x-0 top-0 left-1/2 h-[2px] w-screen -translate-x-1/2 bg-[linear-gradient(90deg,rgba(14,14,14,0.2)_0%,rgba(14,14,14,1)_50%,rgba(14,14,14,0.2)_100%)]" />
@@ -195,12 +243,21 @@ export function LandingFooter({
 
         <LandingReveal delay={bottomDelay}>
           <div className="mt-[30px] flex flex-col gap-[18px] border-t border-[rgba(255,255,255,0.03)] pt-[18px] md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center gap-[10px]">
-              <span className="h-[10px] w-[10px] rounded-[2px] bg-[#0062FF]" />
-              <p className="text-[13px] leading-none font-semibold tracking-[0.02em] text-[#0062FF]">
-                Todos sistemas normais
+            <Link 
+              href="/status" 
+              className="group flex items-center gap-[10px] transition-opacity hover:opacity-80"
+            >
+              <span 
+                className="h-[10px] w-[10px] rounded-[2px] transition-colors" 
+                style={{ backgroundColor: statusColor }}
+              />
+              <p 
+                className="text-[13px] leading-none font-semibold tracking-[0.02em] transition-colors"
+                style={{ color: statusColor }}
+              >
+                {statusMessage}
               </p>
-            </div>
+            </Link>
 
             <div className="flex flex-wrap items-center gap-x-[18px] gap-y-[10px]">
               <FooterLink item={{ label: "Discord", href: DISCORD_HREF }} />

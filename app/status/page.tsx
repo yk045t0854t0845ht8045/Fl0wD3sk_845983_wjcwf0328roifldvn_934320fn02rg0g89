@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import StatusPageClient from "@/components/status/StatusPageClient";
+import { LandingFooter } from "@/components/landing/LandingFooter";
 
 export const metadata: Metadata = {
   title: "Status - Flowdesk",
@@ -7,5 +8,10 @@ export const metadata: Metadata = {
 };
 
 export default function StatusPage() {
-  return <StatusPageClient />;
+  return (
+    <>
+      <StatusPageClient />
+      <LandingFooter baseDelay={0} bottomDelay={0} />
+    </>
+  );
 }

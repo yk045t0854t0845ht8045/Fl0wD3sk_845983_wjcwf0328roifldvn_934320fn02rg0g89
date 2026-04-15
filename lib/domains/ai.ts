@@ -1,8 +1,6 @@
 import { searchDomains } from "@/lib/openprovider/domains";
 import type { DomainSearchResponse } from "@/lib/openprovider/types";
-import { getServerEnv, getServerEnvList } from "@/lib/serverEnv";
-
-const unavailableModelCache = new Map<string, number>();
+import { runFlowAiJson } from "@/lib/flowai/service";
 
 type OpenAiMessage = {
   role: "system" | "user" | "assistant";
@@ -80,98 +78,18 @@ function normalizeIdeaName(value: string) {
     .slice(0, 28);
 }
 
-function looksLikeModelAccessError(status: number, rawText: string) {
-  const content = rawText.toLowerCase();
-  return (
-    status === 403 ||
-    content.includes("model_not_found") ||
-    content.includes("does not have access to model")
-  );
-}
-
-function buildModelCandidates() {
-  return Array.from(
-    new Set(
-      [
-        getServerEnv("OPENAI_MODEL"),
-        ...getServerEnvList("OPENAI_MODEL_FALLBACKS"),
-        "gpt-4o-mini",
-      ].filter((value): value is string => Boolean(value)),
-    ),
-  );
-}
-
 async function callOpenAi(messages: OpenAiMessage[], userId: string) {
-  const apiKey = getServerEnv("OPENAI_API_KEY");
-  const baseUrl = getServerEnv("OPENAI_BASE_URL") || "https://api.openai.com/v1";
+  const result = await runFlowAiJson<DomainAiModelPayload>({
+    taskKey: "domain_suggestions",
+    messages,
+    userId,
+    temperature: 0.7,
+    maxTokens: 650,
+    timeoutMs: 14_000,
+    recordTelemetry: true,
+  });
 
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY nao configurada para a IA de dominios.");
-  }
-
-  let lastError: Error | null = null;
-
-  for (const model of buildModelCandidates()) {
-    const blockedUntil = unavailableModelCache.get(model) || 0;
-    if (blockedUntil > nowMs()) {
-      continue;
-    }
-
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.7,
-        max_tokens: 650,
-        response_format: { type: "json_object" },
-        user: String(userId || "domain-ai").slice(0, 64),
-      }),
-    });
-
-    const rawText = await response.text().catch(() => "");
-    if (!response.ok) {
-      lastError = new Error(
-        `Falha ao chamar OpenAI com ${model}: ${response.status} ${response.statusText} ${rawText}`,
-      );
-
-      if (looksLikeModelAccessError(response.status, rawText)) {
-        unavailableModelCache.set(model, nowMs() + 1000 * 60 * 30);
-        continue;
-      }
-
-      if (response.status === 429 || response.status >= 500) {
-        continue;
-      }
-
-      throw lastError;
-    }
-
-    let payload: { choices?: Array<{ message?: { content?: string } }> } | null = null;
-    try {
-      payload = JSON.parse(rawText);
-    } catch (error) {
-      lastError = new Error(
-        `Resposta invalida da OpenAI com ${model}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      continue;
-    }
-
-    const content = normalizeText(payload?.choices?.[0]?.message?.content || "", 6000);
-    if (!content) {
-      lastError = new Error(`Resposta vazia da OpenAI com ${model}.`);
-      continue;
-    }
-
-    unavailableModelCache.delete(model);
-    return content;
-  }
-
-  throw lastError || new Error("Nenhum modelo disponivel respondeu na IA de dominios.");
+  return JSON.stringify(result.object || {});
 }
 
 function buildDirectCandidate(prompt: string) {

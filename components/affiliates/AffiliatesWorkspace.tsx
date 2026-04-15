@@ -36,6 +36,7 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { AFFILIATE_LEVELS, formatCurrency, getLevelConfig } from "@/lib/affiliates/affiliateLevels";
 import type {
   AffiliateLevel,
+  AffiliateAIInsightCard,
   AffiliateProfile,
   AffiliateStats,
   AffiliateLink,
@@ -77,6 +78,7 @@ function useAffiliateData() {
   const [data, setData] = useState<{
     profile: AffiliateProfile | null;
     stats: AffiliateStats | null;
+    insight: AffiliateAIInsightCard | null;
     settings: any | null;
     links: AffiliateLink[];
     conversions: AffiliateCommission[];
@@ -85,6 +87,7 @@ function useAffiliateData() {
   }>({
     profile: null,
     stats: null,
+    insight: null,
     settings: null,
     links: [],
     conversions: [],
@@ -101,6 +104,7 @@ function useAffiliateData() {
         setData({
           profile: json.profile,
           stats: json.stats,
+          insight: json.insight || null,
           settings: json.settings,
           links: json.links || [],
           conversions: json.conversions || [],
@@ -465,12 +469,34 @@ function CopyButton({ text, label = "Copiar" }: { text: string; label?: string }
 function OverviewTab({
   profile,
   stats,
+  insight,
 }: {
   profile: AffiliateProfile | null;
   stats: AffiliateStats | null;
+  insight: AffiliateAIInsightCard | null;
 }) {
   const level = profile?.level ?? "bronze";
   const config = getLevelConfig(level);
+  const insightType = insight?.insight.type ?? "tip";
+  const insightConfidence = Math.round((insight?.insight.confidence ?? 0.5) * 100);
+  const insightTone =
+    insightType === "warning"
+      ? {
+          border: "rgba(255,255,255,0.1)",
+          badge: "border-[#252525] bg-[#101010] text-[#D8D8D8]",
+          eyebrow: "Atenção da IA",
+        }
+      : insightType === "opportunity"
+        ? {
+            border: "rgba(255,255,255,0.14)",
+            badge: "border-[#2A2A2A] bg-[#111111] text-[#FFFFFF]",
+            eyebrow: "Oportunidade com IA",
+          }
+        : {
+            border: "rgba(255,255,255,0.08)",
+            badge: "border-[#1F1F1F] bg-[#0C0C0C] text-[#D0D0D0]",
+            eyebrow: "Insight com IA",
+          };
 
   return (
     <div className="space-y-[20px]">
@@ -579,16 +605,33 @@ function OverviewTab({
       )}
 
       {/* AI Insight placeholder */}
-      <div className="rounded-[20px] border border-[#0E0E0E] bg-[#070707] p-[20px]">
-        <div className="flex items-center gap-[8px]">
-          <Sparkles className="h-[16px] w-[16px] text-[#FFFFFF]" strokeWidth={1.8} />
-          <p className="text-[12px] uppercase tracking-[0.16em] text-[#555]">Insight com IA</p>
+      <div
+        className="rounded-[20px] border bg-[#070707] p-[20px]"
+        style={{ borderColor: insightTone.border }}
+      >
+        <div className="flex items-center justify-between gap-[12px]">
+          <div className="flex items-center gap-[8px]">
+            <Sparkles className="h-[16px] w-[16px] text-[#FFFFFF]" strokeWidth={1.8} />
+            <p className="text-[12px] uppercase tracking-[0.16em] text-[#555]">
+              {insightTone.eyebrow}
+            </p>
+          </div>
+          <span
+            className={`inline-flex rounded-full border px-[9px] py-[4px] text-[10px] font-semibold uppercase tracking-[0.08em] ${insightTone.badge}`}
+          >
+            {insightConfidence}% conf.
+          </span>
         </div>
-        <p className="mt-[12px] text-[14px] leading-[1.65] text-[#909090]">
-          Seus melhores acessos acontecem entre <strong className="text-[#D8D8D8]">19h e 22h</strong>. 
-          Considere agendar posts e stories nesse horário para aumentar sua taxa de conversão.
+        <p className="mt-[12px] text-[16px] font-medium tracking-[-0.03em] text-[#E8E8E8]">
+          {insight?.insight.title || "Seu painel está aprendendo com seus dados"}
         </p>
-        <p className="mt-[6px] text-[12px] text-[#555]">Baseado nos últimos 30 dias</p>
+        <p className="mt-[8px] text-[14px] leading-[1.65] text-[#909090]">
+          {insight?.insight.body ||
+            "Assim que houver mais dados reais de performance, a IA vai destacar o melhor próximo passo para você converter mais."}
+        </p>
+        <p className="mt-[8px] text-[12px] text-[#555]">
+          {insight?.periodLabel || "Baseado nos últimos 30 dias"}
+        </p>
       </div>
     </div>
   );
@@ -1235,7 +1278,7 @@ export function AffiliatesWorkspace({
   const [sidebarSearch, setSidebarSearch] = useState("");
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const { profile, stats, links, conversions, withdrawals, ranking, settings, loading, reload } = useAffiliateData();
+  const { profile, stats, insight, links, conversions, withdrawals, ranking, settings, loading, reload } = useAffiliateData();
 
   function navigateToTab(tab: AffiliateTab) {
     setActiveTab(tab);
@@ -1430,7 +1473,7 @@ export function AffiliatesWorkspace({
                    <TabSkeleton tab={activeTab} />
                 ) : (
                   <>
-                    {activeTab === "overview" && <OverviewTab profile={profile} stats={stats} />}
+                    {activeTab === "overview" && <OverviewTab profile={profile} stats={stats} insight={insight} />}
                     {activeTab === "links" && <LinksTab links={links} reload={reload} />}
                     {activeTab === "ranking" && <RankingTab ranking={ranking} />}
                     {activeTab === "notifications" && <NotificationsTab settings={settings} reload={reload} />}

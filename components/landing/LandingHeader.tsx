@@ -4,6 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
@@ -491,6 +493,12 @@ function HeaderAccountButton({
 }
 
 export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps = {}) {
+  const pathname = usePathname();
+  const isAffiliatesPage = pathname ? pathname.startsWith("/affiliates") : false;
+  const dashboardHref = isAffiliatesPage ? "/affiliates/dashboard" : "/servers";
+  const loginHref = isAffiliatesPage ? "/login?next=/affiliates/dashboard" : "/login";
+
+
   const documentationHref =
     process.env.NEXT_PUBLIC_DOCUMENTATION_URL || "/terms";
   const headerShellRef = useRef<HTMLDivElement | null>(null);
@@ -1309,7 +1317,7 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
                   {authenticatedUser ? (
                       <LandingReveal delay={570}>
                       <LandingActionButton
-                        href="/servers"
+                        href={dashboardHref}
                         variant="light"
                         className="h-[40px] px-4 text-[14px] sm:h-[46px] sm:px-6 sm:text-[16px]"
                       >
@@ -1319,12 +1327,12 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
                   ) : (
                     <>
                       <LandingReveal delay={570}>
-                        <LandingActionButton href="/login" variant="dark">
+                        <LandingActionButton href={loginHref} variant="dark">
                           Login
                         </LandingActionButton>
                       </LandingReveal>
                       <LandingReveal delay={640}>
-                        <LandingActionButton href="/login" variant="light">
+                        <LandingActionButton href={loginHref} variant="light">
                           Sign Up
                         </LandingActionButton>
                       </LandingReveal>
@@ -1345,7 +1353,7 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
                 <LandingReveal delay={500}>
                   {authenticatedUser ? (
                     <LandingActionButton
-                      href="/servers"
+                      href={dashboardHref}
                       variant="light"
                       className="h-[40px] px-4 text-[14px] sm:h-[46px] sm:px-6 sm:text-[16px]"
                     >
@@ -1353,7 +1361,7 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
                     </LandingActionButton>
                   ) : (
                     <LandingActionButton
-                      href="/login"
+                      href={loginHref}
                       variant="light"
                       className="h-[40px] px-4 text-[14px] sm:h-[46px] sm:px-6 sm:text-[16px]"
                     >
@@ -1450,7 +1458,7 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
               <LandingReveal delay={440}>
                 {authenticatedUser ? (
                   <LandingActionButton
-                    href="/servers"
+                    href={dashboardHref}
                     onClick={closeMenu}
                     variant="light"
                     className="h-[52px] w-full rounded-[12px] px-6 text-[18px]"
@@ -1459,7 +1467,7 @@ export function LandingHeader({ authenticatedUser = null }: LandingHeaderProps =
                   </LandingActionButton>
                 ) : (
                   <LandingActionButton
-                    href="/login"
+                    href={loginHref}
                     onClick={closeMenu}
                     variant="light"
                     className="h-[52px] w-full rounded-[12px] px-6 text-[18px]"

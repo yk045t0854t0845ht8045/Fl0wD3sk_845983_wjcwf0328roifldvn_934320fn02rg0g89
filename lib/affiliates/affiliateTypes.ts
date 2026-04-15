@@ -137,6 +137,13 @@ export type AffiliateAIInsight = {
 
 // ─── API Responses ────────────────────────────────────────────────────────────
 
+export type AffiliateAIInsightCard = {
+  insight: AffiliateAIInsight;
+  periodLabel: string;
+  generatedAt: string;
+  source: "ai" | "fallback";
+};
+
 export type AffiliateProfileApiResponse = {
   ok: boolean;
   message?: string;

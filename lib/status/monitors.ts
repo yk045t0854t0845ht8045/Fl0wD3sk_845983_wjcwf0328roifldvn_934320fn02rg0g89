@@ -1,5 +1,9 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { openProviderClient } from "@/lib/openprovider/client";
+import {
+  runFlowAiHealthProbe,
+  type FlowAiHealthResponse,
+} from "@/lib/flowai/service";
 import type { StatusCheckResult, SystemStatus } from "./types";
 import { getWorstSystemStatus } from "./types";
 
@@ -14,40 +18,7 @@ export type ScheduledTasksStatusResponse = StatusCheckResult & {
   };
 };
 
-export type FlowAiStatusResponse = {
-  ok: boolean;
-  checkedAt: string;
-  overall: {
-    status: SystemStatus;
-    latencyMs: number | null;
-    message: string | null;
-  };
-  upstream: {
-    openai: {
-      status: SystemStatus;
-      latencyMs: number | null;
-      message: string | null;
-      baseUrl: string;
-    };
-  };
-  integrations: {
-    domainSuggestions: {
-      status: SystemStatus;
-      message: string | null;
-      latencyMs: number | null;
-    };
-    ticketAi: {
-      status: SystemStatus;
-      message: string | null;
-      latencyMs: number | null;
-    };
-    discordMessageAi: {
-      status: SystemStatus;
-      message: string | null;
-      latencyMs: number | null;
-    };
-  };
-};
+export type FlowAiStatusResponse = FlowAiHealthResponse;
 
 export type DomainsStatusResponse = StatusCheckResult & {
   circuitBreaker: {
@@ -452,76 +423,7 @@ async function checkOpenAiCompletion(
 }
 
 export async function checkFlowAiStatus(): Promise<FlowAiStatusResponse> {
-  const checkedAt = new Date().toISOString();
-
-  const [openai, domains, tickets, discord] = await Promise.all([
-    checkOpenAiUpstream(),
-    checkOpenAiCompletion("domains"),
-    checkOpenAiCompletion("tickets"),
-    checkOpenAiCompletion("discord"),
-  ]);
-
-  const overallStatus = getWorstSystemStatus([
-    openai.status,
-    domains.status,
-    tickets.status,
-    discord.status,
-  ]);
-
-  const overallLatencyCandidates = [
-    openai.latencyMs,
-    domains.latencyMs,
-    tickets.latencyMs,
-    discord.latencyMs,
-  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-
-  return {
-    ok: true,
-    checkedAt,
-    overall: {
-      status: overallStatus,
-      latencyMs: overallLatencyCandidates.length
-        ? Math.max(...overallLatencyCandidates)
-        : null,
-      message:
-        overallStatus === "operational"
-          ? null
-          : openai.message ||
-            domains.message ||
-            tickets.message ||
-            discord.message ||
-            "Instabilidade detectada no Flow AI.",
-    },
-    upstream: {
-      openai,
-    },
-    integrations: {
-      domainSuggestions: {
-        status: domains.status,
-        latencyMs: domains.latencyMs,
-        message:
-          domains.status === "operational"
-            ? null
-            : domains.message || "Sugestao de dominios com IA instavel.",
-      },
-      ticketAi: {
-        status: tickets.status,
-        latencyMs: tickets.latencyMs,
-        message:
-          tickets.status === "operational"
-            ? null
-            : tickets.message || "IA de tickets instavel.",
-      },
-      discordMessageAi: {
-        status: discord.status,
-        latencyMs: discord.latencyMs,
-        message:
-          discord.status === "operational"
-            ? null
-            : discord.message || "IA de respostas no Discord instavel.",
-      },
-    },
-  };
+  return await runFlowAiHealthProbe();
 }
 
 export async function checkApiStatus(): Promise<ApiStatusResponse> {

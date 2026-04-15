@@ -1,3 +1,4 @@
+import { runFlowAiJson } from "@/lib/flowai/service";
 import type { ComponentStatus, StatusTeamNote } from "./types";
 
 type StatusNoteCache = {
@@ -7,25 +8,6 @@ type StatusNoteCache = {
 };
 
 let latestStatusNoteCache: StatusNoteCache | null = null;
-
-function getOpenAiApiKey() {
-  return process.env.OPENAI_API_KEY?.trim() || "";
-}
-
-function getOpenAiBaseUrl() {
-  return (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(
-    /\/$/,
-    "",
-  );
-}
-
-function getOpenAiModel() {
-  return (
-    process.env.OPENAI_STATUS_MODEL?.trim() ||
-    process.env.OPENAI_MODEL?.trim() ||
-    "gpt-4o-mini"
-  );
-}
 
 function buildFingerprint(criticalComponents: ComponentStatus[]) {
   return criticalComponents
@@ -60,14 +42,23 @@ function buildFallbackNote(criticalComponents: ComponentStatus[]): StatusTeamNot
   };
 }
 
-function extractJsonObject(content: string) {
-  const trimmed = content.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    return trimmed;
-  }
+function buildFallbackIncidentSummary(
+  day: string,
+  components: Array<{ name: string; status: string }>,
+) {
+  const dayLabel = new Date(`${day}T12:00:00Z`).toLocaleDateString("pt-BR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 
-  const match = trimmed.match(/\{[\s\S]*\}/);
-  return match ? match[0] : null;
+  return {
+    title: `Instabilidade detectada em ${components.map((component) => component.name).join(", ")}`,
+    summary: `Em ${dayLabel}, identificamos instabilidade em ${components.map((component) => component.name).join(", ")}. Nossa equipe monitorou e os servicos foram normalizados.`,
+    updateMessage:
+      "Incidente resolvido. A estabilidade dos sistemas foi confirmada pela nossa equipe de monitoramento.",
+  };
 }
 
 export async function generateCriticalTeamNote(
@@ -85,81 +76,45 @@ export async function generateCriticalTeamNote(
     return latestStatusNoteCache.note;
   }
 
-  const apiKey = getOpenAiApiKey();
-  if (!apiKey) {
-    latestStatusNoteCache = {
-      key: cacheKey,
-      expiresAt: now + 30_000,
-      note: fallbackNote,
-    };
-    return fallbackNote;
-  }
-
   try {
-    const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0.2,
-        max_tokens: 180,
-        messages: [
-          {
-            role: "system",
-            content:
-              "Voce escreve comunicados curtos para pagina de status. Responda somente JSON com as chaves title e description. O texto deve ser profissional, simples, sem exagero, sem culpar terceiros e sem prometer prazo.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify(
-              {
-                objective:
-                  "Gerar uma nota curta para falha critica na pagina de status, em portugues do Brasil simples.",
-                affectedComponents: criticalComponents.map((component) => ({
-                  name: component.name,
-                  status: component.status,
-                  latencyMs: component.latency_ms ?? null,
-                  detail: component.status_message || null,
-                })),
-                constraints: {
-                  titleMaxWords: 8,
-                  descriptionMaxWords: 38,
-                },
+    const result = await runFlowAiJson<{ title?: string; description?: string }>({
+      taskKey: "status_note",
+      temperature: 0.2,
+      maxTokens: 180,
+      cacheKey: `status-note:${cacheKey}`,
+      cacheTtlMs: 30_000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Voce escreve comunicados curtos para pagina de status. Responda somente JSON com as chaves title e description. O texto deve ser profissional, simples, sem exagero, sem culpar terceiros e sem prometer prazo.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              objective:
+                "Gerar uma nota curta para falha critica na pagina de status, em portugues do Brasil simples.",
+              affectedComponents: criticalComponents.map((component) => ({
+                name: component.name,
+                status: component.status,
+                latencyMs: component.latency_ms ?? null,
+                detail: component.status_message || null,
+              })),
+              constraints: {
+                titleMaxWords: 8,
+                descriptionMaxWords: 38,
               },
-              null,
-              2,
-            ),
-          },
-        ],
-      }),
-      cache: "no-store",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
     });
 
-    if (!response.ok) {
-      throw new Error(`OpenAI ${response.status}`);
-    }
-
-    const json = await response.json().catch(() => null);
-    const content =
-      json?.choices?.[0]?.message?.content && typeof json.choices[0].message.content === "string"
-        ? json.choices[0].message.content
-        : "";
-
-    const objectText = extractJsonObject(content);
-    if (!objectText) {
-      throw new Error("Resposta da IA sem JSON valido.");
-    }
-
-    const parsed = JSON.parse(objectText) as {
-      title?: string;
-      description?: string;
-    };
-
-    const title = (parsed.title || "").trim();
-    const description = (parsed.description || "").trim();
+    const title = String(result.object?.title || "").trim();
+    const description = String(result.object?.description || "").trim();
 
     if (!title || !description) {
       throw new Error("Resposta da IA incompleta.");
@@ -194,64 +149,97 @@ export async function generateIncidentSummary(
   day: string,
   components: Array<{ name: string; status: string }>,
 ): Promise<{ title: string; summary: string; updateMessage: string }> {
-  const apiKey = getOpenAiApiKey();
-  const dayLabel = new Date(day + "T12:00:00Z").toLocaleDateString("pt-BR", {
-    day: "numeric", month: "long", year: "numeric", timeZone: "UTC"
+  const fallback = buildFallbackIncidentSummary(day, components);
+  const dayLabel = new Date(`${day}T12:00:00Z`).toLocaleDateString("pt-BR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
   });
 
-  const fallback = {
-    title: `Instabilidade detectada em ${components.map(c => c.name).join(", ")}`,
-    summary: `Em ${dayLabel}, identificamos instabilidade em ${components.map(c => c.name).join(", ")}. Nossa equipe monitorou e os servicos foram normalizados.`,
-    updateMessage: "Incidente resolvido. A estabilidade dos sistemas foi confirmada pela nossa equipe de monitoramento."
-  };
-
-  if (!apiKey) return fallback;
-
   try {
-    const response = await fetch(`${getOpenAiBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: getOpenAiModel(),
-        temperature: 0.3,
-        max_tokens: 250,
-        messages: [
-          {
-            role: "system",
-            content: "Você é um engenheiro de SRE escrevendo resumos para uma página de status. Responda APENAS um JSON com 'title', 'summary' e 'updateMessage'. Use um tom profissional, transparente e em português do Brasil."
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              date: dayLabel,
-              affectedComponents: components,
-              instructions: "Gere um titulo curto, um resumo do que aconteceu em 2 frases, e uma mensagem final de resolucao."
-            })
-          }
-        ]
-      }),
-      cache: "no-store",
+    const result = await runFlowAiJson<{
+      title?: string;
+      summary?: string;
+      updateMessage?: string;
+    }>({
+      taskKey: "status_incident_summary",
+      temperature: 0.3,
+      maxTokens: 250,
+      cacheKey: `status-incident:${day}:${components
+        .map((component) => `${component.name}:${component.status}`)
+        .join("|")}`,
+      cacheTtlMs: 30_000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Voce e um engenheiro de SRE escrevendo resumos para uma pagina de status. Responda apenas JSON com title, summary e updateMessage. Use um tom profissional, transparente e em portugues do Brasil.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            date: dayLabel,
+            affectedComponents: components,
+            instructions:
+              "Gere um titulo curto, um resumo do que aconteceu em 2 frases, e uma mensagem final de resolucao.",
+          }),
+        },
+      ],
     });
 
-    if (!response.ok) return fallback;
-    const json = await response.json().catch(() => null);
-    const content = json?.choices?.[0]?.message?.content || "";
-    const match = content.match(/\{[\s\S]*\}/);
-    
-    if (match) {
-      const parsed = JSON.parse(match[0]);
-      return {
-        title: parsed.title || fallback.title,
-        summary: parsed.summary || fallback.summary,
-        updateMessage: parsed.updateMessage || fallback.updateMessage
-      };
-    }
+    return {
+      title: String(result.object?.title || fallback.title).trim() || fallback.title,
+      summary:
+        String(result.object?.summary || fallback.summary).trim() || fallback.summary,
+      updateMessage:
+        String(result.object?.updateMessage || fallback.updateMessage).trim() ||
+        fallback.updateMessage,
+    };
   } catch {
-    // fallback
+    return fallback;
   }
+}
 
-  return fallback;
+export async function generateIncidentInvestigationNote(
+  components: Array<{ name: string; status: string; latencyMs?: number | null; detail?: string | null }>,
+): Promise<{ title: string; message: string }> {
+  const fallback = {
+    title: `Falha critica detectada em: ${components.map((component) => component.name).join(", ")}`,
+    message: `Nossa equipe detectou indisponibilidade em ${components.map((component) => component.name).join(", ")} e iniciou a investigacao imediata.`,
+  };
+
+  try {
+    const result = await runFlowAiJson<{ title?: string; message?: string }>({
+      taskKey: "status_investigation_note",
+      temperature: 0.2,
+      maxTokens: 200,
+      cacheKey: `status-investigation:${components
+        .map((component) => `${component.name}:${component.status}:${component.latencyMs || ""}`)
+        .join("|")}`,
+      cacheTtlMs: 30_000,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Voce escreve comunicados de status page. Responda somente JSON com chaves title e message. Tom: profissional, transparente, sem culpar terceiros, em portugues do Brasil.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            affectedComponents: components,
+            titleMaxWords: 9,
+            messageMaxWords: 40,
+          }),
+        },
+      ],
+    });
+
+    return {
+      title: String(result.object?.title || fallback.title).trim() || fallback.title,
+      message: String(result.object?.message || fallback.message).trim() || fallback.message,
+    };
+  } catch {
+    return fallback;
+  }
 }

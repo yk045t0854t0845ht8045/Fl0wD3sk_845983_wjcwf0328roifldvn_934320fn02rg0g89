@@ -8,6 +8,7 @@ import {
   stabilizeFlowAiStatusResponse,
   stabilizeStatusCheckResult,
 } from "@/lib/status/monitors";
+import { generateIncidentInvestigationNote } from "@/lib/status/intelligence";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import type { SystemStatus } from "@/lib/status/types";
 
@@ -181,12 +182,23 @@ export async function GET(req: Request) {
     // Auto-create incident if a strike-threshold outage was detected  
     const outages = results.filter(r => r.rawStatus === "major_outage");
     if (outages.length > 0) {
-      const openaiKey = process.env.OPENAI_API_KEY?.trim();
+      const investigationNote = await generateIncidentInvestigationNote(
+        outages.map((outage) => ({
+          name: outage.name,
+          status: outage.rawStatus,
+          latencyMs: outage.latencyMs,
+          detail: outage.message,
+        })),
+      );
+      const openaiKey = "";
       const openaiBase = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/, "");
       const model = process.env.OPENAI_STATUS_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 
       let title = `Falha crítica detectada em: ${outages.map(o => o.name).join(", ")}`;
       let message = `Nossa equipe detectou indisponibilidade em ${outages.map(o => o.name).join(", ")} e iniciou a investigação imediata.`;
+
+      title = investigationNote.title;
+      message = investigationNote.message;
 
       if (openaiKey) {
         try {

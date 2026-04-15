@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { generateIncidentSummary } from "@/lib/status/intelligence";
 
 /**
  * POST /api/admin/backfill-incidents
@@ -14,7 +15,7 @@ export async function POST(req: Request) {
   }
 
   const supabase = getSupabaseAdminClientOrThrow();
-  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  const openaiKey = "";
   const openaiBase = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/, "");
   const model = process.env.OPENAI_STATUS_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 
@@ -88,6 +89,17 @@ export async function POST(req: Request) {
       let title = `Anomalia detectada em ${components.map(c => c.name).join(", ")} — ${dayLabel}`;
       let summary = `Em ${dayLabel}, identificamos instabilidade em ${components.map(c => c.name).join(", ")}. A equipe monitorou e a situação foi normalizada.`;
       let updateMessage = summary;
+      const aiNarrative = await generateIncidentSummary(
+        day,
+        components.map((component) => ({
+          name: component.name,
+          status: component.status,
+        })),
+      );
+
+      title = aiNarrative.title;
+      summary = aiNarrative.summary;
+      updateMessage = aiNarrative.updateMessage;
 
       if (openaiKey) {
         try {

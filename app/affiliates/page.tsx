@@ -26,7 +26,7 @@ export default async function AffiliatesPage() {
     ? {
         username: user.username,
         avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar),
-        href: "/servers",
+        href: "/affiliates/dashboard",
       }
     : null;
 

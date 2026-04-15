@@ -10,9 +10,10 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Bot, Check, Loader2, Search, Shield, Sparkles } from "lucide-react";
+import { Bot, Check, Search, Shield, Sparkles } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
+import { ButtonLoader } from "@/components/login/ButtonLoader";
 
 type DomainMode = "register" | "ai";
 
@@ -227,7 +228,7 @@ function ResultPill({
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-[10px] py-[5px] text-[11px] leading-none font-medium ${toneClass}`}
+      className={`inline-flex items-center rounded-[7px] border px-[10px] py-[5px] text-[11px] leading-none font-medium ${toneClass}`}
     >
       {children}
     </span>
@@ -605,9 +606,31 @@ export function DomainSearchSection({ initialTab = "register" }: DomainSearchSec
             <button
               type="submit"
               disabled={isLoading}
-              className="flex h-[54px] w-[54px] items-center justify-center rounded-[18px] bg-[linear-gradient(180deg,#1E66F5_0%,#0F62FE_100%)] text-white transition hover:brightness-110 disabled:opacity-50"
+              className="group relative flex h-[54px] w-[54px] items-center justify-center overflow-hidden rounded-[18px] bg-[linear-gradient(180deg,#1E66F5_0%,#0F62FE_100%)] text-white transition-all active:scale-[0.95] hover:brightness-110 disabled:opacity-80"
             >
-              {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
+              <AnimatePresence mode="wait">
+                {isLoading ? (
+                  <motion.div
+                    key="loader"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.15 }}
+                  >
+                    <ButtonLoader size={20} colorClassName="text-white" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="icon"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.15 }}
+                  >
+                    <Search className="h-5 w-5" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </button>
           </div>
 
@@ -640,7 +663,7 @@ export function DomainSearchSection({ initialTab = "register" }: DomainSearchSec
         <div className="mx-auto mt-7 w-full max-w-[1200px] rounded-[22px] border border-[#141414] bg-[#090909] p-[16px]">
           <div className="flex flex-col items-start gap-[14px] lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 space-y-[8px] text-left">
-              <div className="inline-flex items-center gap-[8px] rounded-full border border-[#16315F] bg-[#0E1728] px-[10px] py-[6px] text-[11px] leading-none font-medium text-[#8DB7FF]">
+              <div className="inline-flex items-center gap-[8px] rounded-[7px] border border-[#16315F] bg-[#0E1728] px-[10px] py-[6px] text-[11px] leading-none font-medium text-[#8DB7FF]">
                 <Sparkles className="h-[12px] w-[12px]" />
                 FlowAI Domains
               </div>
