@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
-import { checkScheduledTasksStatus } from "../../../../lib/status/monitors";
+import {
+  checkScheduledTasksStatus,
+  stabilizeStatusCheckResult,
+} from "../../../../lib/status/monitors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const payload = await checkScheduledTasksStatus();
+    const payload = stabilizeStatusCheckResult(
+      "scheduled_tasks",
+      await checkScheduledTasksStatus(),
+    );
     return NextResponse.json(payload, {
       status: payload.ok ? 200 : 500,
       headers: { "Cache-Control": "no-store" },

@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
-import { checkDomainsStatus } from "../../../../lib/status/monitors";
+import {
+  checkDomainsStatus,
+  stabilizeStatusCheckResult,
+} from "../../../../lib/status/monitors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const payload = await checkDomainsStatus();
+    const payload = stabilizeStatusCheckResult("domains", await checkDomainsStatus());
     return NextResponse.json(payload, {
       status: payload.ok ? 200 : 503,
       headers: { "Cache-Control": "no-store" },

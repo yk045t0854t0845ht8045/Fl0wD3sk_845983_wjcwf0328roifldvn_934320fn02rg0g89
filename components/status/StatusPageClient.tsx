@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   CheckCircle2,
   AlertCircle,
@@ -20,7 +21,16 @@ import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
-import type { ComponentStatus, Incident, SystemStatus, IncidentImpact, IncidentStatus } from "@/lib/status/service";
+import { StatusSubscribeModalContent } from "@/components/status/StatusSubscribeModalContent";
+import type {
+  ComponentStatus,
+  Incident,
+  IncidentImpact,
+  IncidentStatus,
+  StatusSubscriptionType,
+  StatusTeamNote,
+  SystemStatus,
+} from "@/lib/status/types";
 
 const STATUS_CONFIG: Record<SystemStatus, { label: string; color: string; icon: LucideIcon; bannerClass: string }> = {
   operational: { 
@@ -52,9 +62,15 @@ const STATUS_CONFIG: Record<SystemStatus, { label: string; color: string; icon: 
 const BANNER_LABELS: Record<SystemStatus, string> = {
   operational: "Todos os sistemas operacionais",
   degraded_performance: "Operacional",
-  partial_outage: "Alguns sistemas operando com latÃªncia",
-  major_outage: "Falha Critica - Nossa equipe jÃ¡ estÃ¡ lidando com a situaÃ§Ã£o",
+  partial_outage: "Alguns sistemas operando com latencia",
+  major_outage: "Falha critica - nossa equipe ja esta atuando",
 };
+
+STATUS_CONFIG.degraded_performance.label = "Operacional";
+STATUS_CONFIG.partial_outage.label = "Alguns sistemas operando com latencia";
+STATUS_CONFIG.major_outage.label = "Falha critica - nossa equipe ja esta atuando";
+BANNER_LABELS.partial_outage = "Alguns sistemas operando com latencia";
+BANNER_LABELS.major_outage = "Falha critica - nossa equipe ja esta atuando";
 
 const IMPACT_CONFIG: Record<IncidentImpact, { label: string; color: string }> = {
   critical: { label: "Critico", color: "#FF3B30" },
@@ -143,7 +159,7 @@ interface SubscribeModalContentProps {
   setSubscribing: (s: boolean) => void;
 }
 
-const SubscribeModalContent = ({ resetSubscribeModal, subscribing, setSubscribing }: SubscribeModalContentProps) => {
+export const LegacySubscribeModalContent = ({ resetSubscribeModal, subscribing, setSubscribing }: SubscribeModalContentProps) => {
   const [subscribeType, setSubscribeType] = useState<string | null>(null);
   const [subscribeTarget, setSubscribeTarget] = useState("");
   const [subscribeStatus, setSubscribeStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -374,11 +390,20 @@ const StatusHistoryBar = memo(({ history, incidents }: { history: { date: string
 StatusHistoryBar.displayName = "StatusHistoryBar";
 
 export default function StatusPageClient() {
-  const [data, setData] = useState<{ components: ComponentStatus[]; incidents: Incident[] } | null>(null);
+  const searchParams = useSearchParams();
+  const [data, setData] = useState<{
+    components: ComponentStatus[];
+    incidents: Incident[];
+    overallStatus?: SystemStatus;
+    rawOverallStatus?: SystemStatus;
+    teamNote?: StatusTeamNote | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSubscribe, setShowSubscribe] = useState(false);
+  const [initialSubscribeType, setInitialSubscribeType] =
+    useState<StatusSubscriptionType | null>(null);
   const [subscribing, setSubscribing] = useState(false);
   const [flowAiLive, setFlowAiLive] = useState<null | {
     checkedAt: string;
@@ -432,15 +457,38 @@ export default function StatusPageClient() {
   
   const resetSubscribeModal = () => {
     setShowSubscribe(false);
+    setInitialSubscribeType(null);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("subscribe");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
   };
 
   useEffect(() => {
+    const requestedType = searchParams.get("subscribe");
+    if (
+      requestedType === "email" ||
+      requestedType === "discord_dm" ||
+      requestedType === "webhook" ||
+      requestedType === "discord_channel"
+    ) {
+      setInitialSubscribeType(requestedType);
+      setShowSubscribe(true);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setInterval> | null = null;
     async function fetchStatus() {
       try {
-        const res = await fetch("/api/status");
+        const res = await fetch("/api/status", { cache: "no-store" });
         const json = await res.json();
+        if (!alive) return;
         if (json.ok) {
           setData(json);
+          setError(null);
         } else {
           setError(json.error || "Erro desconhecido ao buscar status.");
         }
@@ -448,11 +496,18 @@ export default function StatusPageClient() {
         console.error("Failed to fetch status:", error);
         setError("Falha na conexão com o servidor.");
       } finally {
-        setLoading(false);
-        setIsInitialLoad(false);
+        if (alive) {
+          setLoading(false);
+          setIsInitialLoad(false);
+        }
       }
     }
-    fetchStatus();
+    void fetchStatus();
+    timer = setInterval(fetchStatus, 15000);
+    return () => {
+      alive = false;
+      if (timer) clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -640,6 +695,7 @@ export default function StatusPageClient() {
     
     // Se os dados estão muito antigos (monitoramento parou), mudar status geral para alerta
     if (syncStatus.isStale) return "degraded_performance";
+    if (data.overallStatus) return data.overallStatus;
 
     if (data.components.some(c => c.status === "major_outage")) return "major_outage";
     if (data.components.some(c => c.status === "partial_outage")) return "partial_outage";
@@ -707,7 +763,10 @@ export default function StatusPageClient() {
           </div>
           <LandingActionButton 
             variant="dark"
-            onClick={() => setShowSubscribe(true)}
+            onClick={() => {
+              setInitialSubscribeType(null);
+              setShowSubscribe(true);
+            }}
             className="!h-[42px] !rounded-full px-6"
           >
             Inscreva-se para receber atualizações
@@ -734,6 +793,27 @@ export default function StatusPageClient() {
             </div>
           </div>
         </LandingReveal>
+
+        {overallStatus === "major_outage" && data?.teamNote && (
+          <LandingReveal delay={0.04}>
+            <div className="mb-16 rounded-xl border border-[#2A1010] bg-[#120707] px-6 py-5 shadow-[0_0_30px_-18px_rgba(255,59,48,0.55)]">
+              <div className="border-l-[4px] border-[#FF3B30] pl-4">
+                <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#FF8E88]">
+                  Nota da equipe
+                </p>
+                <h3 className="mt-2 text-[20px] font-semibold text-white">
+                  {data.teamNote.title}
+                </h3>
+                <p className="mt-3 max-w-[760px] text-[14px] leading-[1.7] text-[#E7D4D3]">
+                  {data.teamNote.description}
+                </p>
+                <p className="mt-4 text-[12px] text-[#B88C89]">
+                  Componentes afetados: {data.teamNote.affected_components.join(", ")}
+                </p>
+              </div>
+            </div>
+          </LandingReveal>
+        )}
 
         {/* Components List */}
         <div className="mb-24 space-y-12">
@@ -884,10 +964,11 @@ export default function StatusPageClient() {
               <span aria-hidden="true" className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[32px]" />
               <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
 
-              <SubscribeModalContent 
+              <StatusSubscribeModalContent 
                 resetSubscribeModal={resetSubscribeModal}
                 subscribing={subscribing}
                 setSubscribing={setSubscribing}
+                initialType={initialSubscribeType}
               />
             </motion.div>
           </div>

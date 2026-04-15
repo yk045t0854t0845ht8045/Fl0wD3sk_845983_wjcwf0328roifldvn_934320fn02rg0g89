@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
-import { checkDiscordBotStatus } from "../../../../lib/status/monitors";
+import {
+  checkDiscordBotStatus,
+  stabilizeStatusCheckResult,
+} from "../../../../lib/status/monitors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const payload = await checkDiscordBotStatus();
+    const payload = stabilizeStatusCheckResult("discord", await checkDiscordBotStatus());
     return NextResponse.json(payload, {
       status: payload.ok ? 200 : 503,
       headers: { "Cache-Control": "no-store" },

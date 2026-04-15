@@ -69,6 +69,101 @@ const OPENAI_MAX_ATTEMPTS = 2;
 const OPENAI_BASE_TIMEOUT_MS = 8500;
 const OPENAI_DEFAULT_URL = "https://api.openai.com/v1";
 
+type StatusStabilityMemory = {
+  lastRawStatus: SystemStatus;
+  failureStreak: number;
+};
+
+const statusStabilityMemory = new Map<string, StatusStabilityMemory>();
+
+function softenStatus(status: SystemStatus) {
+  if (status === "major_outage") return "partial_outage" as const;
+  if (status === "partial_outage") return "degraded_performance" as const;
+  return status;
+}
+
+function isImmediateEscalation(
+  status: SystemStatus,
+  message: string | null,
+  latencyMs: number | null,
+) {
+  if (status !== "major_outage") {
+    return false;
+  }
+
+  if (typeof latencyMs === "number" && latencyMs >= 15_000) {
+    return true;
+  }
+
+  return /invalid|credenc|nao configurada|forbidden|unauthorized|401|403|tabela .*nao encontrada/i.test(
+    message || "",
+  );
+}
+
+function stabilizeSystemStatus(
+  sourceKey: string,
+  status: SystemStatus,
+  message: string | null,
+  latencyMs: number | null,
+) {
+  if (status === "operational") {
+    statusStabilityMemory.set(sourceKey, {
+      lastRawStatus: status,
+      failureStreak: 0,
+    });
+    return status;
+  }
+
+  const previous = statusStabilityMemory.get(sourceKey);
+  const failureStreak =
+    previous?.lastRawStatus === status ? previous.failureStreak + 1 : 1;
+
+  statusStabilityMemory.set(sourceKey, {
+    lastRawStatus: status,
+    failureStreak,
+  });
+
+  if (status === "degraded_performance" || isImmediateEscalation(status, message, latencyMs)) {
+    return status;
+  }
+
+  if (failureStreak < 2) {
+    return softenStatus(status);
+  }
+
+  return status;
+}
+
+export function stabilizeStatusCheckResult<
+  T extends { status: SystemStatus; message: string | null; latencyMs: number | null },
+>(sourceKey: string, payload: T): T {
+  return {
+    ...payload,
+    status: stabilizeSystemStatus(
+      sourceKey,
+      payload.status,
+      payload.message,
+      payload.latencyMs,
+    ),
+  };
+}
+
+export function stabilizeFlowAiStatusResponse(payload: FlowAiStatusResponse) {
+  const overall = stabilizeStatusCheckResult("flowai", {
+    status: payload.overall.status,
+    message: payload.overall.message,
+    latencyMs: payload.overall.latencyMs,
+  });
+
+  return {
+    ...payload,
+    overall: {
+      ...payload.overall,
+      ...overall,
+    },
+  };
+}
+
 function mapStatusFromHttp(status: number) {
   if (status >= 200 && status < 300) return "operational" as const;
   if (status === 429) return "degraded_performance" as const;

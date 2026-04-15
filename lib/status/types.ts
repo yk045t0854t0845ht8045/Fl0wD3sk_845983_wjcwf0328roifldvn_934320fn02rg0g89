@@ -17,6 +17,32 @@ export type StatusSubscriptionType =
   | "webhook"
   | "discord_channel";
 
+export type StatusSubscriptionRecord = {
+  id: string;
+  type: StatusSubscriptionType;
+  target: string;
+  label: string | null;
+  metadata?: Record<string, unknown> | null;
+  is_active?: boolean;
+  verified_at?: string | null;
+  last_tested_at?: string | null;
+  last_delivery_at?: string | null;
+  last_delivery_status?: number | null;
+  last_delivery_error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type StatusSubscriptionViewer = {
+  authenticated: boolean;
+  userId: number | null;
+  discordUserId: string | null;
+  username: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  email: string | null;
+};
+
 export type StatusHistoryEntry = {
   date: string;
   status: SystemStatus;
@@ -27,6 +53,7 @@ export type ComponentStatus = {
   name: string;
   description: string | null;
   status: SystemStatus;
+  is_core?: boolean;
   updated_at: string;
   created_at: string;
   history: StatusHistoryEntry[];
@@ -34,6 +61,14 @@ export type ComponentStatus = {
   source_key?: string | null;
   last_checked_at?: string | null;
   latency_ms?: number | null;
+};
+
+export type StatusTeamNote = {
+  title: string;
+  description: string;
+  source: "ai" | "fallback";
+  generated_at: string;
+  affected_components: string[];
 };
 
 export type IncidentUpdate = {

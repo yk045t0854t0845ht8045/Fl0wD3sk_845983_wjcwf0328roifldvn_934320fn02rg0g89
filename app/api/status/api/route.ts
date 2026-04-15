@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
-import { checkApiStatus } from "../../../../lib/status/monitors";
+import {
+  checkApiStatus,
+  stabilizeStatusCheckResult,
+} from "../../../../lib/status/monitors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const payload = await checkApiStatus();
+    const payload = stabilizeStatusCheckResult("api", await checkApiStatus());
     return NextResponse.json(payload, {
       status: payload.ok ? 200 : 500,
       headers: { "Cache-Control": "no-store" },

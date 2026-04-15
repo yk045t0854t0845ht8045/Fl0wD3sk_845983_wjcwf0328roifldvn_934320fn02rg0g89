@@ -46,15 +46,15 @@ type TabRendererProps = {
   [key: string]: unknown;
 };
 
-const TAB_COMPONENTS: Record<string, ComponentType<Record<string, unknown>>> = {
-  plans: dynamic(() => import("@/components/account/tabs/PlansTab").then((m) => ({ default: m.PlansTab })), { ssr: false }),
-  payment_methods: dynamic(() => import("@/components/account/tabs/PaymentMethodsTab").then((m) => ({ default: m.PaymentMethodsTab })), { ssr: false }),
-  payment_history: dynamic(() => import("@/components/account/tabs/PaymentHistoryTab").then((m) => ({ default: m.PaymentHistoryTab })), { ssr: false }),
-  api_keys: dynamic(() => import("@/components/account/tabs/ApiKeysTab").then((m) => ({ default: m.ApiKeysTab })), { ssr: false }),
-  teams: dynamic(() => import("@/components/account/tabs/TeamsTab").then((m) => ({ default: m.TeamsTab })), { ssr: false }),
-  tickets: dynamic(() => import("@/components/account/tabs/TicketsTab").then((m) => ({ default: m.TicketsTab })), { ssr: false }),
-  status: dynamic(() => import("@/components/account/tabs/StatusTab").then((m) => ({ default: m.StatusTab })), { ssr: false }),
-  delete_account: dynamic(() => import("@/components/account/tabs/DeleteAccountTab").then((m) => ({ default: m.DeleteAccountTab })), { ssr: false }),
+const TAB_COMPONENTS: Record<string, ComponentType<any>> = {
+  plans: dynamic<any>(() => import("@/components/account/tabs/PlansTab").then((m) => m.PlansTab), { ssr: false }),
+  payment_methods: dynamic<any>(() => import("@/components/account/tabs/PaymentMethodsTab").then((m) => m.PaymentMethodsTab), { ssr: false }),
+  payment_history: dynamic<any>(() => import("@/components/account/tabs/PaymentHistoryTab").then((m) => m.PaymentHistoryTab), { ssr: false }),
+  api_keys: dynamic<any>(() => import("@/components/account/tabs/ApiKeysTab").then((m) => m.ApiKeysTab), { ssr: false }),
+  teams: dynamic<any>(() => import("@/components/account/tabs/TeamsTab").then((m) => m.TeamsTab), { ssr: false }),
+  tickets: dynamic<any>(() => import("@/components/account/tabs/TicketsTab").then((m) => m.TicketsTab), { ssr: false }),
+  status: dynamic<any>(() => import("@/components/account/tabs/StatusTab").then((m) => m.StatusTab), { ssr: false }),
+  delete_account: dynamic<any>(() => import("@/components/account/tabs/DeleteAccountTab").then((m) => m.DeleteAccountTab), { ssr: false }),
 };
 
 export function TabRenderer({

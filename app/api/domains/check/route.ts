@@ -3,6 +3,7 @@ import {
   getOpenProviderErrorDetails,
   getOpenProviderErrorMessage,
   OpenProviderRequestError,
+  openProviderClient,
 } from "@/lib/openprovider/client";
 import {
   checkLocalRateLimit,

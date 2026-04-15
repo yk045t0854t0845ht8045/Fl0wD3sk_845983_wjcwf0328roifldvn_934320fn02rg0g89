@@ -5,13 +5,17 @@ import {
   checkDomainsStatus,
   checkFlowAiStatus,
   checkScheduledTasksStatus,
+  stabilizeFlowAiStatusResponse,
+  stabilizeStatusCheckResult,
 } from "./monitors";
+import { generateCriticalTeamNote } from "./intelligence";
 import type {
   ComponentStatus,
   Incident,
   IncidentImpact,
   IncidentStatus,
   IncidentUpdate,
+  StatusTeamNote,
   StatusSubscriptionType,
   SystemStatus,
 } from "./types";
@@ -24,6 +28,7 @@ type ComponentRow = {
   name: string;
   description: string | null;
   status: SystemStatus;
+  is_core?: boolean;
   updated_at: string;
   created_at: string;
   display_order?: number;
@@ -195,6 +200,31 @@ function buildIncidentUpdates(
         update.message || (index === updates.length - 1 ? incident.public_summary : null),
       ),
     }));
+}
+
+function resolvePublicOverallStatus(components: ComponentStatus[]) {
+  const coreComponents = components.filter((component) => component.is_core);
+  const hasCoreMajorOutage = coreComponents.some(
+    (component) => component.status === "major_outage",
+  );
+
+  if (hasCoreMajorOutage) {
+    return "major_outage" as const;
+  }
+
+  if (components.some((component) => component.status === "major_outage")) {
+    return "partial_outage" as const;
+  }
+
+  if (components.some((component) => component.status === "partial_outage")) {
+    return "partial_outage" as const;
+  }
+
+  if (components.some((component) => component.status === "degraded_performance")) {
+    return "degraded_performance" as const;
+  }
+
+  return "operational" as const;
 }
 
 function ensureTodayHistory(
@@ -458,7 +488,7 @@ export async function getSystemStatus() {
     ] = await Promise.all([
       supabase
         .from("system_components")
-        .select("id, name, description, status, display_order, updated_at, created_at")
+        .select("id, name, description, status, is_core, display_order, updated_at, created_at")
         .order("display_order", { ascending: true }),
       supabase
         .from("system_status_history")
@@ -492,39 +522,53 @@ export async function getSystemStatus() {
       ? []
       : ((incidentLinksRes.data || []) as IncidentComponentLink[]);
 
+    const apiStable = stabilizeStatusCheckResult("api", apiLive);
+    const flowAiStable = stabilizeFlowAiStatusResponse(flowAiLive);
+    const scheduledStable = stabilizeStatusCheckResult(
+      "scheduled_tasks",
+      scheduledTasksLive,
+    );
+    const domainsStable = stabilizeStatusCheckResult("domains", domainsLive);
+    const discordStable = stabilizeStatusCheckResult("discord", discordBotLive);
+    const paymentsStable = stabilizeStatusCheckResult(
+      "payments",
+      internalSignals.payments,
+    );
+    const auditStable = stabilizeStatusCheckResult("audit", internalSignals.audit);
+
     const signals: Record<string, MonitorSignal> = {
       api: {
-        status: apiLive.status,
-        message: apiLive.message,
-        checkedAt: apiLive.checkedAt,
-        latencyMs: apiLive.latencyMs,
+        status: apiStable.status,
+        message: apiStable.message,
+        checkedAt: apiStable.checkedAt,
+        latencyMs: apiStable.latencyMs,
       },
       flowai: {
-        status: flowAiLive.overall.status,
-        message: flowAiLive.overall.message,
-        checkedAt: flowAiLive.checkedAt,
-        latencyMs: flowAiLive.overall.latencyMs,
+        status: flowAiStable.overall.status,
+        message: flowAiStable.overall.message,
+        checkedAt: flowAiStable.checkedAt,
+        latencyMs: flowAiStable.overall.latencyMs,
       },
       scheduled_tasks: {
-        status: scheduledTasksLive.status,
-        message: scheduledTasksLive.message,
-        checkedAt: scheduledTasksLive.checkedAt,
-        latencyMs: scheduledTasksLive.latencyMs,
+        status: scheduledStable.status,
+        message: scheduledStable.message,
+        checkedAt: scheduledStable.checkedAt,
+        latencyMs: scheduledStable.latencyMs,
       },
       domains: {
-        status: domainsLive.status,
-        message: domainsLive.message,
-        checkedAt: domainsLive.checkedAt,
-        latencyMs: domainsLive.latencyMs,
+        status: domainsStable.status,
+        message: domainsStable.message,
+        checkedAt: domainsStable.checkedAt,
+        latencyMs: domainsStable.latencyMs,
       },
       discord: {
-        status: discordBotLive.status,
-        message: discordBotLive.message,
-        checkedAt: discordBotLive.checkedAt,
-        latencyMs: discordBotLive.latencyMs,
+        status: discordStable.status,
+        message: discordStable.message,
+        checkedAt: discordStable.checkedAt,
+        latencyMs: discordStable.latencyMs,
       },
-      payments: internalSignals.payments,
-      audit: internalSignals.audit,
+      payments: paymentsStable,
+      audit: auditStable,
     };
 
     const historyByComponent = new Map<string, HistoryRow[]>();
@@ -566,6 +610,7 @@ export async function getSystemStatus() {
       return {
         ...component,
         status: effectiveStatus,
+        is_core: Boolean(component.is_core),
         updated_at: effectiveUpdatedAt,
         history: ensureTodayHistory(historyEntries, effectiveStatus),
         status_message: resolvedSignal?.signal?.message || null,
@@ -592,21 +637,32 @@ export async function getSystemStatus() {
       };
     });
 
-    const overallStatus = getWorstSystemStatus(
+    const rawOverallStatus = getWorstSystemStatus(
       componentsWithHistory.map((component) => component.status),
     );
+    const overallStatus = resolvePublicOverallStatus(componentsWithHistory);
+
+    let teamNote: StatusTeamNote | null = null;
+    if (overallStatus === "major_outage") {
+      const criticalComponents = componentsWithHistory.filter(
+        (component) => component.is_core && component.status === "major_outage",
+      );
+      teamNote = await generateCriticalTeamNote(criticalComponents);
+    }
 
     return {
       components: componentsWithHistory,
       incidents,
       overallStatus,
+      rawOverallStatus,
+      teamNote,
       checkedAt: new Date().toISOString(),
       liveChecks: {
-        api: apiLive,
-        flowAi: flowAiLive,
-        scheduledTasks: scheduledTasksLive,
-        domains: domainsLive,
-        discordBot: discordBotLive,
+        api: apiStable,
+        flowAi: flowAiStable,
+        scheduledTasks: scheduledStable,
+        domains: domainsStable,
+        discordBot: discordStable,
       },
     };
   } catch (error: unknown) {
