@@ -591,7 +591,10 @@ export async function getSystemStatus() {
         }, 
         ok: true, 
         upstream: {
-          openai: { status: "operational", latencyMs: null, message: null, baseUrl: "" }
+          openai: { status: "operational", latencyMs: null, message: null, baseUrl: "" },
+          providers: {
+            openai: { status: "operational", latencyMs: null, message: null, baseUrl: "" },
+          },
         } 
       };
       scheduledTasksLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, stats: emptyTaskStats(), ok: true, source: "scheduled_tasks" };

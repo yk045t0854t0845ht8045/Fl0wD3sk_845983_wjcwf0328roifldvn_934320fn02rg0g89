@@ -1,6 +1,25 @@
 import crypto from "node:crypto";
 import { getServerEnv, getServerEnvList } from "@/lib/serverEnv";
 import { getWorstSystemStatus, type SystemStatus } from "@/lib/status/types";
+import {
+  canFlowAiProviderRun,
+  getFlowAiCircuitSnapshot,
+  getFlowAiInfraSnapshot,
+  getFlowAiObservabilitySnapshot,
+  recordFlowAiCacheHit,
+  recordFlowAiCircuitFailure,
+  recordFlowAiCircuitSuccess,
+  recordFlowAiProviderFailure,
+  recordFlowAiProviderSuccess,
+  startFlowAiTrace,
+  withFlowAiTaskQueue,
+} from "./infra";
+import {
+  getConfiguredFlowAiProviders,
+  resolveProviderModelCandidates,
+  type FlowAiProviderConfig,
+  type FlowAiProviderKey,
+} from "./providers";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TIMEOUT_MS = 16_000;
@@ -30,11 +49,14 @@ export type FlowAiTextResponse = {
   content: string;
   model: string;
   latencyMs: number;
-  provider: "openai";
+  provider: FlowAiProviderKey;
+  traceId: string;
+  queueWaitMs: number;
   candidates: string[];
   adaptive: {
     selectedBy: "telemetry" | "default";
     taskKey: string;
+    provider: FlowAiProviderKey;
     model: string;
     avgLatencyMs: number | null;
     successRate: number | null;
@@ -68,6 +90,15 @@ export type FlowAiHealthResponse = {
       message: string | null;
       baseUrl: string;
     };
+    providers: Record<
+      string,
+      {
+        status: SystemStatus;
+        latencyMs: number | null;
+        message: string | null;
+        baseUrl: string;
+      }
+    >;
   };
   integrations: {
     domainSuggestions: FlowAiIntegrationHealth;
@@ -82,6 +113,7 @@ export type FlowAiHealthResponse = {
     trackedPairs: number;
     entries: Array<{
       taskKey: string;
+      provider: string | undefined;
       model: string;
       successes: number;
       failures: number;
@@ -90,6 +122,9 @@ export type FlowAiHealthResponse = {
       lastErrorAt: string | null;
     }>;
   };
+  infrastructure?: ReturnType<typeof getFlowAiInfraSnapshot>;
+  circuitBreakers?: Awaited<ReturnType<typeof getFlowAiCircuitSnapshot>>;
+  observability?: ReturnType<typeof getFlowAiObservabilitySnapshot>;
 };
 
 type ModelTelemetry = {
@@ -116,14 +151,17 @@ type OpenAiCallOptions = {
   preferredModel?: string | null;
   timeoutMs: number;
   recordTelemetry: boolean;
+  trace?: ReturnType<typeof startFlowAiTrace>;
 };
 
 type OpenAiCallResult = {
   content: string;
   model: string;
   latencyMs: number;
+  provider: FlowAiProviderKey;
   candidates: string[];
   selectedBy: "telemetry" | "default";
+  queueWaitMs: number;
 };
 
 type FlowAiTaskProfile = {
@@ -133,6 +171,8 @@ type FlowAiTaskProfile = {
   defaultTimeoutMs?: number;
   defaultCacheTtlMs?: number;
   systemGuard?: string;
+  queueGroup?: string | null;
+  queueConcurrency?: number;
 };
 
 const unavailableModelCache = new Map<string, number>();
@@ -154,6 +194,8 @@ const FLOWAI_TASK_PROFILES: Record<string, FlowAiTaskProfile> = {
     defaultTemperature: 0.35,
     defaultMaxTokens: 400,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    queueGroup: "default",
+    queueConcurrency: 3,
   },
   domain_suggestions: {
     preferredModel: "gpt-4o-mini",
@@ -161,6 +203,8 @@ const FLOWAI_TASK_PROFILES: Record<string, FlowAiTaskProfile> = {
     defaultMaxTokens: 650,
     defaultTimeoutMs: 14_000,
     defaultCacheTtlMs: 1000 * 60 * 5,
+    queueGroup: "heavy",
+    queueConcurrency: 1,
     systemGuard:
       "Pense como estrategista de naming e branding. Entregue nomes claros, curtos, memoraveis e com boa sonoridade para dominio.",
   },
@@ -193,6 +237,8 @@ const FLOWAI_TASK_PROFILES: Record<string, FlowAiTaskProfile> = {
     defaultTemperature: 0.18,
     defaultMaxTokens: 340,
     defaultTimeoutMs: 14_000,
+    queueGroup: "default",
+    queueConcurrency: 2,
     systemGuard:
       "Pense como um orquestrador administrativo. Priorize acoes executaveis, validas e sem ambiguidade.",
   },
@@ -209,6 +255,8 @@ const FLOWAI_TASK_PROFILES: Record<string, FlowAiTaskProfile> = {
     defaultTemperature: 0.25,
     defaultMaxTokens: 250,
     defaultTimeoutMs: 14_000,
+    queueGroup: "heavy",
+    queueConcurrency: 1,
     systemGuard:
       "Produza resumos tecnicos curtos e confiaveis para incidentes, com foco em entendimento rapido do cliente.",
   },
@@ -226,16 +274,22 @@ const FLOWAI_TASK_PROFILES: Record<string, FlowAiTaskProfile> = {
     defaultMaxTokens: 220,
     defaultTimeoutMs: 14_000,
     defaultCacheTtlMs: 1000 * 60 * 3,
+    queueGroup: "default",
+    queueConcurrency: 2,
     systemGuard:
       "Atue como analista senior de growth para afiliados. Gere insights acionaveis, honestos e baseados em sinais reais de desempenho.",
   },
 };
 
+export const FLOWAI_KNOWN_TASK_KEYS = Object.freeze(
+  Object.keys(FLOWAI_TASK_PROFILES).filter((taskKey) => taskKey !== "generic"),
+);
+
 function nowMs() {
   return Date.now();
 }
 
-function normalizeTaskKey(taskKey: string) {
+export function normalizeFlowAiTaskKey(taskKey: string) {
   const normalized = String(taskKey || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -247,7 +301,7 @@ function normalizeTaskKey(taskKey: string) {
 }
 
 function toTaskEnvKey(taskKey: string) {
-  return normalizeTaskKey(taskKey).toUpperCase();
+  return normalizeFlowAiTaskKey(taskKey).toUpperCase();
 }
 
 function normalizeText(value: string, maxLength = 12_000) {
@@ -284,7 +338,7 @@ function normalizeMessages(messages: FlowAiMessage[]): FlowAiMessage[] {
 }
 
 function getTaskProfile(taskKey: string): FlowAiTaskProfile {
-  const normalizedTaskKey = normalizeTaskKey(taskKey);
+  const normalizedTaskKey = normalizeFlowAiTaskKey(taskKey);
 
   if (FLOWAI_TASK_PROFILES[normalizedTaskKey]) {
     return FLOWAI_TASK_PROFILES[normalizedTaskKey];
@@ -305,6 +359,22 @@ function getTaskProfile(taskKey: string): FlowAiTaskProfile {
   }
 
   return FLOWAI_TASK_PROFILES.generic;
+}
+
+export function isFlowAiTaskKeyAllowed(taskKey: string) {
+  const normalizedTaskKey = normalizeFlowAiTaskKey(taskKey);
+
+  return (
+    normalizedTaskKey === "generic" ||
+    Boolean(FLOWAI_TASK_PROFILES[normalizedTaskKey]) ||
+    normalizedTaskKey.startsWith("status_")
+  );
+}
+
+export function getFlowAiTaskProfile(taskKey: string) {
+  return {
+    ...getTaskProfile(taskKey),
+  };
 }
 
 function clampTemperature(value: number | undefined) {
@@ -332,7 +402,7 @@ function resolveTaskSpecificModels(taskKey: string) {
   const taskFallbacks = getServerEnvList(`FLOWAI_MODEL_${taskEnvKey}_FALLBACKS`);
 
   const specialModels: string[] = [];
-  if (normalizeTaskKey(taskKey).startsWith("status_")) {
+  if (normalizeFlowAiTaskKey(taskKey).startsWith("status_")) {
     const statusModel = getServerEnv("OPENAI_STATUS_MODEL");
     if (statusModel) {
       specialModels.push(statusModel);
@@ -367,7 +437,7 @@ function buildTaskSystemGuard(taskKey: string, mode: "text" | "json") {
 
   return [
     FLOWAI_SYSTEM_GUARD,
-    `Task atual: ${normalizeTaskKey(taskKey)}.`,
+    `Task atual: ${normalizeFlowAiTaskKey(taskKey)}.`,
     profile.systemGuard || "",
     mode === "json"
       ? "Responda somente JSON valido quando a tarefa pedir JSON. Nao use markdown, comentarios extras nem texto fora do objeto JSON."
@@ -432,13 +502,17 @@ function formatErrorMessage(error: unknown) {
   return normalizeText(String(error || "Erro desconhecido"), 280);
 }
 
-function modelTelemetryKey(taskKey: string, model: string) {
-  return `${normalizeTaskKey(taskKey)}::${model}`;
+function providerModelKey(provider: string, model: string) {
+  return `${provider}:${model}`;
 }
 
-function getModelTelemetry(taskKey: string, model: string) {
+function modelTelemetryKey(taskKey: string, provider: string, model: string) {
+  return `${normalizeFlowAiTaskKey(taskKey)}::${provider}::${model}`;
+}
+
+function getModelTelemetry(taskKey: string, provider: string, model: string) {
   return (
-    modelTelemetryStore.get(modelTelemetryKey(taskKey, model)) || {
+    modelTelemetryStore.get(modelTelemetryKey(taskKey, provider, model)) || {
       successes: 0,
       failures: 0,
       avgLatencyMs: null,
@@ -451,14 +525,15 @@ function getModelTelemetry(taskKey: string, model: string) {
 
 function recordModelSuccess(
   taskKey: string,
+  provider: string,
   model: string,
   latencyMs: number,
   recordTelemetry: boolean,
 ) {
   if (!recordTelemetry) return;
 
-  const key = modelTelemetryKey(taskKey, model);
-  const current = getModelTelemetry(taskKey, model);
+  const key = modelTelemetryKey(taskKey, provider, model);
+  const current = getModelTelemetry(taskKey, provider, model);
   const totalSuccesses = current.successes + 1;
   const avgLatencyMs =
     current.avgLatencyMs === null
@@ -478,14 +553,15 @@ function recordModelSuccess(
 
 function recordModelFailure(
   taskKey: string,
+  provider: string,
   model: string,
   error: unknown,
   recordTelemetry: boolean,
 ) {
   if (!recordTelemetry) return;
 
-  const key = modelTelemetryKey(taskKey, model);
-  const current = getModelTelemetry(taskKey, model);
+  const key = modelTelemetryKey(taskKey, provider, model);
+  const current = getModelTelemetry(taskKey, provider, model);
 
   modelTelemetryStore.set(key, {
     ...current,
@@ -495,8 +571,13 @@ function recordModelFailure(
   });
 }
 
-function getModelScore(taskKey: string, model: string, baseIndex: number) {
-  const telemetry = getModelTelemetry(taskKey, model);
+function getModelScore(
+  taskKey: string,
+  provider: string,
+  model: string,
+  baseIndex: number,
+) {
+  const telemetry = getModelTelemetry(taskKey, provider, model);
   const total = telemetry.successes + telemetry.failures;
   const successRate =
     total > 0 ? telemetry.successes / Math.max(1, total) : null;
@@ -511,12 +592,12 @@ function getModelScore(taskKey: string, model: string, baseIndex: number) {
   return 100 - baseIndex + successBonus - latencyPenalty - failurePenalty;
 }
 
-function rankModelCandidates(taskKey: string, models: string[]) {
+function rankModelCandidates(taskKey: string, provider: string, models: string[]) {
   const ranked = models
     .map((model, index) => ({
       model,
       index,
-      score: getModelScore(taskKey, model, index),
+      score: getModelScore(taskKey, provider, model, index),
     }))
     .sort((left, right) => right.score - left.score || left.index - right.index);
 
@@ -562,13 +643,19 @@ function extractJsonObject(rawContent: string) {
   return match ? match[0] : null;
 }
 
-function buildAdaptiveSnapshot(taskKey: string, model: string, selectedBy: "telemetry" | "default") {
-  const telemetry = getModelTelemetry(taskKey, model);
+function buildAdaptiveSnapshot(
+  taskKey: string,
+  provider: FlowAiProviderKey,
+  model: string,
+  selectedBy: "telemetry" | "default",
+) {
+  const telemetry = getModelTelemetry(taskKey, provider, model);
   const total = telemetry.successes + telemetry.failures;
 
   return {
     selectedBy,
-    taskKey: normalizeTaskKey(taskKey),
+    taskKey: normalizeFlowAiTaskKey(taskKey),
+    provider,
     model,
     avgLatencyMs: telemetry.avgLatencyMs,
     successRate: total > 0 ? telemetry.successes / total : null,
@@ -579,11 +666,11 @@ function buildAdaptiveSnapshot(taskKey: string, model: string, selectedBy: "tele
 function buildCacheFingerprint(kind: string, input: FlowAiTextRequest) {
   const providedKey = String(input.cacheKey || "").trim();
   if (providedKey) {
-    return `${kind}:${normalizeTaskKey(input.taskKey)}:${providedKey}`;
+    return `${kind}:${normalizeFlowAiTaskKey(input.taskKey)}:${providedKey}`;
   }
 
   const fingerprint = JSON.stringify({
-    taskKey: normalizeTaskKey(input.taskKey),
+    taskKey: normalizeFlowAiTaskKey(input.taskKey),
     messages: normalizeMessages(input.messages),
     userId: String(input.userId || "").slice(0, 64),
     temperature: clampTemperature(input.temperature),
@@ -592,7 +679,7 @@ function buildCacheFingerprint(kind: string, input: FlowAiTextRequest) {
   });
 
   const digest = crypto.createHash("sha1").update(fingerprint).digest("hex");
-  return `${kind}:${normalizeTaskKey(input.taskKey)}:${digest}`;
+  return `${kind}:${normalizeFlowAiTaskKey(input.taskKey)}:${digest}`;
 }
 
 function cloneJsonValue<T>(value: T): T {
@@ -612,6 +699,7 @@ async function withCache<T>(
   const cacheKey = buildCacheFingerprint(kind, input);
   const cached = responseCache.get(cacheKey);
   if (cached && cached.expiresAt > nowMs()) {
+    recordFlowAiCacheHit();
     return cloneJsonValue(cached.value as T);
   }
 
@@ -638,186 +726,380 @@ async function withCache<T>(
   }
 }
 
+function parseBooleanEnv(value: string | undefined, fallback: boolean) {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function resolveProviderRetryCount() {
+  const configured = Number(getServerEnv("FLOWAI_PROVIDER_MAX_RETRIES") || "");
+  if (Number.isFinite(configured) && configured >= 0) {
+    return Math.min(4, Math.round(configured));
+  }
+
+  return DEFAULT_MAX_RETRIES;
+}
+
+function resolveQueuePolicy(taskKey: string) {
+  const taskProfile = getTaskProfile(taskKey);
+  const heavy = taskProfile.queueGroup === "heavy";
+  const enabled = parseBooleanEnv(getServerEnv("FLOWAI_QUEUE_ENABLED"), true);
+  const concurrency = Number(
+    getServerEnv(
+      heavy ? "FLOWAI_QUEUE_HEAVY_CONCURRENCY" : "FLOWAI_QUEUE_CONCURRENCY",
+    ) ||
+      taskProfile.queueConcurrency ||
+      (heavy ? 1 : 3),
+  );
+
+  return {
+    enabled,
+    queueKey: `flowai:${taskProfile.queueGroup || "default"}`,
+    concurrency: Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 1,
+  };
+}
+
 async function callOpenAi(
   options: OpenAiCallOptions,
 ): Promise<OpenAiCallResult> {
-  const apiKey = resolveOpenAiApiKey();
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY nao configurada para o FlowAI.");
+  const configuredProviders = getConfiguredFlowAiProviders();
+  if (!configuredProviders.length) {
+    throw new Error(
+      "Nenhum provider de IA configurado para o FlowAI. Configure OPENAI_API_KEY ou providers de fallback.",
+    );
   }
 
   const messages = normalizeMessages(options.messages);
-  const baseUrl = resolveOpenAiBaseUrl();
-  const { candidates, selectedBy } = rankModelCandidates(
-    options.taskKey,
-    resolveModelCandidates(options.taskKey, options.preferredModel),
+  const queuePolicy = resolveQueuePolicy(options.taskKey);
+  const providerBundles = configuredProviders.map((provider) => {
+    const { candidates, selectedBy } = rankModelCandidates(
+      options.taskKey,
+      provider.key,
+      resolveProviderModelCandidates({
+        provider,
+        taskKey: options.taskKey,
+        preferredModel: options.preferredModel,
+      }),
+    );
+
+    return {
+      provider,
+      candidates,
+      selectedBy,
+    };
+  });
+  const candidateLabels = providerBundles.flatMap((bundle) =>
+    bundle.candidates.map((model) => `${bundle.provider.key}:${model}`),
   );
 
-  let lastError: Error | null = null;
+  const queued = await withFlowAiTaskQueue({
+    queueKey: queuePolicy.queueKey,
+    concurrency: queuePolicy.concurrency,
+    enabled: queuePolicy.enabled,
+    producer: async () => {
+      let lastError: Error | null = null;
+      const maxRetries = resolveProviderRetryCount();
 
-  for (const model of candidates) {
-    const blockedUntil = unavailableModelCache.get(model) || 0;
-    if (blockedUntil > nowMs()) {
-      continue;
-    }
-
-    let allowJsonResponseFormat = options.mode === "json";
-
-    for (let attempt = 1; attempt <= DEFAULT_MAX_RETRIES; attempt += 1) {
-      const startedAt = nowMs();
-
-      try {
-        const body: Record<string, unknown> = {
-          model,
-          messages,
-          temperature: options.temperature,
-          max_tokens: options.maxTokens,
-          user: String(options.userId || "").slice(0, 64) || undefined,
-        };
-
-        if (allowJsonResponseFormat) {
-          body.response_format = { type: "json_object" };
+      for (const bundle of providerBundles) {
+        const provider = bundle.provider;
+        const circuitState = await canFlowAiProviderRun(provider.key);
+        if (!circuitState.ok) {
+          lastError = new Error(
+            `Provider ${provider.key} em circuit breaker ate ${circuitState.nextAttemptAt ? new Date(circuitState.nextAttemptAt).toISOString() : "novo ciclo"}.`,
+          );
+          continue;
         }
 
-        const response = await fetchWithTimeout(
-          `${baseUrl}/chat/completions`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(body),
-          },
-          options.timeoutMs,
-        );
+        let providerLastError: Error | null = null;
 
-        const latencyMs = nowMs() - startedAt;
-        const rawText = await response.text().catch(() => "");
-
-        if (!response.ok) {
-          const error = new Error(
-            `Falha no FlowAI com ${model}: ${response.status} ${response.statusText} ${normalizeText(rawText, 320)}`,
-          );
-
-          if (
-            allowJsonResponseFormat &&
-            (response.status === 400 || response.status === 422)
-          ) {
-            allowJsonResponseFormat = false;
-            recordModelFailure(options.taskKey, model, error, options.recordTelemetry);
+        for (const model of bundle.candidates) {
+          const blockedUntil =
+            unavailableModelCache.get(providerModelKey(provider.key, model)) || 0;
+          if (blockedUntil > nowMs()) {
             continue;
           }
 
-          if (isModelAccessError(response.status, rawText)) {
-            unavailableModelCache.set(model, nowMs() + MODEL_BLOCK_TTL_MS);
-            recordModelFailure(options.taskKey, model, error, options.recordTelemetry);
-            lastError = error;
-            break;
+          let allowJsonResponseFormat = options.mode === "json";
+
+          for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+            const startedAt = nowMs();
+
+            try {
+              const body: Record<string, unknown> = {
+                model,
+                messages,
+                temperature: options.temperature,
+                max_tokens: options.maxTokens,
+                user: String(options.userId || "").slice(0, 64) || undefined,
+              };
+
+              if (allowJsonResponseFormat) {
+                body.response_format = { type: "json_object" };
+              }
+
+              const response = await fetchWithTimeout(
+                `${provider.baseUrl}/chat/completions`,
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${provider.apiKey}`,
+                    "Content-Type": "application/json",
+                    ...(provider.headers || {}),
+                  },
+                  body: JSON.stringify(body),
+                },
+                options.timeoutMs,
+              );
+
+              const latencyMs = nowMs() - startedAt;
+              const rawText = await response.text().catch(() => "");
+
+              if (!response.ok) {
+                const error = new Error(
+                  `Falha no FlowAI com ${provider.key}/${model}: ${response.status} ${response.statusText} ${normalizeText(rawText, 320)}`,
+                );
+
+                if (
+                  allowJsonResponseFormat &&
+                  (response.status === 400 || response.status === 422)
+                ) {
+                  allowJsonResponseFormat = false;
+                  recordModelFailure(
+                    options.taskKey,
+                    provider.key,
+                    model,
+                    error,
+                    options.recordTelemetry,
+                  );
+                  recordFlowAiProviderFailure({
+                    provider: provider.key,
+                    model,
+                    error: error.message,
+                  });
+                  providerLastError = error;
+                  continue;
+                }
+
+                if (isModelAccessError(response.status, rawText)) {
+                  unavailableModelCache.set(
+                    providerModelKey(provider.key, model),
+                    nowMs() + MODEL_BLOCK_TTL_MS,
+                  );
+                  recordModelFailure(
+                    options.taskKey,
+                    provider.key,
+                    model,
+                    error,
+                    options.recordTelemetry,
+                  );
+                  recordFlowAiProviderFailure({
+                    provider: provider.key,
+                    model,
+                    error: error.message,
+                  });
+                  lastError = error;
+                  providerLastError = error;
+                  break;
+                }
+
+                if (isRetryableStatus(response.status) && attempt <= maxRetries) {
+                  recordModelFailure(
+                    options.taskKey,
+                    provider.key,
+                    model,
+                    error,
+                    options.recordTelemetry,
+                  );
+                  recordFlowAiProviderFailure({
+                    provider: provider.key,
+                    model,
+                    error: error.message,
+                  });
+                  await delay(attempt * 350);
+                  lastError = error;
+                  providerLastError = error;
+                  continue;
+                }
+
+                recordModelFailure(
+                  options.taskKey,
+                  provider.key,
+                  model,
+                  error,
+                  options.recordTelemetry,
+                );
+                recordFlowAiProviderFailure({
+                  provider: provider.key,
+                  model,
+                  error: error.message,
+                });
+                lastError = error;
+                providerLastError = error;
+
+                if (
+                  response.status >= 500 ||
+                  response.status === 429 ||
+                  response.status === 401 ||
+                  response.status === 403
+                ) {
+                  break;
+                }
+
+                throw error;
+              }
+
+              let payload: {
+                choices?: Array<{ message?: { content?: string } }>;
+              } | null = null;
+              try {
+                payload = JSON.parse(rawText) as {
+                  choices?: Array<{ message?: { content?: string } }>;
+                };
+              } catch (error) {
+                const parsingError = new Error(
+                  `Resposta invalida do FlowAI com ${provider.key}/${model}: ${formatErrorMessage(error)}`,
+                );
+                recordModelFailure(
+                  options.taskKey,
+                  provider.key,
+                  model,
+                  parsingError,
+                  options.recordTelemetry,
+                );
+                recordFlowAiProviderFailure({
+                  provider: provider.key,
+                  model,
+                  error: parsingError.message,
+                });
+                lastError = parsingError;
+                providerLastError = parsingError;
+                continue;
+              }
+
+              const content = normalizeText(
+                payload?.choices?.[0]?.message?.content || "",
+                10_000,
+              );
+
+              if (!content) {
+                const emptyError = new Error(
+                  `Resposta vazia do FlowAI com ${provider.key}/${model}.`,
+                );
+                recordModelFailure(
+                  options.taskKey,
+                  provider.key,
+                  model,
+                  emptyError,
+                  options.recordTelemetry,
+                );
+                recordFlowAiProviderFailure({
+                  provider: provider.key,
+                  model,
+                  error: emptyError.message,
+                });
+                lastError = emptyError;
+                providerLastError = emptyError;
+                continue;
+              }
+
+              unavailableModelCache.delete(providerModelKey(provider.key, model));
+              recordModelSuccess(
+                options.taskKey,
+                provider.key,
+                model,
+                latencyMs,
+                options.recordTelemetry,
+              );
+              recordFlowAiProviderSuccess({
+                provider: provider.key,
+                model,
+                latencyMs,
+              });
+              await recordFlowAiCircuitSuccess(provider.key);
+              options.trace?.setProvider(provider.key, model);
+
+              return {
+                content,
+                model,
+                provider: provider.key,
+                latencyMs,
+                candidates: candidateLabels,
+                selectedBy: bundle.selectedBy,
+                queueWaitMs: 0,
+              } satisfies OpenAiCallResult;
+            } catch (error) {
+              const latencyMs = nowMs() - startedAt;
+              const isAbort =
+                error instanceof DOMException && error.name === "AbortError";
+              const errorMessage = formatErrorMessage(error);
+              const wrappedError = new Error(
+                isAbort
+                  ? `Timeout ao consultar o FlowAI com ${provider.key}/${model}.`
+                  : `Falha de rede no FlowAI com ${provider.key}/${model}: ${errorMessage}`,
+              );
+
+              recordModelFailure(
+                options.taskKey,
+                provider.key,
+                model,
+                wrappedError,
+                options.recordTelemetry,
+              );
+              recordFlowAiProviderFailure({
+                provider: provider.key,
+                model,
+                error: wrappedError.message,
+              });
+              lastError = wrappedError;
+              providerLastError = wrappedError;
+
+              if (attempt <= maxRetries) {
+                await delay(Math.max(250, attempt * 350));
+                continue;
+              }
+
+              if (latencyMs >= options.timeoutMs || isAbort) {
+                break;
+              }
+            }
           }
-
-          if (response.status === 401) {
-            recordModelFailure(options.taskKey, model, error, options.recordTelemetry);
-            throw error;
-          }
-
-          if (isRetryableStatus(response.status) && attempt < DEFAULT_MAX_RETRIES) {
-            recordModelFailure(options.taskKey, model, error, options.recordTelemetry);
-            await delay(attempt * 350);
-            lastError = error;
-            continue;
-          }
-
-          recordModelFailure(options.taskKey, model, error, options.recordTelemetry);
-          lastError = error;
-
-          if (response.status >= 500 || response.status === 429) {
-            break;
-          }
-
-          throw error;
         }
 
-        let payload: { choices?: Array<{ message?: { content?: string } }> } | null = null;
-        try {
-          payload = JSON.parse(rawText) as {
-            choices?: Array<{ message?: { content?: string } }>;
-          };
-        } catch (error) {
-          const parsingError = new Error(
-            `Resposta invalida do FlowAI com ${model}: ${formatErrorMessage(error)}`,
-          );
-          recordModelFailure(
-            options.taskKey,
-            model,
-            parsingError,
-            options.recordTelemetry,
-          );
-          lastError = parsingError;
-          continue;
-        }
-
-        const content = normalizeText(
-          payload?.choices?.[0]?.message?.content || "",
-          10_000,
-        );
-
-        if (!content) {
-          const emptyError = new Error(`Resposta vazia do FlowAI com ${model}.`);
-          recordModelFailure(options.taskKey, model, emptyError, options.recordTelemetry);
-          lastError = emptyError;
-          continue;
-        }
-
-        unavailableModelCache.delete(model);
-        recordModelSuccess(options.taskKey, model, latencyMs, options.recordTelemetry);
-
-        return {
-          content,
-          model,
-          latencyMs,
-          candidates,
-          selectedBy,
-        };
-      } catch (error) {
-        const latencyMs = nowMs() - startedAt;
-        const isAbort =
-          error instanceof DOMException && error.name === "AbortError";
-        const errorMessage = formatErrorMessage(error);
-        const wrappedError = new Error(
-          isAbort
-            ? `Timeout ao consultar o FlowAI com ${model}.`
-            : `Falha de rede no FlowAI com ${model}: ${errorMessage}`,
-        );
-
-        recordModelFailure(
-          options.taskKey,
-          model,
-          wrappedError,
-          options.recordTelemetry,
-        );
-        lastError = wrappedError;
-
-        if (attempt < DEFAULT_MAX_RETRIES) {
-          await delay(Math.max(250, attempt * 350));
-          continue;
-        }
-
-        if (latencyMs >= options.timeoutMs || isAbort) {
-          break;
+        if (providerLastError) {
+          await recordFlowAiCircuitFailure({
+            provider: provider.key,
+            error: providerLastError.message,
+          });
+          lastError = providerLastError;
         }
       }
-    }
+
+      throw lastError || new Error("Nenhum provider disponivel respondeu no FlowAI.");
+    },
+  });
+
+  if (queued.waitMs > 0) {
+    options.trace?.setQueue(queued.waitMs);
   }
 
-  throw lastError || new Error("Nenhum modelo disponivel respondeu no FlowAI.");
+  return {
+    ...queued.value,
+    queueWaitMs: queued.waitMs,
+  };
 }
 
 export async function runFlowAiText(
   input: FlowAiTextRequest,
 ): Promise<FlowAiTextResponse> {
-  const taskKey = normalizeTaskKey(input.taskKey);
+  const taskKey = normalizeFlowAiTaskKey(input.taskKey);
   const taskProfile = getTaskProfile(taskKey);
+  const trace = startFlowAiTrace({
+    taskKey,
+    kind: "text",
+  });
   const normalizedInput: FlowAiTextRequest = {
     ...input,
     taskKey,
@@ -843,43 +1125,68 @@ export async function runFlowAiText(
     recordTelemetry: input.recordTelemetry !== false,
   };
 
-  return await withCache("text", normalizedInput, async () => {
-    const result = await callOpenAi({
-      mode: "text",
-      taskKey: normalizedInput.taskKey,
-      messages: normalizedInput.messages,
-      userId: normalizedInput.userId,
-      temperature:
-        normalizedInput.temperature ?? taskProfile.defaultTemperature ?? 0.35,
-      maxTokens: normalizedInput.maxTokens ?? taskProfile.defaultMaxTokens ?? 400,
-      preferredModel: normalizedInput.preferredModel,
-      timeoutMs:
-        normalizedInput.timeoutMs ??
-        taskProfile.defaultTimeoutMs ??
-        DEFAULT_TIMEOUT_MS,
-      recordTelemetry: normalizedInput.recordTelemetry !== false,
+  try {
+    const result = await withCache("text", normalizedInput, async () => {
+      const providerResult = await callOpenAi({
+        mode: "text",
+        taskKey: normalizedInput.taskKey,
+        messages: normalizedInput.messages,
+        userId: normalizedInput.userId,
+        temperature:
+          normalizedInput.temperature ?? taskProfile.defaultTemperature ?? 0.35,
+        maxTokens:
+          normalizedInput.maxTokens ?? taskProfile.defaultMaxTokens ?? 400,
+        preferredModel: normalizedInput.preferredModel,
+        timeoutMs:
+          normalizedInput.timeoutMs ??
+          taskProfile.defaultTimeoutMs ??
+          DEFAULT_TIMEOUT_MS,
+        recordTelemetry: normalizedInput.recordTelemetry !== false,
+        trace,
+      });
+
+      return {
+        content: providerResult.content,
+        model: providerResult.model,
+        latencyMs: providerResult.latencyMs,
+        provider: providerResult.provider,
+        traceId: trace.traceId,
+        queueWaitMs: providerResult.queueWaitMs,
+        candidates: providerResult.candidates,
+        adaptive: buildAdaptiveSnapshot(
+          normalizedInput.taskKey,
+          providerResult.provider,
+          providerResult.model,
+          providerResult.selectedBy,
+        ),
+      } satisfies FlowAiTextResponse;
     });
 
-    return {
-      content: result.content,
-      model: result.model,
+    trace.finish({
+      status: "success",
       latencyMs: result.latencyMs,
-      provider: "openai",
-      candidates: result.candidates,
-      adaptive: buildAdaptiveSnapshot(
-        normalizedInput.taskKey,
-        result.model,
-        result.selectedBy,
-      ),
-    } satisfies FlowAiTextResponse;
-  });
+    });
+
+    return result;
+  } catch (error) {
+    trace.finish({
+      status: "error",
+      latencyMs: 0,
+      error: formatErrorMessage(error),
+    });
+    throw error;
+  }
 }
 
 export async function runFlowAiJson<T>(
   input: FlowAiTextRequest,
 ): Promise<FlowAiJsonResponse<T>> {
-  const taskKey = normalizeTaskKey(input.taskKey);
+  const taskKey = normalizeFlowAiTaskKey(input.taskKey);
   const taskProfile = getTaskProfile(taskKey);
+  const trace = startFlowAiTrace({
+    taskKey,
+    kind: "json",
+  });
   const normalizedInput: FlowAiTextRequest = {
     ...input,
     taskKey,
@@ -905,78 +1212,88 @@ export async function runFlowAiJson<T>(
     recordTelemetry: input.recordTelemetry !== false,
   };
 
-  return await withCache("json", normalizedInput, async () => {
-    const result = await callOpenAi({
-      mode: "json",
-      taskKey: normalizedInput.taskKey,
-      messages: normalizedInput.messages,
-      userId: normalizedInput.userId,
-      temperature:
-        normalizedInput.temperature ?? taskProfile.defaultTemperature ?? 0.2,
-      maxTokens: normalizedInput.maxTokens ?? taskProfile.defaultMaxTokens ?? 500,
-      preferredModel: normalizedInput.preferredModel,
-      timeoutMs:
-        normalizedInput.timeoutMs ??
-        taskProfile.defaultTimeoutMs ??
-        DEFAULT_TIMEOUT_MS,
-      recordTelemetry: normalizedInput.recordTelemetry !== false,
+  try {
+    const result = await withCache("json", normalizedInput, async () => {
+      const providerResult = await callOpenAi({
+        mode: "json",
+        taskKey: normalizedInput.taskKey,
+        messages: normalizedInput.messages,
+        userId: normalizedInput.userId,
+        temperature:
+          normalizedInput.temperature ?? taskProfile.defaultTemperature ?? 0.2,
+        maxTokens:
+          normalizedInput.maxTokens ?? taskProfile.defaultMaxTokens ?? 500,
+        preferredModel: normalizedInput.preferredModel,
+        timeoutMs:
+          normalizedInput.timeoutMs ??
+          taskProfile.defaultTimeoutMs ??
+          DEFAULT_TIMEOUT_MS,
+        recordTelemetry: normalizedInput.recordTelemetry !== false,
+        trace,
+      });
+
+      const rawContent = normalizeText(providerResult.content, 10_000);
+      const objectText = extractJsonObject(rawContent);
+
+      if (!objectText) {
+        throw new Error("FlowAI nao retornou JSON valido.");
+      }
+
+      let object: T;
+      try {
+        object = JSON.parse(objectText) as T;
+      } catch (error) {
+        throw new Error(
+          `FlowAI retornou JSON invalido: ${formatErrorMessage(error)}`,
+        );
+      }
+
+      return {
+        rawContent,
+        object,
+        content: rawContent,
+        model: providerResult.model,
+        latencyMs: providerResult.latencyMs,
+        provider: providerResult.provider,
+        traceId: trace.traceId,
+        queueWaitMs: providerResult.queueWaitMs,
+        candidates: providerResult.candidates,
+        adaptive: buildAdaptiveSnapshot(
+          normalizedInput.taskKey,
+          providerResult.provider,
+          providerResult.model,
+          providerResult.selectedBy,
+        ),
+      } satisfies FlowAiJsonResponse<T>;
     });
 
-    const rawContent = normalizeText(result.content, 10_000);
-    const objectText = extractJsonObject(rawContent);
-
-    if (!objectText) {
-      throw new Error("FlowAI nao retornou JSON valido.");
-    }
-
-    let object: T;
-    try {
-      object = JSON.parse(objectText) as T;
-    } catch (error) {
-      throw new Error(
-        `FlowAI retornou JSON invalido: ${formatErrorMessage(error)}`,
-      );
-    }
-
-    return {
-      rawContent,
-      object,
-      content: rawContent,
-      model: result.model,
+    trace.finish({
+      status: "success",
       latencyMs: result.latencyMs,
-      provider: "openai",
-      candidates: result.candidates,
-      adaptive: buildAdaptiveSnapshot(
-        normalizedInput.taskKey,
-        result.model,
-        result.selectedBy,
-      ),
-    } satisfies FlowAiJsonResponse<T>;
-  });
+    });
+
+    return result;
+  } catch (error) {
+    trace.finish({
+      status: "error",
+      latencyMs: 0,
+      error: formatErrorMessage(error),
+    });
+    throw error;
+  }
 }
 
-async function probeOpenAiUpstream() {
-  const apiKey = resolveOpenAiApiKey();
-  const baseUrl = resolveOpenAiBaseUrl();
-
-  if (!apiKey) {
-    return {
-      status: "major_outage" as const,
-      latencyMs: null,
-      message: "OPENAI_API_KEY nao configurada no servidor.",
-      baseUrl,
-    };
-  }
-
+async function probeProviderUpstream(provider: FlowAiProviderConfig) {
   const startedAt = nowMs();
 
   try {
     const response = await fetchWithTimeout(
-      `${baseUrl}/models`,
+      `${provider.baseUrl}/models`,
       {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${provider.apiKey}`,
+          ...(provider.headers || {}),
         },
       },
       8_000,
@@ -994,9 +1311,9 @@ async function probeOpenAiUpstream() {
         latencyMs,
         message:
           response.status === 401 || response.status === 403
-            ? "Credenciais da OpenAI invalidas."
-            : `Falha ao consultar a OpenAI: ${normalizeText(rawText, 220) || `HTTP ${response.status}`}`,
-        baseUrl,
+            ? `Credenciais invalidas no provider ${provider.label}.`
+            : `Falha ao consultar ${provider.label}: ${normalizeText(rawText, 220) || `HTTP ${response.status}`}`,
+        baseUrl: provider.baseUrl,
       };
     }
 
@@ -1004,16 +1321,41 @@ async function probeOpenAiUpstream() {
       status: "operational" as const,
       latencyMs,
       message: null,
-      baseUrl,
+      baseUrl: provider.baseUrl,
     };
   } catch (error) {
     return {
       status: "partial_outage" as const,
       latencyMs: nowMs() - startedAt,
-      message: `Falha de conexao com a OpenAI: ${formatErrorMessage(error)}`,
-      baseUrl,
+      message: `Falha de conexao com ${provider.label}: ${formatErrorMessage(error)}`,
+      baseUrl: provider.baseUrl,
     };
   }
+}
+
+async function probeConfiguredProvidersUpstream() {
+  const providers = getConfiguredFlowAiProviders();
+  const results = await Promise.all(
+    providers.map(async (provider) => ({
+      key: provider.key,
+      result: await probeProviderUpstream(provider),
+    })),
+  );
+
+  const providerMap = Object.fromEntries(
+    results.map((entry) => [entry.key, entry.result]),
+  ) as FlowAiHealthResponse["upstream"]["providers"];
+
+  return {
+    openai:
+      providerMap.openai || {
+        status: "major_outage" as const,
+        latencyMs: null,
+        message: "Provider OpenAI nao configurado.",
+        baseUrl: resolveOpenAiBaseUrl(),
+      },
+    providers: providerMap,
+  };
 }
 
 function buildHealthStatusFromLatency(
@@ -1029,7 +1371,7 @@ function buildHealthStatusFromLatency(
 function mapProbeFailureToStatus(error: unknown) {
   const message = formatErrorMessage(error);
 
-  if (/openai_api_key|credenciais|401|403|unauthorized|forbidden/i.test(message)) {
+  if (/api_key|credenciais|401|403|unauthorized|forbidden/i.test(message)) {
     return {
       status: "major_outage" as const,
       message,
@@ -1054,7 +1396,7 @@ async function probeTextTask(
       temperature: 0.1,
       maxTokens: 120,
       timeoutMs: 10_000,
-      cacheKey: `health:${normalizeTaskKey(taskKey)}`,
+      cacheKey: `health:${normalizeFlowAiTaskKey(taskKey)}`,
       cacheTtlMs: HEALTH_CACHE_TTL_MS,
       recordTelemetry: false,
     });
@@ -1090,7 +1432,7 @@ async function probeJsonTask(
       temperature: 0.1,
       maxTokens: 160,
       timeoutMs: 10_000,
-      cacheKey: `health:${normalizeTaskKey(taskKey)}`,
+      cacheKey: `health:${normalizeFlowAiTaskKey(taskKey)}`,
       cacheTtlMs: HEALTH_CACHE_TTL_MS,
       recordTelemetry: false,
     });
@@ -1119,9 +1461,10 @@ function buildAdaptiveMemorySnapshot() {
     trackedPairs: modelTelemetryStore.size,
     entries: Array.from(modelTelemetryStore.entries())
       .map(([key, telemetry]) => {
-        const [taskKey, model] = key.split("::");
+        const [taskKey, provider, model] = key.split("::");
         return {
           taskKey,
+          provider,
           model,
           successes: telemetry.successes,
           failures: telemetry.failures,
@@ -1146,7 +1489,19 @@ function buildAdaptiveMemorySnapshot() {
 
 export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
   const checkedAt = new Date().toISOString();
-  const openai = await probeOpenAiUpstream();
+  const [upstream, circuitBreakers] = await Promise.all([
+    probeConfiguredProvidersUpstream(),
+    getFlowAiCircuitSnapshot(),
+  ]);
+  const upstreamProviderStatuses = Object.values(upstream.providers).map(
+    (provider) => provider.status,
+  );
+  const upstreamProviderLatencies = Object.values(upstream.providers).map(
+    (provider) => provider.latencyMs,
+  );
+  const upstreamProviderMessages = Object.values(upstream.providers).map(
+    (provider) => provider.message,
+  );
 
   const [
     domainSuggestions,
@@ -1242,7 +1597,8 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
   ]);
 
   const overallStatus = getWorstSystemStatus([
-    openai.status,
+    upstream.openai.status,
+    ...upstreamProviderStatuses,
     domainSuggestions.status,
     ticketAi.status,
     ticketSuggestion.status,
@@ -1253,7 +1609,8 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
   ]);
 
   const latencyCandidates = [
-    openai.latencyMs,
+    upstream.openai.latencyMs,
+    ...upstreamProviderLatencies,
     domainSuggestions.latencyMs,
     ticketAi.latencyMs,
     ticketSuggestion.latencyMs,
@@ -1266,7 +1623,8 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
   const overallMessage =
     overallStatus === "operational"
       ? null
-      : openai.message ||
+      : upstream.openai.message ||
+        upstreamProviderMessages.find(Boolean) ||
         domainSuggestions.message ||
         ticketAi.message ||
         ticketSuggestion.message ||
@@ -1284,9 +1642,7 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
       latencyMs: latencyCandidates.length ? Math.max(...latencyCandidates) : null,
       message: overallMessage,
     },
-    upstream: {
-      openai,
-    },
+    upstream,
     integrations: {
       domainSuggestions,
       ticketAi,
@@ -1297,5 +1653,8 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
       statusPageAi,
     },
     adaptiveMemory: buildAdaptiveMemorySnapshot(),
+    infrastructure: getFlowAiInfraSnapshot(),
+    circuitBreakers,
+    observability: getFlowAiObservabilitySnapshot(),
   };
 }

@@ -1,13 +1,30 @@
 import { NextResponse } from "next/server";
 import { generateDomainAiSuggestions } from "@/lib/domains/ai";
 import {
-  checkLocalRateLimit,
   getJsonSecurityHeaders,
   normalizeAiPromptInput,
 } from "@/lib/domains/requestGuard";
+import { enforceFlowAiRateLimit } from "@/lib/flowai/infra";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function getClientIdentifier(request: Request) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    const candidate = forwardedFor.split(",")[0]?.trim();
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return (
+    request.headers.get("x-real-ip")?.trim() ||
+    request.headers.get("cf-connecting-ip")?.trim() ||
+    request.headers.get("user-agent")?.trim() ||
+    "anonymous"
+  );
+}
 
 function mapAiError(error: unknown) {
   if (error instanceof Error) {
@@ -41,7 +58,8 @@ export async function POST(req: Request) {
   const requestId = Math.random().toString(36).slice(2, 8);
 
   try {
-    const rateLimit = checkLocalRateLimit(req, "domains-ai", {
+    const rateLimit = await enforceFlowAiRateLimit({
+      key: `domains-ai:${getClientIdentifier(req)}`,
       max: 12,
       windowMs: 1000 * 60,
     });
