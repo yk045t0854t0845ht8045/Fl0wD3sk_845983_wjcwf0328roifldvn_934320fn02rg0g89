@@ -423,8 +423,116 @@ async function checkOpenAiCompletion(
 }
 
 export async function checkFlowAiStatus(): Promise<FlowAiStatusResponse> {
-  return await runFlowAiHealthProbe();
+  const checkedAt = new Date().toISOString();
+  const startedAt = Date.now();
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim() || "";
+  const baseUrl = (process.env.OPENAI_BASE_URL?.trim() || OPENAI_DEFAULT_URL).replace(/\/$/, "");
+
+  if (!apiKey) {
+    // Dev sem chave: retorna degraded (não gera incidente crítico)
+    return {
+      ok: true,
+      checkedAt,
+      overall: {
+        status: "degraded_performance",
+        latencyMs: null,
+        message: "OPENAI_API_KEY não configurada — FlowAI em modo limitado.",
+      },
+      upstream: {
+        openai: { status: "degraded_performance", latencyMs: null, message: "Chave ausente.", baseUrl },
+        providers: {},
+      },
+      integrations: {
+        domainSuggestions: { status: "degraded_performance", latencyMs: null, message: null },
+        ticketAi: { status: "degraded_performance", latencyMs: null, message: null },
+        discordMessageAi: { status: "degraded_performance", latencyMs: null, message: null },
+      },
+    };
+  }
+
+  // Checagem LEVE: apenas lista modelos (sem chamadas de IA reais)
+  // Isso evita os 7 calls anteriores que causavam falsos alarmes
+  try {
+    const res = await fetchWithTimeout(
+      `${baseUrl}/models`,
+      { method: "GET", headers: { Authorization: `Bearer ${apiKey}` } },
+      7000,
+    );
+    const latencyMs = Date.now() - startedAt;
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        checkedAt,
+        overall: { status: "major_outage", latencyMs, message: "Credenciais da OpenAI inválidas." },
+        upstream: { openai: { status: "major_outage", latencyMs, message: `HTTP ${res.status}`, baseUrl }, providers: {} },
+        integrations: {
+          domainSuggestions: { status: "major_outage", latencyMs: null, message: null },
+          ticketAi: { status: "major_outage", latencyMs: null, message: null },
+          discordMessageAi: { status: "major_outage", latencyMs: null, message: null },
+        },
+      };
+    }
+
+    if (!res.ok) {
+      return {
+        ok: true,
+        checkedAt,
+        overall: { status: "degraded_performance", latencyMs, message: `OpenAI respondeu HTTP ${res.status} — instabilidade temporária.` },
+        upstream: { openai: { status: "degraded_performance", latencyMs, message: `HTTP ${res.status}`, baseUrl }, providers: {} },
+        integrations: {
+          domainSuggestions: { status: "degraded_performance", latencyMs: null, message: null },
+          ticketAi: { status: "degraded_performance", latencyMs: null, message: null },
+          discordMessageAi: { status: "degraded_performance", latencyMs: null, message: null },
+        },
+      };
+    }
+
+    const overallStatus: SystemStatus =
+      latencyMs > 6000 ? "partial_outage" :
+      latencyMs > 3000 ? "degraded_performance" :
+      "operational";
+
+    return {
+      ok: true,
+      checkedAt,
+      overall: {
+        status: overallStatus,
+        latencyMs,
+        message: overallStatus === "operational" ? null : `Latência elevada OpenAI: ${latencyMs}ms.`,
+      },
+      upstream: { openai: { status: overallStatus, latencyMs, message: null, baseUrl }, providers: {} },
+      integrations: {
+        domainSuggestions: { status: overallStatus, latencyMs, message: null },
+        ticketAi: { status: overallStatus, latencyMs, message: null },
+        discordMessageAi: { status: overallStatus, latencyMs, message: null },
+      },
+    };
+  } catch (error) {
+    const latencyMs = Date.now() - startedAt;
+    const isTimeout = error instanceof DOMException && error.name === "AbortError";
+    // Timeout ou rede: degraded, não major_outage
+    return {
+      ok: true,
+      checkedAt,
+      overall: {
+        status: "degraded_performance",
+        latencyMs,
+        message: isTimeout
+          ? "Timeout ao verificar OpenAI — instabilidade transitória."
+          : error instanceof Error ? error.message.slice(0, 150) : "FlowAI probe falhou.",
+      },
+      upstream: { openai: { status: "degraded_performance", latencyMs, message: null, baseUrl }, providers: {} },
+      integrations: {
+        domainSuggestions: { status: "degraded_performance", latencyMs: null, message: null },
+        ticketAi: { status: "degraded_performance", latencyMs: null, message: null },
+        discordMessageAi: { status: "degraded_performance", latencyMs: null, message: null },
+      },
+    };
+  }
 }
+
 
 export async function checkApiStatus(): Promise<ApiStatusResponse> {
   const checkedAt = new Date().toISOString();

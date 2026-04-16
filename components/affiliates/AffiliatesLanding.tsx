@@ -490,10 +490,8 @@ export function AffiliatesLanding({ isAuthenticated }: { isAuthenticated: boolea
   }
 
   return (
-    <div className="relative overflow-x-clip bg-[#040404] text-white">
+    <div className="relative overflow-x-clip text-white">
       <LandingSmoothScroll />
-      {/* Background surface */}
-      <div className="absolute inset-0 bg-[#040404]" />
 
       {/* Background Blocks Pattern */}
       <section className="w-full">

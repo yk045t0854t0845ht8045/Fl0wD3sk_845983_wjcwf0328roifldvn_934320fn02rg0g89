@@ -303,16 +303,16 @@ export default function StatusPageClient() {
     };
   }, []);
 
-  if (isInitialLoad) return <div className="flex min-h-screen items-center justify-center bg-black"><ButtonLoader size={32} colorClassName="text-white" /></div>;
-  if (loading && !data) return <div className="min-h-screen bg-black"><StatusSkeleton /></div>;
-  if (error) return <div className="flex min-h-screen items-center justify-center bg-black text-white">{error}</div>;
+  if (isInitialLoad) return <div className="flex min-h-screen items-center justify-center"><ButtonLoader size={32} colorClassName="text-white" /></div>;
+  if (loading && !data) return <div className="min-h-screen"><StatusSkeleton /></div>;
+  if (error) return <div className="flex min-h-screen items-center justify-center text-white">{error}</div>;
 
   const overallStatus = data?.overallStatus || "operational";
   const config = STATUS_CONFIG[overallStatus];
   const Icon = config.icon;
 
   return (
-    <div className="min-h-screen bg-black text-white font-sans">
+    <div className="relative min-h-screen text-white font-sans">
       <div className="mx-auto max-w-[900px] px-6 py-16">
         <div className="mb-16 flex items-center justify-between">
           <div className="relative h-[36px] w-[182px]">

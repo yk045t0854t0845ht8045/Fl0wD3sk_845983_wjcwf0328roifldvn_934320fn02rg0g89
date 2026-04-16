@@ -1,5 +1,14 @@
 import { runFlowAiJson } from "@/lib/flowai/service";
 import type { ComponentStatus, StatusTeamNote } from "./types";
+import {
+  buildIncidentSummaryFromContext,
+  buildIncidentTitleFromContext,
+  buildInvestigationUpdateFromContext,
+  buildResolvedUpdateFromContext,
+  finalizeIncidentSummary,
+  finalizeIncidentTitle,
+  finalizeIncidentUpdate,
+} from "./copy";
 
 type StatusNoteCache = {
   key: string;
@@ -34,8 +43,11 @@ function buildFallbackNote(criticalComponents: ComponentStatus[]): StatusTeamNot
   return {
     title: "Estamos investigando uma falha critica",
     description:
-      topMessages ||
-      `Detectamos indisponibilidade em ${affectedComponents.join(", ")}. Nossa equipe tecnica ja iniciou a analise e esta aplicando a estabilizacao do ambiente.`,
+      finalizeIncidentSummary(
+        topMessages ||
+          `Detectamos indisponibilidade em ${affectedComponents.join(", ")} e iniciamos a estabilizacao do ambiente.`,
+        `Detectamos indisponibilidade em ${affectedComponents.join(", ")} e iniciamos a estabilizacao do ambiente.`,
+      ),
     source: "fallback",
     generated_at: new Date().toISOString(),
     affected_components: affectedComponents,
@@ -45,19 +57,23 @@ function buildFallbackNote(criticalComponents: ComponentStatus[]): StatusTeamNot
 function buildFallbackIncidentSummary(
   day: string,
   components: Array<{ name: string; status: string }>,
+  evidenceNotes: string[] = [],
 ) {
-  const dayLabel = new Date(`${day}T12:00:00Z`).toLocaleDateString("pt-BR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  const componentNames = components.map((component) => component.name);
+  const worstStatus =
+    components.some((component) => component.status === "major_outage")
+      ? "major_outage"
+      : components.some((component) => component.status === "partial_outage")
+        ? "partial_outage"
+        : "degraded_performance";
 
   return {
-    title: `Instabilidade detectada em ${components.map((component) => component.name).join(", ")}`,
-    summary: `Em ${dayLabel}, identificamos instabilidade em ${components.map((component) => component.name).join(", ")}. Nossa equipe monitorou e os servicos foram normalizados.`,
-    updateMessage:
-      "Incidente resolvido. A estabilidade dos sistemas foi confirmada pela nossa equipe de monitoramento.",
+    title: buildIncidentTitleFromContext(componentNames, worstStatus),
+    summary: finalizeIncidentSummary(
+      evidenceNotes[0] || buildIncidentSummaryFromContext(day, componentNames, worstStatus),
+      buildIncidentSummaryFromContext(day, componentNames, worstStatus),
+    ),
+    updateMessage: buildResolvedUpdateFromContext(componentNames),
   };
 }
 
@@ -79,15 +95,15 @@ export async function generateCriticalTeamNote(
   try {
     const result = await runFlowAiJson<{ title?: string; description?: string }>({
       taskKey: "status_note",
-      temperature: 0.2,
-      maxTokens: 180,
+      temperature: 0.1,
+      maxTokens: 120,
       cacheKey: `status-note:${cacheKey}`,
       cacheTtlMs: 30_000,
       messages: [
         {
           role: "system",
           content:
-            "Voce escreve comunicados curtos para pagina de status. Responda somente JSON com as chaves title e description. O texto deve ser profissional, simples, sem exagero, sem culpar terceiros e sem prometer prazo.",
+            "Voce escreve comunicados curtos para pagina de status. Responda somente JSON com as chaves title e description. Use portugues do Brasil, sem exagero, sem dramatizacao, sem enrolacao e sem prometer prazo. Title com no maximo 8 palavras. Description com 1 frase curta.",
         },
         {
           role: "user",
@@ -103,7 +119,7 @@ export async function generateCriticalTeamNote(
               })),
               constraints: {
                 titleMaxWords: 8,
-                descriptionMaxWords: 38,
+                descriptionMaxWords: 22,
               },
             },
             null,
@@ -113,8 +129,14 @@ export async function generateCriticalTeamNote(
       ],
     });
 
-    const title = String(result.object?.title || "").trim();
-    const description = String(result.object?.description || "").trim();
+    const title = finalizeIncidentTitle(
+      String(result.object?.title || "").trim(),
+      fallbackNote.title,
+    );
+    const description = finalizeIncidentSummary(
+      String(result.object?.description || "").trim(),
+      fallbackNote.description,
+    );
 
     if (!title || !description) {
       throw new Error("Resposta da IA incompleta.");
@@ -148,14 +170,9 @@ export async function generateCriticalTeamNote(
 export async function generateIncidentSummary(
   day: string,
   components: Array<{ name: string; status: string }>,
+  evidenceNotes: string[] = [],
 ): Promise<{ title: string; summary: string; updateMessage: string }> {
-  const fallback = buildFallbackIncidentSummary(day, components);
-  const dayLabel = new Date(`${day}T12:00:00Z`).toLocaleDateString("pt-BR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  const fallback = buildFallbackIncidentSummary(day, components, evidenceNotes);
 
   try {
     const result = await runFlowAiJson<{
@@ -164,8 +181,8 @@ export async function generateIncidentSummary(
       updateMessage?: string;
     }>({
       taskKey: "status_incident_summary",
-      temperature: 0.3,
-      maxTokens: 250,
+      temperature: 0.1,
+      maxTokens: 140,
       cacheKey: `status-incident:${day}:${components
         .map((component) => `${component.name}:${component.status}`)
         .join("|")}`,
@@ -174,27 +191,34 @@ export async function generateIncidentSummary(
         {
           role: "system",
           content:
-            "Voce e um engenheiro de SRE escrevendo resumos para uma pagina de status. Responda apenas JSON com title, summary e updateMessage. Use um tom profissional, transparente e em portugues do Brasil.",
+            "Voce escreve textos curtos para uma pagina de status. Responda apenas JSON com title, summary e updateMessage. Use portugues do Brasil, 1 frase curta por campo, sem repeticao, sem excesso de detalhes, sem culpar terceiros.",
         },
         {
           role: "user",
           content: JSON.stringify({
-            date: dayLabel,
+            date: day,
             affectedComponents: components,
+            evidenceNotes: evidenceNotes.slice(0, 3),
             instructions:
-              "Gere um titulo curto, um resumo do que aconteceu em 2 frases, e uma mensagem final de resolucao.",
+              "Gere um titulo curto, um resumo publico com 1 frase e uma mensagem final de resolucao com 1 frase. Seja objetivo.",
           }),
         },
       ],
     });
 
     return {
-      title: String(result.object?.title || fallback.title).trim() || fallback.title,
-      summary:
-        String(result.object?.summary || fallback.summary).trim() || fallback.summary,
-      updateMessage:
-        String(result.object?.updateMessage || fallback.updateMessage).trim() ||
+      title: finalizeIncidentTitle(
+        String(result.object?.title || fallback.title).trim(),
+        fallback.title,
+      ),
+      summary: finalizeIncidentSummary(
+        String(result.object?.summary || fallback.summary).trim(),
+        fallback.summary,
+      ),
+      updateMessage: finalizeIncidentUpdate(
+        String(result.object?.updateMessage || fallback.updateMessage).trim(),
         fallback.updateMessage,
+      ),
     };
   } catch {
     return fallback;
@@ -204,16 +228,23 @@ export async function generateIncidentSummary(
 export async function generateIncidentInvestigationNote(
   components: Array<{ name: string; status: string; latencyMs?: number | null; detail?: string | null }>,
 ): Promise<{ title: string; message: string }> {
+  const componentNames = components.map((component) => component.name);
+  const worstStatus =
+    components.some((component) => component.status === "major_outage")
+      ? "major_outage"
+      : components.some((component) => component.status === "partial_outage")
+        ? "partial_outage"
+        : "degraded_performance";
   const fallback = {
-    title: `Falha critica detectada em: ${components.map((component) => component.name).join(", ")}`,
-    message: `Nossa equipe detectou indisponibilidade em ${components.map((component) => component.name).join(", ")} e iniciou a investigacao imediata.`,
+    title: buildIncidentTitleFromContext(componentNames, worstStatus),
+    message: buildInvestigationUpdateFromContext(componentNames, worstStatus),
   };
 
   try {
     const result = await runFlowAiJson<{ title?: string; message?: string }>({
       taskKey: "status_investigation_note",
-      temperature: 0.2,
-      maxTokens: 200,
+      temperature: 0.1,
+      maxTokens: 120,
       cacheKey: `status-investigation:${components
         .map((component) => `${component.name}:${component.status}:${component.latencyMs || ""}`)
         .join("|")}`,
@@ -222,7 +253,7 @@ export async function generateIncidentInvestigationNote(
         {
           role: "system",
           content:
-            "Voce escreve comunicados de status page. Responda somente JSON com chaves title e message. Tom: profissional, transparente, sem culpar terceiros, em portugues do Brasil.",
+            "Voce escreve comunicados curtos de status page. Responda somente JSON com chaves title e message. Use portugues do Brasil, 1 frase curta, sem excesso de detalhes, sem culpar terceiros.",
         },
         {
           role: "user",
@@ -236,8 +267,14 @@ export async function generateIncidentInvestigationNote(
     });
 
     return {
-      title: String(result.object?.title || fallback.title).trim() || fallback.title,
-      message: String(result.object?.message || fallback.message).trim() || fallback.message,
+      title: finalizeIncidentTitle(
+        String(result.object?.title || fallback.title).trim(),
+        fallback.title,
+      ),
+      message: finalizeIncidentUpdate(
+        String(result.object?.message || fallback.message).trim(),
+        fallback.message,
+      ),
     };
   } catch {
     return fallback;

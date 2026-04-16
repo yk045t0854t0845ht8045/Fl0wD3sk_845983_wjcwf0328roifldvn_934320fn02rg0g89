@@ -9,7 +9,6 @@ import {
   checkDiscordCdnStatus,
   stabilizeFlowAiStatusResponse,
   stabilizeStatusCheckResult,
-  emptyTaskStats,
   type ApiStatusResponse,
   type FlowAiStatusResponse,
   type ScheduledTasksStatusResponse,
@@ -18,7 +17,7 @@ import {
   type SquareCloudStatusResponse,
   type DiscordCdnStatusResponse,
 } from "./monitors";
-import { generateCriticalTeamNote, generateIncidentSummary } from "./intelligence";
+import { generateCriticalTeamNote } from "./intelligence";
 import type {
   ComponentStatus,
   Incident,
@@ -30,6 +29,18 @@ import type {
   SystemStatus,
 } from "./types";
 import { getWorstSystemStatus } from "./types";
+import {
+  buildIdentifiedUpdateFromContext,
+  buildIncidentSummaryFromContext,
+  buildIncidentTitleFromContext,
+  buildInvestigationUpdateFromContext,
+  buildMonitoringUpdateFromContext,
+  buildResolvedUpdateFromContext,
+  buildTextSignature,
+  finalizeIncidentSummary,
+  finalizeIncidentUpdate,
+  inferSystemStatusFromIncidentStatus,
+} from "./copy";
 
 export * from "./types";
 
@@ -39,6 +50,12 @@ type ComponentRow = {
   description: string | null;
   status: SystemStatus;
   is_core?: boolean;
+  latency_ms?: number | null;
+  source_key?: string | null;
+  status_message?: string | null;
+  last_checked_at?: string | null;
+  last_raw_status?: SystemStatus | null;
+  last_raw_checked_at?: string | null;
   updated_at: string;
   created_at: string;
   display_order?: number;
@@ -71,7 +88,7 @@ type IncidentComponentLink = {
   } | null;
 };
 
-type MonitorSignal = {
+export type MonitorSignal = {
   status: SystemStatus;
   message: string | null;
   checkedAt: string | null;
@@ -86,29 +103,34 @@ type TableProbeResult = {
   error: string | null;
 };
 
+type LiveStatusSnapshot = {
+  checkedAt: string;
+  signals: Record<string, MonitorSignal>;
+  liveChecks: {
+    api: ApiStatusResponse;
+    flowAi: FlowAiStatusResponse;
+    scheduledTasks: ScheduledTasksStatusResponse;
+    domains: DomainsStatusResponse;
+    discordBot: DiscordBotStatusResponse;
+    squareCloud: SquareCloudStatusResponse;
+    discordCdn: DiscordCdnStatusResponse;
+    audit: MonitorSignal;
+    payments: MonitorSignal;
+  };
+};
+
+let latestLiveStatusSnapshot:
+  | {
+      expiresAt: number;
+      snapshot: LiveStatusSnapshot;
+    }
+  | null = null;
+
 function normalizeText(input: string | null | undefined) {
-  return (input || "").trim();
+  return String(input || "").trim();
 }
 
-function formatDateTimePtBr(dateLike: string) {
-  return new Date(dateLike).toLocaleString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  });
-}
-
-function joinNames(names: string[]) {
-  if (names.length === 0) return "os servicos monitorados";
-  if (names.length === 1) return names[0];
-  if (names.length === 2) return `${names[0]} e ${names[1]}`;
-  return `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}`;
-}
-
-function inferComponentSourceKey(name: string) {
+export function inferComponentSourceKey(name: string) {
   const normalized = name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -156,35 +178,40 @@ function buildIncidentSummary(
   componentNames: string[],
   overrideMessage?: string | null,
 ) {
-  const explicitMessage = normalizeText(overrideMessage);
-  if (explicitMessage) {
-    return explicitMessage;
-  }
+  const fallback = buildIncidentSummaryFromContext(
+    incident.created_at.slice(0, 10),
+    componentNames,
+    inferSystemStatusFromIncidentStatus(incident.status, incident.impact),
+  );
 
-  const summarySources = [
-    normalizeText(incident.public_summary),
-    normalizeText(incident.ai_summary),
-    normalizeText(incident.component_summary),
-  ].filter(Boolean);
+  return finalizeIncidentSummary(
+    overrideMessage ||
+      incident.public_summary ||
+      incident.ai_summary ||
+      incident.component_summary ||
+      "",
+    fallback,
+  );
+}
 
-  if (summarySources.length > 0) {
-    return summarySources[0];
-  }
+function buildDefaultIncidentUpdate(
+  incident: IncidentRow,
+  componentNames: string[],
+  status: IncidentStatus,
+) {
+  const inferredStatus = inferSystemStatusFromIncidentStatus(status, incident.impact);
 
-  const componentsText = joinNames(componentNames);
-  const dateLabel = formatDateTimePtBr(incident.updated_at || incident.created_at);
-
-  switch (incident.status) {
+  switch (status) {
     case "investigating":
-      return `Em ${dateLabel}, detectamos uma instabilidade em ${componentsText} e iniciamos a investigacao.`;
+      return buildInvestigationUpdateFromContext(componentNames, inferredStatus);
     case "identified":
-      return `Em ${dateLabel}, identificamos a causa do incidente em ${componentsText} e seguimos aplicando a correcao.`;
+      return buildIdentifiedUpdateFromContext(componentNames);
     case "monitoring":
-      return `Em ${dateLabel}, aplicamos a correcao em ${componentsText} e seguimos monitorando a estabilidade.`;
+      return buildMonitoringUpdateFromContext(componentNames);
     case "resolved":
-      return `Em ${dateLabel}, o incidente em ${componentsText} foi resolvido e os servicos voltaram ao funcionamento normal.`;
+      return buildResolvedUpdateFromContext(componentNames);
     default:
-      return `Em ${dateLabel}, houve uma ocorrencia monitorada em ${componentsText}.`;
+      return buildIncidentSummary(incident, componentNames);
   }
 }
 
@@ -192,7 +219,18 @@ function buildIncidentUpdates(
   incident: IncidentRow,
   componentNames: string[],
 ) {
-  const updates = Array.isArray(incident.updates) ? [...incident.updates] : [];
+  const updates = (Array.isArray(incident.updates) ? [...incident.updates] : [])
+    .sort(
+      (left, right) =>
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+    )
+    .map((update) => ({
+      ...update,
+      message: finalizeIncidentUpdate(
+        update.message,
+        buildDefaultIncidentUpdate(incident, componentNames, update.status),
+      ),
+    }));
 
   if (updates.length === 0) {
     return [
@@ -200,24 +238,42 @@ function buildIncidentUpdates(
         id: `generated-${incident.id}`,
         status: incident.status,
         created_at: incident.updated_at || incident.created_at,
-        message: buildIncidentSummary(incident, componentNames),
+        message: buildDefaultIncidentUpdate(incident, componentNames, incident.status),
       },
     ] satisfies IncidentUpdate[];
   }
 
-  return updates
-    .sort(
-      (left, right) =>
-        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
-    )
-    .map((update, index) => ({
-      ...update,
-      message: buildIncidentSummary(
-        incident,
-        componentNames,
-        update.message || (index === updates.length - 1 ? incident.public_summary : null),
-      ),
-    }));
+  const deduped: IncidentUpdate[] = [];
+  const seen = new Set<string>();
+
+  for (const update of updates) {
+    const signature = `${update.status}:${buildTextSignature(update.message)}`;
+    if (!signature || seen.has(signature)) {
+      continue;
+    }
+    seen.add(signature);
+    deduped.push(update);
+  }
+
+  if (incident.status === "resolved") {
+    const firstActive = deduped.find((update) => update.status !== "resolved");
+    const finalResolved = [...deduped]
+      .reverse()
+      .find((update) => update.status === "resolved");
+
+    return [firstActive, finalResolved]
+      .filter((update): update is IncidentUpdate => Boolean(update))
+      .filter(
+        (update, index, collection) =>
+          collection.findIndex(
+            (item) =>
+              item.status === update.status &&
+              buildTextSignature(item.message) === buildTextSignature(update.message),
+          ) === index,
+      );
+  }
+
+  return deduped.slice(-3);
 }
 
 function resolvePublicOverallStatus(components: ComponentStatus[]) {
@@ -444,6 +500,146 @@ function resolveSignalForComponent(
   };
 }
 
+export async function collectLiveStatusSnapshot(): Promise<LiveStatusSnapshot> {
+  const cached = latestLiveStatusSnapshot;
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.snapshot;
+  }
+
+  const [
+    apiRaw,
+    flowAiRaw,
+    scheduledRaw,
+    domainsRaw,
+    discordRaw,
+    squareCloudRaw,
+    discordCdnRaw,
+    internalSignals,
+  ] = await Promise.all([
+    checkApiStatus(),
+    checkFlowAiStatus(),
+    checkScheduledTasksStatus(),
+    checkDomainsStatus(),
+    checkDiscordBotStatus(),
+    checkSquareCloudStatus(),
+    checkDiscordCdnStatus(),
+    collectInternalSignals(),
+  ]);
+
+  let api = { ...stabilizeStatusCheckResult("api", apiRaw) };
+  const flowAi = stabilizeFlowAiStatusResponse(flowAiRaw);
+  const scheduledTasks = stabilizeStatusCheckResult("scheduled_tasks", scheduledRaw);
+  const domains = stabilizeStatusCheckResult("domains", domainsRaw);
+  let discordBot = { ...stabilizeStatusCheckResult("discord", discordRaw) };
+  const payments = stabilizeStatusCheckResult("payments", internalSignals.payments);
+  const audit = stabilizeStatusCheckResult("audit", internalSignals.audit);
+  const squareCloud = stabilizeStatusCheckResult("squarecloud", squareCloudRaw);
+  const discordCdn = stabilizeStatusCheckResult("discord_cdn", discordCdnRaw);
+
+  if (squareCloud.status === "major_outage" && discordBot.status === "operational") {
+    discordBot = {
+      ...discordBot,
+      status: "partial_outage",
+      message: "Operacao do bot pode ser afetada por instabilidade na hospedagem.",
+    };
+  }
+
+  if (audit.status !== "operational" && api.status === "operational") {
+    api = {
+      ...api,
+      status: "degraded_performance",
+      message: "API operante, mas com lentidao no processamento de logs internos.",
+    };
+  }
+
+  if (discordCdn.status !== "operational" && api.status === "operational") {
+    api = {
+      ...api,
+      status: "degraded_performance",
+      message: api.message || "Alguns assets externos podem apresentar instabilidade.",
+    };
+  }
+
+  const checkedAt = new Date().toISOString();
+  const snapshot: LiveStatusSnapshot = {
+    checkedAt,
+    signals: {
+      api: {
+        status: api.status,
+        message: api.message,
+        checkedAt: api.checkedAt,
+        latencyMs: api.latencyMs,
+      },
+      flowai: {
+        status: flowAi.overall.status,
+        message: flowAi.overall.message,
+        checkedAt: flowAi.checkedAt,
+        latencyMs: flowAi.overall.latencyMs,
+      },
+      scheduled_tasks: {
+        status: scheduledTasks.status,
+        message: scheduledTasks.message,
+        checkedAt: scheduledTasks.checkedAt,
+        latencyMs: scheduledTasks.latencyMs,
+      },
+      domains: {
+        status: domains.status,
+        message: domains.message,
+        checkedAt: domains.checkedAt,
+        latencyMs: domains.latencyMs,
+      },
+      discord: {
+        status: discordBot.status,
+        message: discordBot.message,
+        checkedAt: discordBot.checkedAt,
+        latencyMs: discordBot.latencyMs,
+      },
+      squarecloud: {
+        status: squareCloud.status,
+        message: squareCloud.message,
+        checkedAt: squareCloud.checkedAt,
+        latencyMs: squareCloud.latencyMs,
+      },
+      discord_cdn: {
+        status: discordCdn.status,
+        message: discordCdn.message,
+        checkedAt: discordCdn.checkedAt,
+        latencyMs: discordCdn.latencyMs,
+      },
+      payments: {
+        status: payments.status,
+        message: payments.message,
+        checkedAt: payments.checkedAt,
+        latencyMs: payments.latencyMs,
+      },
+      audit: {
+        status: audit.status,
+        message: audit.message,
+        checkedAt: audit.checkedAt,
+        latencyMs: audit.latencyMs,
+      },
+    },
+    liveChecks: {
+      api,
+      flowAi,
+      scheduledTasks,
+      domains,
+      discordBot,
+      squareCloud,
+      discordCdn,
+      audit,
+      payments,
+    },
+  };
+
+  latestLiveStatusSnapshot = {
+    expiresAt: Date.now() + 30_000,
+    snapshot,
+  };
+
+  return snapshot;
+}
+
 function validateSubscriptionTarget(
   type: StatusSubscriptionType,
   target: string,
@@ -480,6 +676,61 @@ function validateSubscriptionTarget(
   return value;
 }
 
+function isMissingOptionalStatusColumnError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : String((error as { message?: string })?.message || error || "");
+
+  return /status_message|last_checked_at|last_raw_status|last_raw_checked_at|latency_ms|source_key/i.test(message);
+}
+
+async function loadComponentRows(supabase: ReturnType<typeof getSupabaseAdminClientOrThrow>) {
+  const preferredResult = await supabase
+    .from("system_components")
+    .select(
+      "id, name, description, status, is_core, display_order, latency_ms, source_key, status_message, last_checked_at, last_raw_status, last_raw_checked_at, updated_at, created_at",
+    )
+    .order("display_order", { ascending: true });
+
+  if (!preferredResult.error) {
+    return preferredResult.data as ComponentRow[];
+  }
+
+  if (!isMissingOptionalStatusColumnError(preferredResult.error)) {
+    throw preferredResult.error;
+  }
+
+  const fallbackResult = await supabase
+    .from("system_components")
+    .select("id, name, description, status, is_core, display_order, updated_at, created_at")
+    .order("display_order", { ascending: true });
+
+  if (fallbackResult.error) {
+    throw fallbackResult.error;
+  }
+
+  return (fallbackResult.data || []) as ComponentRow[];
+}
+
+function buildStoredSignal(component: ComponentRow): MonitorSignal | null {
+  const checkedAt =
+    component.last_checked_at ||
+    component.last_raw_checked_at ||
+    component.updated_at ||
+    component.created_at ||
+    null;
+
+  if (!checkedAt && !component.status_message && component.latency_ms == null) {
+    return null;
+  }
+
+  return {
+    status: component.status,
+    message: component.status_message || null,
+    checkedAt,
+    latencyMs: component.latency_ms ?? null,
+  };
+}
+
 export async function getSystemStatus() {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -493,15 +744,12 @@ export async function getSystemStatus() {
     const incidentDateStr = thirtyDaysAgo.toISOString();
 
     const [
-      componentsRes,
+      components,
       historyRes,
       incidentsRes,
       incidentLinksRes,
     ] = await Promise.all([
-      supabase
-        .from("system_components")
-        .select("id, name, description, status, is_core, display_order, updated_at, created_at")
-        .order("display_order", { ascending: true }),
+      loadComponentRows(supabase),
       supabase
         .from("system_status_history")
         .select("component_id, status, recorded_at")
@@ -517,254 +765,21 @@ export async function getSystemStatus() {
         .select("incident_id, component_id, component:system_components(name)"),
     ]);
 
-    if (componentsRes.error) throw componentsRes.error;
-
-    const components = (componentsRes.data || []) as ComponentRow[];
     const incidentsRaw = (incidentsRes.data || []) as IncidentRow[];
 
-    // --- AUTONOMOUS SYNC GATING ---
-    // If last update is > 2 minutes old, trigger an on-demand check battery
     const lastUpdate = components.reduce((acc, c) => {
       const ts = new Date(c.updated_at).getTime();
       return ts > acc ? ts : acc;
     }, 0);
 
-    const isStale = Date.now() - lastUpdate > 120_000; // 2 minutes
-    let apiLive: ApiStatusResponse, 
-        flowAiLive: FlowAiStatusResponse, 
-        scheduledTasksLive: ScheduledTasksStatusResponse, 
-        domainsLive: DomainsStatusResponse, 
-        discordBotLive: DiscordBotStatusResponse, 
-        squareCloudLive: SquareCloudStatusResponse, 
-        discordCdnLive: DiscordCdnStatusResponse, 
-        internalSignals: { payments: MonitorSignal; audit: MonitorSignal; discord: MonitorSignal };
-
-    if (isStale) {
-      [apiLive, flowAiLive, scheduledTasksLive, domainsLive, discordBotLive, squareCloudLive, discordCdnLive, internalSignals] = await Promise.all([
-        checkApiStatus(),
-        checkFlowAiStatus(),
-        checkScheduledTasksStatus(),
-        checkDomainsStatus(),
-        checkDiscordBotStatus(),
-        checkSquareCloudStatus(),
-        checkDiscordCdnStatus(),
-        collectInternalSignals(),
-      ]);
-      
-      // Update DB with results (non-blocking in many contexts, but we wait here for consistency)
-      for (const comp of components) {
-        const resolved = resolveSignalForComponent(comp.name, {
-          api: apiLive,
-          flowai: flowAiLive 
-            ? { ...flowAiLive.overall, checkedAt: flowAiLive.checkedAt } 
-            : { status: "operational", latencyMs: null, message: null, checkedAt: new Date().toISOString() },
-          scheduled_tasks: scheduledTasksLive,
-          domains: domainsLive,
-          discord: discordBotLive,
-          squarecloud: squareCloudLive,
-          discord_cdn: discordCdnLive,
-          payments: internalSignals.payments,
-          audit: internalSignals.audit,
-        });
-
-        if (resolved?.signal) {
-          const statusResult = resolved.signal.status || "operational";
-          await supabase.from("system_components").update({ status: statusResult, updated_at: new Date().toISOString() }).eq("id", comp.id);
-          await supabase.from("system_status_history").upsert({ 
-            component_id: comp.id, 
-            status: statusResult, 
-            recorded_at: new Date().toISOString().slice(0, 10) 
-          }, { onConflict: "component_id,recorded_at" });
-        }
-      }
-    } else {
-      // Use cached signals from DB for most requests to keep it fast
-      const lastCheckIso = new Date(lastUpdate).toISOString();
-      apiLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "api" };
-      flowAiLive = { 
-        overall: { status: "operational", latencyMs: null, message: null }, 
-        checkedAt: lastCheckIso, 
-        integrations: {
-          domainSuggestions: { status: "operational", message: null, latencyMs: null },
-          ticketAi: { status: "operational", message: null, latencyMs: null },
-          discordMessageAi: { status: "operational", message: null, latencyMs: null }
-        }, 
-        ok: true, 
-        upstream: {
-          openai: { status: "operational", latencyMs: null, message: null, baseUrl: "" },
-          providers: {
-            openai: { status: "operational", latencyMs: null, message: null, baseUrl: "" },
-          },
-        } 
-      };
-      scheduledTasksLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, stats: emptyTaskStats(), ok: true, source: "scheduled_tasks" };
-      domainsLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "domains", circuitBreaker: { state: "closed", failures: 0, lastFailureTime: 0 } };
-      discordBotLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "discord", ready: true, wsStatus: 0, guildCount: 0, uptimeMs: 0, url: "" };
-      squareCloudLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "squarecloud" };
-      discordCdnLive = { status: "operational", latencyMs: null, message: null, checkedAt: lastCheckIso, ok: true, source: "discord_cdn" };
-      internalSignals = { 
-        payments: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null, ok: true, source: "internal" },
-        audit: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null, ok: true, source: "internal" },
-        discord: { status: "operational", message: null, checkedAt: lastCheckIso, latencyMs: null, ok: true, source: "internal" }
-      };
-    }
-    
-    // --- DEPENDENCY-AWARE LOGIC (INTELLIGENT DOWNGRADING) ---
-    // If Square Cloud is down, the Discord Bot is likely broken too.
-    if (squareCloudLive.status === "major_outage" && discordBotLive.status === "operational") {
-      discordBotLive.status = "partial_outage";
-      discordBotLive.message = "Operacao do bot pode ser afetada por instabilidade na Square Cloud.";
-    }
-    // If Internal Audit/DB is failing, the API is degraded.
-    if (internalSignals.audit.status !== "operational" && apiLive.status === "operational") {
-      apiLive.status = "degraded_performance";
-      apiLive.message = "API operante, mas com lentidao no processamento de logs internos.";
-    }
-    // If Discord CDN is down, Landing Page assets (icons) are affected.
-    if (discordCdnLive.status !== "operational") {
-      apiLive.status = getWorstSystemStatus([apiLive.status as any, "degraded_performance" as any]);
-    }
-    // --- END OF DEPENDENCY LOGIC ---
-    // --- END OF AUTONOMOUS SYNC ---
+    const isStale = !lastUpdate || Date.now() - lastUpdate > 120_000;
+    const liveSnapshot = isStale ? await collectLiveStatusSnapshot() : null;
 
     const history = (historyRes.data || []) as HistoryRow[];
     const incidentLinks = incidentLinksRes.error
       ? []
       : ((incidentLinksRes.data || []) as IncidentComponentLink[]);
-
-    // AUTO-BACKFILL: Check if historical anomalies have AI summaries
-    // We only process one per request to avoid huge latency
-    const missingSummary = incidentsRaw.find(inc => !inc.public_summary || inc.public_summary.length < 5);
-    if (missingSummary) {
-      const linkedComps = incidentLinks.filter(l => l.incident_id === missingSummary.id).map(l => ({ 
-        name: l.component?.name || "Componente", 
-        status: missingSummary.status 
-      }));
-      
-      const aiNarrative = await generateIncidentSummary(missingSummary.created_at.slice(0, 10), linkedComps);
-      
-      await supabase.from("system_incidents").update({ 
-        public_summary: aiNarrative.summary,
-        ai_summary: aiNarrative.summary,
-        title: aiNarrative.title
-      }).eq("id", missingSummary.id);
-      
-      missingSummary.public_summary = aiNarrative.summary;
-      missingSummary.title = aiNarrative.title;
-
-      await supabase.from("system_incident_updates").insert({
-        incident_id: missingSummary.id,
-        status: "resolved",
-        message: aiNarrative.updateMessage,
-        created_at: new Date().toISOString()
-      });
-    } else {
-      // AGGRESSIVE BACKFILL: If no missing summary in existing incidents,
-      // look for historical anomalies that don't have an incident AT ALL.
-      const incidentsByDaySet = new Set(incidentsRaw.map(inc => inc.created_at.slice(0, 10)));
-      const historicalAnomaly = history.find(h => 
-        h.status !== "operational" && 
-        !incidentsByDaySet.has(h.recorded_at)
-      );
-
-      if (historicalAnomaly) {
-        const component = components.find(c => c.id === historicalAnomaly.component_id);
-        const day = historicalAnomaly.recorded_at;
-        
-        const aiNarrative = await generateIncidentSummary(day, [{ 
-          name: component?.name || "Componente", 
-          status: historicalAnomaly.status 
-        }]);
-
-        const incidentTime = `${day}T12:00:00Z`;
-        const { data: newInc } = await supabase.from("system_incidents").insert({
-          title: aiNarrative.title,
-          impact: historicalAnomaly.status === "major_outage" ? "critical" : "warning",
-          status: "resolved",
-          public_summary: aiNarrative.summary,
-          ai_summary: aiNarrative.summary,
-          created_at: incidentTime,
-          updated_at: incidentTime
-        }).select("id").single();
-
-        if (newInc) {
-          await supabase.from("system_incident_components").insert({
-            incident_id: newInc.id,
-            component_id: historicalAnomaly.component_id
-          });
-          
-          await supabase.from("system_incident_updates").insert({
-            incident_id: newInc.id,
-            status: "resolved",
-            message: aiNarrative.updateMessage,
-            created_at: `${day}T23:59:00Z`
-          });
-        }
-      }
-    }
-
-    const apiStable = stabilizeStatusCheckResult("api", apiLive as any);
-    const flowAiStable = stabilizeFlowAiStatusResponse(flowAiLive);
-    const scheduledStable = stabilizeStatusCheckResult(
-      "scheduled_tasks",
-      scheduledTasksLive,
-    );
-    const domainsStable = stabilizeStatusCheckResult("domains", domainsLive);
-    const discordStable = stabilizeStatusCheckResult("discord", discordBotLive);
-    const paymentsStable = stabilizeStatusCheckResult(
-      "payments",
-      internalSignals.payments,
-    );
-    const auditStable = stabilizeStatusCheckResult("audit", internalSignals.audit);
-    const squareStable = stabilizeStatusCheckResult("squarecloud", squareCloudLive);
-    const cdnStable = stabilizeStatusCheckResult("discord_cdn", discordCdnLive);
-
-    const signals: Record<string, MonitorSignal> = {
-      api: {
-        status: apiStable.status,
-        message: apiStable.message,
-        checkedAt: apiStable.checkedAt,
-        latencyMs: apiStable.latencyMs,
-      },
-      flowai: {
-        status: flowAiStable.overall.status,
-        message: flowAiStable.overall.message,
-        checkedAt: flowAiStable.checkedAt,
-        latencyMs: flowAiStable.overall.latencyMs,
-      },
-      scheduled_tasks: {
-        status: scheduledStable.status,
-        message: scheduledStable.message,
-        checkedAt: scheduledStable.checkedAt,
-        latencyMs: scheduledStable.latencyMs,
-      },
-      domains: {
-        status: domainsStable.status,
-        message: domainsStable.message,
-        checkedAt: domainsStable.checkedAt,
-        latencyMs: domainsStable.latencyMs,
-      },
-      discord: {
-        status: discordStable.status,
-        message: discordStable.message,
-        checkedAt: discordStable.checkedAt,
-        latencyMs: discordStable.latencyMs,
-      },
-      squarecloud: {
-        status: squareStable.status,
-        message: squareStable.message,
-        checkedAt: squareStable.checkedAt,
-        latencyMs: squareStable.latencyMs,
-      },
-      discord_cdn: {
-        status: cdnStable.status,
-        message: cdnStable.message,
-        checkedAt: cdnStable.checkedAt,
-        latencyMs: cdnStable.latencyMs,
-      },
-      payments: paymentsStable,
-      audit: auditStable,
-    };
+    const signals: Record<string, MonitorSignal> = liveSnapshot?.signals || {};
 
     const historyByComponent = new Map<string, HistoryRow[]>();
     for (const entry of history) {
@@ -798,9 +813,11 @@ export async function getSystemStatus() {
       }));
 
       const resolvedSignal = resolveSignalForComponent(component.name, signals);
-      const effectiveStatus = resolvedSignal?.signal?.status || component.status;
+      const storedSignal = buildStoredSignal(component);
+      const effectiveSignal = resolvedSignal?.signal || storedSignal;
+      const effectiveStatus = effectiveSignal?.status || component.status;
       const effectiveUpdatedAt =
-        resolvedSignal?.signal?.checkedAt || component.updated_at || component.created_at;
+        effectiveSignal?.checkedAt || component.updated_at || component.created_at;
 
       return {
         ...component,
@@ -808,20 +825,24 @@ export async function getSystemStatus() {
         is_core: Boolean(component.is_core),
         updated_at: effectiveUpdatedAt,
         history: ensureTodayHistory(historyEntries, effectiveStatus),
-        status_message: resolvedSignal?.signal?.message || null,
-        source_key: resolvedSignal?.sourceKey || null,
-        last_checked_at: resolvedSignal?.signal?.checkedAt || null,
-        latency_ms: resolvedSignal?.signal?.latencyMs ?? null,
+        status_message: effectiveSignal?.message || component.status_message || null,
+        source_key: resolvedSignal?.sourceKey || component.source_key || null,
+        last_checked_at: effectiveSignal?.checkedAt || component.last_checked_at || null,
+        latency_ms: effectiveSignal?.latencyMs ?? component.latency_ms ?? null,
       };
     });
 
     const incidents: Incident[] = incidentsRaw.map((incident) => {
       const componentNames = incidentComponentsByIncident.get(incident.id) || [];
       const updates = buildIncidentUpdates(incident, componentNames);
+      const inferredStatus = inferSystemStatusFromIncidentStatus(
+        incident.status,
+        incident.impact,
+      );
 
       return {
         id: incident.id,
-        title: incident.title,
+        title: normalizeText(incident.title) || buildIncidentTitleFromContext(componentNames, inferredStatus),
         impact: incident.impact,
         status: incident.status,
         created_at: incident.created_at,
@@ -845,23 +866,27 @@ export async function getSystemStatus() {
       teamNote = await generateCriticalTeamNote(criticalComponents);
     }
 
+    const latestPersistedCheckAt = componentsWithHistory.reduce((highest, component) => {
+      const candidate = Date.parse(
+        component.last_checked_at || component.updated_at || component.created_at || "",
+      );
+      return Number.isFinite(candidate) && candidate > highest ? candidate : highest;
+    }, 0);
+
     return {
       components: componentsWithHistory,
       incidents,
       overallStatus,
       rawOverallStatus,
       teamNote,
-      checkedAt: new Date().toISOString(),
-      liveChecks: {
-        api: apiStable,
-        flowAi: flowAiStable,
-        scheduledTasks: scheduledStable,
-        domains: domainsStable,
-        discordBot: discordStable,
-        squareCloud: squareStable,
-        discordCdn: cdnStable,
-        audit: auditStable,
-      },
+      checkedAt:
+        liveSnapshot?.checkedAt ||
+        (latestPersistedCheckAt
+          ? new Date(latestPersistedCheckAt).toISOString()
+          : lastUpdate
+            ? new Date(lastUpdate).toISOString()
+            : new Date().toISOString()),
+      liveChecks: liveSnapshot?.liveChecks || null,
     };
   } catch (error: unknown) {
     if (

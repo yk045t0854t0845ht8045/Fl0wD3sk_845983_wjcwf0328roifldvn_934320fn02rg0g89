@@ -12,7 +12,10 @@ const ALLOWED_SUBSCRIPTION_TYPES: StatusSubscriptionType[] = [
 export async function GET() {
   try {
     const status = await getSystemStatus();
-    return NextResponse.json({ ok: true, ...status });
+    return NextResponse.json(
+      { ok: true, ...status },
+      { headers: { "Cache-Control": "no-store, max-age=0" } },
+    );
   } catch (error) {
     console.error("Error fetching system status:", error);
     return NextResponse.json(
@@ -20,7 +23,7 @@ export async function GET() {
         ok: false,
         error: error instanceof Error ? error.message : "Falha ao buscar o status do sistema.",
       },
-      { status: 500 },
+      { status: 500, headers: { "Cache-Control": "no-store, max-age=0" } },
     );
   }
 }
