@@ -405,28 +405,19 @@ export function DomainSearchSection({ initialTab = "register" }: DomainSearchSec
           setAiData(null);
           const errorMessage = resolveDomainSearchMessage({
             status: response.status,
-            backendMessage: data.ok ? "Falha ao gerar dominios com IA." : data.message,
+            backendMessage: (data as any).message || "Falha ao gerar dominios com IA.",
           });
           setError(errorMessage);
-          setIsMaintenanceMode(/manutenc/i.test(errorMessage) || /pre[cç]o/i.test(errorMessage));
-          setAiData(null);
+          setIsMaintenanceMode(/manutenc/i.test(errorMessage));
           return;
         }
 
         setAiData(data);
         setSelectedAiName(data.suggestions[0]?.name || null);
-
-        // Verificar se algum domínio sugerido tem preço indisponível
-        const hasUnavailablePrices = data.suggestions.some(suggestion =>
-          suggestion.search.results.some(result => result.price <= 0)
-        );
-        if (hasUnavailablePrices) {
-          setIsMaintenanceMode(true);
-          setError("Sistema temporariamente indisponível para consulta de preço");
-        }
         return;
       }
 
+      // ─── REGISTER MODE (STREAMING) ───
       const response = await fetch("/api/domains/check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -434,28 +425,81 @@ export function DomainSearchSection({ initialTab = "register" }: DomainSearchSec
         signal: controller.signal,
       });
 
-      const data = (await response.json()) as RegisterSearchResponse | DomainSearchFailure;
-      if (!response.ok || !data.ok) {
-        setRegisterData(null);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         const errorMessage = resolveDomainSearchMessage({
           status: response.status,
-          backendMessage: data.ok ? "Falha ao consultar dominios." : data.message,
+          backendMessage: data.message || "Falha ao consultar dominios.",
         });
         setError(errorMessage);
-        setIsMaintenanceMode(/manutenc/i.test(errorMessage) || /Sistema temporariamente indispon[ií]vel para consulta de preço/i.test(errorMessage));
+        setIsMaintenanceMode(/manutenc/i.test(errorMessage));
+        setIsLoading(false);
         return;
       }
 
-      setRegisterData(data);
-      if (data.exchangeRate) {
-        setExchangeRate(data.exchangeRate);
-      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Falha ao iniciar stream de dados.");
+      
+      const textDecoder = new TextDecoder();
 
-      // Verificar se o domínio exato tem preço indisponível (problema sistêmico)
-      const exactDomainResult = data.exactDomain ? data.results.find(r => r.domain === data.exactDomain) : data.results[0];
-      if (exactDomainResult && exactDomainResult.price <= 0) {
-        setIsMaintenanceMode(true);
-        setError("Sistema temporariamente indisponível para consulta de preço");
+
+      let buffer = "";
+      
+      setRegisterData({
+        ok: true,
+        query: normalizedQuery,
+        exactDomain: null,
+        searchedTlds: [],
+        results: [],
+        exchangeRate: 5.75
+      });
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        buffer += textDecoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const chunk = JSON.parse(line);
+            
+            if (chunk.isError) {
+              setError(chunk.message);
+              break;
+            }
+
+            if (chunk.exchangeRate) setExchangeRate(chunk.exchangeRate);
+
+            setRegisterData(prev => {
+              if (!prev) return prev;
+              
+              // Only finish loading when isIntermediate is false
+              if (!chunk.isIntermediate) {
+                setIsLoading(false);
+              }
+
+              // Merge results, removing duplicates (prioritize new ones)
+              const existingMap = new Map((prev.results || []).map(r => [r.domain, r]));
+              chunk.results?.forEach((r: DomainResult) => existingMap.set(r.domain, r));
+
+              return {
+                ...prev,
+                exactDomain: chunk.exactDomain || prev.exactDomain,
+                searchedTlds: Array.from(new Set([...prev.searchedTlds, ...(chunk.searchedTlds || [])])),
+                results: Array.from(existingMap.values())
+              };
+            });
+
+          } catch (e) {
+            console.warn("Chunk parse error:", e);
+          }
+        }
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -464,14 +508,18 @@ export function DomainSearchSection({ initialTab = "register" }: DomainSearchSec
 
       const fallbackError = resolveDomainSearchMessage({ backendMessage: null });
       setError(fallbackError);
-      setIsMaintenanceMode(/manutenc/i.test(fallbackError) || /pre[cç]o/i.test(fallbackError));
+      setIsMaintenanceMode(/manutenc/i.test(fallbackError));
     } finally {
-      if (activeRequestRef.current === controller) {
+      if (activeRequestRef.current === controller && !isAi) {
+        // isLoading is handled inside the stream loop for non-AI
         activeRequestRef.current = null;
+      } else if (isAi) {
         setIsLoading(false);
+        activeRequestRef.current = null;
       }
     }
   }, []);
+
 
   const handleTabChange = useCallback((mode: DomainMode) => {
     setActiveTab(mode);

@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
 import {
-  getOpenProviderErrorDetails,
   getOpenProviderErrorMessage,
   OpenProviderRequestError,
-  openProviderClient,
 } from "@/lib/openprovider/client";
 import {
   checkLocalRateLimit,
   getJsonSecurityHeaders,
   normalizeDomainSearchInput,
 } from "@/lib/domains/requestGuard";
-import { searchDomains } from "@/lib/openprovider/domains";
+import { streamSearchDomains } from "@/lib/openprovider/domains";
 import { getUSDToBRLRate } from "@/lib/currency";
 
 export const runtime = "nodejs";
@@ -29,7 +27,6 @@ function mapDomainError(error: unknown) {
         message: "A Openprovider demorou demais para responder. Tente novamente em instantes.",
       };
     }
-
     return fallback;
   }
 
@@ -40,28 +37,6 @@ function mapDomainError(error: unknown) {
     };
   }
 
-  if (/Configuracao incompleta/i.test(error.message)) {
-    return {
-      status: 500,
-      message: "As variaveis da Openprovider nao foram configuradas corretamente no servidor.",
-    };
-  }
-
-  if (/Authentication\/Authorization Failed/i.test(error.message)) {
-    return {
-      status: 502,
-      message:
-        "A Openprovider recusou a autenticacao. Revise usuario, senha, permissao de API e whitelist de IP da conta.",
-    };
-  }
-
-  if (error.status === 401) {
-    return {
-      status: 502,
-      message: "A Openprovider recusou o token da requisicao. Revise a configuracao de autenticacao.",
-    };
-  }
-
   if (error.status === 429) {
     return {
       status: 429,
@@ -69,42 +44,33 @@ function mapDomainError(error: unknown) {
     };
   }
 
-  if (error.status === 503) {
+  const msg = getOpenProviderErrorMessage(error);
+  if (/Authentication\/Authorization Failed/i.test(msg)) {
     return {
-      status: 503,
-      message: "Servico temporariamente indisponivel. Tente novamente em alguns minutos.",
-    };
-  }
-
-  if (error.status === 504 || /timeout/i.test(error.message)) {
-    return {
-      status: 504,
-      message: "A Openprovider demorou demais para responder. Tente novamente em instantes.",
+      status: 502,
+      message: "Falha na autenticacao com o provedor de dominios.",
     };
   }
 
   return {
     status: error.status || 500,
-    message: getOpenProviderErrorMessage(error),
+    message: msg,
   };
 }
 
 export async function POST(req: Request) {
   const requestId = Math.random().toString(36).slice(2, 8);
-  console.log(`[Domains API][${requestId}] Request received`);
+  console.log(`[Domains API][${requestId}] Request received (Stream mode)`);
 
   try {
     const rateLimit = checkLocalRateLimit(req, "domains-check", {
-      max: 50,
+      max: 60,
       windowMs: 1000 * 60,
     });
 
     if (!rateLimit.ok) {
       return NextResponse.json(
-        {
-          ok: false,
-          message: "Muitas consultas em pouco tempo. Aguarde alguns segundos e tente novamente.",
-        },
+        { ok: false, message: "Muitas consultas em pouco tempo. Aguarde alguns segundos." },
         {
           status: 429,
           headers: {
@@ -118,63 +84,59 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const domain = normalizeDomainSearchInput(body?.domain);
 
-    if (!domain.trim()) {
+    if (!domain.trim() || domain.length < 2) {
       return NextResponse.json(
-        {
-          ok: false,
-          message: "Informe um dominio ou nome base para consulta.",
-        },
+        { ok: false, message: "Informe um dominio de pelo menos 2 caracteres." },
         { status: 400, headers: getJsonSecurityHeaders(requestId) },
       );
     }
 
-    if (domain.length < 2) {
-      return NextResponse.json(
-        {
-          ok: false,
-          message: "Use pelo menos 2 caracteres para consultar dominios.",
-        },
-        { status: 400, headers: getJsonSecurityHeaders(requestId) },
-      );
-    }
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          const exchangeRate = await getUSDToBRLRate();
+          
+          await streamSearchDomains(domain, (chunk) => {
+            const payload = JSON.stringify({
+              ...chunk,
+              exchangeRate,
+              requestId,
+              ok: true
+            });
+            controller.enqueue(encoder.encode(payload + "\n"));
+          });
 
-    const [response, exchangeRate] = await Promise.all([
-      searchDomains(domain),
-      getUSDToBRLRate()
-    ]);
-
-    console.log(
-      `[Domains API][${requestId}] Checked ${response.baseName} across ${response.searchedTlds.join(", ")} | Rate: ${exchangeRate}`,
-    );
-
-    return NextResponse.json({
-      ok: true,
-      query: response.query,
-      exactDomain: response.exactDomain,
-      searchedTlds: response.searchedTlds,
-      results: response.results,
-      exchangeRate,
-    }, { headers: getJsonSecurityHeaders(requestId) });
-  } catch (error) {
-    const mapped = mapDomainError(error);
-    const details = getOpenProviderErrorDetails(error);
-    const circuitBreakerStatus = openProviderClient.getCircuitBreakerStatus();
-
-    console.error(`[Domains API][${requestId}] ${mapped.message}`, {
-      error: details || error,
-      circuitBreaker: circuitBreakerStatus,
-      retryCount: error instanceof OpenProviderRequestError ? error.retryCount : undefined,
+          controller.close();
+        } catch (error) {
+          console.error(`[Domains API][${requestId}] Stream error:`, error);
+          const mapped = mapDomainError(error);
+          controller.enqueue(encoder.encode(JSON.stringify({
+            ok: false,
+            message: mapped.message,
+            isError: true
+          }) + "\n"));
+          controller.close();
+        }
+      },
+      cancel() {
+        console.log(`[Domains API][${requestId}] Stream aborted by client`);
+      }
     });
 
-    return NextResponse.json(
-      {
-        ok: false,
-        message: mapped.message,
-        provider: "openprovider",
-        code: error instanceof OpenProviderRequestError ? error.code : undefined,
-        retryCount: error instanceof OpenProviderRequestError ? error.retryCount : undefined,
-        circuitBreakerState: circuitBreakerStatus.state,
+    return new Response(stream, {
+      headers: {
+        ...getJsonSecurityHeaders(requestId),
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
       },
+    });
+
+  } catch (error) {
+    const mapped = mapDomainError(error);
+    return NextResponse.json(
+      { ok: false, message: mapped.message },
       { status: mapped.status, headers: getJsonSecurityHeaders(requestId) },
     );
   }
