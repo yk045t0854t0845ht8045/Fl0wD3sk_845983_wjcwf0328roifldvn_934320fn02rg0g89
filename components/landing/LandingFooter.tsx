@@ -183,12 +183,13 @@ export function LandingFooter({
         
         if (isMounted && data.ok) {
           setOverallStatus(data.overallStatus);
-          if (data.overallStatus === "operational") {
-            setStatusMessage("Todos sistemas normais");
-          } else if (data.overallStatus === "major_outage") {
-            setStatusMessage("Instabilidade detectada");
+          if (data.overallStatus === "major_outage") {
+            setStatusMessage("Falha crítica detectada");
+          } else if (data.overallStatus === "partial_outage") {
+            setStatusMessage("Sistemas com instabilidade");
           } else {
-            setStatusMessage("Sistemas com oscilação");
+            // operational e degraded_performance = tudo normal no footer
+            setStatusMessage("Todos sistemas normais");
           }
         }
       } catch (e) {
@@ -206,10 +207,9 @@ export function LandingFooter({
 
   const getStatusColor = () => {
     switch (overallStatus) {
-      case "operational": return "#0062FF";
-      case "degraded_performance":
-      case "partial_outage": return "#EAB308";
       case "major_outage": return "#EF4444";
+      case "partial_outage": return "#EAB308";
+      // operational e degraded_performance ficam azul — sistema respondendo normalmente
       default: return "#0062FF";
     }
   };
