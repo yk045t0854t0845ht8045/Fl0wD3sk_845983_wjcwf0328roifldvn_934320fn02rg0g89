@@ -10,11 +10,41 @@ function resolveSupabaseEnv() {
   };
 }
 
+const DEFAULT_TIMEOUT_MS = 15000;
+
+/**
+ * Custom fetch wrapper to implement timeouts for Supabase requests.
+ */
+async function fetchWithTimeout(
+  url: string | URL | Request,
+  options: RequestInit = {},
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Supabase request timed out after ${DEFAULT_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function buildClient(supabaseUrl: string, serviceRoleKey: string): SupabaseClient {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
+    },
+    global: {
+      fetch: fetchWithTimeout,
     },
   });
 }

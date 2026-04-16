@@ -64,7 +64,11 @@ function isRetryableError(error: unknown, config: RetryConfig): boolean {
 
 function isAuthError(error: unknown): boolean {
   if (!(error instanceof OpenProviderRequestError)) return false;
-  return error.status === 401 || /Authentication\/Authorization Failed/i.test(error.message);
+  return (
+    error.status === 401 ||
+    error.code === 196 ||
+    /Authentication\/Authorization Failed/i.test(error.message)
+  );
 }
 
 // ─── Circuit Breaker ───────────────────────────────────────────────────────
@@ -320,11 +324,12 @@ export class OpenProviderClient {
             { status: response.status || 500, code: payload.code, details: payload, retryCount: attempt },
           );
 
-          // If 401 and we haven't retried auth yet, invalidate token and retry once
-          if (response.status === 401 && retryOnAuthFailure && !authRetried && requireAuth) {
+          // If auth failure (401 or code 196) and we haven't retried auth yet, invalidate token and retry once
+          const isActuallyAuthError = response.status === 401 || payload.code === 196;
+          if (isActuallyAuthError && retryOnAuthFailure && !authRetried && requireAuth) {
             authRetried = true;
             this.invalidateToken();
-            console.log(`[OpenProvider][${requestId}] Token expired, refreshing and retrying`);
+            console.log(`[OpenProvider][${requestId}] Token expired or invalid (code 196), refreshing and retrying`);
             continue; // retry without counting as backoff attempt
           }
 

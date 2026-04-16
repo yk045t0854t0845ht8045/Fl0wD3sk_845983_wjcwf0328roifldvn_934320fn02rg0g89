@@ -676,6 +676,39 @@ function validateSubscriptionTarget(
   return value;
 }
 
+function sanitizeSupabaseError(error: unknown): Error {
+  const message =
+    error instanceof Error ? error.message : String((error as { message?: string })?.message || error || "");
+
+  if (
+    message.includes("<!DOCTYPE html>") ||
+    message.includes("522") ||
+    message.includes("Connection timed out") ||
+    message.includes("timeout")
+  ) {
+    return new Error(
+      "O banco de dados (Supabase) demorou muito para responder ou esta offline. Verifique o Dashboard do Supabase.",
+    );
+  }
+
+  return error instanceof Error ? error : new Error(message);
+}
+
+async function retryQuery<T>(fn: () => Promise<T>, retries = 1): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (i < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
 function isMissingOptionalStatusColumnError(error: unknown) {
   const message =
     error instanceof Error ? error.message : String((error as { message?: string })?.message || error || "");
@@ -743,27 +776,28 @@ export async function getSystemStatus() {
     thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
     const incidentDateStr = thirtyDaysAgo.toISOString();
 
-    const [
-      components,
-      historyRes,
-      incidentsRes,
-      incidentLinksRes,
-    ] = await Promise.all([
-      loadComponentRows(supabase),
-      supabase
-        .from("system_status_history")
-        .select("component_id, status, recorded_at")
-        .gte("recorded_at", historyDateStr)
-        .order("recorded_at", { ascending: true }),
-      supabase
-        .from("system_incidents")
-        .select("*, updates:system_incident_updates(id, message, status, created_at)")
-        .gte("created_at", incidentDateStr)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("system_incident_components")
-        .select("incident_id, component_id, component:system_components(name)"),
-    ]);
+    const [components, historyRes, incidentsRes, incidentLinksRes] = await retryQuery(() =>
+      Promise.all([
+        loadComponentRows(supabase),
+        supabase
+          .from("system_status_history")
+          .select("component_id, status, recorded_at")
+          .gte("recorded_at", historyDateStr)
+          .order("recorded_at", { ascending: true }),
+        supabase
+          .from("system_incidents")
+          .select("*, updates:system_incident_updates(id, message, status, created_at)")
+          .gte("created_at", incidentDateStr)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("system_incident_components")
+          .select("incident_id, component_id, component:system_components(name)"),
+      ]),
+    );
+
+    if (historyRes.error) throw historyRes.error;
+    if (incidentsRes.error) throw incidentsRes.error;
+    if (incidentLinksRes.error) throw incidentLinksRes.error;
 
     const incidentsRaw = (incidentsRes.data || []) as IncidentRow[];
 
@@ -911,7 +945,7 @@ export async function getSystemStatus() {
       );
     }
 
-    throw error;
+    throw sanitizeSupabaseError(error);
   }
 }
 
