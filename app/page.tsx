@@ -3,6 +3,7 @@ import Script from "next/script";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+import { MaintenanceGate } from "@/components/common/MaintenanceGate";
 import { LandingFooter } from "@/components/landing/LandingFooter";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
 import { LandingHeader } from "@/components/landing/LandingHeader";
@@ -18,6 +19,14 @@ function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null)
 }
 
 export default async function HomePage() {
+  return (
+    <MaintenanceGate area="landing">
+      <HomePageContent />
+    </MaintenanceGate>
+  );
+}
+
+async function HomePageContent() {
   const user = await getCurrentUserFromSessionCookie();
   
   const authenticatedUser = user ? {

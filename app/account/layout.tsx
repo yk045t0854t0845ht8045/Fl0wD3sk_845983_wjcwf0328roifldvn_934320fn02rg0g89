@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AccountWorkspace } from "@/components/account/AccountWorkspace";
+import { MaintenanceGate } from "@/components/common/MaintenanceGate";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 
 function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
@@ -8,7 +9,7 @@ function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null)
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }
 
-export default async function AccountLayout({
+async function AccountLayoutContent({
   children,
 }: {
   children: React.ReactNode;
@@ -27,5 +28,17 @@ export default async function AccountLayout({
     >
       {children}
     </AccountWorkspace>
+  );
+}
+
+export default async function AccountLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <MaintenanceGate area="account">
+      <AccountLayoutContent>{children}</AccountLayoutContent>
+    </MaintenanceGate>
   );
 }
