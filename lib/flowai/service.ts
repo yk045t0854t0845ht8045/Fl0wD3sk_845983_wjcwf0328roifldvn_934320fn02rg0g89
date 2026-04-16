@@ -26,6 +26,7 @@ const DEFAULT_TIMEOUT_MS = 16_000;
 const DEFAULT_MAX_RETRIES = 2;
 const MODEL_BLOCK_TTL_MS = 1000 * 60 * 30;
 const HEALTH_CACHE_TTL_MS = 1000 * 20;
+const FLOWAI_HEALTH_SNAPSHOT_TTL_MS = 1000 * 45;
 
 export type FlowAiMessage = {
   role: "system" | "user" | "assistant";
@@ -179,6 +180,7 @@ const unavailableModelCache = new Map<string, number>();
 const modelTelemetryStore = new Map<string, ModelTelemetry>();
 const responseCache = new Map<string, CacheEntry<unknown>>();
 const inflightRequests = new Map<string, Promise<unknown>>();
+let latestFlowAiHealthSnapshot: CacheEntry<FlowAiHealthResponse> | null = null;
 
 const FLOWAI_SYSTEM_GUARD = [
   "Voce e o nucleo enterprise do FlowAI da Flowdesk.",
@@ -1317,6 +1319,24 @@ async function probeProviderUpstream(provider: FlowAiProviderConfig) {
       };
     }
 
+    if (latencyMs >= 9_000) {
+      return {
+        status: "partial_outage" as const,
+        latencyMs,
+        message: `Provider ${provider.label} respondeu com latencia critica.`,
+        baseUrl: provider.baseUrl,
+      };
+    }
+
+    if (latencyMs >= 4_500) {
+      return {
+        status: "degraded_performance" as const,
+        latencyMs,
+        message: `Provider ${provider.label} respondeu com latencia elevada.`,
+        baseUrl: provider.baseUrl,
+      };
+    }
+
     return {
       status: "operational" as const,
       latencyMs,
@@ -1368,6 +1388,14 @@ function buildHealthStatusFromLatency(
   return "operational" as const;
 }
 
+function cloneIntegrationHealth(input: FlowAiIntegrationHealth) {
+  return {
+    status: input.status,
+    message: input.message,
+    latencyMs: input.latencyMs,
+  } satisfies FlowAiIntegrationHealth;
+}
+
 function mapProbeFailureToStatus(error: unknown) {
   const message = formatErrorMessage(error);
 
@@ -1378,9 +1406,144 @@ function mapProbeFailureToStatus(error: unknown) {
     };
   }
 
+  if (
+    /timeout|network|fetch failed|socket|econn|rate limit|429|temporar|circuit breaker/i.test(
+      message,
+    )
+  ) {
+    return {
+      status: "degraded_performance" as const,
+      message,
+    };
+  }
+
   return {
     status: "partial_outage" as const,
     message,
+  };
+}
+
+function countStatuses(statuses: SystemStatus[]) {
+  return statuses.reduce(
+    (accumulator, status) => {
+      accumulator.total += 1;
+      if (status === "operational") accumulator.operational += 1;
+      if (status === "degraded_performance") accumulator.degraded += 1;
+      if (status === "partial_outage") accumulator.partial += 1;
+      if (status === "major_outage") accumulator.major += 1;
+      return accumulator;
+    },
+    {
+      total: 0,
+      operational: 0,
+      degraded: 0,
+      partial: 0,
+      major: 0,
+    },
+  );
+}
+
+function resolveFlowAiOverallHealth(input: {
+  upstream: FlowAiHealthResponse["upstream"];
+  integrations: FlowAiHealthResponse["integrations"];
+  circuitBreakers: Awaited<ReturnType<typeof getFlowAiCircuitSnapshot>>;
+  infrastructure: ReturnType<typeof getFlowAiInfraSnapshot>;
+  observability: ReturnType<typeof getFlowAiObservabilitySnapshot>;
+}) {
+  const providerEntries = Object.values(input.upstream.providers || {});
+  const providerCounts = countStatuses(providerEntries.map((entry) => entry.status));
+  const integrationEntries = Object.values(input.integrations || {});
+  const integrationCounts = countStatuses(
+    integrationEntries.map((entry) => entry.status),
+  );
+  const latencyCandidates = [
+    input.upstream.openai.latencyMs,
+    ...providerEntries.map((entry) => entry.latencyMs),
+    ...integrationEntries.map((entry) => entry.latencyMs),
+  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const maxLatencyMs = latencyCandidates.length ? Math.max(...latencyCandidates) : null;
+  const queueGroups = input.infrastructure.queue.groups || [];
+  const maxQueuePending = queueGroups.reduce(
+    (highest, group) => Math.max(highest, group.pending || 0),
+    0,
+  );
+  const maxQueueWaitMs = queueGroups.reduce(
+    (highest, group) => Math.max(highest, group.avgWaitMs || 0),
+    0,
+  );
+  const openCircuits = input.circuitBreakers.filter(
+    (breaker) => breaker.state === "open",
+  ).length;
+  const providerFailurePressure = input.observability.providers.filter(
+    (provider) => provider.requests >= 3 && provider.failures > provider.successes,
+  ).length;
+
+  if (
+    providerCounts.total > 0 &&
+    providerCounts.operational === 0 &&
+    providerCounts.degraded === 0 &&
+    (providerCounts.partial > 0 || providerCounts.major > 0)
+  ) {
+    return {
+      status: "major_outage" as const,
+      latencyMs: maxLatencyMs,
+      message:
+        input.upstream.openai.message ||
+        providerEntries.find((entry) => entry.message)?.message ||
+        "Todos os providers principais da FlowAI estao indisponiveis.",
+    };
+  }
+
+  if (
+    providerCounts.major > 0 ||
+    providerCounts.partial > 0 ||
+    integrationCounts.major > 0 ||
+    integrationCounts.partial >= 2 ||
+    openCircuits >= 1 ||
+    maxQueuePending >= 8 ||
+    maxQueueWaitMs >= 6000
+  ) {
+    return {
+      status: "partial_outage" as const,
+      latencyMs: maxLatencyMs,
+      message:
+        input.upstream.openai.message ||
+        providerEntries.find((entry) => entry.message)?.message ||
+        integrationEntries.find((entry) => entry.message)?.message ||
+        (openCircuits >= 1
+          ? "Circuit breaker aberto em um dos providers da FlowAI."
+          : maxQueuePending >= 8 || maxQueueWaitMs >= 6000
+            ? "Fila interna da FlowAI acima do nivel seguro."
+            : "Instabilidade parcial detectada na FlowAI."),
+    };
+  }
+
+  if (
+    integrationCounts.degraded > 0 ||
+    providerCounts.degraded > 0 ||
+    providerFailurePressure > 0 ||
+    maxQueuePending >= 3 ||
+    maxQueueWaitMs >= 2500 ||
+    (typeof maxLatencyMs === "number" && maxLatencyMs >= 4500)
+  ) {
+    return {
+      status: "degraded_performance" as const,
+      latencyMs: maxLatencyMs,
+      message:
+        providerEntries.find((entry) => entry.message)?.message ||
+        integrationEntries.find((entry) => entry.message)?.message ||
+        (maxQueuePending >= 3 || maxQueueWaitMs >= 2500
+          ? "FlowAI operando com fila elevada e tempo de espera acima do ideal."
+          : typeof maxLatencyMs === "number" && maxLatencyMs >= 4500
+            ? `Latencia elevada detectada na FlowAI: ${maxLatencyMs}ms.`
+            : "FlowAI operando com degradacao leve."),
+    };
+  }
+
+  return {
+    status: "operational" as const,
+    latencyMs: maxLatencyMs,
+    message: null,
   };
 }
 
@@ -1404,8 +1567,8 @@ async function probeTextTask(
     return {
       status: buildHealthStatusFromLatency(
         result.latencyMs,
-        input?.degradedAt || 5_500,
-        input?.partialAt || 9_500,
+        input?.degradedAt || 4_500,
+        input?.partialAt || 12_000,
       ),
       message: null,
       latencyMs: result.latencyMs,
@@ -1440,8 +1603,8 @@ async function probeJsonTask(
     return {
       status: buildHealthStatusFromLatency(
         result.latencyMs,
-        input?.degradedAt || 5_500,
-        input?.partialAt || 9_500,
+        input?.degradedAt || 4_500,
+        input?.partialAt || 12_000,
       ),
       message: null,
       latencyMs: result.latencyMs,
@@ -1488,29 +1651,23 @@ function buildAdaptiveMemorySnapshot() {
 }
 
 export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
+  if (
+    latestFlowAiHealthSnapshot &&
+    latestFlowAiHealthSnapshot.expiresAt > nowMs()
+  ) {
+    return cloneJsonValue(latestFlowAiHealthSnapshot.value);
+  }
+
   const checkedAt = new Date().toISOString();
   const [upstream, circuitBreakers] = await Promise.all([
     probeConfiguredProvidersUpstream(),
     getFlowAiCircuitSnapshot(),
   ]);
-  const upstreamProviderStatuses = Object.values(upstream.providers).map(
-    (provider) => provider.status,
-  );
-  const upstreamProviderLatencies = Object.values(upstream.providers).map(
-    (provider) => provider.latencyMs,
-  );
-  const upstreamProviderMessages = Object.values(upstream.providers).map(
-    (provider) => provider.message,
-  );
-
   const [
-    domainSuggestions,
-    ticketAi,
-    ticketSuggestion,
-    discordMessageAi,
-    adminAssistant,
-    affiliateInsight,
-    statusPageAi,
+    creativeTextProbe,
+    supportTextProbe,
+    structuredJsonProbe,
+    statusPageProbe,
   ] = await Promise.all([
     probeTextTask("domain_suggestions", [
       {
@@ -1533,27 +1690,6 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
         content: "Nao consigo acessar meu painel e o ticket ainda esta aberto.",
       },
     ]),
-    probeTextTask("ticket_suggestion", [
-      {
-        role: "system",
-        content:
-          "Voce entrega uma sugestao inicial de atendimento antes da abertura do ticket.",
-      },
-      {
-        role: "user",
-        content: "Preciso de ajuda com a configuracao do painel de tickets.",
-      },
-    ]),
-    probeTextTask("discord_mention", [
-      {
-        role: "system",
-        content: "Voce responde duvidas curtas no Discord em PT-BR.",
-      },
-      {
-        role: "user",
-        content: "Onde eu configuro os logs do ticket neste servidor?",
-      },
-    ]),
     probeJsonTask("admin_plan", [
       {
         role: "system",
@@ -1564,22 +1700,6 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
         role: "user",
         content:
           'Retorne {"intent":"execute","actions":[{"type":"create_channel","name":"suporte"}]}.',
-      },
-    ]),
-    probeJsonTask("affiliate_insight", [
-      {
-        role: "system",
-        content:
-          "Responda apenas JSON com type, title, body e confidence para um insight de afiliado.",
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          approvedConversions: 5,
-          pendingConversions: 2,
-          bestHourWindow: "19h e 22h",
-          topPlan: "Pro",
-        }),
       },
     ]),
     probeJsonTask("status_note", [
@@ -1596,51 +1716,38 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
     ]),
   ]);
 
-  const overallStatus = getWorstSystemStatus([
-    upstream.openai.status,
-    ...upstreamProviderStatuses,
-    domainSuggestions.status,
-    ticketAi.status,
-    ticketSuggestion.status,
-    discordMessageAi.status,
-    adminAssistant.status,
-    affiliateInsight.status,
-    statusPageAi.status,
-  ]);
+  const domainSuggestions = cloneIntegrationHealth(creativeTextProbe);
+  const ticketAi = cloneIntegrationHealth(supportTextProbe);
+  const ticketSuggestion = cloneIntegrationHealth(supportTextProbe);
+  const discordMessageAi = cloneIntegrationHealth(supportTextProbe);
+  const adminAssistant = cloneIntegrationHealth(structuredJsonProbe);
+  const affiliateInsight = cloneIntegrationHealth(structuredJsonProbe);
+  const statusPageAi = cloneIntegrationHealth(statusPageProbe);
+  const infrastructure = getFlowAiInfraSnapshot();
+  const observability = getFlowAiObservabilitySnapshot();
+  const overall = resolveFlowAiOverallHealth({
+    upstream,
+    integrations: {
+      domainSuggestions,
+      ticketAi,
+      ticketSuggestion,
+      discordMessageAi,
+      adminAssistant,
+      affiliateInsight,
+      statusPageAi,
+    },
+    circuitBreakers,
+    infrastructure,
+    observability,
+  });
 
-  const latencyCandidates = [
-    upstream.openai.latencyMs,
-    ...upstreamProviderLatencies,
-    domainSuggestions.latencyMs,
-    ticketAi.latencyMs,
-    ticketSuggestion.latencyMs,
-    discordMessageAi.latencyMs,
-    adminAssistant.latencyMs,
-    affiliateInsight.latencyMs,
-    statusPageAi.latencyMs,
-  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-
-  const overallMessage =
-    overallStatus === "operational"
-      ? null
-      : upstream.openai.message ||
-        upstreamProviderMessages.find(Boolean) ||
-        domainSuggestions.message ||
-        ticketAi.message ||
-        ticketSuggestion.message ||
-        discordMessageAi.message ||
-        adminAssistant.message ||
-        affiliateInsight.message ||
-        statusPageAi.message ||
-        "Instabilidade detectada no FlowAI.";
-
-  return {
-    ok: overallStatus === "operational" || overallStatus === "degraded_performance",
+  const response = {
+    ok: overall.status === "operational" || overall.status === "degraded_performance",
     checkedAt,
     overall: {
-      status: overallStatus,
-      latencyMs: latencyCandidates.length ? Math.max(...latencyCandidates) : null,
-      message: overallMessage,
+      status: overall.status,
+      latencyMs: overall.latencyMs,
+      message: overall.message,
     },
     upstream,
     integrations: {
@@ -1653,8 +1760,15 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
       statusPageAi,
     },
     adaptiveMemory: buildAdaptiveMemorySnapshot(),
-    infrastructure: getFlowAiInfraSnapshot(),
+    infrastructure,
     circuitBreakers,
-    observability: getFlowAiObservabilitySnapshot(),
+    observability,
+  } satisfies FlowAiHealthResponse;
+
+  latestFlowAiHealthSnapshot = {
+    value: cloneJsonValue(response),
+    expiresAt: nowMs() + FLOWAI_HEALTH_SNAPSHOT_TTL_MS,
   };
+
+  return response;
 }
