@@ -25,3 +25,5 @@ export default function ErrorPage({ reset }: ErrorPageProps) {
     </>
   );
 }
+
+//bh
