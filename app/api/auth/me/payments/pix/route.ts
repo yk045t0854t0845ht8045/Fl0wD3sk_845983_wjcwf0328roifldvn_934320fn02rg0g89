@@ -417,7 +417,7 @@ async function resolveCheckoutPlanForGuild(input: {
   if (!guildId) {
     return resolveCheckoutPlanWithoutGuild(input);
   }
-//t
+
   const selection = await resolveEffectivePlanSelection({
     userId: input.userId,
     guildId: guildId,
