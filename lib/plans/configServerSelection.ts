@@ -9,7 +9,7 @@ type ConfigRedirectBypassInput = {
   targetPlanCode?: string | null;
   searchParams?:
     | URLSearchParams
-    | Record<string, string | null | undefined>;
+    | Record<string, string | string[] | number | boolean | null | undefined>;
 };
 
 function normalizeLicensedServerCount(value: number) {
@@ -81,8 +81,15 @@ function readSearchParam(
     return typeof value === "string" ? value : null;
   }
 
-  const value = input[key];
-  return typeof value === "string" ? value : null;
+  const value = (input as Record<string, unknown>)[key];
+  if (value === null || value === undefined) return null;
+
+  if (Array.isArray(value)) {
+    const first = value[0];
+    return first !== null && first !== undefined ? String(first) : null;
+  }
+
+  return String(value);
 }
 
 function isTruthyQueryFlag(value: string | null) {
@@ -91,38 +98,60 @@ function isTruthyQueryFlag(value: string | null) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+/**
+ * Determines if the configuration server selection flow should be bypassed
+ * based on the user's current plan state and incoming search parameters.
+ *
+ * This is used to allow users to skip the server selection step when they are
+ * performing a specific action like a renewal or coming from a direct link
+ * that already implies a valid path.
+ */
 export function shouldBypassConfigServerSelectionBlock(
   input: ConfigRedirectBypassInput,
 ) {
-  const source =
-    readSearchParam(input.searchParams, "source")?.trim().toLowerCase() || null;
-  const renew = isTruthyQueryFlag(readSearchParam(input.searchParams, "renew"));
-  const fresh = isTruthyQueryFlag(readSearchParam(input.searchParams, "fresh"));
-  const hasActivePlan = hasActiveConfigSelectionPlan(input.userPlanState);
-  const currentPlanCode =
-    typeof input.userPlanState?.plan_code === "string"
-      ? input.userPlanState.plan_code.trim().toLowerCase()
-      : null;
-  const targetPlanCode =
-    typeof input.targetPlanCode === "string"
-      ? input.targetPlanCode.trim().toLowerCase()
-      : null;
+  if (!input) return false;
 
+  const { searchParams, userPlanState, targetPlanCode } = input;
+
+  // If no search params are provided, we definitely shouldn't bypass based on them
+  if (!searchParams) return false;
+
+  const source =
+    readSearchParam(searchParams, "source")?.trim().toLowerCase() || null;
+  const renew = isTruthyQueryFlag(readSearchParam(searchParams, "renew"));
+  const fresh = isTruthyQueryFlag(readSearchParam(searchParams, "fresh"));
+
+  const hasActivePlan = hasActiveConfigSelectionPlan(userPlanState);
+
+  // Bypass if user is specifically renewing
   if (renew) return true;
 
+  // Bypass if coming from trusted navigation sources
   if (
     source === "servers-plans" ||
-    source === "downgrade-regularization"
+    source === "downgrade-regularization" ||
+    source === "direct-billing"
   ) {
     return true;
   }
 
+  const currentPlanCode =
+    typeof userPlanState?.plan_code === "string"
+      ? userPlanState.plan_code.trim().toLowerCase()
+      : null;
+
+  const normalizedTargetPlanCode =
+    typeof targetPlanCode === "string"
+      ? targetPlanCode.trim().toLowerCase()
+      : null;
+
+  // Bypass if it's a "fresh" selection and the user is actually changing plans
   if (
     fresh &&
     hasActivePlan &&
-    targetPlanCode &&
+    normalizedTargetPlanCode &&
     currentPlanCode &&
-    currentPlanCode !== targetPlanCode
+    currentPlanCode !== normalizedTargetPlanCode
   ) {
     return true;
   }
