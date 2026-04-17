@@ -80,6 +80,38 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+const ACCOUNT_SIDEBAR_COLLAPSE_KEY = "flowdesk_account_sidebar_groups_v1";
+
+function buildAccountGroupKey(group: NavGroup, groupIndex: number) {
+  return `${group.category}-${groupIndex}`;
+}
+
+function buildDefaultCollapsedGroups() {
+  return Object.fromEntries(
+    NAV_GROUPS.map((group, groupIndex) => [buildAccountGroupKey(group, groupIndex), true]),
+  ) as Record<string, boolean>;
+}
+
+function readStoredCollapsedGroups() {
+  if (typeof window === "undefined") {
+    return buildDefaultCollapsedGroups();
+  }
+
+  const fallback = buildDefaultCollapsedGroups();
+
+  try {
+    const raw = window.localStorage.getItem(ACCOUNT_SIDEBAR_COLLAPSE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    return Object.fromEntries(
+      Object.keys(fallback).map((key) => [key, typeof parsed[key] === "boolean" ? parsed[key] : fallback[key]]),
+    ) as Record<string, boolean>;
+  } catch {
+    return fallback;
+  }
+}
+
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
 function AccountAvatar({
@@ -133,7 +165,8 @@ export function AccountWorkspace({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState("");
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => buildDefaultCollapsedGroups());
+  const [hasLoadedCollapsedGroups, setHasLoadedCollapsedGroups] = useState(false);
   const [pendingTab, setPendingTab] = useState<AccountTab | null>(null);
   const [, startSidebarNavigationTransition] = useTransition();
 
@@ -179,17 +212,17 @@ export function AccountWorkspace({
   }, [pathname]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      ACCOUNT_TABS.forEach((tab) => {
-        prefetchTab(tab);
-      });
-      router.prefetch("/servers");
-    }, 120);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
+    ACCOUNT_TABS.forEach((tab) => {
+      prefetchTab(tab);
+    });
+    router.prefetch("/servers");
+    router.prefetch("/dashboard");
   }, [prefetchTab, router]);
+
+  useEffect(() => {
+    setCollapsedGroups(readStoredCollapsedGroups());
+    setHasLoadedCollapsedGroups(true);
+  }, []);
 
   async function handleLogout() {
     if (isLoggingOut) return;
@@ -217,6 +250,29 @@ export function AccountWorkspace({
   }
 
   const normalizedSearch = sidebarSearch.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!hasLoadedCollapsedGroups) return;
+
+    try {
+      window.localStorage.setItem(ACCOUNT_SIDEBAR_COLLAPSE_KEY, JSON.stringify(collapsedGroups));
+    } catch {
+      // noop
+    }
+  }, [collapsedGroups, hasLoadedCollapsedGroups]);
+
+  useEffect(() => {
+    const activeGroupIndex = NAV_GROUPS.findIndex((group) =>
+      group.items.some((item) => item.id === activeTab),
+    );
+    if (activeGroupIndex < 0) return;
+
+    const groupKey = buildAccountGroupKey(NAV_GROUPS[activeGroupIndex], activeGroupIndex);
+    setCollapsedGroups((prev) => {
+      if (prev[groupKey] === false) return prev;
+      return { ...prev, [groupKey]: false };
+    });
+  }, [activeTab]);
 
   function matchesSearch(item: NavItem) {
     if (!normalizedSearch) return true;
@@ -303,19 +359,32 @@ export function AccountWorkspace({
             groupIndex === 0 ||
             (group.category !== NAV_GROUPS[groupIndex - 1]?.category);
 
-          const groupKey = `${group.category}-${groupIndex}`;
+          const groupKey = buildAccountGroupKey(group, groupIndex);
           const isCollapsed = collapsedGroups[groupKey] && !normalizedSearch;
           const isGroupActive = group.items.some((item) => item.id === activeTab);
+          const isGroupOpen = !isCollapsed && !normalizedSearch;
 
           return (
-            <div key={groupKey} className={groupIndex > 0 && shouldShowCategory ? "mt-[12px] border-t border-[#121212] pt-[12px]" : ""}>
+            <div key={groupKey} className={groupIndex > 0 && shouldShowCategory ? "mt-[12px]" : ""}>
               {shouldShowCategory && (
                 <button
                   type="button"
                   onClick={() => toggleGroup(groupKey)}
-                  className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3] ${isGroupActive ? "text-[#E3E3E3] font-semibold" : "text-[#B5B5B5]"}`}
+                  className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                    isGroupActive
+                      ? "bg-[#1E1E1E] text-[#F0F0F0] font-semibold"
+                      : isGroupOpen
+                        ? "bg-[#121212] text-[#D6D6D6]"
+                        : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                  }`}
                 >
-                  <span className={`inline-flex h-[22px] w-[22px] items-center justify-center group-hover:text-[#DADADA] ${isGroupActive ? "text-[#DADADA]" : "text-[#8A8A8A]"}`}>
+                  <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${
+                    isGroupActive
+                      ? "text-[#DADADA]"
+                      : isGroupOpen
+                        ? "text-[#C7C7C7]"
+                        : "text-[#8A8A8A] group-hover:text-[#DADADA]"
+                  }`}>
                      {group.category === "Conta" && <Settings2 className="h-[16px] w-[16px]" strokeWidth={1.9} />}
                      {group.category === "Cobrança" && <CreditCard className="h-[16px] w-[16px]" strokeWidth={1.9} />}
                      {group.category === "Ferramentas" && <Key className="h-[16px] w-[16px]" strokeWidth={1.9} />}
@@ -385,7 +454,7 @@ export function AccountWorkspace({
         })}
       </div>
 
-      <div ref={profileMenuRef} className="mt-[14px] border-t border-[#121212] pt-[14px]">
+      <div ref={profileMenuRef} className="mt-[14px]">
         <div className="relative">
           {isProfileMenuOpen && (
             <div

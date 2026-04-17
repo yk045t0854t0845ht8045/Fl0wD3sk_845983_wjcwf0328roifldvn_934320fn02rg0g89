@@ -6133,11 +6133,6 @@ export function ServerSettingsEditor({
                             {viewerOnlyMessage}
                           </p>
                         ) : null}
-                        {locked ? (
-                          <p className="text-[12px] leading-[1.55] text-[#C2C2C2]">
-                            Plano da conta expirado ou bot desligado neste servidor. Regularize o pagamento ou ajuste o plano da conta para liberar alteracoes novamente.
-                          </p>
-                        ) : null}
                         {errorMessage && !isUnauthorizedForSection ? (
                           <p className="text-[12px] leading-[1.55] text-[#D98A8A]">
                             {errorMessage}

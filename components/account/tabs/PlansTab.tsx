@@ -106,31 +106,24 @@ export function PlansTab() {
   const StatusIcon = config.icon;
 
   return (
-    <div className="mt-[32px] space-y-[28px]">
+    <div className="mt-[32px] space-y-[24px]">
       {/* Hero Plan Card */}
-      <div className="relative overflow-hidden rounded-[32px] border border-[#141414] bg-[#070707] p-[32px] md:p-[40px]">
-        {/* Abstract background elements */}
-        <div 
-          className="absolute -right-[60px] -top-[60px] h-[300px] w-[300px] blur-[120px] opacity-[0.15] pointer-events-none"
-          style={{ backgroundColor: config.color }}
-        />
-        <div className="absolute right-0 top-0 h-full w-[40%] bg-[linear-gradient(to_left,rgba(0,0,0,0.4)_0%,transparent_100%)] pointer-events-none" />
-        
-        <div className="relative z-10">
-          <div className="flex flex-col gap-[32px] lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-[24px]">
+      <div className="rounded-[24px] border border-[#141414] bg-[#0A0A0A] p-[24px]">
+        <div>
+          <div className="flex flex-col gap-[24px] lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-[20px]">
               <div 
-                className="flex h-[80px] w-[80px] shrink-0 items-center justify-center rounded-[24px] border border-[rgba(255,255,255,0.05)] shadow-[0_20px_50px_rgba(0,0,0,0.5)]"
+                className="flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-[22px] border border-[rgba(255,255,255,0.05)] shadow-[0_16px_40px_rgba(0,0,0,0.35)]"
                 style={{ backgroundColor: config.bg }}
               >
-                <StatusIcon className="h-[40px] w-[40px]" style={{ color: config.color }} />
+                <StatusIcon className="h-[36px] w-[36px]" style={{ color: config.color }} />
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-[12px]">
-                  <h2 className="text-[32px] font-bold tracking-tight text-white">{plan.name}</h2>
+                  <h2 className="text-[28px] font-bold tracking-tight text-white">{plan.name}</h2>
                   <StatusBadge status={plan.status} />
                 </div>
-                <p className="mt-[8px] max-w-[480px] text-[16px] leading-relaxed text-[#888888]">
+                <p className="mt-[8px] max-w-[480px] text-[15px] leading-relaxed text-[#888888]">
                   {config.description}
                 </p>
               </div>
@@ -138,14 +131,14 @@ export function PlansTab() {
 
             <button
               onClick={() => router.push("/servers/plans")}
-              className="flex h-[52px] items-center gap-[10px] rounded-[16px] bg-[#FFFFFF] px-[24px] text-[15px] font-bold text-[#000000] shadow-[0_4px_20px_rgba(255,255,255,0.1)] transition-all hover:scale-[1.02] active:scale-[0.98] hover:bg-[#F2F2F2]"
+              className="flex h-[48px] items-center gap-[10px] rounded-[16px] bg-[#111111] px-[22px] text-[15px] font-semibold text-[#EEEEEE] transition-colors hover:bg-[#1A1A1A]"
             >
               <ArrowRightLeft className="h-[18px] w-[18px]" strokeWidth={2.5} />
               <span>Gerenciar Plano</span>
             </button>
           </div>
 
-          <div className="mt-[40px] grid gap-[16px] sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-[28px] grid gap-[16px] sm:grid-cols-2 lg:grid-cols-3">
              <div className="group rounded-[20px] bg-[#0A0A0A] border border-[#141414] p-[20px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D]">
                 <p className="text-[12px] font-semibold uppercase tracking-widest text-[#555555]">Data de Ativação</p>
                 <div className="mt-[12px] flex items-center gap-[10px]">
@@ -174,7 +167,9 @@ export function PlansTab() {
                   <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[10px] bg-[#111111] text-[#666] group-hover:text-[#F2C823] transition-colors">
                     <Zap className="h-[16px] w-[16px]" />
                   </div>
-                  <p className="text-[16px] font-semibold text-[#EEEEEE]">{plan.recurrenceLabel}</p>
+                  <p className="text-[16px] font-semibold text-[#EEEEEE]">
+                    {plan.code.toLowerCase() === "basic" ? "Desativado" : plan.recurrenceLabel}
+                  </p>
                 </div>
              </div>
           </div>
@@ -183,18 +178,18 @@ export function PlansTab() {
 
       <div className="grid gap-[24px] lg:grid-cols-2">
         {/* Limits & Usage */}
-        <div className="rounded-[28px] border border-[#141414] bg-[#0A0A0A] p-[28px]">
+        <div className="rounded-[24px] border border-[#141414] bg-[#0A0A0A] p-[24px]">
           <div className="flex items-center gap-[12px]">
             <div className="flex h-[36px] w-[36px] items-center justify-center rounded-[10px] bg-[#111111]">
               <Activity className="h-[18px] w-[18px] text-[#A6A6A6]" />
             </div>
             <div>
-              <h3 className="text-[18px] font-bold text-white">Limites do Plano</h3>
+              <h3 className="text-[17px] font-bold text-white">Limites do Plano</h3>
               <p className="text-[13px] text-[#666666]">Consumo atual em relação as cotas</p>
             </div>
           </div>
           
-          <div className="mt-[32px] space-y-[24px]">
+          <div className="mt-[24px] space-y-[20px]">
             <div>
               <div className="mb-[10px] flex items-center justify-between px-[2px]">
                 <span className="text-[14px] font-medium text-[#A0A0A0]">Servidores Licenciados</span>
@@ -215,11 +210,11 @@ export function PlansTab() {
             </div>
 
             <div className="pt-[20px] border-t border-[#141414] grid grid-cols-2 gap-[16px]">
-               <div className="rounded-2xl border border-[#141414] bg-[#080808] p-[16px]">
+               <div className="rounded-[20px] border border-[#141414] bg-[#080808] p-[16px]">
                  <p className="text-[11px] font-bold uppercase tracking-widest text-[#444]">Automações</p>
                  <p className="mt-[6px] text-[15px] font-bold text-[#EEEEEE]">Habilitadas</p>
                </div>
-               <div className="rounded-2xl border border-[#141414] bg-[#080808] p-[16px]">
+               <div className="rounded-[20px] border border-[#141414] bg-[#080808] p-[16px]">
                  <p className="text-[11px] font-bold uppercase tracking-widest text-[#444]">Prioridade</p>
                  <p className="mt-[6px] text-[15px] font-bold text-[#EEEEEE]">Normal</p>
                </div>
@@ -228,20 +223,20 @@ export function PlansTab() {
         </div>
 
         {/* Benefits List */}
-        <div className="rounded-[28px] border border-[#141414] bg-[#0A0A0A] p-[28px]">
+        <div className="rounded-[24px] border border-[#141414] bg-[#0A0A0A] p-[24px]">
           <div className="flex items-center gap-[12px]">
             <div className="flex h-[36px] w-[36px] items-center justify-center rounded-[10px] bg-[#111111]">
               <CheckCircle2 className="h-[18px] w-[18px] text-[#A6A6A6]" />
             </div>
             <div>
-              <h3 className="text-[18px] font-bold text-white">Vantagens Incluídas</h3>
+              <h3 className="text-[17px] font-bold text-white">Vantagens Incluídas</h3>
               <p className="text-[13px] text-[#666666]">Funcionalidades liberadas no seu nível</p>
             </div>
           </div>
           
-          <div className="mt-[32px] grid gap-[12px]">
+          <div className="mt-[24px] grid gap-[12px]">
             {config.features.map((feature, i) => (
-              <div key={i} className="group flex items-center gap-[14px] rounded-[18px] border border-[#141414] bg-[#080808] px-[18px] py-[14px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D]">
+              <div key={i} className="group flex items-center gap-[14px] rounded-[18px] border border-[#141414] bg-[#080808] px-[16px] py-[14px] transition-all hover:border-[#1F1F1F] hover:bg-[#0D0D0D]">
                 <div className="flex h-[24px] w-[24px] items-center justify-center rounded-full bg-[rgba(52,168,83,0.1)] text-[#34A853] transition-colors group-hover:bg-[rgba(52,168,83,0.2)]">
                   <CheckCircle2 className="h-[14px] w-[14px]" />
                 </div>

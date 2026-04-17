@@ -27,7 +27,7 @@ export default async function ConfigPlanPage({ params }: ConfigPlanPageProps) {
     planCode: initialPlanCode,
     billingPeriodCode: resolvedPlan.isTrial ? "monthly" : "monthly",
   });
-  const user = await getCurrentUserFromSessionCookie();
+  const user = await getCurrentUserFromSessionCookie({ fullContext: true });
 
   if (!user) {
     redirect(buildLoginHref(canonicalPath));

@@ -37,7 +37,7 @@ export default async function ConfigPage({ searchParams }: ConfigPageProps) {
         fallbackPlanCode: "pro",
       })
     : "/config";
-  const user = await getCurrentUserFromSessionCookie();
+  const user = await getCurrentUserFromSessionCookie({ fullContext: true });
 
   if (!user) {
     redirect(buildLoginHref(requestedNextPath));

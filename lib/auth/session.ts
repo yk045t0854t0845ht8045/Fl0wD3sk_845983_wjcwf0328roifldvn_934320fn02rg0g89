@@ -177,7 +177,17 @@ export async function createUserSessionFromDiscordUser(
   };
 }
 
-export async function getCurrentAuthSessionFromCookie(): Promise<CurrentAuthSession | null> {
+export type GetAuthSessionOptions = {
+  /**
+   * Se true, carrega colunas pesadas (JSON) como cache de servidores e rascunhos de configuração.
+   * Use apenas páginas que realmente precisam desse contexto.
+   */
+  fullContext?: boolean;
+};
+
+export async function getCurrentAuthSessionFromCookie(
+  options: GetAuthSessionOptions = {},
+): Promise<CurrentAuthSession | null> {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(authConfig.sessionCookieName)?.value;
 
@@ -187,11 +197,14 @@ export async function getCurrentAuthSessionFromCookie(): Promise<CurrentAuthSess
   const supabase = getSupabaseAdminClientOrThrow();
   const nowIso = new Date().toISOString();
 
+  // Otimização: Não buscamos colunas JSON pesadas por padrão para acelerar a validação da sessão.
+  const selectColumns = options.fullContext
+    ? "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cache, discord_guilds_cached_at, config_current_step, config_draft, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email)"
+    : "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cached_at, config_current_step, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email)";
+
   const result = await supabase
     .from("auth_sessions")
-    .select(
-      "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cache, discord_guilds_cached_at, config_current_step, config_draft, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email)",
-    )
+    .select(selectColumns)
     .eq("session_token_hash", sessionTokenHash)
     .is("revoked_at", null)
     .gt("expires_at", nowIso)
@@ -213,10 +226,14 @@ export async function getCurrentAuthSessionFromCookie(): Promise<CurrentAuthSess
     discordRefreshToken: result.data.discord_refresh_token,
     discordTokenExpiresAt: result.data.discord_token_expires_at,
     activeGuildId: result.data.active_guild_id,
-    discordGuildsCache: parseDiscordGuildsCache(result.data.discord_guilds_cache),
+    discordGuildsCache: options.fullContext
+      ? parseDiscordGuildsCache(result.data.discord_guilds_cache)
+      : null,
     discordGuildsCachedAt: result.data.discord_guilds_cached_at,
     configCurrentStep: normalizeConfigStep(result.data.config_current_step) || 1,
-    configDraft: sanitizeConfigDraft(result.data.config_draft),
+    configDraft: options.fullContext
+      ? sanitizeConfigDraft(result.data.config_draft)
+      : createEmptyConfigDraft(),
     configContextUpdatedAt: result.data.config_context_updated_at,
   };
 }
@@ -332,8 +349,10 @@ export async function updateSessionConfigContext(
   };
 }
 
-export async function getCurrentUserFromSessionCookie() {
-  const session = await getCurrentAuthSessionFromCookie();
+export async function getCurrentUserFromSessionCookie(
+  options: GetAuthSessionOptions = {},
+) {
+  const session = await getCurrentAuthSessionFromCookie(options);
   return session?.user || null;
 }
 

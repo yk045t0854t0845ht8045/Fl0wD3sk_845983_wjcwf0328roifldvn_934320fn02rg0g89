@@ -583,11 +583,16 @@ function Menu<T extends string>({ items, onSelect, align = "left", anchor }: { i
       const offset = 8;
       const menuWidth = menuRef.current.offsetWidth || 300;
       const menuHeight = menuRef.current.offsetHeight || 332;
-      const availableBelow = window.innerHeight - anchor.bottom;
-      const availableAbove = anchor.top;
+      const availableBelow = window.innerHeight - anchor.bottom - viewportPadding;
+      const availableAbove = anchor.top - viewportPadding;
+      const canOpenDownward = availableBelow >= menuHeight;
+      const canOpenUpward = availableAbove >= menuHeight;
       const shouldOpenUpward =
-        availableBelow < menuHeight + viewportPadding &&
-        availableAbove > availableBelow;
+        !canOpenDownward && canOpenUpward
+          ? true
+          : !canOpenUpward && canOpenDownward
+            ? false
+            : availableAbove > availableBelow;
 
       const nextLeft =
         align === "right"
@@ -686,11 +691,16 @@ function EmojiAutocompleteMenu({
       const offset = 8;
       const menuWidth = menuRef.current.offsetWidth || Math.max(anchor.width, 320);
       const menuHeight = menuRef.current.offsetHeight || 320;
-      const availableBelow = window.innerHeight - anchor.bottom;
-      const availableAbove = anchor.top;
+      const availableBelow = window.innerHeight - anchor.bottom - viewportPadding;
+      const availableAbove = anchor.top - viewportPadding;
+      const canOpenDownward = availableBelow >= menuHeight;
+      const canOpenUpward = availableAbove >= menuHeight;
       const shouldOpenUpward =
-        availableBelow < menuHeight + viewportPadding &&
-        availableAbove > availableBelow;
+        !canOpenDownward && canOpenUpward
+          ? true
+          : !canOpenUpward && canOpenDownward
+            ? false
+            : availableAbove > availableBelow;
 
       const nextLeft = Math.min(
         window.innerWidth - menuWidth - viewportPadding,

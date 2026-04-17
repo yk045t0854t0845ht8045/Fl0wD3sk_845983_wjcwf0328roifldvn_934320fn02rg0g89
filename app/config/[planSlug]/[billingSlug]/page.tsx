@@ -38,7 +38,7 @@ export default async function ConfigPlanBillingPage({
     planCode: resolvedPricing.code,
     billingPeriodCode: resolvedPricing.billingPeriodCode,
   });
-  const user = await getCurrentUserFromSessionCookie();
+  const user = await getCurrentUserFromSessionCookie({ fullContext: true });
 
   if (!user) {
     redirect(buildLoginHref(canonicalPath));

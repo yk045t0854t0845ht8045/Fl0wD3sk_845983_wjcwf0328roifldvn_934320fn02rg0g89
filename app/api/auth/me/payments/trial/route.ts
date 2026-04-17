@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { clearPlanStateCacheForUser } from "@/lib/account/managedPlanState";
 import {
   assertUserAdminInGuildOrNull,
   hasAcceptedTeamAccessToGuild,
@@ -99,7 +100,7 @@ function toApiOrder(
   };
 }
 
-async function ensureGuildAccess(guildId: string) {
+async function ensureGuildAccess(guildId: string | null) {
   const sessionData = await resolveSessionAccessToken();
   if (!sessionData?.authSession) {
     return {
@@ -118,6 +119,15 @@ async function ensureGuildAccess(guildId: string) {
         { ok: false, message: "Token OAuth ausente na sessao." },
         { status: 401 },
       ),
+    };
+  }
+
+  if (!guildId) {
+    return {
+      ok: true as const,
+      context: {
+        sessionData,
+      },
     };
   }
 
@@ -171,7 +181,8 @@ async function ensureGuildAccess(guildId: string) {
   };
 }
 
-async function getLatestApprovedLicenseCoverageForGuild(guildId: string) {
+async function getLatestApprovedLicenseCoverageForGuild(guildId: string | null) {
+  if (!guildId) return null;
   const approvedOrders = await getApprovedOrdersForGuild<PaymentOrderRecord>(
     guildId,
     PAYMENT_ORDER_SELECT_COLUMNS,
@@ -179,13 +190,13 @@ async function getLatestApprovedLicenseCoverageForGuild(guildId: string) {
   return resolveLatestLicenseCoverageFromApprovedOrders(approvedOrders);
 }
 
-async function getLatestUserOrderForGuild(userId: number, guildId: string) {
+async function getLatestUserOrderForGuild(userId: number, guildId: string | null) {
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
     .from("payment_orders")
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
     .eq("user_id", userId)
-    .eq("guild_id", guildId)
+    .filter("guild_id", guildId === null ? "is" : "eq", guildId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle<PaymentOrderRecord>();
@@ -232,22 +243,18 @@ export async function POST(request: Request) {
     }
 
     const guildId = normalizeGuildId(body.guildId);
-    if (!guildId) {
-      return NextResponse.json(
-        { ok: false, message: "Guild ID invalido para ativacao gratuita." },
-        { status: 400 },
-      );
-    }
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) return access.response;
 
     const user = access.context.sessionData.authSession.user;
-    await cleanupExpiredUnpaidServerSetups({
-      userId: user.id,
-      guildId,
-      source: "payment_trial_post",
-    });
+    if (guildId) {
+      await cleanupExpiredUnpaidServerSetups({
+        userId: user.id,
+        guildId,
+        source: "payment_trial_post",
+      });
+    }
 
     const basicPlanAvailability = await getBasicPlanAvailability(user.id);
     if (!basicPlanAvailability.isAvailable) {
@@ -412,6 +419,7 @@ export async function POST(request: Request) {
     });
 
     await syncUserPlanStateFromOrder(securedOrder.order);
+    clearPlanStateCacheForUser(user.id);
 
     return NextResponse.json({
       ok: true,

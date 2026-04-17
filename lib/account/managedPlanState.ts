@@ -62,6 +62,14 @@ function resolveUpgradeRecommendation(input: {
   };
 }
 
+/**
+ * Força a limpeza do cache de estado do plano para um usuário específico.
+ * Útil após processar pagamentos ou ativações de teste para garantir sincronização imediata.
+ */
+export function clearPlanStateCacheForUser(userId: number) {
+  planStateCache.delete(userId);
+}
+
 export async function getManagedPlanStateForUser(userId: number): Promise<ManagedPlanState> {
   const cached = planStateCache.get(userId);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {

@@ -10,31 +10,72 @@ function resolveSupabaseEnv() {
   };
 }
 
-const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_TIMEOUT_MS = 8000;
+const MAX_RETRIES = 5;
+const INITIAL_BACKOFF_MS = 200;
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
- * Custom fetch wrapper to implement timeouts for Supabase requests.
+ * Custom fetch wrapper to implement timeouts and automatic retries for Supabase requests.
+ * Transient errors (502, 503, 504) and timeouts are retried with exponential backoff.
  */
 async function fetchWithTimeout(
   url: string | URL | Request,
   options: RequestInit = {},
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  let attempt = 0;
 
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Supabase request timed out after ${DEFAULT_TIMEOUT_MS}ms`);
+  while (attempt < MAX_RETRIES) {
+    attempt++;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+
+      // Se for um erro transiente do servidor (Gateway Timeout, Bad Gateway, Service Unavailable), tenta novamente
+      if (
+        attempt < MAX_RETRIES &&
+        (response.status === 502 || response.status === 503 || response.status === 504)
+      ) {
+        console.warn(`[Supabase] Erro transiente ${response.status} na tentativa ${attempt}. Retentando...`);
+        clearTimeout(timeoutId);
+        await sleep(INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1));
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.name === "AbortError";
+      
+      if (attempt < MAX_RETRIES && (isTimeout || error instanceof TypeError)) {
+        // TypeError geralmente indica erro de rede/conexao abortada
+        console.warn(
+          `[Supabase] ${isTimeout ? "Timeout" : "Erro de Rede"} na tentativa ${attempt}. Retentando em ${
+            INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1)
+          }ms...`,
+        );
+        clearTimeout(timeoutId);
+        await sleep(INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1));
+        continue;
+      }
+
+      if (isTimeout) {
+        throw new Error(`Supabase request timed out after ${MAX_RETRIES} attempts of ${DEFAULT_TIMEOUT_MS}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
   }
+
+  throw new Error(`Falha ao processar requisicao Supabase apos ${MAX_RETRIES} tentativas.`);
 }
 
 function buildClient(supabaseUrl: string, serviceRoleKey: string): SupabaseClient {

@@ -695,13 +695,11 @@ export function ConfigFlow({
             ? 4
             : checkoutQuery
               ? 4
-              : shouldRespectHash && resolvedActiveGuildId
+              : shouldRespectHash && (resolvedActiveGuildId || initialHashStep === 4)
                 ? normalizeFlowStep(initialHashStep)
-                : shouldRespectHash && !resolvedActiveGuildId
+                : queryGuildId
                   ? 1
-                  : queryGuildId
-                    ? 1
-                    : normalizeFlowStep(mergedContext.activeStep);
+                  : normalizeFlowStep(mergedContext.activeStep);
         const hydratedContext = toStoredConfigContext({
           activeGuildId: resolvedActiveGuildId,
           activeStep: resolvedActiveStep,
@@ -818,7 +816,7 @@ export function ConfigFlow({
         });
         const payload = (await response.json()) as ServersApiResponse;
 
-        if (!isMounted || !response.ok || !payload.ok || !payload.servers) {
+        if (!response.ok || !payload.ok || !payload.servers) {
           return;
         }
 
@@ -1148,11 +1146,30 @@ export function ConfigFlow({
   }, [setAndSyncContext]);
 
   const handleStepFourApproved = useCallback(() => {
-    // Quando aprovado, liberamos a entrada nos passos de config (1, 2, 3)
+    // Detectamos se o usuário chegou aqui por causa de um limite de servidores atingido.
+    // Se sim, o profissional é mandá-lo de volta para o passo 1 para cadastrar o novo servidor imediatamente.
+    const searchParams = new URLSearchParams(window.location.search);
+    const isServerLimitUpgrade = searchParams.get("reason") === "server-limit";
+
+    if (isServerLimitUpgrade) {
+      // Se for upgrade por limite, manda pro passo 1 para cadastrar o novo servidor
+      setAndSyncContext({ activeStep: 1 }, true);
+      setIsTransitioningStep(true);
+      setStepHash(1);
+      return;
+    }
+
+    // Se o usuário já tem servidores gerenciados (sem ser por limite), manda pro dashboard com cache-buster
+    if (managedServers.length > 0) {
+      window.location.assign(`/servers/?v=${Date.now()}`);
+      return;
+    }
+
+    // Primeira vez: passo 1
     setAndSyncContext({ activeStep: 1 }, true);
     setIsTransitioningStep(true);
     setStepHash(1);
-  }, [setAndSyncContext]);
+  }, [managedServers, setAndSyncContext]);
 
   const handleServerSwitcherSelect = useCallback(
     async (guildId: string) => {

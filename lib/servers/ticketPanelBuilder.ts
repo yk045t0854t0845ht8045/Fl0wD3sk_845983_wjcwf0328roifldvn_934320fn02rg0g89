@@ -267,22 +267,29 @@ export function createDefaultTicketPanelLayout(
 
   return [
     {
-      id: createTicketPanelComponentId("content"),
-      type: "content",
-      markdown: buildMarkdownFromLegacy(legacy),
-      accessory: null,
-    },
-    {
-      id: createTicketPanelComponentId("separator"),
-      type: "separator",
-      spacing: "md",
-    },
-    {
-      id: createTicketPanelComponentId("button"),
-      type: "button",
-      label: buttonLabel,
-      style: "primary",
-      disabled: false,
+      id: createTicketPanelComponentId("container"),
+      type: "container",
+      accentColor: "",
+      children: [
+        {
+          id: createTicketPanelComponentId("content"),
+          type: "content",
+          markdown: buildMarkdownFromLegacy(legacy),
+          accessory: null,
+        },
+        {
+          id: createTicketPanelComponentId("separator"),
+          type: "separator",
+          spacing: "md",
+        },
+        {
+          id: createTicketPanelComponentId("button"),
+          type: "button",
+          label: buttonLabel,
+          style: "primary",
+          disabled: false,
+        },
+      ],
     },
   ];
 }

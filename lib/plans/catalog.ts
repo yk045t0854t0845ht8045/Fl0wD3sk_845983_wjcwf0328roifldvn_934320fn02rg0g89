@@ -285,7 +285,11 @@ export function resolvePlanBillingPeriodSlug(
 export function getAvailableBillingPeriodsForPlan(value: unknown) {
   const plan = resolvePlanDefinition(value);
   if (plan.isTrial) {
-    return [PLAN_BILLING_PERIOD_BY_CODE.monthly];
+    const monthly = { ...PLAN_BILLING_PERIOD_BY_CODE.monthly };
+    if (plan.code === "basic") {
+      monthly.label = "7 Dias";
+    }
+    return [monthly];
   }
   return PLAN_BILLING_PERIOD_ORDER.map(
     (periodCode) => PLAN_BILLING_PERIOD_BY_CODE[periodCode],
@@ -360,7 +364,7 @@ export function resolvePlanPricing(
       compareTotalAmount: roundMoney(plan.comparePrice),
       billingPeriodCode: "monthly",
       billingPeriodSlug: PLAN_BILLING_PERIOD_BY_CODE.monthly.slug,
-      billingPeriodLabel: "Teste",
+      billingPeriodLabel: plan.code === "basic" ? "7 Dias" : "Teste",
       billingPeriodMonths: 1,
       billingCycleDays: Math.max(plan.billingCycleDays, 1),
       billingLabel: plan.billingLabel,

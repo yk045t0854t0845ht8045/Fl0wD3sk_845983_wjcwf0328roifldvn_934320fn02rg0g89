@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { ServersWorkspace } from "@/components/servers/ServersWorkspace";
-import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
+import { getServersWorkspaceBootstrap } from "@/lib/servers/serversWorkspaceBootstrap";
 
 type ServersByGuildPageProps = {
   params: Promise<{
@@ -21,21 +21,11 @@ function normalizeServerTab() {
   return "settings" as const;
 }
 
-function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
-  if (!avatarHash) return null;
-  const extension = avatarHash.startsWith("a_") ? "gif" : "png";
-  return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
-}
-
 export default async function ServersByGuildPage({
   params,
   searchParams,
 }: ServersByGuildPageProps) {
-  const user = await getCurrentUserFromSessionCookie();
-
-  if (!user) {
-    redirect("/login");
-  }
+  const workspace = await getServersWorkspaceBootstrap();
 
   const routeParams = await params;
   const safeGuildId = normalizeGuildId(routeParams.guildId);
@@ -51,14 +41,11 @@ export default async function ServersByGuildPage({
 
   return (
     <ServersWorkspace
-      displayName={user.display_name}
-      currentAccount={{
-        authUserId: user.id,
-        discordUserId: user.discord_user_id,
-        displayName: user.display_name,
-        username: user.username,
-        avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar),
-      }}
+      displayName={workspace.displayName}
+      currentAccount={workspace.currentAccount}
+      initialServers={workspace.initialServers}
+      initialTeams={workspace.initialTeams}
+      initialPendingInvites={workspace.initialPendingInvites}
       initialGuildId={safeGuildId}
       initialTab={tab}
     />

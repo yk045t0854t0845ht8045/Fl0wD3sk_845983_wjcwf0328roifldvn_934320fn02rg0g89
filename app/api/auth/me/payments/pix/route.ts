@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { clearPlanStateCacheForUser } from "@/lib/account/managedPlanState";
 import {
   assertUserAdminInGuildOrNull,
   hasAcceptedTeamAccessToGuild,
@@ -656,7 +657,7 @@ async function getLatestOrderForUserAndGuild(userId: number, guildId: string | n
     .from("payment_orders")
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
     .eq("user_id", userId)
-    .eq("guild_id", guildId)
+    .filter("guild_id", guildId === null ? "is" : "eq", guildId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle<PaymentOrderRecord>();
@@ -674,7 +675,7 @@ async function getOrderByCodeForGuild(guildId: string | null, orderCode: number)
   const result = await supabase
     .from("payment_orders")
     .select(PAYMENT_ORDER_SELECT_COLUMNS)
-    .eq("guild_id", guildId)
+    .filter("guild_id", guildId === null ? "is" : "eq", guildId)
     .eq("order_number", orderCode)
     .maybeSingle<PaymentOrderRecord | null>();
 
@@ -1079,6 +1080,7 @@ async function finalizeCreditCoveredCheckoutOrder(input: {
   );
 
   await syncUserPlanStateFromOrder(updatedOrderResult.data);
+  clearPlanStateCacheForUser(input.order.user_id);
 
   return ensureCheckoutAccessTokenForOrder({
     order: updatedOrderResult.data,
@@ -1107,13 +1109,7 @@ export async function GET(request: Request) {
       );
     }
 
-    const guildId = guildIdFromQuery || sessionData.authSession.activeGuildId;
-    if (!guildId) {
-      return NextResponse.json(
-        { ok: false, message: "Servidor nao definido para checkout." },
-        { status: 400 },
-      );
-    }
+    const guildId = guildIdFromQuery || sessionData.authSession.activeGuildId || null;
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {
@@ -1243,6 +1239,10 @@ export async function GET(request: Request) {
     ) {
       try {
         latestOrder = await reconcilePixOrderFromProvider(latestOrder, "poll");
+        if (latestOrder?.status === "approved") {
+          // Garante cache limpo se o polling acabou de aprovar o pedido
+          clearPlanStateCacheForUser(sessionData.authSession.user.id);
+        }
       } catch {
         await createPaymentOrderEventSafe(
           latestOrder.id,
@@ -1921,6 +1921,7 @@ export async function POST(request: Request) {
 
       if (updatedOrderResult.data.status === "approved") {
         await syncUserPlanStateFromOrder(updatedOrderResult.data);
+        clearPlanStateCacheForUser(user.id);
       }
 
       return respond({

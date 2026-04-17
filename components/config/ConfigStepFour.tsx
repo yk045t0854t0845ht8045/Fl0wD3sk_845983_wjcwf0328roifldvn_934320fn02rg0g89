@@ -1200,14 +1200,18 @@ function setCheckoutStatusQuery(input: {
 }
 
 function buildPaymentOrderLookupUrl(input: {
-  guildId: string;
+  guildId: string | null;
   orderCode?: number | null;
   checkoutToken?: string | null;
   paymentId?: string | null;
   paymentRef?: string | null;
   status?: string | null;
 }) {
-  const params = new URLSearchParams({ guildId: input.guildId });
+  const params = new URLSearchParams();
+
+  if (input.guildId) {
+    params.set("guildId", input.guildId);
+  }
 
   if (input.orderCode) {
     params.set("code", String(input.orderCode));
@@ -1303,17 +1307,17 @@ function formatCooldownMessage(seconds: number | null | undefined) {
 
 function resolveCardPublicKey() {
   const candidates = [
-    process.env.NEXT_PUBLIC_MERCADO_PAGO_CARD_PUBLIC_KEY ||
-      null,
+    process.env.NEXT_PUBLIC_MERCADO_PAGO_CARD_TEST_PUBLIC_KEY || null,
+    process.env.NEXT_PUBLIC_MERCADO_PAGO_CARD_PUBLIC_KEY || null,
     process.env.NEXT_PUBLIC_MERCADO_PAGO_CARD_PRODUCTION_PUBLIC_KEY || null,
     process.env.NEXT_PUBLIC_MERCADO_PAGO_PUBLIC_KEY || null,
-    process.env.NEXT_PUBLIC_MERCADO_PAGO_CARD_TEST_PUBLIC_KEY || null,
   ]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
 
+  // Favor test keys for sandbox mode as requested
   const key =
-    candidates.find((value) => !value.startsWith("TEST-")) ||
+    candidates.find((value) => value.startsWith("TEST-")) ||
     candidates[0] ||
     null;
   if (!key) return null;

@@ -4,6 +4,7 @@ export type MaintenanceArea =
   | "landing"
   | "affiliates"
   | "domains"
+  | "dashboard"
   | "servers"
   | "account"
   | "status";
@@ -35,6 +36,13 @@ const MAINTENANCE_CONTENT: Record<MaintenanceArea, MaintenanceContent> = {
     title: "Sistema de dominios em manutencao",
     description:
       "A area de dominios esta temporariamente indisponivel enquanto finalizamos algumas melhorias. Tente novamente em breve.",
+    fallbackHref: "/",
+  },
+  dashboard: {
+    envKey: "MANUTENTION_DASHBOARD",
+    title: "Dashboard em manutencao",
+    description:
+      "Estamos ajustando o dashboard principal para liberar esta area com mais estabilidade. Volte em breve.",
     fallbackHref: "/",
   },
   servers: {

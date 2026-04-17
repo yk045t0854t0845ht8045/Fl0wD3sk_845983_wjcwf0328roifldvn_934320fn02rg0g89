@@ -152,7 +152,7 @@ function normalizeMercadoPagoIsoDate(value: string | null | undefined) {
 }
 
 function resolveMercadoPagoAccessToken() {
-  const token = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+  const token = process.env.MERCADO_PAGO_TEST_ACCESS_TOKEN || process.env.MERCADO_PAGO_ACCESS_TOKEN;
   if (typeof token !== "string") return null;
   const normalized = token.trim();
   return normalized || null;
@@ -169,10 +169,10 @@ function getMercadoPagoAccessTokenOrThrow() {
 
 function resolveMercadoPagoCardAccessToken() {
   const candidates = [
+    process.env.MERCADO_PAGO_CARD_TEST_ACCESS_TOKEN,
     process.env.MERCADO_PAGO_CARD_ACCESS_TOKEN,
     process.env.MERCADO_PAGO_CARD_PRODUCTION_ACCESS_TOKEN,
     process.env.MERCADO_PAGO_ACCESS_TOKEN,
-    process.env.MERCADO_PAGO_CARD_TEST_ACCESS_TOKEN,
   ]
     .map((token) => (typeof token === "string" ? token.trim() : ""))
     .filter(Boolean);
@@ -181,7 +181,8 @@ function resolveMercadoPagoCardAccessToken() {
     return null;
   }
 
-  return candidates.find((token) => !token.startsWith("TEST-")) || candidates[0];
+  // Prefer test tokens if available for sandbox mode
+  return candidates.find((token) => token.startsWith("TEST-")) || candidates[0];
 }
 
 function getMercadoPagoCardAccessTokenOrThrow() {

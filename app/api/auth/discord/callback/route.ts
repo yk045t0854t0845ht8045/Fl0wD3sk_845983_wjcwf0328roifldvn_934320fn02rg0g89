@@ -1,18 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   authConfig,
-  buildLoginSuccessLocation,
   isSecureRequest,
   normalizeInternalNextPath,
 } from "@/lib/auth/config";
 import {
   exchangeCodeForToken,
-  fetchDiscordGuilds,
   fetchDiscordUser,
 } from "@/lib/auth/discord";
-import { filterAccessibleGuilds } from "@/lib/auth/discordGuildAccess";
 import { createUserSessionFromDiscordUser } from "@/lib/auth/session";
-import { getLockedGuildLicenseMap } from "@/lib/payments/licenseStatus";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -21,8 +17,6 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
-import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
-
 function buildLoginRedirect(request: NextRequest) {
   return new URL("/login", request.url);
 }
@@ -46,32 +40,6 @@ function redirectWithLocation(location: string) {
       Location: location,
     },
   }));
-}
-
-async function hasApprovedServerForUser(userId: number) {
-  const supabase = getSupabaseAdminClientOrThrow();
-
-  const result = await supabase
-    .from("payment_orders")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("status", "approved")
-    .limit(1)
-    .maybeSingle<{ id: number }>();
-
-  if (result.error) {
-    throw new Error(result.error.message);
-  }
-
-  return Boolean(result.data?.id);
-}
-
-async function hasAccessibleLicensedServer(accessToken: string) {
-  const guilds = filterAccessibleGuilds(await fetchDiscordGuilds(accessToken));
-  if (!guilds.length) return false;
-
-  const lockedGuildMap = await getLockedGuildLicenseMap(guilds.map((guild) => guild.id));
-  return lockedGuildMap.size > 0;
 }
 
 export async function GET(request: NextRequest) {
@@ -149,21 +117,9 @@ export async function GET(request: NextRequest) {
       discordTokenExpiresAt,
     });
 
-    let hasManagedServerAccess = false;
-    try {
-      const [hasOwnApprovedServer, hasAccessibleLicensedGuild] = await Promise.all([
-        hasApprovedServerForUser(user.id),
-        hasAccessibleLicensedServer(tokenPayload.access_token),
-      ]);
-      hasManagedServerAccess = hasOwnApprovedServer || hasAccessibleLicensedGuild;
-    } catch {
-      hasManagedServerAccess = false;
-    }
     const successLocation = nextPathCookie
       ? `${request.nextUrl.origin}${nextPathCookie}`
-      : hasManagedServerAccess
-        ? `${request.nextUrl.origin}/servers`
-        : buildLoginSuccessLocation(request.nextUrl.origin);
+      : `${request.nextUrl.origin}/dashboard`;
     const response = redirectWithLocation(successLocation);
 
     response.cookies.set(authConfig.sessionCookieName, session.sessionToken, {
@@ -187,7 +143,6 @@ export async function GET(request: NextRequest) {
       outcome: "succeeded",
       metadata: {
         redirectTo: successLocation,
-        hasManagedServerAccess,
       },
     });
     return attachRequestId(response, initialRequestContext.requestId);

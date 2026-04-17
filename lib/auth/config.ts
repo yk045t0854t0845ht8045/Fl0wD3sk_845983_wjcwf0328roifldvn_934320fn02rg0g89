@@ -62,8 +62,8 @@ export const authConfig = {
   discordRedirectUriProd: normalizeProdRedirectUri(
     process.env.DISCORD_REDIRECT_URI_PROD || resolveDefaultProdRedirectUri(),
   ),
-  loginSuccessBasePath: process.env.LOGIN_SUCCESS_BASE_PATH || "/config",
-  loginSuccessHashPath: process.env.LOGIN_SUCCESS_HASH_PATH || "/step/1",
+  loginSuccessBasePath: process.env.LOGIN_SUCCESS_BASE_PATH || "/dashboard",
+  loginSuccessHashPath: process.env.LOGIN_SUCCESS_HASH_PATH || "",
   oauthStateCookieName: "flowdesk_oauth_state",
   oauthRedirectUriCookieName: "flowdesk_oauth_redirect_uri",
   oauthNextPathCookieName: "flowdesk_oauth_next_path",
@@ -87,7 +87,7 @@ export function isSecureRequest(request: NextRequest) {
 }
 
 function normalizeBasePath(path: string) {
-  if (!path) return "/config";
+  if (!path) return "/dashboard";
   return path.startsWith("/") ? path : `/${path}`;
 }
 
