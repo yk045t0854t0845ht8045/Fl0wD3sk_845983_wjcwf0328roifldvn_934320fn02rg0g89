@@ -413,13 +413,14 @@ async function resolveCheckoutPlanForGuild(input: {
   requestedPlanCode?: unknown;
   requestedBillingPeriodCode?: unknown;
 }) {
-  if (!input.guildId) {
+  const { guildId } = input;
+  if (!guildId) {
     return resolveCheckoutPlanWithoutGuild(input);
   }
 
   const selection = await resolveEffectivePlanSelection({
     userId: input.userId,
-    guildId: input.guildId,
+    guildId: guildId,
     preferredPlanCode: input.requestedPlanCode,
     preferredBillingPeriodCode: input.requestedBillingPeriodCode,
   });

@@ -269,6 +269,13 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!guildId) {
+      return NextResponse.json(
+        { ok: false, message: "ID do servidor e obrigatorio para ativar o teste." },
+        { status: 400 },
+      );
+    }
+
     const checkoutPlan = await resolveEffectivePlanSelection({
       userId: user.id,
       guildId,
