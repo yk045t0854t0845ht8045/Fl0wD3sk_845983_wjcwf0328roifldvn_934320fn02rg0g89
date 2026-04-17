@@ -1,10 +1,14 @@
 import { redirect } from "next/navigation";
+import { buildLoginHref } from "@/lib/auth/paths";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 import { getManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
 
-function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
-  if (!avatarHash) return null;
+function buildDiscordAvatarUrl(
+  discordUserId: string | null,
+  avatarHash: string | null,
+) {
+  if (!avatarHash || !discordUserId) return null;
   const extension = avatarHash.startsWith("a_") ? "gif" : "png";
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }
@@ -14,6 +18,10 @@ export async function getServersWorkspaceBootstrap() {
 
   if (!user) {
     redirect("/login");
+  }
+
+  if (!user.discord_user_id) {
+    redirect(buildLoginHref("/servers", "link"));
   }
 
   const [initialServers, teamsSnapshot] = await Promise.all([

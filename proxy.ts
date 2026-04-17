@@ -69,6 +69,35 @@ function buildProtectedErrorResponse(
   return response;
 }
 
+function buildRewriteResponse(
+  request: NextRequest,
+  requestHeaders: Headers,
+  requestId: string,
+  csp: string,
+  pathname: string,
+) {
+  const rewriteUrl = request.nextUrl.clone();
+  rewriteUrl.pathname = pathname;
+
+  const response = NextResponse.rewrite(rewriteUrl, {
+    request: {
+      headers: requestHeaders,
+    },
+  });
+
+  applyStandardSecurityHeaders(response, {
+    contentSecurityPolicy: csp,
+    requestId,
+    noIndex: rewriteUrl.pathname.startsWith("/api/"),
+  });
+
+  if (isSensitiveApiPath(rewriteUrl.pathname)) {
+    applySensitiveApiHeaders(response);
+  }
+
+  return response;
+}
+
 export function proxy(request: NextRequest) {
   const requestId =
     request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
@@ -78,6 +107,19 @@ export function proxy(request: NextRequest) {
   const csp = buildContentSecurityPolicy({
     isDevelopment: process.env.NODE_ENV !== "production",
   });
+
+  if (
+    request.nextUrl.pathname === "/api/auth/discord/callback" ||
+    request.nextUrl.pathname === "/api/auth/discord/callback/"
+  ) {
+    return buildRewriteResponse(
+      request,
+      requestHeaders,
+      requestId,
+      csp,
+      "/api/auth/discord-callback",
+    );
+  }
 
   if (
     requiresSameOriginProtection(request.nextUrl.pathname, request.method) &&

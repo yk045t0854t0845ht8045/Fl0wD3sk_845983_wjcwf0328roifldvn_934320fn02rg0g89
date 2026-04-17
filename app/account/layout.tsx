@@ -3,8 +3,11 @@ import { AccountWorkspace } from "@/components/account/AccountWorkspace";
 import { MaintenanceGate } from "@/components/common/MaintenanceGate";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 
-function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
-  if (!avatarHash) return null;
+function buildDiscordAvatarUrl(
+  discordUserId: string | null,
+  avatarHash: string | null,
+) {
+  if (!avatarHash || !discordUserId) return null;
   const extension = avatarHash.startsWith("a_") ? "gif" : "png";
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }

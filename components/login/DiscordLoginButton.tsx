@@ -6,9 +6,13 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 
 type DiscordLoginButtonProps = {
   href: string;
+  label?: string;
 };
 
-export function DiscordLoginButton({ href }: DiscordLoginButtonProps) {
+export function DiscordLoginButton({
+  href,
+  label = "Continuar com Discord",
+}: DiscordLoginButtonProps) {
   const [loading, setLoading] = useState(false);
 
   function handleClick() {
@@ -44,10 +48,10 @@ export function DiscordLoginButton({ href }: DiscordLoginButtonProps) {
               alt="Discord"
               width={20}
               height={20}
-              className="h-[20px] w-auto shrink-0"
+              className="h-[20px] w-[20px] shrink-0"
               priority
             />
-            <span>Continuar com Discord</span>
+            <span>{label}</span>
           </>
         )}
       </span>

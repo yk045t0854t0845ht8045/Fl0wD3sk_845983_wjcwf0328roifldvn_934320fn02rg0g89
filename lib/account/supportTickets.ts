@@ -26,8 +26,12 @@ type SupportTicketRow = Omit<SupportTicket, "access_code"> & {
 };
 
 export async function getSupportTicketsForDiscordUser(
-  discordUserId: string,
+  discordUserId: string | null,
 ): Promise<SupportTicket[]> {
+  if (!discordUserId) {
+    return [];
+  }
+
   const supabase = getSupabaseAdminClientOrThrow();
   const { data, error } = await supabase
     .from("tickets")

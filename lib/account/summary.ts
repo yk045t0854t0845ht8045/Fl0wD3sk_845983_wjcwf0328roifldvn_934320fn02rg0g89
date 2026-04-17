@@ -21,7 +21,10 @@ export type AccountSummary = {
   initialTickets?: SupportTicket[];
 };
 
-export async function getAccountSummary(userId: string, discordUserId: string): Promise<AccountSummary> {
+export async function getAccountSummary(
+  userId: string,
+  discordUserId: string | null,
+): Promise<AccountSummary> {
   const supabase = getSupabaseAdminClientOrThrow();
 
   try {
@@ -40,7 +43,13 @@ export async function getAccountSummary(userId: string, discordUserId: string): 
       supabase.from("auth_user_api_keys").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("payment_methods").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "active"),
       supabase.from("payment_orders").select("*", { count: "exact", head: true }).eq("user_id", userId),
-      supabase.from("tickets").select("*", { count: "exact", head: true }).eq("user_id", discordUserId).eq("guild_id", OFFICIAL_DISCORD_GUILD_ID),
+      discordUserId
+        ? supabase
+            .from("tickets")
+            .select("*", { count: "exact", head: true })
+            .eq("user_id", discordUserId)
+            .eq("guild_id", OFFICIAL_DISCORD_GUILD_ID)
+        : Promise.resolve({ count: 0 }),
       supabase.from("auth_user_plan_flow_points").select("balance_amount").eq("user_id", userId).maybeSingle(),
       getSupportTicketsForDiscordUser(discordUserId),
     ]);

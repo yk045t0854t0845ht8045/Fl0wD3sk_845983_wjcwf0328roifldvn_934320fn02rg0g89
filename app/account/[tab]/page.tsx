@@ -40,7 +40,11 @@ export default async function AccountTabPage({
     <TabRenderer 
       id={activeTab} 
       displayName={user.display_name}
-      avatarUrl={user.avatar ? `https://cdn.discordapp.com/avatars/${user.discord_user_id}/${user.avatar}.png` : null}
+      avatarUrl={
+        user.avatar && user.discord_user_id
+          ? `https://cdn.discordapp.com/avatars/${user.discord_user_id}/${user.avatar}.png`
+          : null
+      }
       initialTickets={initialTickets}
     />
   );

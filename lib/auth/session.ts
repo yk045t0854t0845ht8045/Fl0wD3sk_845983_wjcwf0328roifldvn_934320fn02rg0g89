@@ -8,6 +8,11 @@ import {
   normalizeConfigStep,
   sanitizeConfigDraft,
 } from "@/lib/auth/configContext";
+import {
+  buildEmailDisplayName,
+  buildEmailUsername,
+  normalizeAuthEmail,
+} from "@/lib/auth/email";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreateSessionContext = {
@@ -15,20 +20,25 @@ type CreateSessionContext = {
   userAgent: string | null;
 };
 
-type DiscordSessionTokens = {
-  discordAccessToken: string;
-  discordRefreshToken: string | null;
-  discordTokenExpiresAt: string | null;
+type AuthMethod = "discord" | "email";
+
+type SessionTokens = {
+  authMethod?: AuthMethod;
+  discordAccessToken?: string | null;
+  discordRefreshToken?: string | null;
+  discordTokenExpiresAt?: string | null;
 };
 
-type AuthUserRecord = {
+export type AuthUserRecord = {
   id: number;
-  discord_user_id: string;
+  discord_user_id: string | null;
   username: string;
   global_name: string | null;
   display_name: string;
   avatar: string | null;
   email: string | null;
+  email_normalized: string | null;
+  email_verified_at: string | null;
 };
 
 type AuthSessionRecord = {
@@ -100,8 +110,111 @@ function parseDiscordGuildsCache(cache: unknown): DiscordGuild[] | null {
   return cache.length === 0 ? [] : null;
 }
 
-async function upsertAuthUser(discordUser: DiscordUser) {
+async function selectAuthUserBy(
+  column: "id" | "discord_user_id" | "email_normalized",
+  value: number | string,
+) {
   const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("auth_users")
+    .select(
+      "id, discord_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at",
+    )
+    .eq(column, value)
+    .maybeSingle<AuthUserRecord>();
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data;
+}
+
+export async function findAuthUserById(userId: number) {
+  return selectAuthUserBy("id", userId);
+}
+
+export async function findAuthUserByDiscordUserId(discordUserId: string) {
+  return selectAuthUserBy("discord_user_id", discordUserId);
+}
+
+export async function findAuthUserByEmail(email: string) {
+  const normalizedEmail = normalizeAuthEmail(email);
+  if (!normalizedEmail) return null;
+  return selectAuthUserBy("email_normalized", normalizedEmail);
+}
+
+function buildEmailUserPayload(email: string, emailVerifiedAt: string | null) {
+  const normalizedEmail = normalizeAuthEmail(email);
+  if (!normalizedEmail) {
+    throw new Error("Email invalido para criar a conta.");
+  }
+
+  return {
+    discord_user_id: null,
+    username: buildEmailUsername(normalizedEmail),
+    global_name: null,
+    display_name: buildEmailDisplayName(normalizedEmail),
+    avatar: null,
+    email: normalizedEmail,
+    email_normalized: normalizedEmail,
+    email_verified_at: emailVerifiedAt,
+    locale: null,
+    raw_user: {
+      source: "email",
+    },
+  };
+}
+
+export async function createEmailAuthUser(input: {
+  email: string;
+  emailVerifiedAt?: string | null;
+}) {
+  const normalizedEmail = normalizeAuthEmail(input.email);
+  if (!normalizedEmail) {
+    throw new Error("Informe um email valido.");
+  }
+
+  const existing = await findAuthUserByEmail(normalizedEmail);
+  if (existing) {
+    return existing;
+  }
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("auth_users")
+    .insert(
+      buildEmailUserPayload(
+        normalizedEmail,
+        input.emailVerifiedAt ?? new Date().toISOString(),
+      ),
+    )
+    .select(
+      "id, discord_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at",
+    )
+    .single<AuthUserRecord>();
+
+  if (result.error) {
+    if (normalizedEmail) {
+      const concurrent = await findAuthUserByEmail(normalizedEmail);
+      if (concurrent) return concurrent;
+    }
+
+    throw new Error(`Erro ao criar usuario por email: ${result.error.message}`);
+  }
+
+  return result.data;
+}
+
+async function saveDiscordUserToAuthUser(
+  discordUser: DiscordUser,
+  linkToUserId?: number | null,
+) {
+  const normalizedEmail = discordUser.verified
+    ? normalizeAuthEmail(discordUser.email)
+    : null;
+  const existingLinkedUser =
+    typeof linkToUserId === "number" ? await findAuthUserById(linkToUserId) : null;
 
   const payload = {
     discord_user_id: discordUser.id,
@@ -109,30 +222,113 @@ async function upsertAuthUser(discordUser: DiscordUser) {
     global_name: discordUser.global_name,
     display_name: buildDisplayName(discordUser),
     avatar: discordUser.avatar,
-    email: discordUser.email || null,
+    email: normalizedEmail || existingLinkedUser?.email || null,
+    email_normalized: normalizedEmail || existingLinkedUser?.email_normalized || null,
+    email_verified_at:
+      normalizedEmail
+        ? existingLinkedUser?.email_verified_at || new Date().toISOString()
+        : existingLinkedUser?.email_verified_at || null,
     locale: discordUser.locale || null,
     raw_user: discordUser,
   };
+
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  if (typeof linkToUserId === "number") {
+    const result = await supabase
+      .from("auth_users")
+      .update(payload)
+      .eq("id", linkToUserId)
+      .select(
+        "id, discord_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at",
+      )
+      .single<AuthUserRecord>();
+
+    if (result.error) {
+      throw new Error(`Erro ao vincular usuario Discord: ${result.error.message}`);
+    }
+
+    return result.data;
+  }
 
   const result = await supabase
     .from("auth_users")
     .upsert(payload, { onConflict: "discord_user_id" })
     .select(
-      "id, discord_user_id, username, global_name, display_name, avatar, email",
+      "id, discord_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at",
     )
     .single<AuthUserRecord>();
 
   if (result.error) {
+    if (normalizedEmail) {
+      const byEmail = await findAuthUserByEmail(normalizedEmail);
+      if (byEmail && (!byEmail.discord_user_id || byEmail.discord_user_id === discordUser.id)) {
+        return saveDiscordUserToAuthUser(discordUser, byEmail.id);
+      }
+    }
+
     throw new Error(`Erro ao salvar usuario no Supabase: ${result.error.message}`);
   }
 
   return result.data;
 }
 
+export async function resolveAuthUserForDiscordLogin(
+  discordUser: DiscordUser,
+  input?: {
+    currentUserId?: number | null;
+  },
+) {
+  const existingByDiscord = await findAuthUserByDiscordUserId(discordUser.id);
+
+  if (typeof input?.currentUserId === "number") {
+    const currentUser = await findAuthUserById(input.currentUserId);
+    if (!currentUser) {
+      throw new Error("Sua sessao atual nao foi encontrada para concluir a vinculacao.");
+    }
+
+    if (existingByDiscord && existingByDiscord.id !== currentUser.id) {
+      throw new Error("Esta conta do Discord ja esta vinculada a outra conta Flowdesk.");
+    }
+
+    if (
+      currentUser.discord_user_id &&
+      currentUser.discord_user_id !== discordUser.id
+    ) {
+      throw new Error("Sua conta Flowdesk ja esta vinculada a outro Discord.");
+    }
+
+    return saveDiscordUserToAuthUser(discordUser, currentUser.id);
+  }
+
+  if (existingByDiscord) {
+    return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id);
+  }
+
+  if (discordUser.verified) {
+    const normalizedEmail = normalizeAuthEmail(discordUser.email);
+    if (normalizedEmail) {
+      const existingByEmail = await findAuthUserByEmail(normalizedEmail);
+      if (existingByEmail) {
+        if (
+          existingByEmail.discord_user_id &&
+          existingByEmail.discord_user_id !== discordUser.id
+        ) {
+          throw new Error("O email desta conta ja esta vinculado a outro Discord.");
+        }
+
+        return saveDiscordUserToAuthUser(discordUser, existingByEmail.id);
+      }
+    }
+  }
+
+  return saveDiscordUserToAuthUser(discordUser);
+}
+
 async function createSession(
   userId: number,
   context: CreateSessionContext,
-  tokens: DiscordSessionTokens,
+  tokens: SessionTokens,
 ) {
   const sessionToken = createSessionToken();
   const sessionTokenHash = hashToken(sessionToken);
@@ -141,20 +337,34 @@ async function createSession(
   ).toISOString();
 
   const supabase = getSupabaseAdminClientOrThrow();
+  const authMethod =
+    tokens.authMethod || (tokens.discordAccessToken ? "discord" : "email");
 
-  const result = await supabase.from("auth_sessions").insert({
+  const insertResult = await supabase.from("auth_sessions").insert({
     user_id: userId,
     session_token_hash: sessionTokenHash,
     ip_address: context.ipAddress,
     user_agent: context.userAgent,
     expires_at: expiresAt,
-    discord_access_token: tokens.discordAccessToken,
-    discord_refresh_token: tokens.discordRefreshToken,
-    discord_token_expires_at: tokens.discordTokenExpiresAt,
+    discord_access_token: tokens.discordAccessToken ?? null,
+    discord_refresh_token: tokens.discordRefreshToken ?? null,
+    discord_token_expires_at: tokens.discordTokenExpiresAt ?? null,
   });
 
-  if (result.error) {
-    throw new Error(`Erro ao criar sessao no Supabase: ${result.error.message}`);
+  if (insertResult.error) {
+    throw new Error(`Erro ao criar sessao no Supabase: ${insertResult.error.message}`);
+  }
+
+  try {
+    await supabase
+      .from("auth_users")
+      .update({
+        last_login_at: new Date().toISOString(),
+        last_auth_method: authMethod,
+      })
+      .eq("id", userId);
+  } catch {
+    // Mantemos o login funcional mesmo se colunas auxiliares ainda nao existirem.
   }
 
   return {
@@ -163,13 +373,29 @@ async function createSession(
   };
 }
 
+export async function createSessionForUser(
+  userId: number,
+  context: CreateSessionContext,
+  tokens: SessionTokens = {},
+) {
+  return createSession(userId, context, tokens);
+}
+
 export async function createUserSessionFromDiscordUser(
   discordUser: DiscordUser,
   context: CreateSessionContext,
-  tokens: DiscordSessionTokens,
+  tokens: SessionTokens,
+  options?: {
+    currentUserId?: number | null;
+  },
 ) {
-  const user = await upsertAuthUser(discordUser);
-  const session = await createSession(user.id, context, tokens);
+  const user = await resolveAuthUserForDiscordLogin(discordUser, {
+    currentUserId: options?.currentUserId ?? null,
+  });
+  const session = await createSession(user.id, context, {
+    ...tokens,
+    authMethod: "discord",
+  });
 
   return {
     user,
@@ -178,10 +404,6 @@ export async function createUserSessionFromDiscordUser(
 }
 
 export type GetAuthSessionOptions = {
-  /**
-   * Se true, carrega colunas pesadas (JSON) como cache de servidores e rascunhos de configuração.
-   * Use apenas páginas que realmente precisam desse contexto.
-   */
   fullContext?: boolean;
 };
 
@@ -197,10 +419,9 @@ export async function getCurrentAuthSessionFromCookie(
   const supabase = getSupabaseAdminClientOrThrow();
   const nowIso = new Date().toISOString();
 
-  // Otimização: Não buscamos colunas JSON pesadas por padrão para acelerar a validação da sessão.
   const selectColumns = options.fullContext
-    ? "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cache, discord_guilds_cached_at, config_current_step, config_draft, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email)"
-    : "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cached_at, config_current_step, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email)";
+    ? "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cache, discord_guilds_cached_at, config_current_step, config_draft, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at)"
+    : "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cached_at, config_current_step, config_context_updated_at, user:auth_users(id, discord_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at)";
 
   const result = await supabase
     .from("auth_sessions")
@@ -240,16 +461,16 @@ export async function getCurrentAuthSessionFromCookie(
 
 export async function updateSessionDiscordTokens(
   sessionId: string,
-  tokens: DiscordSessionTokens,
+  tokens: SessionTokens,
 ) {
   const supabase = getSupabaseAdminClientOrThrow();
 
   const result = await supabase
     .from("auth_sessions")
     .update({
-      discord_access_token: tokens.discordAccessToken,
-      discord_refresh_token: tokens.discordRefreshToken,
-      discord_token_expires_at: tokens.discordTokenExpiresAt,
+      discord_access_token: tokens.discordAccessToken ?? null,
+      discord_refresh_token: tokens.discordRefreshToken ?? null,
+      discord_token_expires_at: tokens.discordTokenExpiresAt ?? null,
     })
     .eq("id", sessionId);
 

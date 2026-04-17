@@ -11,8 +11,11 @@ export const metadata: Metadata = {
     "Indique o Flowdesk e ganhe até 35% de comissão por cada venda aprovada. Dashboard exclusivo, ranking com bônus, webhook em tempo real e muito mais.",
 };
 
-function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
-  if (!avatarHash) return null;
+function buildDiscordAvatarUrl(
+  discordUserId: string | null,
+  avatarHash: string | null,
+) {
+  if (!avatarHash || !discordUserId) return null;
   const extension = avatarHash.startsWith("a_") ? "gif" : "png";
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }

@@ -22,6 +22,7 @@ const AUTH_COOKIE_NAMES = [
   authConfig.oauthStateCookieName,
   authConfig.oauthRedirectUriCookieName,
   authConfig.oauthNextPathCookieName,
+  authConfig.oauthModeCookieName,
 ] as const;
 
 export async function POST(request: Request) {

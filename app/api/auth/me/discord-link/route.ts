@@ -40,8 +40,11 @@ function buildUnauthorizedResponse(requestId: string) {
   );
 }
 
-function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
-  if (!avatarHash) return null;
+function buildDiscordAvatarUrl(
+  discordUserId: string | null,
+  avatarHash: string | null,
+) {
+  if (!avatarHash || !discordUserId) return null;
   const extension = avatarHash.startsWith("a_") ? "gif" : "png";
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=160`;
 }
@@ -122,12 +125,29 @@ export async function POST(request: NextRequest) {
   }
 
   const authSession = sessionContext.authSession;
+  const discordUserId = authSession.user.discord_user_id;
 
   const authenticatedContext = extendSecurityRequestContext(requestContext, {
     sessionId: authSession.id,
     userId: authSession.user.id,
     guildId: OFFICIAL_DISCORD_GUILD_ID,
   });
+
+  if (!discordUserId) {
+    return attachRequestId(
+      applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            authenticated: true,
+            message: "Esta conta ainda nao possui um Discord vinculado.",
+          },
+          { status: 409 },
+        ),
+      ),
+      authenticatedContext.requestId,
+    );
+  }
 
   const rateLimit = await enforceRequestRateLimit({
     action: "discord_link_sync",
@@ -247,11 +267,11 @@ export async function POST(request: NextRequest) {
               requireHumanCheck: true,
               message: humanVerification.message,
               authenticatedUser: {
-                discordUserId: authSession.user.discord_user_id,
+                discordUserId,
                 username: authSession.user.username,
                 displayName: authSession.user.display_name,
                 avatarUrl: buildDiscordAvatarUrl(
-                  authSession.user.discord_user_id,
+                  discordUserId,
                   authSession.user.avatar,
                 ),
               },
@@ -265,7 +285,7 @@ export async function POST(request: NextRequest) {
 
     const result = await syncOfficialDiscordLink({
       userId: authSession.user.id,
-      discordUserId: authSession.user.discord_user_id,
+      discordUserId,
       requestId: authenticatedContext.requestId,
       discordAccessToken: sessionContext.accessToken,
     });
@@ -291,11 +311,11 @@ export async function POST(request: NextRequest) {
               openDiscordUrl: result.openDiscordUrl,
               inviteUrl: result.inviteUrl,
               authenticatedUser: {
-                discordUserId: authSession.user.discord_user_id,
+                discordUserId,
                 username: authSession.user.username,
                 displayName: authSession.user.display_name,
                 avatarUrl: buildDiscordAvatarUrl(
-                  authSession.user.discord_user_id,
+                  discordUserId,
                   authSession.user.avatar,
                 ),
               },
@@ -333,11 +353,11 @@ export async function POST(request: NextRequest) {
           openDiscordUrl: result.openDiscordUrl,
           inviteUrl: result.inviteUrl,
           authenticatedUser: {
-            discordUserId: authSession.user.discord_user_id,
+            discordUserId,
             username: authSession.user.username,
             displayName: authSession.user.display_name,
             avatarUrl: buildDiscordAvatarUrl(
-              authSession.user.discord_user_id,
+              discordUserId,
               authSession.user.avatar,
             ),
           },

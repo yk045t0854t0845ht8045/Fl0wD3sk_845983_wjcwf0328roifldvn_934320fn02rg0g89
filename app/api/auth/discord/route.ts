@@ -51,6 +51,8 @@ export async function GET(request: NextRequest) {
   const requestedNextPath = normalizeInternalNextPath(
     request.nextUrl.searchParams.get("next"),
   );
+  const requestedMode =
+    request.nextUrl.searchParams.get("mode") === "link" ? "link" : "login";
   const discordAuthUrl = buildDiscordAuthorizeUrl(state, redirectUri);
 
   const response = NextResponse.redirect(discordAuthUrl, 302);
@@ -86,12 +88,22 @@ export async function GET(request: NextRequest) {
     response.cookies.delete(authConfig.oauthNextPathCookieName);
   }
 
+  response.cookies.set(authConfig.oauthModeCookieName, requestedMode, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isSecureRequest(request),
+    maxAge: 60 * 10,
+    path: "/",
+    priority: "high",
+  });
+
   await logSecurityAuditEventSafe(requestContext, {
     action: "auth_discord_start",
     outcome: "succeeded",
     metadata: {
       redirectUri,
       requestedNextPath,
+      requestedMode,
     },
   });
 

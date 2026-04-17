@@ -67,6 +67,7 @@ export const authConfig = {
   oauthStateCookieName: "flowdesk_oauth_state",
   oauthRedirectUriCookieName: "flowdesk_oauth_redirect_uri",
   oauthNextPathCookieName: "flowdesk_oauth_next_path",
+  oauthModeCookieName: "flowdesk_oauth_mode",
   sessionCookieName: "flowdesk_auth_session",
   sessionTtlHours: parseSessionHours(),
 };

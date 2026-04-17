@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { resolveSessionAccessToken } from "@/lib/auth/discordGuildAccess";
-import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   attachRequestId,
   createSecurityRequestContext,
@@ -19,21 +18,11 @@ async function resolveUserFromSession() {
   if (!sessionData?.authSession) return null;
 
   const authSession = sessionData.authSession;
-  const discordUserId = authSession.user.discord_user_id;
-
-  const supabase = getSupabaseAdminClientOrThrow();
-  const { data: userData, error: userError } = await supabase
-    .from("auth_users")
-    .select("id")
-    .eq("discord_user_id", discordUserId)
-    .single();
-
-  if (userError || !userData) return null;
 
   return {
     authSession,
-    discordUserId,
-    internalUserId: userData.id as number,
+    discordUserId: authSession.user.discord_user_id,
+    internalUserId: authSession.user.id,
   };
 }
 
@@ -106,9 +95,11 @@ export async function POST(request: Request) {
     const violationStatus = await getViolationStatusForUser(user.internalUserId);
 
     // Fire role sync in the background, don't block the response
-    syncDiscordViolationRoles(user.discordUserId, violationStatus.level).catch((err) => {
-      console.error("[AccountStatus POST] Discord role sync error:", err);
-    });
+    if (user.discordUserId) {
+      syncDiscordViolationRoles(user.discordUserId, violationStatus.level).catch((err) => {
+        console.error("[AccountStatus POST] Discord role sync error:", err);
+      });
+    }
 
     await logSecurityAuditEventSafe(auditContext, {
       action: "account_violations_discord_sync",

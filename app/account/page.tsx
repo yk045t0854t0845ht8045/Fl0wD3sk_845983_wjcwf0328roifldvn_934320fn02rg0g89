@@ -23,7 +23,11 @@ export default async function AccountSettingsPage() {
     <TabRenderer 
       id="overview" 
       displayName={user.display_name} 
-      avatarUrl={user.avatar ? `https://cdn.discordapp.com/avatars/${user.discord_user_id}/${user.avatar}.png` : null} 
+      avatarUrl={
+        user.avatar && user.discord_user_id
+          ? `https://cdn.discordapp.com/avatars/${user.discord_user_id}/${user.avatar}.png`
+          : null
+      }
       initialSummary={initialSummary}
     />
   );

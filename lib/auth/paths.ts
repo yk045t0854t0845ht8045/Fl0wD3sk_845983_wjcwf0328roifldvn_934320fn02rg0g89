@@ -1,28 +1,47 @@
-export const DISCORD_AUTH_START_PATH = "/api/auth/discord/";
+export const DISCORD_AUTH_START_PATH = "/api/auth/discord";
 export const LOGIN_PATH = "/login";
 
-export function buildLoginHref(nextPath?: string | null) {
-  if (!nextPath) return LOGIN_PATH;
+export type LoginIntentMode = "login" | "link";
 
-  const normalizedNextPath = nextPath.trim();
-  if (!normalizedNextPath) return LOGIN_PATH;
+export function buildLoginHref(
+  nextPath?: string | null,
+  mode: LoginIntentMode = "login",
+) {
+  const params = new URLSearchParams();
 
-  const params = new URLSearchParams({
-    next: normalizedNextPath,
-  });
+  if (nextPath) {
+    const normalizedNextPath = nextPath.trim();
+    if (normalizedNextPath) {
+      params.set("next", normalizedNextPath);
+    }
+  }
+
+  if (mode === "link") {
+    params.set("mode", mode);
+  }
+
+  if (!params.size) return LOGIN_PATH;
 
   return `${LOGIN_PATH}?${params.toString()}`;
 }
 
-export function buildDiscordAuthStartHref(nextPath?: string | null) {
-  if (!nextPath) return DISCORD_AUTH_START_PATH;
+export function buildDiscordAuthStartHref(
+  nextPath?: string | null,
+  mode: LoginIntentMode = "login",
+) {
+  const params = new URLSearchParams();
+  if (nextPath) {
+    const normalizedNextPath = nextPath.trim();
+    if (normalizedNextPath) {
+      params.set("next", normalizedNextPath);
+    }
+  }
 
-  const normalizedNextPath = nextPath.trim();
-  if (!normalizedNextPath) return DISCORD_AUTH_START_PATH;
+  if (mode === "link") {
+    params.set("mode", mode);
+  }
 
-  const params = new URLSearchParams({
-    next: normalizedNextPath,
-  });
+  if (!params.size) return DISCORD_AUTH_START_PATH;
 
   return `${DISCORD_AUTH_START_PATH}?${params.toString()}`;
 }

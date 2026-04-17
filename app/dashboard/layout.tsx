@@ -6,8 +6,11 @@ import { getManagedServersForCurrentSession } from "@/lib/servers/managedServers
 import { resolveDashboardWorkspaceAlertMessage } from "@/lib/servers/workspaceAlerts";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
 
-function buildDiscordAvatarUrl(discordUserId: string, avatarHash: string | null) {
-  if (!avatarHash) return null;
+function buildDiscordAvatarUrl(
+  discordUserId: string | null,
+  avatarHash: string | null,
+) {
+  if (!avatarHash || !discordUserId) return null;
   const extension = avatarHash.startsWith("a_") ? "gif" : "png";
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }
@@ -24,7 +27,9 @@ async function DashboardLayoutContent({
   }
 
   const [managedServers, teamsSnapshot] = await Promise.all([
-    getManagedServersForCurrentSession().catch(() => []),
+    user.discord_user_id
+      ? getManagedServersForCurrentSession().catch(() => [])
+      : Promise.resolve([]),
     getUserTeamsSnapshotForUser({
       authUserId: user.id,
       discordUserId: user.discord_user_id,

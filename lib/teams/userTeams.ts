@@ -218,9 +218,9 @@ function normalizeGuildIds(values: string[]) {
 
 export async function getAcceptedTeamGuildIdsForUser(input: {
   authUserId: number;
-  discordUserId: string;
+  discordUserId: string | null;
 }) {
-  const cacheKey = `${input.authUserId}:${input.discordUserId}`;
+  const cacheKey = `${input.authUserId}:${input.discordUserId || "no-discord"}`;
   const cached = readCacheEntry(acceptedTeamGuildIdsCache, cacheKey);
   if (cached) {
     return cloneAcceptedTeamGuildIds(cached);
@@ -241,13 +241,15 @@ export async function getAcceptedTeamGuildIdsForUser(input: {
       .eq("owner_user_id", input.authUserId);
 
     // 2. Teams where user is a member
-    const membershipsResult = await supabase
+    const membershipsBaseQuery = supabase
       .from("auth_user_team_members")
       .select("team_id")
-      .eq("status", "accepted")
-      .or(
-        `invited_discord_user_id.eq.${input.discordUserId},invited_auth_user_id.eq.${input.authUserId}`,
-      );
+      .eq("status", "accepted");
+    const membershipsResult = input.discordUserId
+      ? await membershipsBaseQuery.or(
+          `invited_discord_user_id.eq.${input.discordUserId},invited_auth_user_id.eq.${input.authUserId}`,
+        )
+      : await membershipsBaseQuery.eq("invited_auth_user_id", input.authUserId);
 
     if (ownedTeamsResult.error) throw new Error(ownedTeamsResult.error.message);
     if (membershipsResult.error) throw new Error(membershipsResult.error.message);
@@ -296,7 +298,7 @@ export async function getAcceptedTeamGuildIdsForUser(input: {
 
 export async function getUserTeamsSnapshotForUser(input: {
   authUserId: number;
-  discordUserId: string;
+  discordUserId: string | null;
 }) {
   const supabase = getSupabaseAdminClientOrThrow();
 
@@ -311,15 +313,20 @@ export async function getUserTeamsSnapshotForUser(input: {
     throw new Error(ownedTeamsResult.error.message);
   }
 
-  const memberInvitesResult = await supabase
+  const memberInvitesBaseQuery = supabase
     .from("auth_user_team_members")
     .select(
       "id, team_id, invited_discord_user_id, invited_auth_user_id, invited_by_user_id, status, role_id, custom_permissions, accepted_at, created_at",
-    )
-    .or(
-      `invited_discord_user_id.eq.${input.discordUserId},invited_auth_user_id.eq.${input.authUserId}`,
-    )
-    .returns<TeamMemberRow[]>();
+    );
+  const memberInvitesResult = input.discordUserId
+    ? await memberInvitesBaseQuery
+        .or(
+          `invited_discord_user_id.eq.${input.discordUserId},invited_auth_user_id.eq.${input.authUserId}`,
+        )
+        .returns<TeamMemberRow[]>()
+    : await memberInvitesBaseQuery
+        .eq("invited_auth_user_id", input.authUserId)
+        .returns<TeamMemberRow[]>();
 
   if (memberInvitesResult.error) {
     throw new Error(memberInvitesResult.error.message);
@@ -502,7 +509,13 @@ export async function getUserTeamsSnapshotForUser(input: {
       const acceptedCount = members.filter((member) => member.status === "accepted").length;
       const pendingCount = members.filter((member) => member.status === "pending").length;
 
-      const userMembership = teamMembers.find(m => m.team_id === teamId && (m.invited_auth_user_id === input.authUserId || m.invited_discord_user_id === input.discordUserId));
+      const userMembership = teamMembers.find(
+        (membership) =>
+          membership.team_id === teamId &&
+          (membership.invited_auth_user_id === input.authUserId ||
+            (input.discordUserId !== null &&
+              membership.invited_discord_user_id === input.discordUserId)),
+      );
       const userRoleRow = userMembership?.role_id ? rolesById.get(userMembership.role_id) : null;
       const isAdminOrOwner = team.owner_user_id === input.authUserId;
 
@@ -565,12 +578,16 @@ export async function getUserTeamsSnapshotForUser(input: {
 
 export async function createUserTeamForUser(input: {
   authUserId: number;
-  discordUserId: string;
+  discordUserId: string | null;
   name: string;
   iconKey: string;
   guildIds: string[];
   memberDiscordIds: string[];
 }) {
+  if (!input.discordUserId) {
+    throw new Error("Vincule uma conta Discord antes de criar equipes.");
+  }
+
   const supabase = getSupabaseAdminClientOrThrow();
   const teamName = parseTeamName(input.name);
   const iconKey = normalizeTeamIconKey(input.iconKey);
@@ -687,9 +704,13 @@ export async function createUserTeamForUser(input: {
 
 export async function acceptUserTeamInviteForUser(input: {
   authUserId: number;
-  discordUserId: string;
+  discordUserId: string | null;
   teamId: number;
 }) {
+  if (!input.discordUserId) {
+    throw new Error("Vincule uma conta Discord antes de aceitar convites de equipe.");
+  }
+
   const supabase = getSupabaseAdminClientOrThrow();
 
   const membershipResult = await supabase

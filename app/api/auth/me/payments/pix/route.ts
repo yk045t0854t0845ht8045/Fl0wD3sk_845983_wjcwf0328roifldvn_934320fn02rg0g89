@@ -1884,7 +1884,9 @@ export async function POST(request: Request) {
     try {
       const payerEmail =
         normalizePayerEmail(user.email) ||
-        `discord-${user.discord_user_id}@flowdeskbot.app`;
+        `${
+          user.discord_user_id ? `discord-${user.discord_user_id}` : `user-${user.id}`
+        }@flowdeskbot.app`;
 
       const mercadoPagoPayment = await createMercadoPagoPixPayment({
         amount,
@@ -1899,7 +1901,11 @@ export async function POST(request: Request) {
         metadata: {
           flowdesk_order_number: String(createdOrder.order_number),
           flowdesk_user_id: String(user.id),
-          flowdesk_discord_user_id: user.discord_user_id,
+          ...(user.discord_user_id
+            ? {
+                flowdesk_discord_user_id: user.discord_user_id,
+              }
+            : {}),
           ...(guildId
             ? {
                 flowdesk_guild_id: guildId,

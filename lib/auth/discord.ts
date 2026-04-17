@@ -19,6 +19,7 @@ export type DiscordUser = {
   global_name: string | null;
   avatar: string | null;
   email?: string | null;
+  verified?: boolean | null;
   locale?: string | null;
 };
 

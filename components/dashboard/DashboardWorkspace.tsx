@@ -31,7 +31,7 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
-import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
+import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import type { ManagedServer } from "@/lib/servers/managedServers";
 import {
   readCachedManagedServers,
@@ -47,7 +47,7 @@ import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 type DashboardWorkspaceProps = {
   currentAccount: {
     authUserId: number;
-    discordUserId: string;
+    discordUserId: string | null;
     displayName: string;
     username: string;
     avatarUrl: string | null;
@@ -61,7 +61,7 @@ type DashboardWorkspaceProps = {
 
 type SavedPanelAccount = {
   authUserId: number;
-  discordUserId: string;
+  discordUserId: string | null;
   displayName: string;
   username: string;
   avatarUrl: string | null;
@@ -252,7 +252,6 @@ function normalizeSavedPanelAccounts(input: unknown) {
       const record = item as Partial<SavedPanelAccount>;
       if (
         typeof record.authUserId !== "number" ||
-        typeof record.discordUserId !== "string" ||
         typeof record.displayName !== "string" ||
         typeof record.username !== "string" ||
         typeof record.lastSeenAt !== "number"
@@ -262,7 +261,8 @@ function normalizeSavedPanelAccounts(input: unknown) {
 
       return {
         authUserId: record.authUserId,
-        discordUserId: record.discordUserId,
+        discordUserId:
+          typeof record.discordUserId === "string" ? record.discordUserId : null,
         displayName: record.displayName,
         username: record.username,
         avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl : null,
@@ -273,11 +273,24 @@ function normalizeSavedPanelAccounts(input: unknown) {
     .slice(0, 3);
 }
 
+function resolveSavedAccountKey(account: {
+  authUserId: number;
+  discordUserId: string | null;
+}) {
+  return account.discordUserId || `auth:${account.authUserId}`;
+}
+
 function mergeSavedPanelAccounts(
   currentAccount: SavedPanelAccount,
   previousAccounts: SavedPanelAccount[],
 ) {
-  return [currentAccount, ...previousAccounts.filter((account) => account.discordUserId !== currentAccount.discordUserId)]
+  const currentAccountKey = resolveSavedAccountKey(currentAccount);
+  return [
+    currentAccount,
+    ...previousAccounts.filter(
+      (account) => resolveSavedAccountKey(account) !== currentAccountKey,
+    ),
+  ]
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
     .slice(0, 3);
 }
@@ -826,9 +839,14 @@ export function DashboardWorkspace({
 
   const handleNavigateItem = useCallback(
     (item: DashboardSidebarItem) => {
+      if (item.href === "/servers" && !currentAccount.discordUserId) {
+        window.location.assign(buildLoginHref("/servers", "link"));
+        return;
+      }
+
       navigateToHref(item.href, item.viewIds?.[0] ?? null);
     },
-    [navigateToHref],
+    [currentAccount.discordUserId, navigateToHref],
   );
 
   const handlePrefetchItem = useCallback(
@@ -1038,8 +1056,16 @@ export function DashboardWorkspace({
 
   const handleSwitchSavedAccount = useCallback(
     (account: SavedPanelAccount) => {
-      if (account.discordUserId === currentAccount.discordUserId) {
+      if (
+        resolveSavedAccountKey(account) === resolveSavedAccountKey(currentAccount)
+      ) {
         setIsProfileMenuOpen(false);
+        return;
+      }
+
+      if (!account.discordUserId) {
+        setIsProfileMenuOpen(false);
+        window.location.replace("/login");
         return;
       }
 
@@ -1058,7 +1084,7 @@ export function DashboardWorkspace({
       setIsProfileMenuOpen(false);
       openDiscordLoginFlow();
     },
-    [currentAccount.discordUserId, openDiscordLoginFlow],
+    [currentAccount, openDiscordLoginFlow],
   );
 
   const handleOpenAccountSettings = useCallback(() => {
