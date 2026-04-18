@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
-import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
+import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import {
   buildOfficialDiscordChannelUrl,
   OFFICIAL_DISCORD_INVITE_URL,
@@ -13,6 +13,7 @@ import {
   OFFICIAL_DISCORD_LINKED_ROLE_NAME,
 } from "@/lib/discordLink/config";
 import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal/content";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
 type LinkSyncResponse = {
   ok: boolean;
@@ -464,7 +465,7 @@ export function DiscordLinkPageClient({
         },
       });
     } finally {
-      window.location.assign("/login");
+      window.location.assign(buildLoginHref());
     }
   }, [isLoggingOut]);
 
@@ -580,7 +581,11 @@ export function DiscordLinkPageClient({
       : "Carregando conta";
   const handleRetryAction = useCallback(() => {
     if (isExpiredSecureLink) {
-      window.location.assign(OFFICIAL_DISCORD_LINK_START_PATH);
+      window.location.assign(
+        buildBrowserRoutingTargetFromInternalPath(OFFICIAL_DISCORD_LINK_START_PATH, {
+          fallbackArea: "public",
+        }).href,
+      );
       return;
     }
 

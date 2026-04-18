@@ -46,7 +46,7 @@ import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor"
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
 import { resolveAddServerTargetHref } from "@/lib/plans/addServerFlow";
-import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
+import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import type { ManagedServer, ManagedServerStatus } from "@/lib/servers/managedServers";
 import {
   buildServerMetaLabel,
@@ -64,6 +64,7 @@ import {
 } from "@/lib/servers/serversWorkspaceClientCache";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
 import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
 type ServersWorkspaceProps = {
   displayName: string;
@@ -1873,8 +1874,14 @@ export function ServersWorkspace({
   }, [errorMessage, filteredServers, isLoading, selectedGuildIdForConfig]);
 
   useEffect(() => {
-    router.prefetch("/dashboard");
-    router.prefetch("/account");
+    const dashboardTarget = buildBrowserRoutingTargetFromInternalPath("/dashboard");
+    const accountTarget = buildBrowserRoutingTargetFromInternalPath("/account");
+    if (dashboardTarget.sameOrigin) {
+      router.prefetch(dashboardTarget.path);
+    }
+    if (accountTarget.sameOrigin) {
+      router.prefetch(accountTarget.path);
+    }
   }, [router]);
 
   const buildServerConfigUrl = useCallback((
@@ -1918,30 +1925,42 @@ export function ServersWorkspace({
 
   const navigateToUrl = useCallback((nextUrl: string, mode: "push" | "replace" = "push") => {
     if (typeof window === "undefined") return;
+    const target = buildBrowserRoutingTargetFromInternalPath(nextUrl);
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const comparableCurrentUrl = normalizeComparablePath(currentUrl);
-    const comparableNextUrl = normalizeComparablePath(nextUrl);
+    const comparableNextUrl = normalizeComparablePath(target.path);
     if (comparableCurrentUrl === comparableNextUrl) return;
     const currentPathname = window.location.pathname;
-    const nextPathname = nextUrl.split("?")[0]?.split("#")[0] || "";
+    const nextPathname = target.path.split("?")[0]?.split("#")[0] || "";
     const isInternalServersPath =
+      target.sameOrigin &&
       isServersWorkspacePath(currentPathname) &&
       isServersWorkspacePath(nextPathname);
 
     // Atualiza a URL imediatamente enquanto mantemos a arvore viva no mesmo workspace.
     if (isInternalServersPath) {
       if (mode === "replace") {
-        window.history.replaceState(window.history.state, "", nextUrl);
+        window.history.replaceState(window.history.state, "", target.path);
         return;
       }
 
-      window.history.pushState(window.history.state, "", nextUrl);
+      window.history.pushState(window.history.state, "", target.path);
       return;
     }
 
-    void router.prefetch(nextPathname || nextUrl);
-    if (mode === "replace") router.replace(nextUrl, { scroll: false });
-    else router.push(nextUrl, { scroll: false });
+    if (!target.sameOrigin) {
+      if (mode === "replace") {
+        window.location.replace(target.href);
+        return;
+      }
+
+      window.location.assign(target.href);
+      return;
+    }
+
+    void router.prefetch(nextPathname || target.path);
+    if (mode === "replace") router.replace(target.path, { scroll: false });
+    else router.push(target.path, { scroll: false });
   }, [router]);
 
   const applySelectedServerRouteState = useCallback((
@@ -2044,7 +2063,7 @@ export function ServersWorkspace({
       } catch {
         // noop
       }
-      window.location.replace("/login");
+      window.location.replace(buildLoginHref());
     }
   }, [isLoggingOut]);
 
@@ -2086,12 +2105,16 @@ export function ServersWorkspace({
 
   const handleOpenAccountSettings = useCallback(() => {
     setIsProfileMenuOpen(false);
-    router.push("/account");
-  }, [router]);
+    navigateToUrl("/account");
+  }, [navigateToUrl]);
 
   const handleOpenMyAccount = useCallback(() => {
     setIsProfileMenuOpen(false);
-    window.location.assign("/discord/link");
+    window.location.assign(
+      buildBrowserRoutingTargetFromInternalPath("/discord/link", {
+        fallbackArea: "public",
+      }).href,
+    );
   }, []);
 
   const handleOpenHelp = useCallback(() => {
@@ -2676,17 +2699,23 @@ export function ServersWorkspace({
                         type="button"
                         onMouseEnter={() => {
                           if (item.kind === "dashboard") {
-                            router.prefetch("/dashboard");
+                            const target = buildBrowserRoutingTargetFromInternalPath("/dashboard");
+                            if (target.sameOrigin) {
+                              router.prefetch(target.path);
+                            }
                           }
                         }}
                         onFocus={() => {
                           if (item.kind === "dashboard") {
-                            router.prefetch("/dashboard");
+                            const target = buildBrowserRoutingTargetFromInternalPath("/dashboard");
+                            if (target.sameOrigin) {
+                              router.prefetch(target.path);
+                            }
                           }
                         }}
                         onClick={() => {
                           if (item.kind === "dashboard") {
-                            router.push("/dashboard");
+                            navigateToUrl("/dashboard");
                           } else {
                             openProjectsOverview("push");
                           }
@@ -3164,7 +3193,7 @@ export function ServersWorkspace({
         <button
           type="button"
           onClick={() => {
-            router.push("/servers/plans");
+            navigateToUrl("/servers/plans");
           }}
           className="fixed inset-x-0 top-0 z-[1400] h-[42px] overflow-hidden bg-[linear-gradient(90deg,#731015_0%,#971D22_10%,#BC2D32_24%,#D94141_40%,#E45555_50%,#D94141_60%,#BC2D32_76%,#971D22_90%,#731015_100%)] text-white transition-opacity hover:opacity-95 md:h-[46px]"
           aria-label={`${workspaceAlertMessage} Abrir pagina de planos.`}

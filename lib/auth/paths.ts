@@ -1,9 +1,23 @@
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+
 export const DISCORD_AUTH_START_PATH = "/api/auth/discord";
 export const GOOGLE_AUTH_START_PATH = "/api/auth/google";
 export const MICROSOFT_AUTH_START_PATH = "/api/auth/microsoft";
 export const LOGIN_PATH = "/login";
 
 export type LoginIntentMode = "login" | "link";
+
+function resolveBrowserAuthHref(
+  path: string,
+  options?: {
+    forceLoginHost?: boolean;
+  },
+) {
+  const target = buildBrowserRoutingTargetFromInternalPath(path, {
+    fallbackArea: options?.forceLoginHost ? "login" : undefined,
+  });
+  return target.href;
+}
 
 export function buildLoginHref(
   nextPath?: string | null,
@@ -22,9 +36,9 @@ export function buildLoginHref(
     params.set("mode", mode);
   }
 
-  if (!params.size) return LOGIN_PATH;
+  if (!params.size) return resolveBrowserAuthHref(LOGIN_PATH);
 
-  return `${LOGIN_PATH}?${params.toString()}`;
+  return resolveBrowserAuthHref(`${LOGIN_PATH}?${params.toString()}`);
 }
 
 export function buildDiscordAuthStartHref(
@@ -43,9 +57,15 @@ export function buildDiscordAuthStartHref(
     params.set("mode", mode);
   }
 
-  if (!params.size) return DISCORD_AUTH_START_PATH;
+  if (!params.size) {
+    return resolveBrowserAuthHref(DISCORD_AUTH_START_PATH, {
+      forceLoginHost: true,
+    });
+  }
 
-  return `${DISCORD_AUTH_START_PATH}?${params.toString()}`;
+  return resolveBrowserAuthHref(`${DISCORD_AUTH_START_PATH}?${params.toString()}`, {
+    forceLoginHost: true,
+  });
 }
 
 export function buildGoogleAuthStartHref(
@@ -64,9 +84,15 @@ export function buildGoogleAuthStartHref(
     params.set("mode", mode);
   }
 
-  if (!params.size) return GOOGLE_AUTH_START_PATH;
+  if (!params.size) {
+    return resolveBrowserAuthHref(GOOGLE_AUTH_START_PATH, {
+      forceLoginHost: true,
+    });
+  }
 
-  return `${GOOGLE_AUTH_START_PATH}?${params.toString()}`;
+  return resolveBrowserAuthHref(`${GOOGLE_AUTH_START_PATH}?${params.toString()}`, {
+    forceLoginHost: true,
+  });
 }
 
 export function buildMicrosoftAuthStartHref(
@@ -85,7 +111,13 @@ export function buildMicrosoftAuthStartHref(
     params.set("mode", mode);
   }
 
-  if (!params.size) return MICROSOFT_AUTH_START_PATH;
+  if (!params.size) {
+    return resolveBrowserAuthHref(MICROSOFT_AUTH_START_PATH, {
+      forceLoginHost: true,
+    });
+  }
 
-  return `${MICROSOFT_AUTH_START_PATH}?${params.toString()}`;
+  return resolveBrowserAuthHref(`${MICROSOFT_AUTH_START_PATH}?${params.toString()}`, {
+    forceLoginHost: true,
+  });
 }

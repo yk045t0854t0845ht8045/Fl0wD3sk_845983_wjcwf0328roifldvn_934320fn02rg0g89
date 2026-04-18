@@ -33,6 +33,7 @@ import {
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { buildLoginHref } from "@/lib/auth/paths";
 import { AFFILIATE_LEVELS, formatCurrency, getLevelConfig } from "@/lib/affiliates/affiliateLevels";
 import type {
   AffiliateLevel,
@@ -1295,9 +1296,9 @@ export function AffiliatesWorkspace({
     setIsLoggingOut(true);
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-      window.location.replace("/login");
+      window.location.replace(buildLoginHref());
     } catch {
-      window.location.replace("/login");
+      window.location.replace(buildLoginHref());
     }
   };
 

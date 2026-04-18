@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { type AccountTab } from "@/lib/account/tabs";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
 type AccountSummaryData = {
   plan?: {
@@ -66,6 +67,15 @@ export function TabRenderer({
   ...props
 }: TabRendererProps) {
   const router = useRouter();
+  const navigateToAccountPath = (href: string) => {
+    const target = buildBrowserRoutingTargetFromInternalPath(href);
+    if (!target.sameOrigin) {
+      window.location.assign(target.href);
+      return;
+    }
+
+    router.push(target.path);
+  };
 
   if (id === "overview") {
     return (
@@ -83,7 +93,7 @@ export function TabRenderer({
 
   const extraProps: Record<string, unknown> = {};
   if (id === "payment_history") {
-    extraProps.onNavigateTickets = () => router.push("/account/tickets");
+    extraProps.onNavigateTickets = () => navigateToAccountPath("/account/tickets");
   }
 
   return (
@@ -167,7 +177,16 @@ function OverviewContent({
 
   const router = useRouter();
   const onNavigate = (tab: AccountTab) =>
-    router.push(tab === "overview" ? "/account" : `/account/${tab}`);
+    {
+      const href = tab === "overview" ? "/account" : `/account/${tab}`;
+      const target = buildBrowserRoutingTargetFromInternalPath(href);
+      if (!target.sameOrigin) {
+        window.location.assign(target.href);
+        return;
+      }
+
+      router.push(target.path);
+    };
 
   const summary = data?.ok ? data.summary ?? null : initialSummary ?? null;
   const summaryWarning =

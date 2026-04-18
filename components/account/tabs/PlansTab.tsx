@@ -4,6 +4,7 @@ import React from "react";
 import { BadgePercent, ArrowRightLeft, CheckCircle2, Clock, Zap, Crown, Star, Activity } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { usePlanInfo } from "@/hooks/useAccountData";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
 type PlanData = {
   code: string;
@@ -77,6 +78,15 @@ function StatusBadge({ status }: { status: string }) {
 export function PlansTab() {
   const { plan, loading } = usePlanInfo();
   const router = useRouter();
+  const navigateToPlans = () => {
+    const target = buildBrowserRoutingTargetFromInternalPath("/servers/plans");
+    if (!target.sameOrigin) {
+      window.location.assign(target.href);
+      return;
+    }
+
+    router.push(target.path);
+  };
 
   if (loading) {
     return (
@@ -130,7 +140,7 @@ export function PlansTab() {
             </div>
 
             <button
-              onClick={() => router.push("/servers/plans")}
+              onClick={navigateToPlans}
               className="flex h-[48px] items-center gap-[10px] rounded-[16px] bg-[#111111] px-[22px] text-[15px] font-semibold text-[#EEEEEE] transition-colors hover:bg-[#1A1A1A]"
             >
               <ArrowRightLeft className="h-[18px] w-[18px]" strokeWidth={2.5} />

@@ -25,6 +25,7 @@ import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingSmoothScroll } from "@/components/landing/LandingSmoothScroll";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
 // Data
 
@@ -485,7 +486,15 @@ export function AffiliatesLanding({ isAuthenticated }: { isAuthenticated: boolea
     if (isAuthenticated) {
       router.push("/affiliates/dashboard");
     } else {
-      router.push("/login?redirect=/affiliates/dashboard&reason=affiliate");
+      const target = buildBrowserRoutingTargetFromInternalPath(
+        "/login?redirect=/affiliates/dashboard&reason=affiliate",
+      );
+      if (!target.sameOrigin) {
+        window.location.assign(target.href);
+        return;
+      }
+
+      router.push(target.path);
     }
   }
 

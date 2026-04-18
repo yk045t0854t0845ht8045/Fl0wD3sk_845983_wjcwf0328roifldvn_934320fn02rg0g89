@@ -2,6 +2,7 @@ import { useState } from "react";
 import { UserMinus, AlertTriangle } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
+import { buildLoginHref } from "@/lib/auth/paths";
 import { DangerActionModal } from "../DangerActionModal";
 
 export function DeleteAccountTab() {
@@ -15,7 +16,7 @@ export function DeleteAccountTab() {
       const res = await fetch("/api/auth/me/account", { method: "DELETE" });
       if (res.ok) {
         await fetch("/api/auth/logout", { method: "POST" });
-        window.location.assign("/login");
+        window.location.assign(buildLoginHref());
       } else {
         const data = await res.json();
         notifications.error(data.message || "Falha ao excluir a conta.", {

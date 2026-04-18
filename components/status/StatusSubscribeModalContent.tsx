@@ -13,6 +13,8 @@ import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
+import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 import type {
   StatusSubscriptionRecord,
   StatusSubscriptionType,
@@ -129,7 +131,7 @@ export function StatusSubscribeModalContent({
 
   const handleAuthRedirect = () => {
     const next = subscribeType || "discord_dm";
-    window.location.assign(`/api/auth/discord?next=${encodeURIComponent(`/status?subscribe=${next}`)}`);
+    window.location.assign(buildDiscordAuthStartHref(`/status?subscribe=${next}`));
   };
 
   const handleSubscribe = async () => {
@@ -163,7 +165,11 @@ export function StatusSubscribeModalContent({
 
       if (!json.ok) {
         if (json.code === "AUTH_REQUIRED" && json.loginUrl) {
-          window.location.assign(json.loginUrl);
+          window.location.assign(
+            buildBrowserRoutingTargetFromInternalPath(json.loginUrl, {
+              fallbackArea: "login",
+            }).href,
+          );
           return;
         }
 

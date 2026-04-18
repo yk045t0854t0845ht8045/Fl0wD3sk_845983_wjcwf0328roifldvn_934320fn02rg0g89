@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 import { DangerActionModal } from "../DangerActionModal";
 
 type TeamRolePermission =
@@ -507,7 +508,15 @@ export function TeamsTab() {
           Você não possui nem faz parte de nenhuma equipe. Crie uma a partir do painel de servidores.
         </p>
         <button
-          onClick={() => router.push("/servers")}
+          onClick={() => {
+            const target = buildBrowserRoutingTargetFromInternalPath("/servers");
+            if (!target.sameOrigin) {
+              window.location.assign(target.href);
+              return;
+            }
+
+            router.push(target.path);
+          }}
           className="mt-[20px] flex h-[40px] items-center gap-[8px] rounded-[12px] bg-[#111111] px-[18px] text-[14px] font-medium text-[#D0D0D0] transition hover:bg-[#1A1A1A]"
         >
           Ir para Servidores

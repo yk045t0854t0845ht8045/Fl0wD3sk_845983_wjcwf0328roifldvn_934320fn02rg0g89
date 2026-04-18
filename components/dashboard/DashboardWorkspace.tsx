@@ -863,12 +863,7 @@ export function DashboardWorkspace({
   const handleNavigateItem = useCallback(
     (item: DashboardSidebarItem) => {
       if (item.href === "/servers" && !currentAccount.discordUserId) {
-        window.location.assign(
-          buildBrowserRoutingTargetFromInternalPath(
-            buildLoginHref("/servers", "link"),
-            { fallbackArea: "account" },
-          ).href,
-        );
+        window.location.assign(buildLoginHref("/servers", "link"));
         return;
       }
 
@@ -1067,7 +1062,7 @@ export function DashboardWorkspace({
       } catch {
         // noop
       }
-      window.location.replace("/login");
+      window.location.replace(buildLoginHref());
     }
   }, [isLoggingOut]);
 
@@ -1093,7 +1088,7 @@ export function DashboardWorkspace({
 
       if (!account.discordUserId) {
         setIsProfileMenuOpen(false);
-        window.location.replace("/login");
+        window.location.replace(buildLoginHref());
         return;
       }
 
@@ -1121,7 +1116,11 @@ export function DashboardWorkspace({
 
   const handleOpenMyAccount = useCallback(() => {
     setIsProfileMenuOpen(false);
-    window.location.assign("/discord/link");
+    window.location.assign(
+      buildBrowserRoutingTargetFromInternalPath("/discord/link", {
+        fallbackArea: "public",
+      }).href,
+    );
   }, []);
 
   const handleOpenHelp = useCallback(() => {

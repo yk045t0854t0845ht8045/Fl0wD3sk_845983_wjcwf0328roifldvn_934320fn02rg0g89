@@ -7,6 +7,7 @@ import { ConfigLogoutButton } from "@/components/config/ConfigLogoutButton";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
+import { buildLoginHref } from "@/lib/auth/paths";
 import { resolveAddServerTargetHref } from "@/lib/plans/addServerFlow";
 import { serversScale } from "@/components/servers/serversScale";
 import { buildServerStatusDescription } from "@/lib/servers/licensePresentation";
@@ -452,7 +453,7 @@ export function ServersDashboard({
       } catch {
         // noop
       }
-      window.location.replace("/login");
+      window.location.replace(buildLoginHref());
     }
   }, [isLoggingOut]);
 
