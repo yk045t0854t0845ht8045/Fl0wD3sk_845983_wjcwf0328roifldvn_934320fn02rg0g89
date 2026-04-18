@@ -22,6 +22,9 @@ type NotificationItem = {
   message: string;
   durationMs: number;
   createdAt: number;
+  updatedAt: number;
+  fingerprint: string;
+  occurrences: number;
 };
 
 type NotificationPayload = {
@@ -55,9 +58,20 @@ type DismissTimerMeta = {
   remainingMs: number;
 };
 
+type NotificationCollections = {
+  visible: NotificationItem[];
+  queued: NotificationItem[];
+};
+
 const MAX_VISIBLE_NOTIFICATIONS = 3;
+const MAX_BUFFERED_NOTIFICATIONS = 36;
 const DEFAULT_NOTIFICATION_DURATION_MS = 5200;
 const MINIMUM_RESUME_DURATION_MS = 180;
+const DUPLICATE_MERGE_WINDOW_MS = 2800;
+const EXPANDED_STACK_GAP_PX = 12;
+const COLLAPSED_STACK_SCALE_STEP = 0.04;
+const COLLAPSED_STACK_TOP_PADDING_PX = 38;
+const COMPACT_STACK_CARD_HEIGHT_PX = 92;
 
 const NotificationContext = createContext<NotificationApi | null>(null);
 
@@ -69,18 +83,53 @@ function createNotificationId() {
   return `flowdesk-notification-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function normalizeNotificationFingerprintPart(value: string | null | undefined) {
+  return typeof value === "string"
+    ? value.trim().replace(/\s+/g, " ").toLowerCase()
+    : "";
+}
+
+function createNotificationFingerprint(input: {
+  tone: NotificationTone;
+  title: string | null;
+  message: string;
+}) {
+  return [
+    input.tone,
+    normalizeNotificationFingerprintPart(input.title),
+    normalizeNotificationFingerprintPart(input.message),
+  ].join("::");
+}
+
+function getCollapsedStackLiftPx(stackDepth: number) {
+  if (stackDepth <= 0) {
+    return 0;
+  }
+
+  if (stackDepth === 1) {
+    return 18;
+  }
+
+  if (stackDepth === 2) {
+    return 36;
+  }
+
+  return 36 + (stackDepth - 2) * 18;
+}
+
 function resolveToneClasses(tone: NotificationTone) {
   if (tone === "success") {
     return {
       borderGlowClassName: "flowdesk-tag-border-glow-success",
       borderCoreClassName: "flowdesk-tag-border-core-success",
-      iconWrapperClassName:
-        "border-[rgba(106,226,90,0.18)] bg-[rgba(106,226,90,0.08)] text-[#B8F2AE]",
+      iconWrapperClassName: "border-[#204225] bg-[#0D130E] text-[#B8F2AE]",
       titleClassName: "text-[#DDF8D8]",
       messageClassName: "text-[#A9D2A2]",
+      badgeClassName: "border-[#204225] bg-[#101610] text-[#B8F2AE]",
       closeButtonClassName:
-        "text-[#87C67E] hover:border-[rgba(106,226,90,0.18)] hover:bg-[rgba(106,226,90,0.08)] hover:text-[#DDF8D8]",
-      progressClassName: "from-[rgba(171,255,162,0.85)] via-[rgba(106,226,90,0.62)] to-[rgba(106,226,90,0)]",
+        "text-[#87C67E] hover:border-[#204225] hover:bg-[#101610] hover:text-[#DDF8D8]",
+      progressClassName:
+        "from-[rgba(171,255,162,0.85)] via-[rgba(106,226,90,0.62)] to-[rgba(106,226,90,0)]",
     };
   }
 
@@ -88,26 +137,28 @@ function resolveToneClasses(tone: NotificationTone) {
     return {
       borderGlowClassName: "flowdesk-tag-border-glow-danger",
       borderCoreClassName: "flowdesk-tag-border-core-danger",
-      iconWrapperClassName:
-        "border-[rgba(219,70,70,0.18)] bg-[rgba(219,70,70,0.08)] text-[#FFB4B4]",
+      iconWrapperClassName: "border-[#412020] bg-[#130D0D] text-[#FFB4B4]",
       titleClassName: "text-[#FFD5D5]",
       messageClassName: "text-[#D4A5A5]",
+      badgeClassName: "border-[#412020] bg-[#171010] text-[#FFB4B4]",
       closeButtonClassName:
-        "text-[#D18D8D] hover:border-[rgba(219,70,70,0.18)] hover:bg-[rgba(219,70,70,0.08)] hover:text-[#FFD5D5]",
-      progressClassName: "from-[rgba(255,126,126,0.85)] via-[rgba(219,70,70,0.62)] to-[rgba(219,70,70,0)]",
+        "text-[#D18D8D] hover:border-[#412020] hover:bg-[#171010] hover:text-[#FFD5D5]",
+      progressClassName:
+        "from-[rgba(255,126,126,0.85)] via-[rgba(219,70,70,0.62)] to-[rgba(219,70,70,0)]",
     };
   }
 
   return {
     borderGlowClassName: "flowdesk-tag-border-glow",
     borderCoreClassName: "flowdesk-tag-border-core",
-    iconWrapperClassName:
-      "border-[rgba(255,255,255,0.11)] bg-[rgba(255,255,255,0.05)] text-[#F2F2F2]",
+    iconWrapperClassName: "border-[#1F1F1F] bg-[#101010] text-[#F2F2F2]",
     titleClassName: "text-[#F2F2F2]",
     messageClassName: "text-[#B8B8B8]",
+    badgeClassName: "border-[#262626] bg-[#101010] text-[#E5E5E5]",
     closeButtonClassName:
-      "text-[#8E8E8E] hover:border-[rgba(255,255,255,0.11)] hover:bg-[rgba(255,255,255,0.05)] hover:text-[#F2F2F2]",
-    progressClassName: "from-[rgba(255,255,255,0.82)] via-[rgba(255,255,255,0.48)] to-[rgba(255,255,255,0)]",
+      "text-[#8E8E8E] hover:border-[#232323] hover:bg-[#111111] hover:text-[#F2F2F2]",
+    progressClassName:
+      "from-[rgba(255,255,255,0.82)] via-[rgba(255,255,255,0.48)] to-[rgba(255,255,255,0)]",
   };
 }
 
@@ -124,32 +175,28 @@ function NotificationCard({
 }) {
   const toneClasses = resolveToneClasses(item.tone);
   const Icon = item.tone === "success" ? CheckCircle2 : item.tone === "error" ? AlertCircle : Bell;
-  const compactScale = Math.max(0.9, 1 - stackDepth * 0.04);
-  const compactOpacity = Math.max(0.52, 1 - stackDepth * 0.12);
-  const compactTranslateY = stackDepth * 10;
-  const compactBlur = stackDepth > 1 ? 0.8 : 0;
+  const isCollapsedSecondary = !expanded && stackDepth > 0;
+  const collapsedScale = Math.max(0.9, 1 - stackDepth * COLLAPSED_STACK_SCALE_STEP);
+  const collapsedTopOffset = COLLAPSED_STACK_TOP_PADDING_PX - getCollapsedStackLiftPx(stackDepth);
+  const compactLineClamp = item.title || item.occurrences > 1 ? 2 : 3;
 
   return (
     <motion.div
       layout
       initial={{
         opacity: 0,
-        y: 36,
-        scale: 0.96,
-        filter: "blur(10px)",
+        y: 26,
+        scale: 0.97,
       }}
       animate={{
-        opacity: expanded ? 1 : compactOpacity,
-        y: expanded ? 0 : compactTranslateY,
-        scale: expanded ? 1 : compactScale,
-        filter: expanded ? "blur(0px)" : `blur(${compactBlur}px)`,
+        opacity: expanded ? 1 : Math.max(0.62, 1 - stackDepth * 0.13),
+        y: 0,
+        scale: expanded ? 1 : collapsedScale,
       }}
       exit={{
         opacity: 0,
-        x: 84,
-        y: 18,
-        scale: 0.94,
-        filter: "blur(10px)",
+        y: 34,
+        scale: 0.92,
       }}
       transition={{
         layout: {
@@ -157,33 +204,36 @@ function NotificationCard({
           ease: [0.22, 1, 0.36, 1],
         },
         opacity: {
-          duration: 0.22,
+          duration: 0.2,
           ease: [0.22, 1, 0.36, 1],
         },
         y: {
-          duration: 0.26,
+          duration: 0.24,
           ease: [0.22, 1, 0.36, 1],
         },
         scale: {
           duration: 0.24,
           ease: [0.22, 1, 0.36, 1],
         },
-        filter: {
-          duration: 0.22,
-          ease: [0.22, 1, 0.36, 1],
-        },
       }}
       style={{
-        zIndex: 100 + stackDepth,
-        marginTop: expanded || stackDepth === 0 ? 0 : -84,
-        transformOrigin: "bottom right",
+        zIndex: 260 - stackDepth,
+        position: isCollapsedSecondary ? "absolute" : "relative",
+        insetInline: isCollapsedSecondary ? 0 : undefined,
+        top: isCollapsedSecondary ? collapsedTopOffset : undefined,
+        marginTop: expanded && stackDepth > 0 ? EXPANDED_STACK_GAP_PX : 0,
+        transformOrigin: "top right",
+        pointerEvents: isCollapsedSecondary ? "none" : "auto",
       }}
       className="w-full"
     >
       <div
         role={item.tone === "error" ? "alert" : "status"}
         aria-live={item.tone === "error" ? "assertive" : "polite"}
-        className="relative overflow-hidden rounded-[24px] shadow-[0_28px_90px_rgba(0,0,0,0.56)]"
+        aria-atomic="true"
+        className={`relative overflow-hidden rounded-[24px] shadow-[0_28px_90px_rgba(0,0,0,0.56)] ${
+          isCollapsedSecondary ? "h-[92px]" : "min-h-[92px]"
+        }`}
       >
         <span
           aria-hidden="true"
@@ -199,18 +249,14 @@ function NotificationCard({
         />
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-[1px] rounded-[23px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]"
-        />
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[88px] rounded-t-[23px] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0.015)_36%,transparent_78%)]"
+          className="pointer-events-none absolute inset-[1px] rounded-[23px] bg-[linear-gradient(180deg,#0B0B0B_0%,#050505_100%)]"
         />
         <span
           aria-hidden="true"
           className={`pointer-events-none absolute inset-x-[18px] bottom-[1px] h-[2px] rounded-full bg-gradient-to-r ${toneClasses.progressClassName}`}
         />
 
-        <div className="relative z-10 flex min-h-[92px] items-start gap-[14px] px-[16px] py-[16px] pr-[56px]">
+        <div className="relative z-10 flex h-full items-start gap-[14px] px-[16px] py-[16px] pr-[56px]">
           <span
             className={`mt-[1px] flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[13px] border ${toneClasses.iconWrapperClassName}`}
             aria-hidden="true"
@@ -219,15 +265,40 @@ function NotificationCard({
           </span>
 
           <div className="min-w-0 flex-1">
-            {item.title ? (
-              <p className={`text-[14px] font-semibold tracking-[-0.02em] ${toneClasses.titleClassName}`}>
-                {item.title}
-              </p>
+            {item.title || item.occurrences > 1 ? (
+              <div className="flex min-w-0 items-center gap-[8px] pr-[8px]">
+                {item.title ? (
+                  <p
+                    className={`truncate text-[14px] font-semibold tracking-[-0.02em] ${toneClasses.titleClassName}`}
+                  >
+                    {item.title}
+                  </p>
+                ) : null}
+
+                {item.occurrences > 1 ? (
+                  <span
+                    className={`inline-flex shrink-0 items-center rounded-full border px-[8px] py-[2px] text-[10px] font-semibold tracking-[0.04em] ${toneClasses.badgeClassName}`}
+                  >
+                    {item.occurrences}x
+                  </span>
+                ) : null}
+              </div>
             ) : null}
+
             <p
               className={`${
-                item.title ? "mt-[4px] text-[13px]" : "text-[14px]"
+                item.title || item.occurrences > 1 ? "mt-[4px] text-[13px]" : "text-[14px]"
               } leading-[1.55] tracking-[-0.01em] ${toneClasses.messageClassName}`}
+              style={
+                isCollapsedSecondary
+                  ? {
+                      display: "-webkit-box",
+                      overflow: "hidden",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: compactLineClamp,
+                    }
+                  : undefined
+              }
             >
               {item.message}
             </p>
@@ -248,11 +319,35 @@ function NotificationCard({
 }
 
 export function NotificationsProvider({ children }: NotificationsProviderProps) {
-  const [items, setItems] = useState<NotificationItem[]>([]);
+  const [visibleItems, setVisibleItems] = useState<NotificationItem[]>([]);
+  const [, setQueuedItems] = useState<NotificationItem[]>([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [forceExpanded, setForceExpanded] = useState(false);
   const trayRef = useRef<HTMLDivElement | null>(null);
+  const visibleItemsRef = useRef<NotificationItem[]>([]);
+  const queuedItemsRef = useRef<NotificationItem[]>([]);
   const dismissTimerMapRef = useRef<Map<string, DismissTimerMeta>>(new Map());
+  const recentFingerprintCooldownRef = useRef<Map<string, number>>(new Map());
+  const dismissRef = useRef<(id: string) => void>(() => {});
+
+  const syncCollections = useCallback((collections: NotificationCollections) => {
+    visibleItemsRef.current = collections.visible;
+    queuedItemsRef.current = collections.queued;
+    setVisibleItems(collections.visible);
+    setQueuedItems(collections.queued);
+    return collections;
+  }, []);
+
+  const updateCollections = useCallback(
+    (updater: (current: NotificationCollections) => NotificationCollections) =>
+      syncCollections(
+        updater({
+          visible: visibleItemsRef.current,
+          queued: queuedItemsRef.current,
+        }),
+      ),
+    [syncCollections],
+  );
 
   const clearDismissTimer = useCallback((id: string) => {
     const meta = dismissTimerMapRef.current.get(id);
@@ -265,10 +360,53 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
     dismissTimerMapRef.current.delete(id);
   }, []);
 
-  const dismiss = useCallback(
-    (id: string) => {
+  const pruneRecentFingerprintCooldowns = useCallback((now: number) => {
+    recentFingerprintCooldownRef.current.forEach((expiresAt, fingerprint) => {
+      if (expiresAt <= now) {
+        recentFingerprintCooldownRef.current.delete(fingerprint);
+      }
+    });
+  }, []);
+
+  const rememberRecentFingerprint = useCallback(
+    (fingerprint: string) => {
+      if (!fingerprint) {
+        return;
+      }
+
+      const now = Date.now();
+      pruneRecentFingerprintCooldowns(now);
+      recentFingerprintCooldownRef.current.set(
+        fingerprint,
+        now + DUPLICATE_MERGE_WINDOW_MS,
+      );
+    },
+    [pruneRecentFingerprintCooldowns],
+  );
+
+  const isFingerprintCoolingDown = useCallback(
+    (fingerprint: string, now: number) => {
+      if (!fingerprint) {
+        return false;
+      }
+
+      pruneRecentFingerprintCooldowns(now);
+      const expiresAt = recentFingerprintCooldownRef.current.get(fingerprint) || 0;
+      return expiresAt > now;
+    },
+    [pruneRecentFingerprintCooldowns],
+  );
+
+  const setPausedDismissTimer = useCallback(
+    (id: string, delayMs: number) => {
+      const nextDelayMs = Math.max(MINIMUM_RESUME_DURATION_MS, Math.trunc(delayMs));
       clearDismissTimer(id);
-      setItems((current) => current.filter((item) => item.id !== id));
+
+      dismissTimerMapRef.current.set(id, {
+        timeoutId: null,
+        startedAt: Date.now(),
+        remainingMs: nextDelayMs,
+      });
     },
     [clearDismissTimer],
   );
@@ -284,7 +422,7 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
 
       const startedAt = Date.now();
       const timeoutId = window.setTimeout(() => {
-        dismiss(id);
+        dismissRef.current(id);
       }, nextDelayMs);
 
       dismissTimerMapRef.current.set(id, {
@@ -293,8 +431,71 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
         remainingMs: nextDelayMs,
       });
     },
-    [clearDismissTimer, dismiss],
+    [clearDismissTimer],
   );
+
+  const dismiss = useCallback(
+    (id: string) => {
+      clearDismissTimer(id);
+
+      const promotedItems: NotificationItem[] = [];
+      let dismissedFingerprint: string | null = null;
+      updateCollections((current) => {
+        dismissedFingerprint =
+          current.visible.find((item) => item.id === id)?.fingerprint ||
+          current.queued.find((item) => item.id === id)?.fingerprint ||
+          null;
+        const nextVisible = current.visible.filter((item) => item.id !== id);
+        const removedVisibleItem = nextVisible.length !== current.visible.length;
+        const nextQueued = current.queued.filter((item) => item.id !== id);
+
+        if (removedVisibleItem) {
+          while (
+            nextVisible.length < MAX_VISIBLE_NOTIFICATIONS &&
+            nextQueued.length > 0
+          ) {
+            const nextQueuedItem = nextQueued.shift();
+            if (!nextQueuedItem) {
+              break;
+            }
+
+            promotedItems.push(nextQueuedItem);
+            nextVisible.push(nextQueuedItem);
+          }
+        }
+
+        return {
+          visible: nextVisible,
+          queued: nextQueued,
+        };
+      });
+
+      if (dismissedFingerprint) {
+        rememberRecentFingerprint(dismissedFingerprint);
+      }
+
+      promotedItems.forEach((item) => {
+        if (isExpanded) {
+          setPausedDismissTimer(item.id, item.durationMs);
+          return;
+        }
+
+        scheduleDismiss(item.id, item.durationMs);
+      });
+    },
+    [
+      clearDismissTimer,
+      isExpanded,
+      rememberRecentFingerprint,
+      scheduleDismiss,
+      setPausedDismissTimer,
+      updateCollections,
+    ],
+  );
+
+  useEffect(() => {
+    dismissRef.current = dismiss;
+  }, [dismiss]);
 
   const pauseAllDismissTimers = useCallback(() => {
     dismissTimerMapRef.current.forEach((meta, id) => {
@@ -344,13 +545,13 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
   }, []);
 
   useEffect(() => {
-    if (forceExpanded || isExpanded) {
+    if (isExpanded) {
       pauseAllDismissTimers();
       return;
     }
 
     resumeAllDismissTimers();
-  }, [forceExpanded, isExpanded, pauseAllDismissTimers, resumeAllDismissTimers]);
+  }, [isExpanded, pauseAllDismissTimers, resumeAllDismissTimers]);
 
   useEffect(() => {
     const dismissTimerMap = dismissTimerMapRef.current;
@@ -372,50 +573,156 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
         return "";
       }
 
-      const item: NotificationItem = {
-        id: createNotificationId(),
-        tone: payload.tone || "default",
-        title:
-          typeof payload.title === "string" && payload.title.trim()
-            ? payload.title.trim()
-            : null,
+      const title =
+        typeof payload.title === "string" && payload.title.trim() ? payload.title.trim() : null;
+      const tone = payload.tone || "default";
+      const durationMs = Math.max(
+        MINIMUM_RESUME_DURATION_MS,
+        Math.trunc(payload.durationMs || DEFAULT_NOTIFICATION_DURATION_MS),
+      );
+      const fingerprint = createNotificationFingerprint({
+        tone,
+        title,
         message,
-        durationMs: Math.max(
-          MINIMUM_RESUME_DURATION_MS,
-          Math.trunc(payload.durationMs || DEFAULT_NOTIFICATION_DURATION_MS),
-        ),
-        createdAt: Date.now(),
-      };
+      });
+      const now = Date.now();
 
-      let overflowId: string | null = null;
+      if (isFingerprintCoolingDown(fingerprint, now)) {
+        return "";
+      }
 
-      setItems((current) => {
-        const next = [...current, item];
-        if (next.length > MAX_VISIBLE_NOTIFICATIONS) {
-          overflowId = next[0]?.id || null;
-          return next.slice(-MAX_VISIBLE_NOTIFICATIONS);
+      let targetId = "";
+      let targetDelayMs = durationMs;
+      let shouldRunVisibleTimer = false;
+      const droppedIds: string[] = [];
+      const droppedFingerprints: string[] = [];
+
+      updateCollections((current) => {
+        const duplicateVisible = current.visible.find(
+          (item) => item.fingerprint === fingerprint,
+        );
+
+        if (duplicateVisible) {
+          const updatedItem: NotificationItem = {
+            ...duplicateVisible,
+            tone,
+            title,
+            message,
+            durationMs: Math.max(duplicateVisible.durationMs, durationMs),
+            updatedAt: now,
+            occurrences: duplicateVisible.occurrences + 1,
+          };
+
+          targetId = updatedItem.id;
+          targetDelayMs = updatedItem.durationMs;
+          shouldRunVisibleTimer = true;
+
+          return {
+            visible: [
+              updatedItem,
+              ...current.visible.filter((item) => item.id !== duplicateVisible.id),
+            ],
+            queued: current.queued,
+          };
         }
 
-        return next;
+        const duplicateQueued = current.queued.find(
+          (item) => item.fingerprint === fingerprint,
+        );
+
+        if (duplicateQueued) {
+          const updatedItem: NotificationItem = {
+            ...duplicateQueued,
+            tone,
+            title,
+            message,
+            durationMs: Math.max(duplicateQueued.durationMs, durationMs),
+            updatedAt: now,
+            occurrences: duplicateQueued.occurrences + 1,
+          };
+
+          targetId = updatedItem.id;
+          targetDelayMs = updatedItem.durationMs;
+
+          return {
+            visible: current.visible,
+            queued: current.queued.map((item) =>
+              item.id === duplicateQueued.id ? updatedItem : item,
+            ),
+          };
+        }
+
+        const item: NotificationItem = {
+          id: createNotificationId(),
+          tone,
+          title,
+          message,
+          durationMs,
+          createdAt: now,
+          updatedAt: now,
+          fingerprint,
+          occurrences: 1,
+        };
+
+        targetId = item.id;
+        targetDelayMs = item.durationMs;
+
+        if (current.visible.length < MAX_VISIBLE_NOTIFICATIONS) {
+          shouldRunVisibleTimer = true;
+          return {
+            visible: [item, ...current.visible],
+            queued: current.queued,
+          };
+        }
+
+        const nextQueued = [...current.queued, item];
+        while (
+          current.visible.length + nextQueued.length >
+          MAX_BUFFERED_NOTIFICATIONS
+        ) {
+          const droppedItem = nextQueued.shift();
+          if (!droppedItem) {
+            break;
+          }
+
+          droppedIds.push(droppedItem.id);
+          droppedFingerprints.push(droppedItem.fingerprint);
+        }
+
+        return {
+          visible: current.visible,
+          queued: nextQueued,
+        };
       });
 
-      if (overflowId) {
-        clearDismissTimer(overflowId);
+      droppedIds.forEach((id) => {
+        clearDismissTimer(id);
+      });
+      droppedFingerprints.forEach((itemFingerprint) => {
+        rememberRecentFingerprint(itemFingerprint);
+      });
+
+      if (!targetId || !shouldRunVisibleTimer) {
+        return targetId;
       }
 
-      if (forceExpanded || isExpanded) {
-        dismissTimerMapRef.current.set(item.id, {
-          timeoutId: null,
-          startedAt: Date.now(),
-          remainingMs: item.durationMs,
-        });
+      if (isExpanded) {
+        setPausedDismissTimer(targetId, targetDelayMs);
       } else {
-        scheduleDismiss(item.id, item.durationMs);
+        scheduleDismiss(targetId, targetDelayMs);
       }
 
-      return item.id;
+      return targetId;
     },
-    [clearDismissTimer, forceExpanded, isExpanded, scheduleDismiss],
+    [
+      clearDismissTimer,
+      isExpanded,
+      isFingerprintCoolingDown,
+      rememberRecentFingerprint,
+      scheduleDismiss,
+      setPausedDismissTimer,
+      updateCollections,
+    ],
   );
 
   const clear = useCallback(() => {
@@ -425,7 +732,11 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
       }
     });
     dismissTimerMapRef.current.clear();
-    setItems([]);
+    recentFingerprintCooldownRef.current.clear();
+    visibleItemsRef.current = [];
+    queuedItemsRef.current = [];
+    setVisibleItems([]);
+    setQueuedItems([]);
   }, []);
 
   const api = useMemo<NotificationApi>(
@@ -459,6 +770,12 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
   );
 
   const expanded = forceExpanded || isExpanded;
+  const renderedItems = visibleItems;
+  const collapsedTrayHeight =
+    renderedItems.length > 0
+      ? COMPACT_STACK_CARD_HEIGHT_PX +
+        (renderedItems.length > 1 ? COLLAPSED_STACK_TOP_PADDING_PX : 0)
+      : 0;
 
   return (
     <NotificationContext.Provider value={api}>
@@ -478,22 +795,42 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
             }
           }}
         >
-          <div className="flex w-full flex-col">
-            <AnimatePresence initial={false}>
-              {items.map((item, index) => {
-                const stackDepth = items.length - 1 - index;
-
-                return (
-                  <NotificationCard
-                    key={item.id}
-                    item={item}
-                    stackDepth={stackDepth}
-                    expanded={expanded}
-                    onDismiss={dismiss}
-                  />
-                );
-              })}
-            </AnimatePresence>
+          <div className="w-full">
+            {expanded ? (
+              <div className="flex w-full flex-col">
+                <AnimatePresence initial={false}>
+                  {renderedItems.map((item, index) => (
+                    <NotificationCard
+                      key={item.id}
+                      item={item}
+                      stackDepth={index}
+                      expanded
+                      onDismiss={dismiss}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+            ) : (
+              <div
+                className="relative w-full"
+                style={{
+                  paddingTop: renderedItems.length > 1 ? COLLAPSED_STACK_TOP_PADDING_PX : 0,
+                  minHeight: collapsedTrayHeight,
+                }}
+              >
+                <AnimatePresence initial={false}>
+                  {renderedItems.map((item, index) => (
+                    <NotificationCard
+                      key={item.id}
+                      item={item}
+                      stackDepth={index}
+                      expanded={false}
+                      onDismiss={dismiss}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -520,28 +857,38 @@ export function useNotificationEffect(
   },
 ) {
   const notifications = useNotifications();
-  const previousMessageRef = useRef<string | null>(null);
+  const previousFingerprintRef = useRef<string | null>(null);
   const tone = options?.tone || "default";
   const enabled = options?.enabled ?? true;
 
   useEffect(() => {
     const normalizedMessage =
       typeof message === "string" && message.trim() ? message.trim() : null;
+    const normalizedTitle =
+      typeof options?.title === "string" && options.title.trim()
+        ? options.title.trim()
+        : null;
 
     if (!normalizedMessage) {
-      previousMessageRef.current = null;
+      previousFingerprintRef.current = null;
       return;
     }
 
-    if (!enabled || previousMessageRef.current === normalizedMessage) {
+    const fingerprint = createNotificationFingerprint({
+      tone,
+      title: normalizedTitle,
+      message: normalizedMessage,
+    });
+
+    if (!enabled || previousFingerprintRef.current === fingerprint) {
       return;
     }
 
-    previousMessageRef.current = normalizedMessage;
+    previousFingerprintRef.current = fingerprint;
 
     if (tone === "success") {
       notifications.success(normalizedMessage, {
-        title: options?.title,
+        title: normalizedTitle,
         durationMs: options?.durationMs,
       });
       return;
@@ -549,7 +896,7 @@ export function useNotificationEffect(
 
     if (tone === "error") {
       notifications.error(normalizedMessage, {
-        title: options?.title,
+        title: normalizedTitle,
         durationMs: options?.durationMs,
       });
       return;
@@ -557,7 +904,7 @@ export function useNotificationEffect(
 
     notifications.show(normalizedMessage, {
       tone,
-      title: options?.title,
+      title: normalizedTitle,
       durationMs: options?.durationMs,
     });
   }, [

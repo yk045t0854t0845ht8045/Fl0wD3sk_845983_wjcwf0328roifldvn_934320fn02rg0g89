@@ -69,6 +69,14 @@ const inputShellClassName =
   "group relative flex h-[58px] w-full items-center rounded-[18px] border border-[rgba(255,255,255,0.06)] bg-[#090909] px-[18px] transition-[border-color,background-color,box-shadow] duration-200 focus-within:border-[rgba(255,255,255,0.13)] focus-within:bg-[#0C0C0C] focus-within:shadow-[0_0_0_4px_rgba(255,255,255,0.04)]";
 const otpBoxClassName =
   "h-[62px] w-[62px] rounded-[18px] border border-[rgba(255,255,255,0.07)] bg-[#090909] text-center text-[26px] font-semibold uppercase text-white outline-none transition-[border-color,background-color,box-shadow,color,transform] duration-200 placeholder:text-transparent focus:border-[rgba(255,255,255,0.14)] focus:bg-[#0C0C0C] focus:shadow-[0_0_0_4px_rgba(255,255,255,0.04)] sm:h-[70px] sm:w-[70px] sm:text-[30px]";
+const PASSWORD_SUBMIT_BASE_COOLDOWN_MS = 1600;
+const PASSWORD_SUBMIT_MAX_COOLDOWN_MS = 12000;
+const PASSWORD_FAILURE_RESET_WINDOW_MS = 45_000;
+
+function getPasswordCooldownLabel(remainingMs: number) {
+  const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
+  return `Aguarde ${seconds}s`;
+}
 
 function WhiteActionButton({
   label,
@@ -163,7 +171,12 @@ export function LoginPanel({
   const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [rememberSession, setRememberSession] = useState(false);
   const [isEmbeddedAuthBrowser, setIsEmbeddedAuthBrowser] = useState(false);
+  const [passwordCooldownUntil, setPasswordCooldownUntil] = useState<number | null>(null);
+  const [passwordCooldownNow, setPasswordCooldownNow] = useState(() => Date.now());
   const otpInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const passwordSubmitLockRef = useRef(false);
+  const passwordFailureCountRef = useRef(0);
+  const passwordLastFailureAtRef = useRef(0);
   const resolvedOtpLength = useMemo(
     () => Math.min(8, Math.max(6, Math.trunc(emailOtpLength || 6))),
     [emailOtpLength],
@@ -208,6 +221,34 @@ export function LoginPanel({
     const seconds = Math.max(1, Math.ceil(diffMs / 1000));
     return `Reenviar em ${seconds}s`;
   }, [nowTimestamp, otpResendAvailableAt]);
+  const passwordCooldownRemainingMs = useMemo(() => {
+    if (!passwordCooldownUntil) return 0;
+    return Math.max(0, passwordCooldownUntil - passwordCooldownNow);
+  }, [passwordCooldownNow, passwordCooldownUntil]);
+  const passwordSubmitDisabled = useMemo(() => {
+    if (!password.trim()) {
+      return true;
+    }
+
+    if (
+      passwordStep === "set_password" &&
+      (!confirmPassword.trim() || Boolean(passwordPolicyError))
+    ) {
+      return true;
+    }
+
+    return passwordCooldownRemainingMs > 0;
+  }, [
+    confirmPassword,
+    password,
+    passwordCooldownRemainingMs,
+    passwordPolicyError,
+    passwordStep,
+  ]);
+  const passwordButtonLabel =
+    passwordCooldownRemainingMs > 0
+      ? getPasswordCooldownLabel(passwordCooldownRemainingMs)
+      : "Continuar";
 
   useEffect(() => {
     setIsEmbeddedAuthBrowser(isLikelyEmbeddedAuthBrowser(window.navigator.userAgent));
@@ -226,6 +267,27 @@ export function LoginPanel({
       window.clearInterval(intervalId);
     };
   }, [otpResendAvailableAt, stage]);
+
+  useEffect(() => {
+    if (!passwordCooldownUntil || passwordCooldownUntil <= Date.now()) {
+      if (passwordCooldownUntil !== null) {
+        setPasswordCooldownNow(Date.now());
+      }
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const now = Date.now();
+      setPasswordCooldownNow(now);
+      if (passwordCooldownUntil <= now) {
+        window.clearInterval(intervalId);
+      }
+    }, 250);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [passwordCooldownUntil]);
 
   useEffect(() => {
     if (!initialErrorMessage) {
@@ -283,6 +345,43 @@ export function LoginPanel({
       title,
       durationMs: 5600,
     });
+  }
+
+  function clearPasswordSubmitCooldown() {
+    setPasswordCooldownUntil(null);
+    setPasswordCooldownNow(Date.now());
+    passwordFailureCountRef.current = 0;
+    passwordLastFailureAtRef.current = 0;
+  }
+
+  function applyPasswordSubmitCooldown(durationMs?: number) {
+    const now = Date.now();
+    const previousFailureAt = passwordLastFailureAtRef.current;
+
+    if (
+      previousFailureAt === 0 ||
+      now - previousFailureAt > PASSWORD_FAILURE_RESET_WINDOW_MS
+    ) {
+      passwordFailureCountRef.current = 0;
+    }
+
+    passwordFailureCountRef.current += 1;
+    passwordLastFailureAtRef.current = now;
+
+    const progressiveDelayMs = Math.min(
+      PASSWORD_SUBMIT_MAX_COOLDOWN_MS,
+      PASSWORD_SUBMIT_BASE_COOLDOWN_MS *
+        2 ** Math.max(0, passwordFailureCountRef.current - 1),
+    );
+    const nextDelayMs = Math.max(
+      PASSWORD_SUBMIT_BASE_COOLDOWN_MS,
+      Math.trunc(durationMs || progressiveDelayMs),
+    );
+
+    setPasswordCooldownNow(now);
+    setPasswordCooldownUntil((current) =>
+      Math.max(current || 0, now + nextDelayMs),
+    );
   }
 
   function setOtpCodeAt(index: number, rawValue: string) {
@@ -422,12 +521,15 @@ export function LoginPanel({
   }
 
   async function handlePasswordContinue() {
-    if (isSubmittingPassword) return;
+    if (passwordSubmitLockRef.current || isSubmittingPassword || passwordCooldownRemainingMs > 0) {
+      return;
+    }
     if (passwordStep === "set_password" && passwordPolicyError) {
       showErrorNotification(passwordPolicyError, "Senha invalida");
       return;
     }
 
+    passwordSubmitLockRef.current = true;
     setIsSubmittingPassword(true);
     setErrorMessage(null);
     setInfoMessage(null);
@@ -447,14 +549,22 @@ export function LoginPanel({
         }),
       });
       const payload = (await response.json()) as EmailPasswordResponse;
+      const retryAfterHeader = response.headers.get("Retry-After");
+      const retryAfterSeconds = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : NaN;
 
       if (!response.ok || !payload.ok || !payload.challengeId || !payload.nextStep) {
         if (payload.nextStep !== "session") {
+          if (response.status === 429 && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+            applyPasswordSubmitCooldown(retryAfterSeconds * 1000);
+          } else if (response.status >= 400) {
+            applyPasswordSubmitCooldown();
+          }
           throw new Error(payload.message || "Nao foi possivel validar sua senha.");
         }
       }
 
       if (payload.nextStep === "session" && payload.redirectTo) {
+        clearPasswordSubmitCooldown();
         window.location.replace(payload.redirectTo);
         return;
       }
@@ -463,6 +573,7 @@ export function LoginPanel({
         throw new Error(payload.message || "Nao foi possivel validar sua senha.");
       }
 
+      clearPasswordSubmitCooldown();
       setChallengeId(payload.challengeId);
       setMaskedEmail(payload.maskedEmail || maskedEmail);
       setOtpCode("");
@@ -479,6 +590,7 @@ export function LoginPanel({
         "Senha nao validada",
       );
     } finally {
+      passwordSubmitLockRef.current = false;
       setIsSubmittingPassword(false);
     }
   }
@@ -566,6 +678,8 @@ export function LoginPanel({
   }
 
   function handleGoBack() {
+    passwordSubmitLockRef.current = false;
+    clearPasswordSubmitCooldown();
     setErrorMessage(null);
     setInfoMessage(null);
 
@@ -710,14 +824,10 @@ export function LoginPanel({
         ) : null}
 
         <WhiteActionButton
-          label="Continuar"
+          label={passwordButtonLabel}
           type="submit"
           loading={isSubmittingPassword}
-          disabled={
-            !password.trim() ||
-            (passwordStep === "set_password" &&
-              (!confirmPassword.trim() || Boolean(passwordPolicyError)))
-          }
+          disabled={passwordSubmitDisabled}
         />
       </form>
     </>
