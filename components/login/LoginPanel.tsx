@@ -6,20 +6,30 @@ import { ChevronLeft } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DiscordLoginButton } from "@/components/login/DiscordLoginButton";
 import { GoogleLoginButton } from "@/components/login/GoogleLoginButton";
+import { MicrosoftLoginButton } from "@/components/login/MicrosoftLoginButton";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { normalizeAuthEmail } from "@/lib/auth/email";
 import {
   buildDiscordAuthStartHref,
   buildGoogleAuthStartHref,
+  buildMicrosoftAuthStartHref,
   type LoginIntentMode,
 } from "@/lib/auth/paths";
+import {
+  getPasswordPolicyChecklist,
+  validatePasswordPolicy as validateClientPasswordPolicy,
+} from "@/lib/auth/passwordPolicy";
+import { isLikelyEmbeddedAuthBrowser } from "@/lib/auth/oauthBrowser";
 import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal/content";
 
 type LoginPanelProps = {
   nextPath?: string | null;
   loginMode?: LoginIntentMode;
   initialErrorMessage?: string | null;
+  googleEnabled?: boolean;
+  microsoftEnabled?: boolean;
+  emailOtpLength?: number;
   currentSessionHint?: {
     displayName: string;
     email: string | null;
@@ -32,8 +42,6 @@ type EmailStartResponse = {
   email?: string;
   maskedEmail?: string;
   nextStep?: "password" | "set_password";
-  hasDiscordLinked?: boolean;
-  hasGoogleLinked?: boolean;
 };
 
 type EmailPasswordResponse = {
@@ -55,7 +63,6 @@ type EmailOtpResponse = {
 };
 
 type LoginStage = "chooser" | "password" | "otp";
-const OTP_CODE_LENGTH = 4;
 
 const inputShellClassName =
   "group relative flex h-[58px] w-full items-center rounded-[18px] border border-[rgba(255,255,255,0.06)] bg-[#090909] px-[18px] transition-[border-color,background-color,box-shadow] duration-200 focus-within:border-[rgba(255,255,255,0.13)] focus-within:bg-[#0C0C0C] focus-within:shadow-[0_0_0_4px_rgba(255,255,255,0.04)]";
@@ -67,19 +74,21 @@ function WhiteActionButton({
   loading,
   disabled,
   onClick,
+  type = "button",
   hideLabelWhenLoading = true,
 }: {
   label: string;
   loading?: boolean;
   disabled?: boolean;
-  onClick: () => void;
+  onClick?: () => void;
+  type?: "button" | "submit";
   hideLabelWhenLoading?: boolean;
 }) {
   const isVisuallyDisabled = Boolean(disabled) && !loading;
 
   return (
     <button
-      type="button"
+      type={type}
       disabled={disabled || loading}
       onClick={onClick}
       className={`group relative inline-flex h-[52px] w-full items-center justify-center overflow-visible rounded-[14px] px-6 text-[16px] font-semibold disabled:cursor-not-allowed ${
@@ -126,6 +135,9 @@ export function LoginPanel({
   nextPath = null,
   loginMode = "login",
   initialErrorMessage = null,
+  googleEnabled = false,
+  microsoftEnabled = false,
+  emailOtpLength = 6,
   currentSessionHint = null,
 }: LoginPanelProps) {
   const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL || TERMS_PATH;
@@ -148,7 +160,12 @@ export function LoginPanel({
   const [isSubmittingOtp, setIsSubmittingOtp] = useState(false);
   const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [rememberSession, setRememberSession] = useState(false);
+  const [isEmbeddedAuthBrowser, setIsEmbeddedAuthBrowser] = useState(false);
   const otpInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const resolvedOtpLength = useMemo(
+    () => Math.min(8, Math.max(6, Math.trunc(emailOtpLength || 6))),
+    [emailOtpLength],
+  );
 
   const discordHref = useMemo(
     () => buildDiscordAuthStartHref(nextPath, loginMode === "link" ? "link" : "login"),
@@ -158,10 +175,23 @@ export function LoginPanel({
     () => buildGoogleAuthStartHref(nextPath, loginMode === "link" ? "link" : "login"),
     [loginMode, nextPath],
   );
-  const isEmailValid = useMemo(() => Boolean(normalizeAuthEmail(email)), [email]);
+  const microsoftHref = useMemo(
+    () => buildMicrosoftAuthStartHref(nextPath, loginMode === "link" ? "link" : "login"),
+    [loginMode, nextPath],
+  );
+  const normalizedEmail = useMemo(() => normalizeAuthEmail(email), [email]);
+  const isEmailValid = useMemo(() => Boolean(normalizedEmail), [normalizedEmail]);
+  const passwordChecklist = useMemo(() => getPasswordPolicyChecklist(password), [password]);
+  const passwordPolicyError = useMemo(
+    () =>
+      passwordStep === "set_password"
+        ? validateClientPasswordPolicy(password, confirmPassword)
+        : null,
+    [confirmPassword, password, passwordStep],
+  );
   const otpCharacters = useMemo(
-    () => Array.from({ length: OTP_CODE_LENGTH }, (_, index) => otpCode[index] || ""),
-    [otpCode],
+    () => Array.from({ length: resolvedOtpLength }, (_, index) => otpCode[index] || ""),
+    [otpCode, resolvedOtpLength],
   );
 
   const resendDisabled = useMemo(() => {
@@ -176,6 +206,10 @@ export function LoginPanel({
     const seconds = Math.max(1, Math.ceil(diffMs / 1000));
     return `Reenviar em ${seconds}s`;
   }, [nowTimestamp, otpResendAvailableAt]);
+
+  useEffect(() => {
+    setIsEmbeddedAuthBrowser(isLikelyEmbeddedAuthBrowser(window.navigator.userAgent));
+  }, []);
 
   useEffect(() => {
     if (stage !== "otp" || !otpResendAvailableAt) {
@@ -200,7 +234,7 @@ export function LoginPanel({
       return;
     }
 
-    const focusIndex = Math.min(otpCode.length, OTP_CODE_LENGTH - 1);
+    const focusIndex = Math.min(otpCode.length, resolvedOtpLength - 1);
     const frameId = window.requestAnimationFrame(() => {
       otpInputRefs.current[focusIndex]?.focus();
       otpInputRefs.current[focusIndex]?.select();
@@ -209,10 +243,10 @@ export function LoginPanel({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [otpCode.length, stage]);
+  }, [otpCode.length, resolvedOtpLength, stage]);
 
   function focusOtpSlot(index: number) {
-    const nextIndex = Math.max(0, Math.min(index, OTP_CODE_LENGTH - 1));
+    const nextIndex = Math.max(0, Math.min(index, resolvedOtpLength - 1));
     otpInputRefs.current[nextIndex]?.focus();
     otpInputRefs.current[nextIndex]?.select();
   }
@@ -227,18 +261,21 @@ export function LoginPanel({
     }
 
     if (nextValue.length > 1) {
-      const merged = nextValue.slice(0, OTP_CODE_LENGTH);
+      const merged = nextValue.slice(0, resolvedOtpLength);
       setOtpCode(merged);
-      focusOtpSlot(Math.min(merged.length, OTP_CODE_LENGTH - 1));
+      focusOtpSlot(Math.min(merged.length, resolvedOtpLength - 1));
       return;
     }
 
-    const characters = Array.from({ length: OTP_CODE_LENGTH }, (_, otpIndex) => otpCode[otpIndex] || "");
+    const characters = Array.from(
+      { length: resolvedOtpLength },
+      (_, otpIndex) => otpCode[otpIndex] || "",
+    );
     characters[index] = nextValue;
-    const merged = characters.join("").slice(0, OTP_CODE_LENGTH);
+    const merged = characters.join("").slice(0, resolvedOtpLength);
     setOtpCode(merged);
 
-    if (index < OTP_CODE_LENGTH - 1) {
+    if (index < resolvedOtpLength - 1) {
       focusOtpSlot(index + 1);
     }
   }
@@ -261,7 +298,7 @@ export function LoginPanel({
       return;
     }
 
-    if (event.key === "ArrowRight" && index < OTP_CODE_LENGTH - 1) {
+    if (event.key === "ArrowRight" && index < resolvedOtpLength - 1) {
       event.preventDefault();
       focusOtpSlot(index + 1);
     }
@@ -277,25 +314,32 @@ export function LoginPanel({
       .getData("text")
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "")
-      .slice(0, OTP_CODE_LENGTH - startIndex);
+      .slice(0, resolvedOtpLength - startIndex);
 
     if (!pasted) {
       return;
     }
 
-    const characters = Array.from({ length: OTP_CODE_LENGTH }, (_, otpIndex) => otpCode[otpIndex] || "");
+    const characters = Array.from(
+      { length: resolvedOtpLength },
+      (_, otpIndex) => otpCode[otpIndex] || "",
+    );
 
     Array.from(pasted).forEach((character, offset) => {
       characters[startIndex + offset] = character;
     });
 
-    const merged = characters.join("").slice(0, OTP_CODE_LENGTH);
+    const merged = characters.join("").slice(0, resolvedOtpLength);
     setOtpCode(merged);
-    focusOtpSlot(Math.min(startIndex + pasted.length, OTP_CODE_LENGTH - 1));
+    focusOtpSlot(Math.min(startIndex + pasted.length, resolvedOtpLength - 1));
   }
 
   async function handleEmailContinue() {
     if (isSubmittingEmail) return;
+    if (!normalizedEmail) {
+      setErrorMessage("Informe um email corporativo valido para continuar.");
+      return;
+    }
 
     setIsSubmittingEmail(true);
     setErrorMessage(null);
@@ -309,7 +353,7 @@ export function LoginPanel({
         },
         credentials: "same-origin",
         body: JSON.stringify({
-          email,
+          email: normalizedEmail,
         }),
       });
       const payload = (await response.json()) as EmailStartResponse;
@@ -326,9 +370,7 @@ export function LoginPanel({
       setStage("password");
       setInfoMessage(
         payload.nextStep === "set_password"
-          ? payload.hasDiscordLinked || payload.hasGoogleLinked
-            ? "Encontramos sua conta Flowdesk. Crie uma senha para acessar tambem por email."
-            : "Este sera o primeiro acesso desta conta por email. Crie sua senha para continuar."
+          ? "Crie uma senha forte para liberar o acesso por email nesta conta."
           : null,
       );
     } catch (error) {
@@ -344,6 +386,10 @@ export function LoginPanel({
 
   async function handlePasswordContinue() {
     if (isSubmittingPassword) return;
+    if (passwordStep === "set_password" && passwordPolicyError) {
+      setErrorMessage(passwordPolicyError);
+      return;
+    }
 
     setIsSubmittingPassword(true);
     setErrorMessage(null);
@@ -357,7 +403,7 @@ export function LoginPanel({
         },
         credentials: "same-origin",
         body: JSON.stringify({
-          email,
+          email: normalizedEmail || email.trim().toLowerCase(),
           password,
           confirmPassword: passwordStep === "set_password" ? confirmPassword : undefined,
           next: nextPath,
@@ -400,6 +446,10 @@ export function LoginPanel({
 
   async function handleOtpContinue() {
     if (isSubmittingOtp) return;
+    if (otpCode.trim().length < resolvedOtpLength) {
+      setErrorMessage(`Digite os ${resolvedOtpLength} caracteres do codigo para continuar.`);
+      return;
+    }
 
     setIsSubmittingOtp(true);
     setErrorMessage(null);
@@ -490,35 +540,65 @@ export function LoginPanel({
 
   const chooserView = (
     <>
-      <div className="mt-[22px] space-y-[14px]">
+      <form
+        className="mt-[22px] space-y-[14px]"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleEmailContinue();
+        }}
+      >
         <div className={inputShellClassName}>
           <input
             type="email"
             value={email}
             onChange={(event) => setEmail(event.currentTarget.value)}
+            onBlur={() => {
+              const trimmed = email.trim().toLowerCase();
+              if (trimmed && trimmed !== email) {
+                setEmail(trimmed);
+              }
+            }}
             placeholder="voce@email.com"
             autoComplete="email"
             inputMode="email"
+            maxLength={254}
+            aria-invalid={Boolean(errorMessage && !isEmailValid)}
             className="w-full bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
           />
         </div>
 
         <WhiteActionButton
           label="Continuar"
+          type="submit"
           loading={isSubmittingEmail}
           disabled={!isEmailValid}
-          onClick={() => {
-            void handleEmailContinue();
-          }}
         />
-      </div>
+      </form>
 
       <PanelDivider />
 
       <div className="mt-[20px] space-y-[12px]">
-        <GoogleLoginButton href={googleHref} />
+        {googleEnabled ? (
+          <GoogleLoginButton
+            href={googleHref}
+            disabled={isEmbeddedAuthBrowser}
+          />
+        ) : null}
+        {microsoftEnabled ? (
+          <MicrosoftLoginButton
+            href={microsoftHref}
+            disabled={isEmbeddedAuthBrowser}
+          />
+        ) : null}
         <DiscordLoginButton href={discordHref} />
       </div>
+
+      {isEmbeddedAuthBrowser && (googleEnabled || microsoftEnabled) ? (
+        <div className="mt-[14px] rounded-[18px] border border-[rgba(255,255,255,0.06)] bg-[#080808] px-[14px] py-[12px] text-[12px] leading-[1.7] text-[#A7A7A7]">
+          Google e Microsoft bloqueiam login dentro de navegador embutido de apps como Discord e Instagram.
+          Abra esta pagina no Chrome, Edge ou Safari para continuar com esses provedores.
+        </div>
+      ) : null}
     </>
   );
 
@@ -533,7 +613,13 @@ export function LoginPanel({
         <span>{email}</span>
       </button>
 
-      <div className="mt-[18px] space-y-[14px]">
+      <form
+        className="mt-[18px] space-y-[14px]"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handlePasswordContinue();
+        }}
+      >
         <div className={inputShellClassName}>
           <input
             type="password"
@@ -541,6 +627,7 @@ export function LoginPanel({
             onChange={(event) => setPassword(event.currentTarget.value)}
             placeholder={passwordStep === "set_password" ? "Crie sua senha" : "Digite sua senha"}
             autoComplete={passwordStep === "set_password" ? "new-password" : "current-password"}
+            maxLength={128}
             className="w-full bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
           />
         </div>
@@ -553,23 +640,44 @@ export function LoginPanel({
               onChange={(event) => setConfirmPassword(event.currentTarget.value)}
               placeholder="Confirme sua senha"
               autoComplete="new-password"
+              maxLength={128}
               className="w-full bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
             />
           </div>
         ) : null}
 
+        {passwordStep === "set_password" ? (
+          <div className="rounded-[20px] border border-[rgba(255,255,255,0.06)] bg-[#080808] px-[16px] py-[14px]">
+            <p className="text-[12px] font-semibold tracking-[0.12em] text-[#6E6E6E] uppercase">
+              Padrao minimo
+            </p>
+            <div className="mt-[10px] grid gap-[8px] text-[13px] text-[#909090]">
+              {passwordChecklist.map((item) => (
+                <div key={item.id} className="flex items-center gap-[8px]">
+                  <span
+                    aria-hidden="true"
+                    className={`h-[7px] w-[7px] rounded-full ${
+                      item.valid ? "bg-[#C9F77B]" : "bg-[#4D4D4D]"
+                    }`}
+                  />
+                  <span className={item.valid ? "text-[#D8D8D8]" : undefined}>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <WhiteActionButton
           label="Continuar"
+          type="submit"
           loading={isSubmittingPassword}
           disabled={
             !password.trim() ||
-            (passwordStep === "set_password" && !confirmPassword.trim())
+            (passwordStep === "set_password" &&
+              (!confirmPassword.trim() || Boolean(passwordPolicyError)))
           }
-          onClick={() => {
-            void handlePasswordContinue();
-          }}
         />
-      </div>
+      </form>
     </>
   );
 
@@ -584,12 +692,18 @@ export function LoginPanel({
         <span>{maskedEmail || email}</span>
       </button>
 
-      <div className="mt-[18px] space-y-[14px]">
+      <form
+        className="mt-[18px] space-y-[14px]"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void handleOtpContinue();
+        }}
+      >
         <div className="flex items-center justify-center gap-[10px] sm:gap-[12px]">
           {otpCharacters.map((character, index) => {
             const isCurrentSlot =
               otpCode.length === index ||
-              (otpCode.length >= OTP_CODE_LENGTH && index === OTP_CODE_LENGTH - 1);
+              (otpCode.length >= resolvedOtpLength && index === resolvedOtpLength - 1);
 
             return (
               <input
@@ -665,13 +779,11 @@ export function LoginPanel({
 
         <WhiteActionButton
           label="Confirmar codigo"
+          type="submit"
           loading={isSubmittingOtp}
-          disabled={otpCode.trim().length < OTP_CODE_LENGTH}
-          onClick={() => {
-            void handleOtpContinue();
-          }}
+          disabled={otpCode.trim().length < resolvedOtpLength}
         />
-      </div>
+      </form>
 
       <div className="mt-[14px] flex items-center justify-between gap-[12px] text-[13px] text-[#868686]">
         <span>
@@ -727,7 +839,7 @@ export function LoginPanel({
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[180px] rounded-t-[31px] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0.02)_32%,transparent_74%)]"
           />
-          <div className="relative z-10">
+      <div className="relative z-10">
             <LandingReveal delay={170}>
               <Link
                 href="/"
@@ -791,13 +903,19 @@ export function LoginPanel({
             )}
 
             {infoMessage ? (
-              <p className="mt-[16px] text-center text-[13px] leading-[1.7] text-[#8A8A8A]">
+              <p
+                role="status"
+                className="mt-[16px] rounded-[18px] border border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)] px-[14px] py-[12px] text-center text-[13px] leading-[1.7] text-[#B4B4B4]"
+              >
                 {infoMessage}
               </p>
             ) : null}
 
             {errorMessage ? (
-              <p className="mt-[16px] text-center text-[13px] leading-[1.7] text-[#D69B9B]">
+              <p
+                role="alert"
+                className="mt-[16px] rounded-[18px] border border-[rgba(214,155,155,0.18)] bg-[rgba(148,36,36,0.12)] px-[14px] py-[12px] text-center text-[13px] leading-[1.7] text-[#E1A9A9]"
+              >
                 {errorMessage}
               </p>
             ) : null}

@@ -15,7 +15,7 @@ const LEGACY_PRODUCTION_HOSTS = new Set([
 ]);
 const OAUTH_PROVIDER_COOKIE_PREFIX = "flowdesk_oauth";
 
-export type OAuthProvider = "discord" | "google";
+export type OAuthProvider = "discord" | "google" | "microsoft";
 
 function requireEnv(name: string) {
   const value = process.env[name];
@@ -108,6 +108,8 @@ export const authConfig = {
     ),
   googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() || null,
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || null,
+  microsoftClientId: process.env.MICROSOFT_CLIENT_ID?.trim() || null,
+  microsoftClientSecret: process.env.MICROSOFT_CLIENT_SECRET?.trim() || null,
   googleRedirectUriLocal:
     process.env.GOOGLE_REDIRECT_URI_LOCAL ||
     buildDefaultRedirectUri(
@@ -119,6 +121,18 @@ export const authConfig = {
     buildDefaultRedirectUri(
       resolveDefaultProductionAuthOrigin(),
       "/api/auth/google/callback",
+    ),
+  microsoftRedirectUriLocal:
+    process.env.MICROSOFT_REDIRECT_URI_LOCAL ||
+    buildDefaultRedirectUri(
+      resolveDefaultLocalAuthOrigin(),
+      "/api/auth/microsoft/callback",
+    ),
+  microsoftRedirectUriProd:
+    process.env.MICROSOFT_REDIRECT_URI_PROD ||
+    buildDefaultRedirectUri(
+      resolveDefaultProductionAuthOrigin(),
+      "/api/auth/microsoft/callback",
     ),
   loginSuccessBasePath: process.env.LOGIN_SUCCESS_BASE_PATH || "/dashboard",
   loginSuccessHashPath: process.env.LOGIN_SUCCESS_HASH_PATH || "",
@@ -168,12 +182,27 @@ export function resolveGoogleRedirectUri(request: NextRequest) {
   );
 }
 
+export function resolveMicrosoftRedirectUri(request: NextRequest) {
+  return resolveRequestScopedRedirectUri(
+    request,
+    "/api/auth/microsoft/callback",
+    authConfig.microsoftRedirectUriLocal &&
+      resolveHostRuntimeContext(getRequestHostname(request)).mode === "local"
+      ? authConfig.microsoftRedirectUriLocal
+      : authConfig.microsoftRedirectUriProd,
+  );
+}
+
 export function isSecureRequest(request: NextRequest) {
   return request.nextUrl.protocol === "https:";
 }
 
 export function isGoogleAuthConfigured() {
   return Boolean(authConfig.googleClientId && authConfig.googleClientSecret);
+}
+
+export function isMicrosoftAuthConfigured() {
+  return Boolean(authConfig.microsoftClientId && authConfig.microsoftClientSecret);
 }
 
 function buildOAuthCookieName(provider: OAuthProvider, suffix: string) {
@@ -214,6 +243,11 @@ export function normalizeInternalNextPath(path: string | null | undefined) {
   if (!trimmed.startsWith("/")) return null;
   if (trimmed.startsWith("//")) return null;
   return trimmed;
+}
+
+export function getConfiguredEmailOtpLength() {
+  const value = Number(process.env.AUTH_EMAIL_OTP_LENGTH || "6");
+  return Number.isInteger(value) && value >= 6 && value <= 8 ? value : 6;
 }
 
 export function buildLoginSuccessLocation(origin: string) {

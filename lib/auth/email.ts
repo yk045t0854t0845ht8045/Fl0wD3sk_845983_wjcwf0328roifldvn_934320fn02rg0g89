@@ -1,4 +1,5 @@
-const AUTH_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AUTH_EMAIL_REGEX =
+  /^[a-z0-9!#$%&'*+/=?^_`{|}~.-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
 
 function titleCaseSegment(value: string) {
   if (!value) return "";
@@ -11,6 +12,17 @@ export function normalizeAuthEmail(value: unknown) {
   const normalized = value.trim().toLowerCase();
   if (!normalized || normalized.length > 254) return null;
   if (!AUTH_EMAIL_REGEX.test(normalized)) return null;
+
+  const [localPart = "", domainPart = ""] = normalized.split("@");
+  if (!localPart || !domainPart) return null;
+  if (localPart.length > 64 || domainPart.length > 253) return null;
+  if (localPart.startsWith(".") || localPart.endsWith(".")) return null;
+  if (normalized.includes("..")) return null;
+
+  const domainLabels = domainPart.split(".");
+  if (domainLabels.some((label) => !label || label.length > 63)) {
+    return null;
+  }
 
   return normalized;
 }

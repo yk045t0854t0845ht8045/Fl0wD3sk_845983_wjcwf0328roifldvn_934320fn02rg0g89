@@ -46,8 +46,8 @@ function getOtpAlphabet() {
 }
 
 function getOtpLength() {
-  const value = Number(process.env.AUTH_EMAIL_OTP_LENGTH || "4");
-  return Number.isInteger(value) && value >= 4 && value <= 8 ? value : 4;
+  const value = Number(process.env.AUTH_EMAIL_OTP_LENGTH || "6");
+  return Number.isInteger(value) && value >= 6 && value <= 8 ? value : 6;
 }
 
 function getOtpTtlMs() {
@@ -247,7 +247,8 @@ export async function verifyLoginOtpChallenge(input: {
   code: string;
 }) {
   const normalizedCode = normalizeOtpCode(input.code);
-  if (!/^[A-Z0-9]{4,8}$/.test(normalizedCode)) {
+  const otpLength = getOtpLength();
+  if (!new RegExp(`^[A-Z0-9]{${otpLength}}$`).test(normalizedCode)) {
     throw new EmailOtpError("Digite um codigo valido para continuar.", 400, "otp_invalid_format");
   }
 

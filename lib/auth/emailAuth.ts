@@ -6,7 +6,8 @@ import {
 } from "@/lib/auth/session";
 import { normalizeAuthEmail } from "@/lib/auth/email";
 import { createLoginOtpChallenge, resendLoginOtpChallenge, verifyLoginOtpChallenge } from "@/lib/auth/emailOtp";
-import { hashPassword, validatePasswordPolicy, verifyPassword } from "@/lib/auth/password";
+import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { validatePasswordPolicy } from "@/lib/auth/passwordPolicy";
 import { validateTrustedEmailDevice } from "@/lib/auth/trustedDevice";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 

@@ -1,5 +1,9 @@
 export type CanonicalHost = "public" | "login" | "status" | "dashboard" | "servers";
 export type WorkspaceArea = "login" | "status" | "dashboard" | "servers" | "account";
+type CanonicalRoutingFallbackOptions = {
+  fallbackHost?: CanonicalHost | null;
+  fallbackArea?: WorkspaceArea | "public" | null;
+};
 
 type RequestLike = Pick<Request, "headers" | "url">;
 
@@ -613,12 +617,17 @@ export function buildCanonicalPublicUrl(
 export function buildCanonicalUrlFromInternalPath(
   request: RequestLike,
   internalPath: string,
-  options?: {
-    fallbackHost?: CanonicalHost | null;
-  },
+  options?: CanonicalRoutingFallbackOptions,
 ) {
   const resolvedUrl = new URL(internalPath, getRequestOrigin(request));
   const pathArea = detectWorkspaceAreaFromPath(resolvedUrl.pathname);
+  const fallbackHost =
+    options?.fallbackHost ??
+    (options?.fallbackArea
+      ? options.fallbackArea === "public"
+        ? "public"
+        : getWorkspaceAreaCanonicalHost(options.fallbackArea)
+      : null);
 
   if (pathArea) {
     return (
@@ -631,15 +640,15 @@ export function buildCanonicalUrlFromInternalPath(
     );
   }
 
-  if (options?.fallbackHost === "public") {
+  if (fallbackHost === "public") {
     return (
       buildCanonicalPublicUrl(request, resolvedUrl.pathname, resolvedUrl.search) ||
       resolvedUrl.toString()
     );
   }
 
-  if (options?.fallbackHost) {
-    const origin = resolveCanonicalHostOrigin(request, options.fallbackHost);
+  if (fallbackHost) {
+    const origin = resolveCanonicalHostOrigin(request, fallbackHost);
     return origin
       ? new URL(`${ensureLeadingSlash(resolvedUrl.pathname)}${resolvedUrl.search}`, origin).toString()
       : resolvedUrl.toString();
@@ -665,9 +674,7 @@ function createBrowserRequestLike(): RequestLike | null {
 
 export function buildBrowserRoutingTargetFromInternalPath(
   internalPath: string,
-  options?: {
-    fallbackHost?: CanonicalHost | null;
-  },
+  options?: CanonicalRoutingFallbackOptions,
 ) {
   if (typeof window === "undefined") {
     return {

@@ -112,7 +112,6 @@ export async function POST(request: NextRequest) {
         ok: true,
         nextStep: result.nextStep,
         passwordStep: result.passwordStep,
-        userId: result.userId,
         challengeId: "challengeId" in result ? result.challengeId : undefined,
         maskedEmail: result.maskedEmail,
         expiresAt: "expiresAt" in result ? result.expiresAt : undefined,

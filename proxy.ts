@@ -166,7 +166,9 @@ function maybeBuildCanonicalAuthRedirect(
     pathname === "/api/auth/discord/callback" ||
     pathname === "/api/auth/discord/callback/" ||
     pathname === "/api/auth/google/callback" ||
-    pathname === "/api/auth/google/callback/"
+    pathname === "/api/auth/google/callback/" ||
+    pathname === "/api/auth/microsoft/callback" ||
+    pathname === "/api/auth/microsoft/callback/"
   ) {
     const targetLocation = new URL(
       `${pathname}${request.nextUrl.search}`,

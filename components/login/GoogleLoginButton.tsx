@@ -6,6 +6,7 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 type GoogleLoginButtonProps = {
   href: string;
   label?: string;
+  disabled?: boolean;
 };
 
 function GoogleLogo() {
@@ -38,33 +39,39 @@ function GoogleLogo() {
 export function GoogleLoginButton({
   href,
   label = "Continuar com Google",
+  disabled = false,
 }: GoogleLoginButtonProps) {
   const [loading, setLoading] = useState(false);
 
   function handleClick() {
-    if (loading) return;
+    if (loading || disabled) return;
 
     setLoading(true);
-
-    window.setTimeout(() => {
-      window.location.assign(href);
-    }, 400);
+    window.location.assign(href);
   }
 
   return (
     <button
       type="button"
       onClick={handleClick}
-      disabled={loading}
+      disabled={loading || disabled}
       aria-busy={loading}
       className="group relative inline-flex h-[52px] w-full items-center justify-center overflow-hidden rounded-[14px] px-6 text-[16px] leading-none font-semibold disabled:cursor-not-allowed"
     >
       <span
         aria-hidden="true"
-        className="absolute inset-0 rounded-[14px] border border-[rgba(255,255,255,0.08)] bg-[linear-gradient(180deg,#FFFFFF_0%,#ECECEC_100%)] transition-transform duration-200 ease-out group-hover:scale-[1.015] group-active:scale-[0.992]"
+        className={`absolute inset-0 rounded-[14px] border transition-transform duration-200 ease-out ${
+          disabled
+            ? "border-[rgba(255,255,255,0.05)] bg-[linear-gradient(180deg,#2A2A2A_0%,#1E1E1E_100%)]"
+            : "border-[rgba(255,255,255,0.08)] bg-[linear-gradient(180deg,#FFFFFF_0%,#ECECEC_100%)] group-hover:scale-[1.015] group-active:scale-[0.992]"
+        }`}
       />
 
-      <span className="relative z-10 inline-flex items-center justify-center gap-[12px] text-[#101010]">
+      <span
+        className={`relative z-10 inline-flex items-center justify-center gap-[12px] ${
+          disabled ? "text-[#BFBFBF]" : "text-[#101010]"
+        }`}
+      >
         {loading ? (
           <ButtonLoader size={22} colorClassName="text-[#101010]" />
         ) : (

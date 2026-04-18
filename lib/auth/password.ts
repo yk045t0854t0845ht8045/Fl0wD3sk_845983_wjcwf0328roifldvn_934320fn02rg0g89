@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { validatePasswordPolicy } from "@/lib/auth/passwordPolicy";
 
 const PASSWORD_KEY_LENGTH = 64;
 const PASSWORD_HASH_PREFIX = "scrypt";
@@ -153,31 +154,6 @@ function scryptAsync(
       resolve(derivedKey as Buffer);
     });
   });
-}
-
-export function validatePasswordPolicy(
-  password: string,
-  confirmPassword?: string | null,
-) {
-  const value = typeof password === "string" ? password : "";
-
-  if (value.length < 8) {
-    return "Use pelo menos 8 caracteres na senha.";
-  }
-
-  if (value.length > 128) {
-    return "A senha ultrapassa o limite de 128 caracteres.";
-  }
-
-  if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
-    return "Use pelo menos uma letra e um numero na senha.";
-  }
-
-  if (typeof confirmPassword === "string" && value !== confirmPassword) {
-    return "A confirmacao da senha nao confere.";
-  }
-
-  return null;
 }
 
 export async function hashPassword(password: string) {

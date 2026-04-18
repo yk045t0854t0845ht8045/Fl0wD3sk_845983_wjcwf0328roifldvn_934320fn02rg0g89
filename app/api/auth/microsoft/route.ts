@@ -4,9 +4,9 @@ import {
   getOAuthNextPathCookieName,
   getOAuthRedirectUriCookieName,
   getOAuthStateCookieName,
-  isGoogleAuthConfigured,
+  isMicrosoftAuthConfigured,
   normalizeInternalNextPath,
-  resolveGoogleRedirectUri,
+  resolveMicrosoftRedirectUri,
 } from "@/lib/auth/config";
 import {
   clearSharedAuthCookie,
@@ -14,7 +14,7 @@ import {
 } from "@/lib/auth/cookies";
 import { isLikelyEmbeddedAuthBrowser } from "@/lib/auth/oauthBrowser";
 import { buildLoginHref } from "@/lib/auth/paths";
-import { buildGoogleAuthorizeUrl } from "@/lib/auth/google";
+import { buildMicrosoftAuthorizeUrl } from "@/lib/auth/microsoft";
 import { createOAuthState } from "@/lib/auth/session";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
@@ -27,7 +27,7 @@ import {
 export async function GET(request: NextRequest) {
   const requestContext = createSecurityRequestContext(request);
   const rateLimit = await enforceRequestRateLimit({
-    action: "auth_google_start",
+    action: "auth_microsoft_start",
     windowMs: 10 * 60 * 1000,
     maxAttempts: 18,
     context: requestContext,
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
 
   if (!rateLimit.ok) {
     await logSecurityAuditEventSafe(requestContext, {
-      action: "auth_google_start",
+      action: "auth_microsoft_start",
       outcome: "blocked",
       metadata: {
         reason: "rate_limit",
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
   }
 
   await logSecurityAuditEventSafe(requestContext, {
-    action: "auth_google_start",
+    action: "auth_microsoft_start",
     outcome: "started",
   });
 
@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
 
   if (isLikelyEmbeddedAuthBrowser(request.headers.get("user-agent"))) {
     await logSecurityAuditEventSafe(requestContext, {
-      action: "auth_google_start",
+      action: "auth_microsoft_start",
       outcome: "blocked",
       metadata: {
         reason: "embedded_browser_blocked",
@@ -71,28 +71,28 @@ export async function GET(request: NextRequest) {
     });
 
     const loginUrl = new URL(buildLoginHref(requestedNextPath, requestedMode), request.url);
-    loginUrl.searchParams.set("error", "google_embedded_browser");
+    loginUrl.searchParams.set("error", "microsoft_embedded_browser");
     return attachRequestId(
       applyNoStoreHeaders(NextResponse.redirect(loginUrl, 302)),
       requestContext.requestId,
     );
   }
 
-  if (!isGoogleAuthConfigured()) {
+  if (!isMicrosoftAuthConfigured()) {
     return attachRequestId(
       applyNoStoreHeaders(
-        NextResponse.redirect(new URL("/login?error=google_not_configured", request.url), 302),
+        NextResponse.redirect(new URL("/login?error=microsoft_not_configured", request.url), 302),
       ),
       requestContext.requestId,
     );
   }
 
   const state = createOAuthState();
-  const redirectUri = resolveGoogleRedirectUri(request);
-  const googleAuthUrl = buildGoogleAuthorizeUrl(state, redirectUri);
-  const response = NextResponse.redirect(googleAuthUrl, 302);
+  const redirectUri = resolveMicrosoftRedirectUri(request);
+  const microsoftAuthUrl = buildMicrosoftAuthorizeUrl(state, redirectUri);
+  const response = NextResponse.redirect(microsoftAuthUrl, 302);
 
-  setSharedAuthCookie(request, response, getOAuthStateCookieName("google"), state, {
+  setSharedAuthCookie(request, response, getOAuthStateCookieName("microsoft"), state, {
     httpOnly: true,
     sameSite: "lax",
     maxAge: 60 * 10,
@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
   setSharedAuthCookie(
     request,
     response,
-    getOAuthRedirectUriCookieName("google"),
+    getOAuthRedirectUriCookieName("microsoft"),
     redirectUri,
     {
       httpOnly: true,
@@ -118,7 +118,7 @@ export async function GET(request: NextRequest) {
     setSharedAuthCookie(
       request,
       response,
-      getOAuthNextPathCookieName("google"),
+      getOAuthNextPathCookieName("microsoft"),
       requestedNextPath,
       {
         httpOnly: true,
@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
       },
     );
   } else {
-    clearSharedAuthCookie(request, response, getOAuthNextPathCookieName("google"), {
+    clearSharedAuthCookie(request, response, getOAuthNextPathCookieName("microsoft"), {
       httpOnly: true,
       sameSite: "lax",
       priority: "high",
@@ -139,7 +139,7 @@ export async function GET(request: NextRequest) {
   setSharedAuthCookie(
     request,
     response,
-    getOAuthModeCookieName("google"),
+    getOAuthModeCookieName("microsoft"),
     requestedMode,
     {
       httpOnly: true,
@@ -151,7 +151,7 @@ export async function GET(request: NextRequest) {
   );
 
   await logSecurityAuditEventSafe(requestContext, {
-    action: "auth_google_start",
+    action: "auth_microsoft_start",
     outcome: "succeeded",
     metadata: {
       redirectUri,

@@ -1,6 +1,11 @@
 import { LoginPanel } from "@/components/login/LoginPanel";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
-import { normalizeInternalNextPath } from "@/lib/auth/config";
+import {
+  getConfiguredEmailOtpLength,
+  isGoogleAuthConfigured,
+  isMicrosoftAuthConfigured,
+  normalizeInternalNextPath,
+} from "@/lib/auth/config";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 import { redirect } from "next/navigation";
 
@@ -44,8 +49,22 @@ function resolveLoginErrorMessage(
       return "Sua conta Google precisa ter um email verificado para continuar.";
     case "google_not_configured":
       return "O login com Google ainda nao esta configurado neste ambiente.";
+    case "google_embedded_browser":
+      return "O Google bloqueia login dentro do navegador embutido do app. Abra esta pagina no Chrome, Safari ou Edge para continuar.";
     case "google_auth_failed":
       return "Nao foi possivel entrar com Google agora. Tente novamente.";
+    case "microsoft_invalid_state":
+      return "Sua autenticacao com Microsoft expirou ou ficou invalida. Tente novamente.";
+    case "microsoft_conflict":
+      return "Esta conta Microsoft ja esta vinculada a outra conta Flowdesk.";
+    case "microsoft_missing_email":
+      return "Sua conta Microsoft precisa retornar um email valido para continuar.";
+    case "microsoft_not_configured":
+      return "O login com Microsoft ainda nao esta configurado neste ambiente.";
+    case "microsoft_embedded_browser":
+      return "O Microsoft bloqueia login dentro do navegador embutido do app. Abra esta pagina no Chrome, Safari ou Edge para continuar.";
+    case "microsoft_auth_failed":
+      return "Nao foi possivel entrar com Microsoft agora. Tente novamente.";
     default:
       return null;
   }
@@ -59,6 +78,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     takeFirstQueryValue(query.error),
     loginMode,
   );
+  const googleEnabled = isGoogleAuthConfigured();
+  const microsoftEnabled = isMicrosoftAuthConfigured();
+  const emailOtpLength = getConfiguredEmailOtpLength();
   const currentUser = await getCurrentUserFromSessionCookie();
 
   if (loginMode === "link" && currentUser?.discord_user_id) {
@@ -81,6 +103,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               nextPath={nextPath}
               loginMode={loginMode}
               initialErrorMessage={initialErrorMessage}
+              googleEnabled={googleEnabled}
+              microsoftEnabled={microsoftEnabled}
+              emailOtpLength={emailOtpLength}
               currentSessionHint={
                 currentUser
                   ? {
