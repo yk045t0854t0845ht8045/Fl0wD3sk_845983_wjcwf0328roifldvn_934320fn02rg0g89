@@ -12,6 +12,7 @@ import {
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import type {
   StatusSubscriptionRecord,
   StatusSubscriptionType,
@@ -65,13 +66,10 @@ export function StatusSubscribeModalContent({
   setSubscribing,
   initialType,
 }: StatusSubscribeModalContentProps) {
+  const notifications = useNotifications();
   const [subscribeType, setSubscribeType] = useState<StatusSubscriptionType | null>(
     initialType,
   );
-  const [subscribeStatus, setSubscribeStatus] = useState<"idle" | "success" | "error">(
-    "idle",
-  );
-  const [subscribeMessage, setSubscribeMessage] = useState("");
   const [loadingState, setLoadingState] = useState(true);
   const [emailTarget, setEmailTarget] = useState("");
   const [webhookTarget, setWebhookTarget] = useState("");
@@ -112,8 +110,9 @@ export function StatusSubscribeModalContent({
         setWebhookTarget((json.subscriptions?.webhook?.target as string | undefined) || "");
       } catch {
         if (!alive) return;
-        setSubscribeStatus("error");
-        setSubscribeMessage("Nao foi possivel carregar as opcoes de notificacao.");
+        notifications.error("Nao foi possivel carregar as opcoes de notificacao.", {
+          title: "Notificacoes de status",
+        });
       } finally {
         if (alive) {
           setLoadingState(false);
@@ -126,7 +125,7 @@ export function StatusSubscribeModalContent({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [notifications]);
 
   const handleAuthRedirect = () => {
     const next = subscribeType || "discord_dm";
@@ -145,8 +144,6 @@ export function StatusSubscribeModalContent({
     }
 
     setSubscribing(true);
-    setSubscribeStatus("idle");
-    setSubscribeMessage("");
 
     try {
       const res = await fetch("/api/status/subscriptions", {
@@ -170,8 +167,9 @@ export function StatusSubscribeModalContent({
           return;
         }
 
-        setSubscribeStatus("error");
-        setSubscribeMessage(json.message || "Falha ao salvar a inscricao.");
+        notifications.error(json.message || "Falha ao salvar a inscricao.", {
+          title: "Notificacoes de status",
+        });
         return;
       }
 
@@ -180,17 +178,20 @@ export function StatusSubscribeModalContent({
         subscriptions: json.subscriptions || {},
         discordChannelUrl: json.discordChannelUrl,
       });
-      setSubscribeStatus("success");
-      setSubscribeMessage(
+      notifications.success(
         subscribeType === "webhook"
           ? `Webhook validado e salvo com sucesso${json.validation?.responseStatus ? ` (${json.validation.responseStatus})` : ""}.`
           : subscribeType === "discord_dm"
             ? "Alertas por Discord DM ativados com sucesso."
             : "Inscricao salva com sucesso.",
+        {
+          title: "Notificacoes de status",
+        },
       );
     } catch {
-      setSubscribeStatus("error");
-      setSubscribeMessage("Falha ao salvar a inscricao.");
+      notifications.error("Falha ao salvar a inscricao.", {
+        title: "Notificacoes de status",
+      });
     } finally {
       setSubscribing(false);
     }
@@ -200,8 +201,6 @@ export function StatusSubscribeModalContent({
     if (!subscribeType) return;
 
     setSubscribing(true);
-    setSubscribeStatus("idle");
-    setSubscribeMessage("");
 
     try {
       const res = await fetch("/api/status/subscriptions", {
@@ -212,8 +211,9 @@ export function StatusSubscribeModalContent({
       const json = await res.json();
 
       if (!json.ok) {
-        setSubscribeStatus("error");
-        setSubscribeMessage(json.message || "Nao foi possivel desativar a inscricao.");
+        notifications.error(json.message || "Nao foi possivel desativar a inscricao.", {
+          title: "Notificacoes de status",
+        });
         return;
       }
 
@@ -225,11 +225,13 @@ export function StatusSubscribeModalContent({
       if (subscribeType === "webhook") {
         setWebhookTarget("");
       }
-      setSubscribeStatus("success");
-      setSubscribeMessage("Inscricao atualizada com sucesso.");
+      notifications.success("Inscricao atualizada com sucesso.", {
+        title: "Notificacoes de status",
+      });
     } catch {
-      setSubscribeStatus("error");
-      setSubscribeMessage("Falha ao desativar a inscricao.");
+      notifications.error("Falha ao desativar a inscricao.", {
+        title: "Notificacoes de status",
+      });
     } finally {
       setSubscribing(false);
     }
@@ -541,18 +543,6 @@ export function StatusSubscribeModalContent({
       ) : (
         <>
           {renderSelectedType()}
-          {subscribeStatus !== "idle" && subscribeMessage && (
-            <div
-              className={`mt-5 rounded-[14px] border px-4 py-3 text-[13px] ${
-                subscribeStatus === "success"
-                  ? "border-[#15305B] bg-[#071426] text-[#92BFFF]"
-                  : "border-[#3B1616] bg-[#160909] text-[#FF9B9B]"
-              }`}
-            >
-              {subscribeMessage}
-            </div>
-          )}
-
           <div className="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <LandingActionButton
               variant="dark"

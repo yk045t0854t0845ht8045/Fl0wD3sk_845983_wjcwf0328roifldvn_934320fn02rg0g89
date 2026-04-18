@@ -26,6 +26,7 @@ import { ConfigStepMultiSelect } from "@/components/config/ConfigStepMultiSelect
 import { ConfigStepSelect } from "@/components/config/ConfigStepSelect";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { TicketMessageBuilder } from "@/components/servers/TicketMessageBuilder";
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
@@ -3434,6 +3435,11 @@ export function ServerSettingsEditor({
   const showInlineMessages = Boolean(
     isViewerOnly || isUnauthorizedForSection || locked || errorMessage,
   );
+  const methodActionTone =
+    methodActionMessage === CARD_PAYMENTS_DISABLED_MESSAGE ||
+    methodActionMessage === financialViewerMessage
+      ? "default"
+      : "success";
   const ticketControlsDisabled = isSaving || settingsReadOnly || !ticketEnabled;
   const aiControlsDisabled = isSaving || settingsReadOnly || !aiEnabled;
   const welcomeControlsDisabled =
@@ -3523,6 +3529,24 @@ export function ServerSettingsEditor({
             ? "Defina canais publicos e privados para entrada e saida antes de salvar."
             : "Preencha todos os campos de ticket e staff para liberar o salvamento."
           : "Revise os campos abaixo e confirme para manter a operacao deste servidor atualizada.";
+
+  useNotificationEffect(errorMessage, {
+    tone: "error",
+    title: "Configuracoes do servidor",
+    enabled: !isUnauthorizedForSection,
+  });
+  useNotificationEffect(methodActionMessage, {
+    tone: methodActionTone,
+    title: "Metodos de pagamento",
+  });
+  useNotificationEffect(planError, {
+    tone: "error",
+    title: "Plano da conta",
+  });
+  useNotificationEffect(planSuccess, {
+    tone: "success",
+    title: "Plano da conta",
+  });
 
   useEffect(() => {
     setIsPortalMounted(true);
@@ -6133,11 +6157,6 @@ export function ServerSettingsEditor({
                             {viewerOnlyMessage}
                           </p>
                         ) : null}
-                        {errorMessage && !isUnauthorizedForSection ? (
-                          <p className="text-[12px] leading-[1.55] text-[#D98A8A]">
-                            {errorMessage}
-                          </p>
-                        ) : null}
                       </div>
                     </div>
                   ) : null}
@@ -6439,18 +6458,6 @@ export function ServerSettingsEditor({
                   </span>
                 ) : null}
               </button>
-
-              {methodActionMessage ? (
-                <p
-                  className={`mt-2 text-[11px] ${
-                    methodActionMessage === CARD_PAYMENTS_DISABLED_MESSAGE
-                      ? "text-[#F2C823]"
-                      : "text-[#9BD694]"
-                  }`}
-                >
-                  {methodActionMessage}
-                </p>
-              ) : null}
               {paymentsError ? (
                 <p className="mt-2 text-[11px] text-[#C2C2C2]">{paymentsError}</p>
               ) : null}
@@ -6653,9 +6660,6 @@ export function ServerSettingsEditor({
                       Pagamentos com cartao e cobranca recorrente estao temporariamente desativados e retornarao em breve.
                     </p>
                   ) : null}
-
-                  {planError ? <p className="mt-2 text-[11px] text-[#C2C2C2]">{planError}</p> : null}
-                  {planSuccess ? <p className="mt-2 text-[11px] text-[#9BD694]">{planSuccess}</p> : null}
                 </div>
               </div>
             )}

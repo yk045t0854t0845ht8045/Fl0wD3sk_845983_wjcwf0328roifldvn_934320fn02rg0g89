@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { UserMinus, AlertTriangle } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { DangerActionModal } from "../DangerActionModal";
 
 export function DeleteAccountTab() {
+  const notifications = useNotifications();
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -16,10 +18,17 @@ export function DeleteAccountTab() {
         window.location.assign("/login");
       } else {
         const data = await res.json();
-        alert(data.message || "Falha ao excluir a conta.");
+        notifications.error(data.message || "Falha ao excluir a conta.", {
+          title: "Exclusao de conta",
+        });
+        setLoading(false);
+        setModalOpen(false);
       }
     } catch (err) {
       console.error(err);
+      notifications.error("Falha ao excluir a conta.", {
+        title: "Exclusao de conta",
+      });
       setLoading(false);
       setModalOpen(false);
     }

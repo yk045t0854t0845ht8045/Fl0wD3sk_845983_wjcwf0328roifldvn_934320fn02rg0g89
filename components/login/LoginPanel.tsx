@@ -22,6 +22,7 @@ import {
 } from "@/lib/auth/passwordPolicy";
 import { isLikelyEmbeddedAuthBrowser } from "@/lib/auth/oauthBrowser";
 import { PRIVACY_PATH, TERMS_PATH } from "@/lib/legal/content";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 
 type LoginPanelProps = {
   nextPath?: string | null;
@@ -140,6 +141,7 @@ export function LoginPanel({
   emailOtpLength = 6,
   currentSessionHint = null,
 }: LoginPanelProps) {
+  const notifications = useNotifications();
   const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL || TERMS_PATH;
   const privacyUrl = process.env.NEXT_PUBLIC_PRIVACY_URL || PRIVACY_PATH;
   const [stage, setStage] = useState<LoginStage>("chooser");
@@ -154,7 +156,7 @@ export function LoginPanel({
   const [otpResendAvailableAt, setOtpResendAvailableAt] = useState<string | null>(null);
   const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [errorMessage, setErrorMessage] = useState<string | null>(initialErrorMessage);
-  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [, setInfoMessage] = useState<string | null>(null);
   const [isSubmittingEmail, setIsSubmittingEmail] = useState(false);
   const [isSubmittingPassword, setIsSubmittingPassword] = useState(false);
   const [isSubmittingOtp, setIsSubmittingOtp] = useState(false);
@@ -226,8 +228,17 @@ export function LoginPanel({
   }, [otpResendAvailableAt, stage]);
 
   useEffect(() => {
+    if (!initialErrorMessage) {
+      setErrorMessage(null);
+      return;
+    }
+
     setErrorMessage(initialErrorMessage);
-  }, [initialErrorMessage]);
+    notifications.error(initialErrorMessage, {
+      title: "Falha no login",
+      durationMs: 6200,
+    });
+  }, [initialErrorMessage, notifications]);
 
   useEffect(() => {
     if (stage !== "otp") {
@@ -249,6 +260,29 @@ export function LoginPanel({
     const nextIndex = Math.max(0, Math.min(index, resolvedOtpLength - 1));
     otpInputRefs.current[nextIndex]?.focus();
     otpInputRefs.current[nextIndex]?.select();
+  }
+
+  function showInfoNotification(message: string, title?: string) {
+    const normalizedMessage = message.trim();
+    if (!normalizedMessage) return;
+
+    setInfoMessage(normalizedMessage);
+    notifications.show(normalizedMessage, {
+      title,
+      tone: "default",
+      durationMs: 4600,
+    });
+  }
+
+  function showErrorNotification(message: string, title?: string) {
+    const normalizedMessage = message.trim();
+    if (!normalizedMessage) return;
+
+    setErrorMessage(normalizedMessage);
+    notifications.error(normalizedMessage, {
+      title,
+      durationMs: 5600,
+    });
   }
 
   function setOtpCodeAt(index: number, rawValue: string) {
@@ -337,7 +371,10 @@ export function LoginPanel({
   async function handleEmailContinue() {
     if (isSubmittingEmail) return;
     if (!normalizedEmail) {
-      setErrorMessage("Informe um email corporativo valido para continuar.");
+      showErrorNotification(
+        "Informe um email corporativo valido para continuar.",
+        "Email invalido",
+      );
       return;
     }
 
@@ -368,16 +405,16 @@ export function LoginPanel({
       setPassword("");
       setConfirmPassword("");
       setStage("password");
-      setInfoMessage(
-        payload.nextStep === "set_password"
-          ? "Crie uma senha forte para liberar o acesso por email nesta conta."
-          : null,
-      );
+      if (payload.nextStep === "set_password") {
+        showInfoNotification(
+          "Crie uma senha forte para liberar o acesso por email nesta conta.",
+          "Defina sua senha",
+        );
+      }
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Nao foi possivel continuar com este email.",
+      showErrorNotification(
+        error instanceof Error ? error.message : "Nao foi possivel continuar com este email.",
+        "Nao foi possivel continuar",
       );
     } finally {
       setIsSubmittingEmail(false);
@@ -387,7 +424,7 @@ export function LoginPanel({
   async function handlePasswordContinue() {
     if (isSubmittingPassword) return;
     if (passwordStep === "set_password" && passwordPolicyError) {
-      setErrorMessage(passwordPolicyError);
+      showErrorNotification(passwordPolicyError, "Senha invalida");
       return;
     }
 
@@ -432,12 +469,14 @@ export function LoginPanel({
       setOtpExpiresAt(payload.expiresAt || null);
       setOtpResendAvailableAt(payload.resendAvailableAt || null);
       setStage("otp");
-      setInfoMessage("Enviamos o codigo de acesso para o seu email.");
+      showInfoNotification(
+        "Enviamos o codigo de acesso para o seu email.",
+        "Codigo enviado",
+      );
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Nao foi possivel validar sua senha.",
+      showErrorNotification(
+        error instanceof Error ? error.message : "Nao foi possivel validar sua senha.",
+        "Senha nao validada",
       );
     } finally {
       setIsSubmittingPassword(false);
@@ -447,7 +486,10 @@ export function LoginPanel({
   async function handleOtpContinue() {
     if (isSubmittingOtp) return;
     if (otpCode.trim().length < resolvedOtpLength) {
-      setErrorMessage(`Digite os ${resolvedOtpLength} caracteres do codigo para continuar.`);
+      showErrorNotification(
+        `Digite os ${resolvedOtpLength} caracteres do codigo para continuar.`,
+        "Codigo incompleto",
+      );
       return;
     }
 
@@ -476,8 +518,9 @@ export function LoginPanel({
 
       window.location.replace(payload.redirectTo);
     } catch (error) {
-      setErrorMessage(
+      showErrorNotification(
         error instanceof Error ? error.message : "Nao foi possivel validar o codigo.",
+        "Codigo invalido",
       );
     } finally {
       setIsSubmittingOtp(false);
@@ -511,12 +554,11 @@ export function LoginPanel({
       setMaskedEmail(payload.maskedEmail || maskedEmail);
       setOtpExpiresAt(payload.expiresAt || otpExpiresAt);
       setOtpResendAvailableAt(payload.resendAvailableAt || otpResendAvailableAt);
-      setInfoMessage("Novo codigo enviado com sucesso.");
+      showInfoNotification("Novo codigo enviado com sucesso.", "Codigo reenviado");
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Nao foi possivel reenviar o codigo.",
+      showErrorNotification(
+        error instanceof Error ? error.message : "Nao foi possivel reenviar o codigo.",
+        "Falha ao reenviar",
       );
     } finally {
       setIsResendingOtp(false);
@@ -742,7 +784,7 @@ export function LoginPanel({
           })}
         </div>
 
-        <label className="flex cursor-pointer items-start gap-[12px] rounded-[18px] border border-[rgba(255,255,255,0.06)] bg-[#090909] px-[16px] py-[14px] text-left transition-[border-color,background-color,box-shadow] duration-200 hover:border-[rgba(255,255,255,0.1)] hover:bg-[#0C0C0C]">
+        <label className="flex cursor-pointer items-center gap-[12px] rounded-[18px] border border-[rgba(255,255,255,0.06)] bg-[#090909] px-[16px] py-[14px] text-left transition-[border-color,background-color,box-shadow] duration-200 hover:border-[rgba(255,255,255,0.1)] hover:bg-[#0C0C0C]">
           <span className="relative mt-[2px] flex h-[18px] w-[18px] shrink-0 items-center justify-center">
             <input
               type="checkbox"
@@ -767,13 +809,8 @@ export function LoginPanel({
               />
             </svg>
           </span>
-          <span className="block">
-            <span className="block text-[14px] font-medium text-[#F1F1F1]">
-              Salvar sessao por 30 dias
-            </span>
-            <span className="mt-[4px] block text-[12px] leading-[1.6] text-[#7E7E7E]">
-              Neste dispositivo, o login por email pode pular uma nova verificacao durante esse periodo.
-            </span>
+          <span className="block text-[14px] font-medium text-[#F1F1F1]">
+            Salvar sessao por 30 dias
           </span>
         </label>
 
@@ -902,23 +939,6 @@ export function LoginPanel({
               </LandingReveal>
             )}
 
-            {infoMessage ? (
-              <p
-                role="status"
-                className="mt-[16px] rounded-[18px] border border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)] px-[14px] py-[12px] text-center text-[13px] leading-[1.7] text-[#B4B4B4]"
-              >
-                {infoMessage}
-              </p>
-            ) : null}
-
-            {errorMessage ? (
-              <p
-                role="alert"
-                className="mt-[16px] rounded-[18px] border border-[rgba(214,155,155,0.18)] bg-[rgba(148,36,36,0.12)] px-[14px] py-[12px] text-center text-[13px] leading-[1.7] text-[#E1A9A9]"
-              >
-                {errorMessage}
-              </p>
-            ) : null}
           </div>
         </div>
       </LandingReveal>

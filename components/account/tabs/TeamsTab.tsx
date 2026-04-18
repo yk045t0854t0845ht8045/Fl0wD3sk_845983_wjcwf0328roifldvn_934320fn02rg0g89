@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Users, Trash2, Clock, CheckCircle2, Crown, AlertCircle,
+  Users, Trash2, Clock, CheckCircle2, Crown,
   ChevronDown, ChevronUp, X, Plus, Server, ShieldAlert,
-  Shield, Settings, UserPlus, Edit2, Check, Loader2, Search, Info
+  Shield, UserPlus, Edit2, Check, Loader2, Search, Info
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { DangerActionModal } from "../DangerActionModal";
 
 type TeamRolePermission =
@@ -84,6 +85,7 @@ function Spinner({ size = 14 }: { size?: number }) {
 }
 
 export function TeamsTab() {
+  const notifications = useNotifications();
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedTeams, setExpandedTeams] = useState<Set<number>>(new Set());
@@ -94,8 +96,6 @@ export function TeamsTab() {
   // Invite
   const [inviteInput, setInviteInput] = useState<Record<number, string>>({});
   const [invitingTeamId, setInvitingTeamId] = useState<number | null>(null);
-  const [inviteError, setInviteError] = useState<Record<number, string>>({});
-  const [inviteSuccess, setInviteSuccess] = useState<Record<number, string>>({});
 
   // Member actions
   const [removingMemberId, setRemovingMemberId] = useState<number | null>(null);
@@ -108,7 +108,6 @@ export function TeamsTab() {
   const [newRoleName, setNewRoleName] = useState<Record<number, string>>({});
   const [newRolePerms, setNewRolePerms] = useState<Record<number, TeamRolePermission[]>>({});
   const [isCreatingRole, setIsCreatingRole] = useState<Record<number, boolean>>({});
-  const [roleCreateError, setRoleCreateError] = useState<Record<number, string>>({});
   const [roleToDelete, setRoleToDelete] = useState<{ teamId: number; role: TeamRole } | null>(null);
   const [isDeletingRole, setIsDeletingRole] = useState(false);
   const [editingRole, setEditingRole] = useState<{ teamId: number; role: TeamRole; name: string; permissions: TeamRolePermission[] } | null>(null);
@@ -124,18 +123,29 @@ export function TeamsTab() {
   const router = useRouter();
 
   // ─── Data Loading ──────────────────────────────────────────────────────────
-  async function loadTeams(silent = false) {
+  const loadTeams = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
       const res = await fetch("/api/auth/me/teams");
       const json = await res.json();
-      if (json.ok) setTeams(json.teams || []);
+      if (!json.ok) {
+        throw new Error(json.message || "Nao foi possivel carregar as equipes.");
+      }
+      setTeams(json.teams || []);
+      return true;
     } catch (err) {
       console.error(err);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel carregar as equipes.",
+        {
+          title: "Equipes",
+        },
+      );
+      return false;
     } finally {
       if (!silent) setLoading(false);
     }
-  }
+  }, [notifications]);
 
   // Row selection for role dropdown etc.
   const [roleMenuState, setRoleMenuState] = useState<{
@@ -143,7 +153,7 @@ export function TeamsTab() {
     anchorRect: DOMRect | null;
   } | null>(null);
 
-  useEffect(() => { loadTeams(); }, []);
+  useEffect(() => { void loadTeams(); }, [loadTeams]);
 
   useEffect(() => {
     if (!roleMenuState) return;
@@ -183,8 +193,6 @@ export function TeamsTab() {
     const discordUserId = (inviteInput[teamId] || "").trim();
     if (!discordUserId) return;
     setInvitingTeamId(teamId);
-    setInviteError((p) => ({ ...p, [teamId]: "" }));
-    setInviteSuccess((p) => ({ ...p, [teamId]: "" }));
     try {
       const res = await fetch(`/api/auth/me/teams/${teamId}/members`, {
         method: "POST",
@@ -194,13 +202,19 @@ export function TeamsTab() {
       const json = await res.json();
       if (json.ok) {
         setInviteInput((p) => ({ ...p, [teamId]: "" }));
-        setInviteSuccess((p) => ({ ...p, [teamId]: "Convite enviado com sucesso!" }));
-        await loadTeams();
+        await loadTeams(true);
+        notifications.success("Convite enviado com sucesso!", {
+          title: "Equipes",
+        });
       } else {
-        setInviteError((p) => ({ ...p, [teamId]: json.message || "Erro ao convidar." }));
+        notifications.error(json.message || "Erro ao convidar.", {
+          title: "Equipes",
+        });
       }
     } catch {
-      setInviteError((p) => ({ ...p, [teamId]: "Erro de rede." }));
+      notifications.error("Erro de rede.", {
+        title: "Equipes",
+      });
     } finally {
       setInvitingTeamId(null);
     }
@@ -212,12 +226,27 @@ export function TeamsTab() {
     const { teamId, member } = memberToRemove;
     setRemovingMemberId(member.id);
     try {
-      await fetch(`/api/auth/me/teams/${teamId}/members/${member.id}`, {
+      const res = await fetch(`/api/auth/me/teams/${teamId}/members/${member.id}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel remover o membro.");
+      }
       await loadTeams(true);
-    } catch (err) { console.error(err); }
+      notifications.success("Membro removido com sucesso.", {
+        title: "Equipes",
+      });
+    } catch (err) {
+      console.error(err);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel remover o membro.",
+        {
+          title: "Equipes",
+        },
+      );
+    }
     finally {
       setRemovingMemberId(null);
       setMemberToRemove(null);
@@ -229,12 +258,27 @@ export function TeamsTab() {
     if (!teamToDelete) return;
     setDeletingTeamId(teamToDelete.id);
     try {
-      await fetch(`/api/auth/me/teams/${teamToDelete.id}`, {
+      const res = await fetch(`/api/auth/me/teams/${teamToDelete.id}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       });
-      await loadTeams();
-    } catch (err) { console.error(err); }
+      const json = await res.json().catch(() => null);
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel excluir a equipe.");
+      }
+      await loadTeams(true);
+      notifications.success("Equipe excluida com sucesso.", {
+        title: "Equipes",
+      });
+    } catch (err) {
+      console.error(err);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel excluir a equipe.",
+        {
+          title: "Equipes",
+        },
+      );
+    }
     finally {
       setDeletingTeamId(null);
       setTeamToDelete(null);
@@ -250,8 +294,23 @@ export function TeamsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ roleId }),
       });
-      if (res.ok) await loadTeams(true);
-    } catch (err) { console.error(err); }
+      const json = await res.json().catch(() => null);
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel atualizar o cargo.");
+      }
+      await loadTeams(true);
+      notifications.success("Cargo atualizado com sucesso.", {
+        title: "Equipes",
+      });
+    } catch (err) {
+      console.error(err);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel atualizar o cargo.",
+        {
+          title: "Equipes",
+        },
+      );
+    }
     finally { setIsUpdatingMemberRole(null); }
   }
 
@@ -283,14 +342,25 @@ export function TeamsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ permissions: newPerms }),
       });
-      if (res.ok) {
-        setMemberPermsToEdit({ teamId, member: { ...member, customPermissions: newPerms } });
-        await loadTeams(true);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel atualizar as permissoes.");
       }
+      setMemberPermsToEdit({ teamId, member: { ...member, customPermissions: newPerms } });
+      await loadTeams(true);
+      notifications.success("Permissoes atualizadas com sucesso.", {
+        title: "Equipes",
+      });
     } catch (err) { 
       console.error(err);
       // Rollback on error
       await loadTeams(true);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel atualizar as permissoes.",
+        {
+          title: "Equipes",
+        },
+      );
     }
     finally { setIsUpdatingMemberPerms(false); }
   }
@@ -299,12 +369,13 @@ export function TeamsTab() {
   async function handleCreateRole(teamId: number) {
     const name = (newRoleName[teamId] || "").trim();
     if (name.length < 2) {
-      setRoleCreateError((p) => ({ ...p, [teamId]: "O nome deve ter pelo menos 2 caracteres." }));
+      notifications.error("O nome deve ter pelo menos 2 caracteres.", {
+        title: "Equipes",
+      });
       return;
     }
     const permissions = newRolePerms[teamId] || [];
     setIsCreatingRole((p) => ({ ...p, [teamId]: true }));
-    setRoleCreateError((p) => ({ ...p, [teamId]: "" }));
     try {
       const res = await fetch(`/api/auth/me/teams/${teamId}/roles`, {
         method: "POST",
@@ -316,11 +387,18 @@ export function TeamsTab() {
         setNewRoleName((p) => ({ ...p, [teamId]: "" }));
         setNewRolePerms((p) => ({ ...p, [teamId]: [] }));
         await loadTeams(true);
+        notifications.success("Cargo criado com sucesso.", {
+          title: "Equipes",
+        });
       } else {
-        setRoleCreateError((p) => ({ ...p, [teamId]: json.message || "Erro ao criar cargo." }));
+        notifications.error(json.message || "Erro ao criar cargo.", {
+          title: "Equipes",
+        });
       }
     } catch {
-      setRoleCreateError((p) => ({ ...p, [teamId]: "Erro de rede." }));
+      notifications.error("Erro de rede.", {
+        title: "Equipes",
+      });
     } finally {
       setIsCreatingRole((p) => ({ ...p, [teamId]: false }));
     }
@@ -336,11 +414,24 @@ export function TeamsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: editingRole.name.trim(), permissions: editingRole.permissions }),
       });
-      if (res.ok) {
-        setEditingRole(null);
-        await loadTeams(true);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel salvar o cargo.");
       }
-    } catch (err) { console.error(err); }
+      setEditingRole(null);
+      await loadTeams(true);
+      notifications.success("Cargo atualizado com sucesso.", {
+        title: "Equipes",
+      });
+    } catch (err) {
+      console.error(err);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel salvar o cargo.",
+        {
+          title: "Equipes",
+        },
+      );
+    }
     finally { setIsSavingRoleEdit(false); }
   }
 
@@ -349,12 +440,27 @@ export function TeamsTab() {
     if (!roleToDelete) return;
     setIsDeletingRole(true);
     try {
-      await fetch(`/api/auth/me/teams/${roleToDelete.teamId}/roles/${roleToDelete.role.id}`, {
+      const res = await fetch(`/api/auth/me/teams/${roleToDelete.teamId}/roles/${roleToDelete.role.id}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel excluir o cargo.");
+      }
       await loadTeams(true);
-    } catch (err) { console.error(err); }
+      notifications.success("Cargo excluido com sucesso.", {
+        title: "Equipes",
+      });
+    } catch (err) {
+      console.error(err);
+      notifications.error(
+        err instanceof Error ? err.message : "Nao foi possivel excluir o cargo.",
+        {
+          title: "Equipes",
+        },
+      );
+    }
     finally {
       setIsDeletingRole(false);
       setRoleToDelete(null);
@@ -916,14 +1022,6 @@ export function TeamsTab() {
                             })}
                           </div>
                         </div>
-
-                        {roleCreateError[team.id] && (
-                          <p className="flex items-center gap-[6px] text-[12px] text-[#DB4646]">
-                            <AlertCircle className="h-[12px] w-[12px]" />
-                            {roleCreateError[team.id]}
-                          </p>
-                        )}
-
                         <button
                           onClick={() => handleCreateRole(team.id)}
                           disabled={isCreatingRole[team.id] || !(newRoleName[team.id] || "").trim()}
@@ -963,16 +1061,6 @@ export function TeamsTab() {
                             Convidar
                           </button>
                         </div>
-                        {inviteError[team.id] && (
-                          <p className="flex items-center gap-[6px] text-[12px] text-[#DB4646]">
-                            <AlertCircle className="h-[12px] w-[12px]" /> {inviteError[team.id]}
-                          </p>
-                        )}
-                        {inviteSuccess[team.id] && (
-                          <p className="flex items-center gap-[6px] text-[12px] text-[#34A853]">
-                            <Check className="h-[12px] w-[12px]" /> {inviteSuccess[team.id]}
-                          </p>
-                        )}
                       </div>
 
                       {/* Pending list in invite tab */}

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Copy, Key, Search, Trash } from "lucide-react";
+import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import { DangerActionModal } from "../DangerActionModal";
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { CreateApiKeyModal } from "@/components/account/CreateApiKeyModal";
@@ -31,11 +32,11 @@ function formatDateLabel(value: string | null | undefined) {
 }
 
 export function ApiKeysTab() {
+  const notifications = useNotifications();
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [createModalError, setCreateModalError] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -50,7 +51,7 @@ export function ApiKeysTab() {
     return await response.json().catch(() => null);
   }
 
-  async function loadKeys() {
+  const loadKeys = useCallback(async () => {
     try {
       setLoading(true);
       setLoadError(null);
@@ -71,20 +72,25 @@ export function ApiKeysTab() {
       }
 
       setKeys(Array.isArray(payload.keys) ? payload.keys : []);
+      return true;
     } catch (error) {
       console.error(error);
-      setLoadError(
-        error instanceof Error ? error.message : "Falha ao carregar as chaves API.",
-      );
+      const message =
+        error instanceof Error ? error.message : "Falha ao carregar as chaves API.";
+      setLoadError(message);
       setKeys([]);
+      notifications.error(message, {
+        title: "Chaves de API",
+      });
+      return false;
     } finally {
       setLoading(false);
     }
-  }
+  }, [notifications]);
 
   useEffect(() => {
     void loadKeys();
-  }, []);
+  }, [loadKeys]);
 
   const filteredKeys = useMemo(() => {
     return keys.filter((key) => {
@@ -108,7 +114,6 @@ export function ApiKeysTab() {
   }) {
     try {
       setCreating(true);
-      setCreateModalError(null);
       setLoadError(null);
 
       const response = await fetch("/api/auth/me/api-keys", {
@@ -133,11 +138,19 @@ export function ApiKeysTab() {
 
       setCreatedSecret(typeof payload.secret === "string" ? payload.secret : null);
       setIsCreateModalOpen(false);
-      await loadKeys();
+      const refreshed = await loadKeys();
+      if (refreshed) {
+        notifications.success("Chave criada com sucesso.", {
+          title: "Chaves de API",
+        });
+      }
     } catch (error) {
       console.error(error);
-      setCreateModalError(
+      notifications.error(
         error instanceof Error ? error.message : "Falha ao criar a chave API.",
+        {
+          title: "Chaves de API",
+        },
       );
     } finally {
       setCreating(false);
@@ -163,12 +176,20 @@ export function ApiKeysTab() {
         throw new Error(payload?.message || "Falha ao revogar a chave API.");
       }
 
-      await loadKeys();
+      const refreshed = await loadKeys();
+      if (refreshed) {
+        notifications.success("Chave revogada com sucesso.", {
+          title: "Chaves de API",
+        });
+      }
     } catch (error) {
       console.error(error);
-      setLoadError(
-        error instanceof Error ? error.message : "Falha ao revogar a chave API.",
-      );
+      const message =
+        error instanceof Error ? error.message : "Falha ao revogar a chave API.";
+      setLoadError(message);
+      notifications.error(message, {
+        title: "Chaves de API",
+      });
     } finally {
       setRevoking(false);
       setKeyToRevoke(null);
@@ -182,6 +203,10 @@ export function ApiKeysTab() {
 
     navigator.clipboard.writeText(createdSecret);
     setCopied(true);
+    notifications.success("Chave copiada.", {
+      title: "Chaves de API",
+      durationMs: 2600,
+    });
     setTimeout(() => setCopied(false), 2000);
   }
 
@@ -263,19 +288,12 @@ export function ApiKeysTab() {
             variant="light"
             className="h-[46px] px-6 text-[14px] sm:h-[48px] sm:px-7 sm:text-[15px]"
             onClick={() => {
-              setCreateModalError(null);
               setIsCreateModalOpen(true);
             }}
           >
             Criar Chave
           </LandingActionButton>
         </div>
-
-        {loadError ? (
-          <div className="mt-[16px] rounded-[12px] border border-[rgba(219,70,70,0.2)] bg-[rgba(219,70,70,0.08)] px-[14px] py-[12px] text-[13px] text-[#FFB4B4]">
-            {loadError}
-          </div>
-        ) : null}
 
         {createdSecret ? (
           <div className="mt-[20px] rounded-[14px] border border-[#058232] bg-[rgba(5,130,50,0.05)] p-[20px]">
@@ -314,7 +332,11 @@ export function ApiKeysTab() {
         <h3 className="text-[14px] font-semibold uppercase tracking-wide text-[#555555]">
           Chaves Registradas
         </h3>
-        {filteredKeys.length === 0 ? (
+        {loadError ? (
+          <p className="text-[14px] text-[#777777]">
+            Nao foi possivel carregar as chaves agora.
+          </p>
+        ) : filteredKeys.length === 0 ? (
           <p className="text-[14px] text-[#777777]">
             Nenhuma chave encontrada com os filtros atuais.
           </p>
@@ -406,11 +428,9 @@ export function ApiKeysTab() {
       <CreateApiKeyModal
         isOpen={isCreateModalOpen}
         isProcessing={creating}
-        errorMessage={createModalError}
         onClose={() => {
           if (!creating) {
             setIsCreateModalOpen(false);
-            setCreateModalError(null);
           }
         }}
         onSubmit={handleCreateKey}

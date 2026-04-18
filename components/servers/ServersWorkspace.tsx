@@ -41,6 +41,7 @@ import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
 import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
@@ -2391,6 +2392,19 @@ export function ServersWorkspace({
   const shouldShowEditorHeaderSkeleton =
     Boolean(selectedGuildIdForConfig) && !selectedServer;
 
+  useNotificationEffect(teamsErrorMessage, {
+    tone: "error",
+    title: "Equipes",
+  });
+  useNotificationEffect(teamActionError, {
+    tone: "error",
+    title: "Equipes",
+  });
+  useNotificationEffect(teamActionMessage, {
+    tone: "success",
+    title: "Equipes",
+  });
+
   useEffect(() => {
     if (!selectedGuildIdForConfig) {
       selectedServerRecoveryRef.current = { guildId: null, attempts: 0 };
@@ -2626,16 +2640,6 @@ export function ServersWorkspace({
                   </span>
                 </button>
               </div>
-
-              {teamsErrorMessage ? (
-                <p className="text-[12px] leading-[1.45] text-[#D98484]">{teamsErrorMessage}</p>
-              ) : null}
-              {teamActionError ? (
-                <p className="text-[12px] leading-[1.45] text-[#D98484]">{teamActionError}</p>
-              ) : null}
-              {teamActionMessage ? (
-                <p className="text-[12px] leading-[1.45] text-[#8AB6FF]">{teamActionMessage}</p>
-              ) : null}
             </div>
           </div>
         ) : null}
@@ -3745,12 +3749,6 @@ export function ServersWorkspace({
                         )}
                       </div>
                     </div>
-                  ) : null}
-
-                  {teamActionError ? (
-                    <p className="mt-[14px] text-[13px] leading-[1.5] text-[#D98484]">
-                      {teamActionError}
-                    </p>
                   ) : null}
                 </div>
 

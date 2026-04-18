@@ -30,6 +30,7 @@ import {
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import type { ManagedServer } from "@/lib/servers/managedServers";
@@ -530,6 +531,19 @@ export function DashboardWorkspace({
   );
   const highlightedViewId = pendingViewId ?? currentView.id;
   const hasWorkspaceAlert = Boolean(workspaceAlertMessage);
+
+  useNotificationEffect(teamsErrorMessage, {
+    tone: "error",
+    title: "Equipes",
+  });
+  useNotificationEffect(teamActionError, {
+    tone: "error",
+    title: "Equipes",
+  });
+  useNotificationEffect(teamActionMessage, {
+    tone: "success",
+    title: "Equipes",
+  });
 
   const isDomainsActive = currentView.id.startsWith("domains_");
   const isBillingActive = currentView.id.startsWith("billing_");
@@ -1449,16 +1463,6 @@ export function DashboardWorkspace({
                   </span>
                 </button>
               </div>
-
-              {teamsErrorMessage ? (
-                <p className="text-[12px] leading-[1.45] text-[#D98484]">{teamsErrorMessage}</p>
-              ) : null}
-              {teamActionError ? (
-                <p className="text-[12px] leading-[1.45] text-[#D98484]">{teamActionError}</p>
-              ) : null}
-              {teamActionMessage ? (
-                <p className="text-[12px] leading-[1.45] text-[#8AB6FF]">{teamActionMessage}</p>
-              ) : null}
             </div>
           </div>
         ) : null}
@@ -1991,12 +1995,6 @@ export function DashboardWorkspace({
                         </div>
                       </div>
                     ) : null}
-
-                    {teamActionError ? (
-                      <p className="mt-[14px] text-[13px] leading-[1.5] text-[#D98484]">
-                        {teamActionError}
-                      </p>
-                    ) : null}
                   </div>
 
                   <div className="mt-[20px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-between">
@@ -2150,13 +2148,6 @@ export function DashboardWorkspace({
                       </div>
                     ) : null}
                   </div>
-
-                  {teamActionError ? (
-                    <p className="mt-[14px] text-[13px] leading-[1.5] text-[#D98484]">
-                      {teamActionError}
-                    </p>
-                  ) : null}
-
                   <div className="mt-[18px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-between">
                     <button
                       type="button"

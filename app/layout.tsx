@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { CookieConsentManager } from "@/components/cookies/CookieConsentManager";
+import { NotificationsProvider } from "@/components/notifications/NotificationsProvider";
 import { COOKIE_CONSENT_COOKIE_NAME } from "@/lib/cookies/consent";
 import { RoutePrefetcher } from "@/components/RoutePrefetcher";
 
@@ -45,9 +46,11 @@ export default async function RootLayout({
           crossOrigin="anonymous"
           strategy="afterInteractive"
         />
-        <RoutePrefetcher />
-        {children}
-        <CookieConsentManager initialConsentValue={initialConsentValue} />
+        <NotificationsProvider>
+          <RoutePrefetcher />
+          {children}
+          <CookieConsentManager initialConsentValue={initialConsentValue} />
+        </NotificationsProvider>
       </body>
     </html>
   );
