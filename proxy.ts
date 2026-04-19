@@ -13,6 +13,7 @@ import {
 } from "@/lib/security/http";
 import {
   buildCanonicalUrlFromInternalPath,
+  buildCanonicalPaymentUrl,
   buildCanonicalWorkspaceUrl,
   detectCanonicalHostFromRequest,
   detectWorkspaceAreaFromPath,
@@ -29,6 +30,7 @@ const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const STATIC_PUBLIC_ASSET_PREFIXES = ["/cdn/", "/icons/"] as const;
 const STATIC_PUBLIC_ROOT_FILE_PATTERN =
   /^\/[^/]+\.(?:png|jpe?g|gif|webp|svg|ico|txt|xml|json|webmanifest|woff2?|ttf|otf)$/i;
+const DEFAULT_PAYMENT_CHECKOUT_PATH = "/payment/pro/monthly";
 
 function isStaticPublicAssetPath(pathname: string) {
   if (pathname === "/ads.txt") {
@@ -254,6 +256,53 @@ function maybeBuildCanonicalAuthRedirect(
   return null;
 }
 
+function maybeBuildCanonicalPaymentRedirect(
+  request: NextRequest,
+  requestId: string,
+  csp: string,
+) {
+  const pathname = request.nextUrl.pathname;
+  const canonicalHost = detectCanonicalHostFromRequest(request);
+
+  if (
+    canonicalHost === "pay" &&
+    (pathname === "/" || pathname === "")
+  ) {
+    const targetLocation = buildCanonicalPaymentUrl(
+      request,
+      DEFAULT_PAYMENT_CHECKOUT_PATH,
+      request.nextUrl.search,
+    );
+
+    if (targetLocation && targetLocation !== getCurrentRequestLocation(request)) {
+      return buildRedirectResponse(request, requestId, csp, targetLocation, 308);
+    }
+
+    return null;
+  }
+
+  if (pathname !== "/payment" && !pathname.startsWith("/payment/")) {
+    return null;
+  }
+
+  const currentLocation = getCurrentRequestLocation(request);
+  const targetPathname =
+    pathname === "/payment" || pathname === "/payment/"
+      ? DEFAULT_PAYMENT_CHECKOUT_PATH
+      : pathname;
+  const targetLocation = buildCanonicalPaymentUrl(
+    request,
+    targetPathname,
+    request.nextUrl.search,
+  );
+
+  if (targetLocation && targetLocation !== currentLocation) {
+    return buildRedirectResponse(request, requestId, csp, targetLocation, 308);
+  }
+
+  return null;
+}
+
 function maybeBuildLoginErrorFlashRedirect(
   request: NextRequest,
   requestId: string,
@@ -402,14 +451,23 @@ export function proxy(request: NextRequest) {
       return canonicalHostRedirectResponse;
     }
 
-    const authRedirectResponse = maybeBuildCanonicalAuthRedirect(
-      request,
-      requestId,
-      csp,
-    );
-    if (authRedirectResponse) {
-      return authRedirectResponse;
-    }
+  const authRedirectResponse = maybeBuildCanonicalAuthRedirect(
+    request,
+    requestId,
+    csp,
+  );
+  if (authRedirectResponse) {
+    return authRedirectResponse;
+  }
+
+  const paymentRedirectResponse = maybeBuildCanonicalPaymentRedirect(
+    request,
+    requestId,
+    csp,
+  );
+  if (paymentRedirectResponse) {
+    return paymentRedirectResponse;
+  }
   }
 
   const loginErrorFlashRedirectResponse = maybeBuildLoginErrorFlashRedirect(

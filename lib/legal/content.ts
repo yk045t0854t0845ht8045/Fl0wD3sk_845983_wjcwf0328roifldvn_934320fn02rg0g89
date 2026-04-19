@@ -59,8 +59,12 @@ const officialUrlsTable: LegalTable = {
   rows: [
     [
       { text: "Painel web" },
-      { text: APP_URL, href: APP_URL, mono: true },
-      { text: "Login, configuracao, gerenciamento e paginas legais." },
+      {
+        text: `${APP_URL} / https://pay.flwdesk.com`,
+        href: APP_URL,
+        mono: true,
+      },
+      { text: "Login, configuracao, gerenciamento, paginas legais e checkout oficial." },
     ],
     [
       { text: "OAuth e APIs do Discord" },

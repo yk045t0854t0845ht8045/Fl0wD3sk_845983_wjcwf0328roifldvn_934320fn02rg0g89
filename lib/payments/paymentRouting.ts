@@ -10,6 +10,7 @@ import {
   type PlanCode,
 } from "@/lib/plans/catalog";
 import { buildConfigCheckoutSearchParams } from "@/lib/plans/configRouting";
+import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
 type PaymentCheckoutQueryValue = string | number | boolean | null | undefined;
 type PaymentCheckoutQueryValueInput =
@@ -205,8 +206,15 @@ export function buildPaymentCheckoutEntryHref(input: {
     omitKeys: input.omitSearchParamKeys,
   });
   const search = params.toString();
+  const href = search ? `${pathname}?${search}` : pathname;
 
-  return search ? `${pathname}?${search}` : pathname;
+  if (typeof window === "undefined") {
+    return href;
+  }
+
+  return buildBrowserRoutingTargetFromInternalPath(href, {
+    fallbackHost: "pay",
+  }).href;
 }
 
 export function buildPaymentBasePathFromCurrentPathname(pathname: string) {

@@ -1,4 +1,10 @@
-export type CanonicalHost = "public" | "login" | "status" | "dashboard" | "servers";
+export type CanonicalHost =
+  | "public"
+  | "login"
+  | "status"
+  | "dashboard"
+  | "servers"
+  | "pay";
 export type WorkspaceArea = "login" | "status" | "dashboard" | "servers" | "account";
 type CanonicalRoutingFallbackOptions = {
   fallbackHost?: CanonicalHost | null;
@@ -55,6 +61,9 @@ const CANONICAL_HOST_CONFIG: Record<CanonicalHost, CanonicalHostConfig> = {
   servers: {
     subdomain: "servers",
   },
+  pay: {
+    subdomain: "pay",
+  },
 };
 
 const WORKSPACE_AREA_CONFIG: Record<WorkspaceArea, WorkspaceAreaConfig> = {
@@ -98,6 +107,7 @@ const WORKSPACE_AREAS_IN_MATCH_ORDER = (
 );
 
 export const AUTH_HOST: CanonicalHost = "login";
+export const PAYMENT_HOST: CanonicalHost = "pay";
 export const CANONICAL_PUBLIC_PATH_PREFIXES = [
   "/privacy",
   "/terms",
@@ -598,6 +608,21 @@ export function resolvePublicOrigin(request: RequestLike) {
 
 export function resolveAuthOrigin(request: RequestLike) {
   return resolveCanonicalHostOrigin(request, AUTH_HOST) || getRequestOrigin(request);
+}
+
+export function resolvePaymentOrigin(request: RequestLike) {
+  return resolveCanonicalHostOrigin(request, PAYMENT_HOST) || getRequestOrigin(request);
+}
+
+export function buildCanonicalPaymentUrl(
+  request: RequestLike,
+  pathname = "/payment",
+  search = "",
+) {
+  const origin = resolvePaymentOrigin(request);
+  if (!origin) return null;
+
+  return new URL(`${ensureLeadingSlash(pathname)}${search}`, origin).toString();
 }
 
 export function resolveCookieDomainForHostname(hostname: string) {

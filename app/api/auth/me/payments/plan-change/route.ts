@@ -24,7 +24,14 @@ import {
   resolvePlanPricing,
 } from "@/lib/plans/catalog";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
-import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import {
+  attachRequestId,
+  createSecurityRequestContext,
+  enforceRequestRateLimit,
+  extendSecurityRequestContext,
+  logSecurityAuditEventSafe,
+} from "@/lib/security/requestSecurity";
 
 type SchedulePlanChangeBody = {
   guildId?: unknown;
@@ -160,17 +167,28 @@ async function resolveEffectivePlanSelectionForCheckout(input: {
 }
 
 export async function POST(request: Request) {
+  const requestContext = createSecurityRequestContext(request);
+  let auditContext = requestContext;
+  const respond = (body: unknown, init?: ResponseInit) =>
+    attachRequestId(
+      applyNoStoreHeaders(NextResponse.json(body, init)),
+      requestContext.requestId,
+    );
+
   try {
     const securityResponse = ensureSameOriginJsonMutationRequest(request);
     if (securityResponse) {
-      return securityResponse;
+      return attachRequestId(
+        applyNoStoreHeaders(securityResponse),
+        requestContext.requestId,
+      );
     }
 
     let body: SchedulePlanChangeBody = {};
     try {
       body = (await request.json()) as SchedulePlanChangeBody;
     } catch {
-      return NextResponse.json(
+      return respond(
         { ok: false, message: "Payload JSON invalido." },
         { status: 400 },
       );
@@ -178,9 +196,54 @@ export async function POST(request: Request) {
 
     const guildId = normalizeGuildId(body.guildId);
     const access = await ensureGuildAccess(guildId);
-    if (!access.ok) return access.response;
+    if (!access.ok) {
+      return attachRequestId(
+        applyNoStoreHeaders(access.response),
+        requestContext.requestId,
+      );
+    }
 
-    const userId = access.context.sessionData.authSession.user.id;
+    const session = access.context.sessionData.authSession;
+    const userId = session.user.id;
+    auditContext = extendSecurityRequestContext(requestContext, {
+      sessionId: session.id,
+      userId,
+      guildId,
+    });
+
+    const rateLimit = await enforceRequestRateLimit({
+      action: "payment_plan_change_post",
+      windowMs: 10 * 60 * 1000,
+      maxAttempts: 10,
+      context: auditContext,
+    });
+    if (!rateLimit.ok) {
+      await logSecurityAuditEventSafe(auditContext, {
+        action: "payment_plan_change_post",
+        outcome: "blocked",
+        metadata: {
+          reason: "rate_limit",
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+      });
+
+      const response = respond(
+        {
+          ok: false,
+          message:
+            "Muitas tentativas de troca de plano em pouco tempo. Aguarde alguns instantes e tente novamente.",
+        },
+        { status: 429 },
+      );
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return response;
+    }
+
+    await logSecurityAuditEventSafe(auditContext, {
+      action: "payment_plan_change_post",
+      outcome: "started",
+    });
+
     const selection = await resolveEffectivePlanSelectionForCheckout({
       userId,
       guildId,
@@ -195,7 +258,7 @@ export async function POST(request: Request) {
     });
 
     if (selection.plan.isTrial) {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message:
@@ -206,7 +269,7 @@ export async function POST(request: Request) {
     }
 
     if (preview.execution !== "schedule_for_renewal") {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message:
@@ -217,7 +280,7 @@ export async function POST(request: Request) {
     }
 
     if (!selection.userPlanState?.expires_at || !preview.currentPlanCode || !preview.currentBillingCycleDays) {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message:
@@ -243,7 +306,18 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({
+    await logSecurityAuditEventSafe(auditContext, {
+      action: "payment_plan_change_post",
+      outcome: "succeeded",
+      metadata: {
+        guildId,
+        scheduledChangeId: scheduledChange.id,
+        targetPlanCode: selection.plan.code,
+        targetBillingPeriodCode: selection.plan.billingPeriodCode,
+      },
+    });
+
+    return respond({
       ok: true,
       scheduledChange: {
         id: scheduledChange.id,
@@ -265,7 +339,18 @@ export async function POST(request: Request) {
         "Downgrade agendado com sucesso. O plano atual continua ativo ate o fim do ciclo pago.",
     });
   } catch (error) {
-    return NextResponse.json(
+    await logSecurityAuditEventSafe(auditContext, {
+      action: "payment_plan_change_post",
+      outcome: "failed",
+      metadata: {
+        message: sanitizeErrorMessage(
+          error,
+          "Nao foi possivel agendar a troca de plano.",
+        ),
+      },
+    });
+
+    return respond(
       {
         ok: false,
         message: sanitizeErrorMessage(

@@ -25,7 +25,14 @@ import {
 } from "@/lib/plans/state";
 import { resolvePlanCycleExpirationIso } from "@/lib/plans/cycle";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
-import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import {
+  attachRequestId,
+  createSecurityRequestContext,
+  enforceRequestRateLimit,
+  extendSecurityRequestContext,
+  logSecurityAuditEventSafe,
+} from "@/lib/security/requestSecurity";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type ActivateTrialBody = {
@@ -226,17 +233,28 @@ async function createPaymentOrderEvent(
 }
 
 export async function POST(request: Request) {
+  const requestContext = createSecurityRequestContext(request);
+  let auditContext = requestContext;
+  const respond = (body: unknown, init?: ResponseInit) =>
+    attachRequestId(
+      applyNoStoreHeaders(NextResponse.json(body, init)),
+      requestContext.requestId,
+    );
+
   try {
     const securityResponse = ensureSameOriginJsonMutationRequest(request);
     if (securityResponse) {
-      return securityResponse;
+      return attachRequestId(
+        applyNoStoreHeaders(securityResponse),
+        requestContext.requestId,
+      );
     }
 
     let body: ActivateTrialBody = {};
     try {
       body = (await request.json()) as ActivateTrialBody;
     } catch {
-      return NextResponse.json(
+      return respond(
         { ok: false, message: "Payload JSON invalido." },
         { status: 400 },
       );
@@ -245,9 +263,52 @@ export async function POST(request: Request) {
     const guildId = normalizeGuildId(body.guildId);
 
     const access = await ensureGuildAccess(guildId);
-    if (!access.ok) return access.response;
+    if (!access.ok) {
+      return attachRequestId(
+        applyNoStoreHeaders(access.response),
+        requestContext.requestId,
+      );
+    }
 
     const user = access.context.sessionData.authSession.user;
+    auditContext = extendSecurityRequestContext(requestContext, {
+      sessionId: access.context.sessionData.authSession.id,
+      userId: user.id,
+      guildId,
+    });
+    const rateLimit = await enforceRequestRateLimit({
+      action: "payment_trial_post",
+      windowMs: 10 * 60 * 1000,
+      maxAttempts: 10,
+      context: auditContext,
+    });
+    if (!rateLimit.ok) {
+      await logSecurityAuditEventSafe(auditContext, {
+        action: "payment_trial_post",
+        outcome: "blocked",
+        metadata: {
+          reason: "rate_limit",
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+      });
+
+      const response = respond(
+        {
+          ok: false,
+          message:
+            "Muitas tentativas de ativacao em pouco tempo. Aguarde alguns instantes e tente novamente.",
+        },
+        { status: 429 },
+      );
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return response;
+    }
+
+    await logSecurityAuditEventSafe(auditContext, {
+      action: "payment_trial_post",
+      outcome: "started",
+    });
+
     if (guildId) {
       await cleanupExpiredUnpaidServerSetups({
         userId: user.id,
@@ -258,7 +319,7 @@ export async function POST(request: Request) {
 
     const basicPlanAvailability = await getBasicPlanAvailability(user.id);
     if (!basicPlanAvailability.isAvailable) {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message:
@@ -266,13 +327,6 @@ export async function POST(request: Request) {
             "O plano gratuito ja nao esta disponivel nesta conta.",
         },
         { status: 403 },
-      );
-    }
-
-    if (!guildId) {
-      return NextResponse.json(
-        { ok: false, message: "ID do servidor e obrigatorio para ativar o teste." },
-        { status: 400 },
       );
     }
 
@@ -284,7 +338,7 @@ export async function POST(request: Request) {
     });
 
     if (!checkoutPlan.plan.isTrial) {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message: "Este endpoint so ativa o plano gratuito.",
@@ -305,7 +359,7 @@ export async function POST(request: Request) {
             })
           : null;
 
-      return NextResponse.json({
+      return respond({
         ok: true,
         blockedByActiveLicense: true,
         licenseActive: true,
@@ -329,7 +383,7 @@ export async function POST(request: Request) {
         invalidateOtherOrders: false,
       });
 
-      return NextResponse.json({
+      return respond({
         ok: true,
         reused: true,
         licenseActive: true,
@@ -428,7 +482,16 @@ export async function POST(request: Request) {
     await syncUserPlanStateFromOrder(securedOrder.order);
     clearPlanStateCacheForUser(user.id);
 
-    return NextResponse.json({
+    await logSecurityAuditEventSafe(auditContext, {
+      action: "payment_trial_post",
+      outcome: "succeeded",
+      metadata: {
+        guildId,
+        orderNumber: securedOrder.order.order_number,
+      },
+    });
+
+    return respond({
       ok: true,
       reused: false,
       trialActivated: true,
@@ -440,7 +503,18 @@ export async function POST(request: Request) {
       ),
     });
   } catch (error) {
-    return NextResponse.json(
+    await logSecurityAuditEventSafe(auditContext, {
+      action: "payment_trial_post",
+      outcome: "failed",
+      metadata: {
+        message: sanitizeErrorMessage(
+          error,
+          "Falha ao ativar o plano gratuito.",
+        ),
+      },
+    });
+
+    return respond(
       {
         ok: false,
         message: sanitizeErrorMessage(

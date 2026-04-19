@@ -1154,11 +1154,12 @@ function normalizeServersTabFromQuery(value: string | null) {
 function resolveApprovedRedirectConfig(fallbackGuildId: string | null) {
   if (typeof window === "undefined") {
     return {
-      targetUrl: "/servers",
+      targetUrl: fallbackGuildId ? "/servers" : "/account/plans",
       delayMs: 10_000,
     };
   }
 
+  const currentUrl = new URL(window.location.href);
   const params = new URLSearchParams(window.location.search);
   const isRenewFlow = params.get("renew")?.trim() === "1";
   const returnTarget = params.get("return")?.trim().toLowerCase() || null;
@@ -1166,7 +1167,10 @@ function resolveApprovedRedirectConfig(fallbackGuildId: string | null) {
 
   if (!shouldReturnToServers) {
     return {
-      targetUrl: "/servers",
+      targetUrl:
+        !fallbackGuildId && isPaymentCheckoutPathname(currentUrl.pathname)
+          ? "/account/plans"
+          : "/servers",
       delayMs: 10_000,
     };
   }
@@ -3505,6 +3509,7 @@ export function ConfigStepFour({
     checkoutCurrency,
     couponCode,
     giftCardCode,
+    knownFlowPointsBalance,
     guildId,
     discountRefreshTick,
     selectedBillingPeriodCode,
@@ -4459,8 +4464,7 @@ export function ConfigStepFour({
 
   const canSubmitPix = useMemo(() => {
     return Boolean(
-      guildId &&
-        (pixOrder?.orderNumber || lastKnownOrderNumber) &&
+      (pixOrder?.orderNumber || lastKnownOrderNumber) &&
         !isLoadingOrder &&
         !isPreparingBaseOrder &&
         pixDocumentStatus === "valid" &&
@@ -4468,7 +4472,6 @@ export function ConfigStepFour({
         !isSubmittingPix,
     );
   }, [
-    guildId,
     isLoadingOrder,
     isPreparingBaseOrder,
     isSubmittingPix,
@@ -4481,7 +4484,6 @@ export function ConfigStepFour({
   const canSubmitCard = useMemo(() => {
     return Boolean(
       cardPaymentsEnabled &&
-        guildId &&
         (pixOrder?.orderNumber || lastKnownOrderNumber) &&
         !isLoadingOrder &&
         !isPreparingBaseOrder &&
@@ -4503,7 +4505,6 @@ export function ConfigStepFour({
     cardNumberStatus,
     cardPaymentsEnabled,
     cardCvvStatus,
-    guildId,
     isLoadingOrder,
     isPreparingBaseOrder,
     isSubmittingCard,
@@ -4533,8 +4534,7 @@ export function ConfigStepFour({
       activeCheckoutQuery.status === "approved",
   );
   const canChoosePaymentMethod = Boolean(
-    guildId &&
-      !isLoadingOrder &&
+    !isLoadingOrder &&
       !isPreparingBaseOrder &&
       !!resolvedOrderNumber &&
       !isSubmittingCard &&
@@ -5222,7 +5222,7 @@ export function ConfigStepFour({
   }, [guildId, handleRefreshExpiredPixPayment, pixOrder, view]);
 
   const handleActivateTrialPlan = useCallback(async () => {
-    if (isSubmittingTrial || isPlanLoading || isLoadingOrder) {
+    if (isSubmittingTrial) {
       return;
     }
 
@@ -5301,8 +5301,6 @@ export function ConfigStepFour({
     }
   }, [
     guildId,
-    isLoadingOrder,
-    isPlanLoading,
     isSubmittingTrial,
     selectedBillingPeriodCode,
     selectedPlanCode,
@@ -5311,8 +5309,7 @@ export function ConfigStepFour({
 
   const handleSchedulePlanChange = useCallback(async () => {
     if (
-      isPlanLoading ||
-      isLoadingOrder ||
+      isSubmittingTrial ||
       selectedPlanChange.execution !== "schedule_for_renewal"
     ) {
       return;
@@ -5375,8 +5372,7 @@ export function ConfigStepFour({
     }
   }, [
     guildId,
-    isLoadingOrder,
-    isPlanLoading,
+    isSubmittingTrial,
     scheduledPlanChange,
     selectedBillingPeriodCode,
     selectedPlanChange.execution,
@@ -5386,8 +5382,7 @@ export function ConfigStepFour({
 
   const handleApplyCoveredPlanChange = useCallback(async () => {
     if (
-      isPlanLoading ||
-      isLoadingOrder ||
+      isSubmittingTrial ||
       activeDiscountPreview.totalAmount > 0
     ) {
       return;
@@ -5449,8 +5444,7 @@ export function ConfigStepFour({
     couponCode,
     giftCardCode,
     guildId,
-    isLoadingOrder,
-    isPlanLoading,
+    isSubmittingTrial,
     selectedBillingPeriodCode,
     selectedPlanCode,
     onApproved,
@@ -6336,10 +6330,7 @@ export function ConfigStepFour({
       !resolvedPlan.isAvailable,
   );
   const isContinueButtonBusy =
-    phase === "cart" &&
-    Boolean(
-      isPlanLoading || isLoadingOrder || isPreparingBaseOrder || isSubmittingTrial,
-    );
+    phase === "cart" && isSubmittingTrial;
   const continueButtonLabel = !resolvedPlan.isAvailable
     ? "Indisponivel"
     : resolvedPlan.isTrial
@@ -6378,8 +6369,9 @@ export function ConfigStepFour({
                   </svg>
                 </div>
                 <p className="max-w-[1180px] text-[15px] leading-[1.55] text-[#EAEAEA] sm:text-[17px]">
-                  Voce foi direcionado para o checkout Flowdesk, que e onde sua conta esta registrada.
-                  Os valores do pedido foram atualizados de acordo com sua regiao.
+                  Voce foi direcionado para o checkout seguro da Flowdesk em pay.flwdesk.com,
+                  que e onde sua conta esta registrada. Os valores do pedido foram atualizados
+                  de acordo com sua regiao.
                 </p>
               </div>
               <button

@@ -82,6 +82,9 @@ function buildDisplayName(discordUser: DiscordUser) {
   return discordUser.global_name || discordUser.username;
 }
 
+const AUTH_USER_SELECT_COLUMNS =
+  "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale";
+
 function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -125,15 +128,14 @@ async function selectAuthUserBy(
     | "discord_user_id"
     | "google_user_id"
     | "microsoft_user_id"
+    | "username"
     | "email_normalized",
   value: number | string,
 ) {
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
     .from("auth_users")
-    .select(
-      "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-    )
+    .select(AUTH_USER_SELECT_COLUMNS)
     .eq(column, value)
     .maybeSingle<AuthUserRecord>();
 
@@ -160,10 +162,122 @@ export async function findAuthUserByMicrosoftUserId(microsoftUserId: string) {
   return selectAuthUserBy("microsoft_user_id", microsoftUserId);
 }
 
+export async function findAuthUserByUsername(username: string) {
+  const normalizedUsername = sanitizeAuthUsername(username);
+  if (!normalizedUsername) return null;
+  return selectAuthUserBy("username", normalizedUsername);
+}
+
 export async function findAuthUserByEmail(email: string) {
   const normalizedEmail = normalizeAuthEmail(email);
   if (!normalizedEmail) return null;
   return selectAuthUserBy("email_normalized", normalizedEmail);
+}
+
+function sanitizeAuthUsername(value: string | null | undefined) {
+  if (typeof value !== "string") return "flowdesk-user";
+
+  const sanitized = value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-._]+|[-._]+$/g, "")
+    .slice(0, 32);
+
+  return sanitized || "flowdesk-user";
+}
+
+function buildAuthUsernameVariant(baseUsername: string, attempt: number) {
+  const normalizedBase = sanitizeAuthUsername(baseUsername);
+  if (attempt <= 0) {
+    return normalizedBase;
+  }
+
+  const suffix = `-${attempt + 1}`;
+  const truncatedBase = normalizedBase
+    .slice(0, Math.max(1, 32 - suffix.length))
+    .replace(/^[-._]+|[-._]+$/g, "");
+
+  return `${truncatedBase || "flowdesk-user"}${suffix}`;
+}
+
+async function resolveAvailableAuthUsername(
+  baseUsername: string,
+  excludeUserId?: number | null,
+) {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const candidate = buildAuthUsernameVariant(baseUsername, attempt);
+    const existing = await findAuthUserByUsername(candidate);
+    if (!existing || existing.id === excludeUserId) {
+      return candidate;
+    }
+  }
+
+  const randomSuffix = crypto.randomBytes(3).toString("hex");
+  const fallbackBase = sanitizeAuthUsername(baseUsername)
+    .slice(0, Math.max(1, 32 - randomSuffix.length - 1))
+    .replace(/^[-._]+|[-._]+$/g, "");
+
+  return `${fallbackBase || "flowdesk-user"}-${randomSuffix}`;
+}
+
+type AuthUserMutationPayload = {
+  discord_user_id: string | null;
+  google_user_id: string | null;
+  microsoft_user_id: string | null;
+  username: string;
+  global_name: string | null;
+  display_name: string;
+  avatar: string | null;
+  email: string | null;
+  email_normalized: string | null;
+  email_verified_at: string | null;
+  locale: string | null;
+  raw_user: {
+    source: string;
+    providers: Record<string, unknown>;
+  };
+};
+
+function isDuplicateUsernameInsertError(message: string) {
+  const normalizedMessage = message.toLowerCase();
+  return (
+    normalizedMessage.includes("duplicate key value violates unique constraint") &&
+    normalizedMessage.includes("username")
+  );
+}
+
+async function insertAuthUserWithResolvedUsername(
+  payload: AuthUserMutationPayload,
+) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const username = await resolveAvailableAuthUsername(payload.username);
+    const result = await supabase
+      .from("auth_users")
+      .insert({
+        ...payload,
+        username,
+      })
+      .select(AUTH_USER_SELECT_COLUMNS)
+      .single<AuthUserRecord>();
+
+    if (!result.error) {
+      return result.data;
+    }
+
+    lastError = new Error(result.error.message);
+    if (!isDuplicateUsernameInsertError(result.error.message)) {
+      break;
+    }
+  }
+
+  throw lastError || new Error("Erro desconhecido ao criar usuario.");
 }
 
 function buildEmailUserPayload(email: string, emailVerifiedAt: string | null) {
@@ -218,9 +332,7 @@ export async function createEmailAuthUser(input: {
         input.emailVerifiedAt ?? new Date().toISOString(),
       ),
     )
-    .select(
-      "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-    )
+    .select(AUTH_USER_SELECT_COLUMNS)
     .single<AuthUserRecord>();
 
   if (result.error) {
@@ -247,6 +359,8 @@ async function saveDiscordUserToAuthUser(
 
   const payload = {
     discord_user_id: discordUser.id,
+    google_user_id: existingLinkedUser?.google_user_id || null,
+    microsoft_user_id: existingLinkedUser?.microsoft_user_id || null,
     username: discordUser.username,
     global_name: discordUser.global_name,
     display_name: buildDisplayName(discordUser),
@@ -273,9 +387,7 @@ async function saveDiscordUserToAuthUser(
       .from("auth_users")
       .update(payload)
       .eq("id", linkToUserId)
-      .select(
-        "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-      )
+      .select(AUTH_USER_SELECT_COLUMNS)
       .single<AuthUserRecord>();
 
     if (result.error) {
@@ -285,15 +397,14 @@ async function saveDiscordUserToAuthUser(
     return result.data;
   }
 
-  const result = await supabase
-    .from("auth_users")
-    .upsert(payload, { onConflict: "discord_user_id" })
-    .select(
-      "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-    )
-    .single<AuthUserRecord>();
+  try {
+    return await insertAuthUserWithResolvedUsername(payload);
+  } catch (error) {
+    const existingByDiscord = await findAuthUserByDiscordUserId(discordUser.id);
+    if (existingByDiscord) {
+      return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id);
+    }
 
-  if (result.error) {
     if (normalizedEmail) {
       const byEmail = await findAuthUserByEmail(normalizedEmail);
       if (byEmail && (!byEmail.discord_user_id || byEmail.discord_user_id === discordUser.id)) {
@@ -301,10 +412,12 @@ async function saveDiscordUserToAuthUser(
       }
     }
 
-    throw new Error(`Erro ao salvar usuario no Supabase: ${result.error.message}`);
+    throw new Error(
+      `Erro ao salvar usuario no Supabase: ${
+        error instanceof Error ? error.message : "erro_desconhecido"
+      }`,
+    );
   }
-
-  return result.data;
 }
 
 export async function resolveAuthUserForDiscordLogin(
@@ -373,6 +486,7 @@ async function saveGoogleUserToAuthUser(
   const preserveExistingIdentity = Boolean(existingLinkedUser?.discord_user_id);
 
   const payload = {
+    discord_user_id: existingLinkedUser?.discord_user_id || null,
     google_user_id: googleUser.sub,
     microsoft_user_id: existingLinkedUser?.microsoft_user_id || null,
     username: existingLinkedUser?.username || buildEmailUsername(normalizedEmail),
@@ -410,9 +524,7 @@ async function saveGoogleUserToAuthUser(
       .from("auth_users")
       .update(payload)
       .eq("id", linkToUserId)
-      .select(
-        "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-      )
+      .select(AUTH_USER_SELECT_COLUMNS)
       .single<AuthUserRecord>();
 
     if (result.error) {
@@ -422,24 +534,25 @@ async function saveGoogleUserToAuthUser(
     return result.data;
   }
 
-  const result = await supabase
-    .from("auth_users")
-    .upsert(payload, { onConflict: "google_user_id" })
-    .select(
-      "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-    )
-    .single<AuthUserRecord>();
+  try {
+    return await insertAuthUserWithResolvedUsername(payload);
+  } catch (error) {
+    const byGoogle = await findAuthUserByGoogleUserId(googleUser.sub);
+    if (byGoogle) {
+      return saveGoogleUserToAuthUser(googleUser, byGoogle.id);
+    }
 
-  if (result.error) {
     const byEmail = await findAuthUserByEmail(normalizedEmail);
     if (byEmail && (!byEmail.google_user_id || byEmail.google_user_id === googleUser.sub)) {
       return saveGoogleUserToAuthUser(googleUser, byEmail.id);
     }
 
-    throw new Error(`Erro ao salvar usuario Google no Supabase: ${result.error.message}`);
+    throw new Error(
+      `Erro ao salvar usuario Google no Supabase: ${
+        error instanceof Error ? error.message : "erro_desconhecido"
+      }`,
+    );
   }
-
-  return result.data;
 }
 
 export async function resolveAuthUserForGoogleLogin(
@@ -505,6 +618,7 @@ async function saveMicrosoftUserToAuthUser(
   const preserveExistingIdentity = Boolean(existingLinkedUser?.discord_user_id);
 
   const payload = {
+    discord_user_id: existingLinkedUser?.discord_user_id || null,
     google_user_id: existingLinkedUser?.google_user_id || null,
     microsoft_user_id: microsoftUser.id,
     username: existingLinkedUser?.username || buildEmailUsername(normalizedEmail),
@@ -545,9 +659,7 @@ async function saveMicrosoftUserToAuthUser(
       .from("auth_users")
       .update(payload)
       .eq("id", linkToUserId)
-      .select(
-        "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-      )
+      .select(AUTH_USER_SELECT_COLUMNS)
       .single<AuthUserRecord>();
 
     if (result.error) {
@@ -557,15 +669,14 @@ async function saveMicrosoftUserToAuthUser(
     return result.data;
   }
 
-  const result = await supabase
-    .from("auth_users")
-    .upsert(payload, { onConflict: "microsoft_user_id" })
-    .select(
-      "id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale",
-    )
-    .single<AuthUserRecord>();
+  try {
+    return await insertAuthUserWithResolvedUsername(payload);
+  } catch (error) {
+    const byMicrosoft = await findAuthUserByMicrosoftUserId(microsoftUser.id);
+    if (byMicrosoft) {
+      return saveMicrosoftUserToAuthUser(microsoftUser, byMicrosoft.id);
+    }
 
-  if (result.error) {
     const byEmail = await findAuthUserByEmail(normalizedEmail);
     if (
       byEmail &&
@@ -574,10 +685,12 @@ async function saveMicrosoftUserToAuthUser(
       return saveMicrosoftUserToAuthUser(microsoftUser, byEmail.id);
     }
 
-    throw new Error(`Erro ao salvar usuario Microsoft no Supabase: ${result.error.message}`);
+    throw new Error(
+      `Erro ao salvar usuario Microsoft no Supabase: ${
+        error instanceof Error ? error.message : "erro_desconhecido"
+      }`,
+    );
   }
-
-  return result.data;
 }
 
 export async function resolveAuthUserForMicrosoftLogin(
