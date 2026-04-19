@@ -44,6 +44,10 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import {
+  areHostedCardCheckoutsEnabled,
+  CARD_PAYMENTS_DISABLED_MESSAGE,
+} from "@/lib/payments/cardAvailability";
 import { runCoalescedRouteResponse } from "@/lib/security/routeCoalescing";
 import {
   attachRequestId,
@@ -131,6 +135,16 @@ export async function POST(request: Request) {
       return attachRequestId(
         applyNoStoreHeaders(originGuard),
         baseRequestContext.requestId,
+      );
+    }
+
+    if (!areHostedCardCheckoutsEnabled()) {
+      return respond(
+        {
+          ok: false,
+          message: CARD_PAYMENTS_DISABLED_MESSAGE,
+        },
+        { status: 503 },
       );
     }
 
@@ -343,7 +357,7 @@ export async function POST(request: Request) {
           );
         }
 
-        let latestOrder = await getLatestOrderForUserAndGuild(user.id, guildId);
+        const latestOrder = await getLatestOrderForUserAndGuild(user.id, guildId);
         const hasPendingCardUnderAnalysis =
           !forceNew &&
           !!latestOrder &&

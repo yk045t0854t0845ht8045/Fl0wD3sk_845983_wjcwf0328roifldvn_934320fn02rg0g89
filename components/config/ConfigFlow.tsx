@@ -149,7 +149,32 @@ const CHECKOUT_QUERY_KEYS = [
   "paymentId",
   "paymentRef",
   "collection_id",
+  "collection_status",
+  "external_reference",
+  "payment_type",
+  "merchant_order_id",
+  "preference_id",
+  "site_id",
+  "processing_mode",
+  "merchant_account_id",
 ] as const;
+
+function normalizeNullableCheckoutQueryValue(value: string | null) {
+  if (!value) return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered === "null" ||
+    lowered === "undefined" ||
+    lowered === "nan"
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
 
 function normalizeFlowStep(step: ConfigStep): ConfigStep {
   return step === 4 ? 4 : 1;
@@ -369,15 +394,17 @@ function setStepHash(step: ConfigStep) {
 }
 
 function normalizePaymentStatusForQuery(status: string | null | undefined) {
-  const normalized = (status || "").trim().toLowerCase();
+  const normalized = normalizeNullableCheckoutQueryValue(status || null)?.toLowerCase() || "";
   if (!normalized) return "pending";
   return normalized;
 }
 
 function readCheckoutStatusQuery(url: URL) {
   const guildId = normalizeGuildIdFromQuery(url.searchParams.get("guild"));
-  const codeRaw = url.searchParams.get("code")?.trim() || "";
-  const statusRaw = url.searchParams.get("status");
+  const codeRaw = normalizeNullableCheckoutQueryValue(url.searchParams.get("code")) || "";
+  const statusRaw = normalizeNullableCheckoutQueryValue(
+    url.searchParams.get("status"),
+  );
   const status = normalizePaymentStatusForQuery(statusRaw);
 
   if (!guildId || !/^\d+$/.test(codeRaw) || !statusRaw) {
@@ -388,13 +415,17 @@ function readCheckoutStatusQuery(url: URL) {
     guildId,
     code: Number(codeRaw),
     status,
-    checkoutToken: url.searchParams.get("checkoutToken")?.trim() || null,
+    checkoutToken: normalizeNullableCheckoutQueryValue(
+      url.searchParams.get("checkoutToken"),
+    ),
     paymentId:
-      url.searchParams.get("paymentId")?.trim() ||
-      url.searchParams.get("payment_id")?.trim() ||
-      url.searchParams.get("collection_id")?.trim() ||
+      normalizeNullableCheckoutQueryValue(url.searchParams.get("paymentId")) ||
+      normalizeNullableCheckoutQueryValue(url.searchParams.get("payment_id")) ||
+      normalizeNullableCheckoutQueryValue(url.searchParams.get("collection_id")) ||
       null,
-    paymentRef: url.searchParams.get("paymentRef")?.trim() || null,
+    paymentRef: normalizeNullableCheckoutQueryValue(
+      url.searchParams.get("paymentRef"),
+    ),
   };
 }
 
@@ -1440,6 +1471,7 @@ export function ConfigFlow({
     handleProceedAfterValidation,
     handleProceedToStepFour,
     handleProceedToStepThree,
+    handleStepFourApproved,
     handleStepFourDraftChange,
     hasExplicitInitialPlan,
     handleStepThreeDraftChange,

@@ -25,7 +25,6 @@ import {
 } from "@/lib/payments/paymentDiagnostics";
 import {
   areHostedCardCheckoutsEnabled,
-  CARD_PAYMENTS_COMING_SOON_BADGE,
   CARD_PAYMENTS_DISABLED_MESSAGE,
 } from "@/lib/payments/cardAvailability";
 import {
@@ -608,6 +607,14 @@ const CHECKOUT_STATUS_QUERY_KEYS = [
   "paymentId",
   "paymentRef",
   "collection_id",
+  "collection_status",
+  "external_reference",
+  "payment_type",
+  "merchant_order_id",
+  "preference_id",
+  "site_id",
+  "processing_mode",
+  "merchant_account_id",
 ] as const;
 
 const EMPTY_STEP_FOUR_DRAFT: StepFourDraft = {
@@ -658,7 +665,6 @@ function buildStepFourDraft(
 
   const view: StepFourView =
     input.view === "pix_form" ||
-    input.view === "card_form" ||
     input.view === "pix_checkout"
       ? input.view
       : "methods";
@@ -667,13 +673,7 @@ function buildStepFourDraft(
     visited: Boolean(input.visited),
     phase: input.phase === "checkout" ? "checkout" : "cart",
     view,
-    selectedRail:
-      input.selectedRail === "pix" ||
-      input.selectedRail === "google_pay" ||
-      input.selectedRail === "nupay" ||
-      input.selectedRail === "paypal"
-        ? input.selectedRail
-        : null,
+    selectedRail: input.selectedRail === "pix" ? input.selectedRail : null,
     selectedPlanCode: normalizePlanCode(input.selectedPlanCode, fallbackPlanCode),
     selectedBillingPeriodCode: normalizePlanBillingPeriodCode(
       input.selectedBillingPeriodCode,
@@ -1073,6 +1073,23 @@ function formatPromoCountdown(targetTimestamp: number) {
   };
 }
 
+function normalizeNullableCheckoutQueryValue(value: string | null) {
+  if (!value) return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered === "null" ||
+    lowered === "undefined" ||
+    lowered === "nan"
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
 function readCheckoutStatusQuery() {
   if (typeof window === "undefined") {
     return {
@@ -1098,20 +1115,24 @@ function readCheckoutStatusQuery() {
   const cartId =
     paymentPathDetails?.orderId ||
     (() => {
-      const rawCartId = params.get("cartId")?.trim() || params.get("orderId")?.trim() || null;
+      const rawCartId =
+        normalizeNullableCheckoutQueryValue(params.get("cartId")) ||
+        normalizeNullableCheckoutQueryValue(params.get("orderId"));
       if (!rawCartId || !/^\d{1,12}$/.test(rawCartId)) return null;
       const numeric = Number(rawCartId);
       return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
     })();
-  const status = params.get("status")?.trim().toLowerCase() || null;
-  const guild = params.get("guild")?.trim() || null;
-  const checkoutToken = params.get("checkoutToken")?.trim() || null;
+  const status = normalizeNullableCheckoutQueryValue(params.get("status"))?.toLowerCase() || null;
+  const guild = normalizeNullableCheckoutQueryValue(params.get("guild"));
+  const checkoutToken = normalizeNullableCheckoutQueryValue(
+    params.get("checkoutToken"),
+  );
   const paymentId =
-    params.get("payment_id")?.trim() ||
-    params.get("paymentId")?.trim() ||
-    params.get("collection_id")?.trim() ||
+    normalizeNullableCheckoutQueryValue(params.get("payment_id")) ||
+    normalizeNullableCheckoutQueryValue(params.get("paymentId")) ||
+    normalizeNullableCheckoutQueryValue(params.get("collection_id")) ||
     null;
-  const paymentRef = params.get("paymentRef")?.trim() || null;
+  const paymentRef = normalizeNullableCheckoutQueryValue(params.get("paymentRef"));
 
   return {
     code,
@@ -2301,77 +2322,6 @@ function PixRailWordmark() {
   );
 }
 
-function CardBrandCluster() {
-  return (
-    <div className="flex items-center gap-[8px] opacity-80">
-      <Image
-        src="/cdn/icons/card_visa.svg"
-        alt="Visa"
-        width={36}
-        height={12}
-        className="h-[12px] w-auto object-contain"
-      />
-      <Image
-        src="/cdn/icons/card_mastercard.svg"
-        alt="Mastercard"
-        width={24}
-        height={18}
-        className="h-[18px] w-auto object-contain"
-      />
-      <Image
-        src="/cdn/icons/card_amex.svg"
-        alt="American Express"
-        width={42}
-        height={14}
-        className="h-[14px] w-auto object-contain"
-      />
-      <Image
-        src="/cdn/icons/card_elo.svg"
-        alt="Elo"
-        width={24}
-        height={16}
-        className="h-[16px] w-auto object-contain"
-      />
-    </div>
-  );
-}
-
-function HostedPaymentWordmark({
-  rail,
-}: {
-  rail: Exclude<CheckoutRail, "pix">;
-}) {
-  if (rail === "google_pay") {
-    return (
-      <span className="inline-flex items-center gap-[2px] text-[15px] font-semibold tracking-[-0.03em]">
-        <span className="text-[#4285F4]">G</span>
-        <span className="text-[#DB4437]">o</span>
-        <span className="text-[#F4B400]">o</span>
-        <span className="text-[#4285F4]">g</span>
-        <span className="text-[#0F9D58]">l</span>
-        <span className="text-[#DB4437]">e</span>
-        <span className="ml-[4px] text-[#E8E8E8]">Pay</span>
-      </span>
-    );
-  }
-
-  if (rail === "nupay") {
-    return (
-      <span className="inline-flex items-center gap-[4px] text-[15px] font-semibold tracking-[-0.03em] text-[#B987FF]">
-        <span>Nu</span>
-        <span className="text-[#F1E7FF]">Pay</span>
-      </span>
-    );
-  }
-
-  return (
-    <span className="inline-flex items-center gap-[4px] text-[15px] font-semibold tracking-[-0.03em]">
-      <span className="text-[#0070E0]">Pay</span>
-      <span className="text-[#62B0FF]">Pal</span>
-    </span>
-  );
-}
-
 function PaymentMethodRow({
   label,
   description,
@@ -2429,19 +2379,18 @@ function PaymentMethodRow({
   );
 }
 
-function MethodSelectorPanel({
-  className,
-  onChoosePix,
-  onStartPixFlow,
-  onTogglePixTerms,
-  onSelectHostedRail,
-  methodMessage,
-  canInteract,
-  cardEnabled,
-  selectedRail,
-  pixTermsAccepted,
-  view,
-}: MethodSelectorPanelProps) {
+function MethodSelectorPanel(props: MethodSelectorPanelProps) {
+  const {
+    className,
+    onChoosePix,
+    onStartPixFlow,
+    onTogglePixTerms,
+    methodMessage,
+    canInteract,
+    selectedRail,
+    pixTermsAccepted,
+    view,
+  } = props;
   const isPixExpanded = selectedRail === "pix";
   const isPixDetailsStage = view === "methods";
   const isPixIdentityStage = view === "pix_form";
@@ -2569,71 +2518,6 @@ function MethodSelectorPanel({
             </div>
           </div>
         </div>
-
-        <PaymentMethodRow
-          label="Cartao"
-          description="Checkout dedicado com cartao sera liberado em seguida."
-          disabled
-          trailing={
-            <>
-              <CardBrandCluster />
-              <span className="rounded-full border border-[#252525] bg-[#111111] px-[10px] py-[6px] text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8D8D8D]">
-                {CARD_PAYMENTS_COMING_SOON_BADGE}
-              </span>
-            </>
-          }
-        />
-
-        <PaymentMethodRow
-          label="Google Pay"
-          description="Pagamento seguro pela camada hospedada."
-          active={selectedRail === "google_pay"}
-          disabled={!canInteract || !cardEnabled}
-          onClick={() => onSelectHostedRail("google_pay")}
-          trailing={
-            <>
-              <HostedPaymentWordmark rail="google_pay" />
-              <PaymentMethodChevron
-                disabled={!canInteract || !cardEnabled}
-                expanded={selectedRail === "google_pay"}
-              />
-            </>
-          }
-        />
-
-        <PaymentMethodRow
-          label="Nubank"
-          description="Continue com NuPay pelo checkout protegido."
-          active={selectedRail === "nupay"}
-          disabled={!canInteract || !cardEnabled}
-          onClick={() => onSelectHostedRail("nupay")}
-          trailing={
-            <>
-              <HostedPaymentWordmark rail="nupay" />
-              <PaymentMethodChevron
-                disabled={!canInteract || !cardEnabled}
-                expanded={selectedRail === "nupay"}
-              />
-            </>
-          }
-        />
-
-        <PaymentMethodRow
-          label="PayPal"
-          description="Pagamento externo com retorno automatico."
-          active={selectedRail === "paypal"}
-          disabled={!canInteract || !cardEnabled}
-          onClick={() => onSelectHostedRail("paypal")}
-          trailing={
-            <>
-              <HostedPaymentWordmark rail="paypal" />
-              <PaymentMethodChevron
-                disabled={!canInteract || !cardEnabled}
-                expanded={selectedRail === "paypal"}
-              />
-            </>
-          }
-        />
       </div>
 
       {!canInteract ? (

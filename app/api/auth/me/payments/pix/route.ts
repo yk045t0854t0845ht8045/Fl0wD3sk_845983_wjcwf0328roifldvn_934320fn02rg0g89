@@ -1,5 +1,3 @@
-// api atualizada
-
 import { NextResponse } from "next/server";
 import { clearPlanStateCacheForUser } from "@/lib/account/managedPlanState";
 import {
@@ -18,6 +16,7 @@ import {
   fetchMercadoPagoPaymentById,
   refundMercadoPagoPixPayment,
   resolveMercadoPagoPixEnvironment,
+  resolveMercadoPagoPixPayerEmail,
   resolvePaymentStatus,
   toQrDataUri,
   type MercadoPagoPaymentResponse,
@@ -495,7 +494,7 @@ function resolveFriendlyPixProviderErrorMessage(message: string) {
     (normalizedMessage.includes("internal_error") ||
       normalizedMessage.includes("invalid_credentials"))
   ) {
-    return "O Mercado Pago nao aceitou gerar PIX com esta credencial de teste neste ambiente. Nao houve cobranca. Para PIX, configure uma credencial compativel exclusiva para esse fluxo ou siga com cartao de teste.";
+    return "O Mercado Pago nao aceitou gerar o PIX com a credencial de teste configurada neste ambiente. Nao houve cobranca. Revise a credencial de teste e a chave Pix vinculada a ela.";
   }
 
   if (
@@ -2064,9 +2063,9 @@ export async function POST(request: Request) {
     let createdProviderPayment: MercadoPagoPaymentResponse | null = null;
     try {
       const payerEmail =
-        (resolveMercadoPagoPixEnvironment() === "test"
-          ? "test@testuser.com"
-          : null) ||
+        resolveMercadoPagoPixPayerEmail(
+          normalizePayerEmail(user.email),
+        ) ||
         normalizePayerEmail(user.email) ||
         `${
           user.discord_user_id ? `discord-${user.discord_user_id}` : `user-${user.id}`

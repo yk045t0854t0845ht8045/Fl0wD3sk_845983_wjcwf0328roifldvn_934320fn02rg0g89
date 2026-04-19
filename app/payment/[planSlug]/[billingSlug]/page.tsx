@@ -10,6 +10,21 @@ import {
 } from "@/lib/plans/catalog";
 import { buildPaymentCheckoutEntryHref } from "@/lib/payments/paymentRouting";
 
+const PAYMENT_PROVIDER_RETURN_QUERY_KEYS = [
+  "collection_id",
+  "collection_status",
+  "payment_id",
+  "paymentId",
+  "status",
+  "external_reference",
+  "payment_type",
+  "merchant_order_id",
+  "preference_id",
+  "site_id",
+  "processing_mode",
+  "merchant_account_id",
+] as const;
+
 type PaymentPlanBillingPageProps = {
   params: Promise<{
     planSlug: string;
@@ -37,7 +52,15 @@ export default async function PaymentPlanBillingPage({
     planCode: resolvedPricing.code,
     billingPeriodCode: resolvedPricing.billingPeriodCode,
     searchParams: query,
-    omitSearchParamKeys: ["plan", "billing", "guild", "code", "orderId", "cartId"],
+    omitSearchParamKeys: [
+      "plan",
+      "billing",
+      "guild",
+      "code",
+      "orderId",
+      "cartId",
+      ...PAYMENT_PROVIDER_RETURN_QUERY_KEYS,
+    ],
   });
   const canonicalPathname = canonicalHref.split("?")[0] || canonicalHref;
   const currentPathname = `/payment/${routeParams.planSlug}/${routeParams.billingSlug}`;

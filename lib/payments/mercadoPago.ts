@@ -283,6 +283,7 @@ function resolveMercadoPagoAccessToken() {
   return resolvePreferredMercadoPagoToken([
     normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_PIX_TEST_ACCESS_TOKEN),
     normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_TEST_ACCESS_TOKEN),
+    normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_CARD_TEST_ACCESS_TOKEN),
     normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_ACCESS_TOKEN),
   ]);
 }
@@ -331,6 +332,22 @@ export function resolveMercadoPagoPixEnvironment() {
   return token.startsWith("TEST-") ? "test" : "production";
 }
 
+export function resolveMercadoPagoPixPayerEmail(preferredEmail?: string | null) {
+  const normalizedPreferredEmail = normalizeMercadoPagoEnvValue(
+    preferredEmail || undefined,
+  );
+
+  if (resolveMercadoPagoPixEnvironment() !== "test") {
+    return normalizedPreferredEmail;
+  }
+
+  return (
+    normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_PIX_TEST_PAYER_EMAIL) ||
+    normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_TEST_PAYER_EMAIL) ||
+    normalizedPreferredEmail
+  );
+}
+
 export function resolveMercadoPagoCardPayerEmail(preferredEmail?: string | null) {
   const normalizedPreferredEmail = normalizeMercadoPagoEnvValue(
     preferredEmail || undefined,
@@ -343,7 +360,7 @@ export function resolveMercadoPagoCardPayerEmail(preferredEmail?: string | null)
   return (
     normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_CARD_TEST_PAYER_EMAIL) ||
     normalizeMercadoPagoEnvValue(process.env.MERCADO_PAGO_TEST_PAYER_EMAIL) ||
-    "test@testuser.com"
+    normalizedPreferredEmail
   );
 }
 

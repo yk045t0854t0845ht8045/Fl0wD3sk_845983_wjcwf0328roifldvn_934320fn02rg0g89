@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Analytics } from "@vercel/analytics/next"
 
+import { AdsenseScript } from "@/components/ads/AdsenseScript";
 import { CookieConsentManager } from "@/components/cookies/CookieConsentManager";
 import { NotificationsProvider } from "@/components/notifications/NotificationsProvider";
 import { COOKIE_CONSENT_COOKIE_NAME } from "@/lib/cookies/consent";
@@ -41,12 +40,7 @@ export default async function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <Script
-          async
-          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4997317332626224"
-          crossOrigin="anonymous"
-          strategy="afterInteractive"
-        />
+        <AdsenseScript />
         <NotificationsProvider>
           <RoutePrefetcher />
           {children}

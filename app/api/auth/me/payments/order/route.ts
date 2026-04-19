@@ -11,7 +11,6 @@ import {
   searchMercadoPagoPaymentsByExternalReference,
   toQrDataUri,
 } from "@/lib/payments/mercadoPago";
-import { areHostedCardCheckoutsEnabled } from "@/lib/payments/cardAvailability";
 import { resolvePaymentDiagnostic } from "@/lib/payments/paymentDiagnostics";
 import {
   ensureCheckoutAccessTokenForOrder,
@@ -94,6 +93,23 @@ type PaymentOrderRecord = {
 const PAYMENT_ORDER_SELECT_COLUMNS =
   `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
+function normalizeNullableProviderQueryValue(value: string | null) {
+  if (!value) return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered === "null" ||
+    lowered === "undefined" ||
+    lowered === "nan"
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
 function normalizeGuildId(value: string | null) {
   if (!value) return null;
   const guildId = value.trim();
@@ -117,21 +133,25 @@ function normalizeCartId(value: string | null) {
 }
 
 function normalizePaymentId(value: string | null) {
-  if (!value) return null;
-  const trimmed = value.trim();
+  const trimmed = normalizeNullableProviderQueryValue(value);
+  if (!trimmed) return null;
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(trimmed)) return null;
   return trimmed || null;
 }
 
 function normalizeCheckoutToken(value: string | null) {
-  if (!value) return null;
-  const normalized = value.trim();
-  return normalized || null;
+  return normalizeNullableProviderQueryValue(value);
+}
+
+function normalizeExternalReference(value: string | null) {
+  const normalized = normalizeNullableProviderQueryValue(value);
+  if (!normalized) return null;
+  if (!/^[a-zA-Z0-9:_-]{1,128}$/.test(normalized)) return null;
+  return normalized;
 }
 
 function normalizeHostedCheckoutReturnStatus(value: string | null) {
-  if (!value) return null;
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeNullableProviderQueryValue(value)?.toLowerCase();
   if (!normalized) return null;
 
   if (normalized === "canceled") return "cancelled" as const;
@@ -502,9 +522,53 @@ async function reconcileHostedCardOrderByExternalReference(
   return refreshedOrder;
 }
 
+async function reconcileOrderByExplicitExternalReference(input: {
+  order: PaymentOrderRecord;
+  externalReference: string;
+  source: string;
+}) {
+  const providerPayments = await searchMercadoPagoPaymentsByExternalReference(
+    input.externalReference,
+    { useCardToken: input.order.payment_method === "card" },
+  );
+
+  const matchingPayments = providerPayments.filter((payment) => {
+    const providerExternalReference =
+      typeof payment.external_reference === "string"
+        ? payment.external_reference.trim()
+        : "";
+    return providerExternalReference === input.externalReference;
+  });
+
+  const providerPayment =
+    matchingPayments.find(
+      (payment) => resolvePaymentStatus(payment.status) === "approved",
+    ) ||
+    matchingPayments.find(
+      (payment) => resolvePaymentStatus(payment.status) !== "pending",
+    ) ||
+    matchingPayments[0] ||
+    null;
+
+  if (!providerPayment) {
+    return input.order;
+  }
+
+  await reconcilePaymentOrderWithProviderPayment(input.order, providerPayment, {
+    source: input.source,
+  });
+
+  return (
+    (await getOrderByCodeForScope(
+      input.order.guild_id,
+      input.order.order_number,
+      input.order.id,
+    )) || input.order
+  );
+}
+
 export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);
-  const cardPaymentsEnabled = areHostedCardCheckoutsEnabled();
   const respond = (body: unknown, init?: ResponseInit) =>
     attachRequestId(
       applyNoStoreHeaders(NextResponse.json(body, init)),
@@ -522,6 +586,9 @@ export async function GET(request: Request) {
       normalizePaymentId(url.searchParams.get("paymentId")) ||
       normalizePaymentId(url.searchParams.get("payment_id")) ||
       normalizePaymentId(url.searchParams.get("collection_id"));
+    const paymentRef =
+      normalizeExternalReference(url.searchParams.get("paymentRef")) ||
+      normalizeExternalReference(url.searchParams.get("external_reference"));
     const checkoutToken = normalizeCheckoutToken(
       url.searchParams.get("checkoutToken"),
     );
@@ -635,7 +702,7 @@ export async function GET(request: Request) {
       }
     }
 
-    if (paymentId && (order.payment_method !== "card" || cardPaymentsEnabled)) {
+    if (paymentId) {
       try {
         const providerPayment = await fetchMercadoPagoPaymentById(paymentId, {
           forceFresh: true,
@@ -652,8 +719,19 @@ export async function GET(request: Request) {
       }
     }
 
+    if (paymentRef) {
+      try {
+        order = await reconcileOrderByExplicitExternalReference({
+          order,
+          externalReference: paymentRef,
+          source: "auth_payment_order_query_external_reference",
+        });
+      } catch {
+        // melhor esforco; mantemos o estado persistido
+      }
+    }
+
     const shouldResolveApprovedHostedCardReturn =
-      cardPaymentsEnabled &&
       returnStatus === "approved" &&
       order.payment_method === "card" &&
       order.status === "pending";
@@ -670,7 +748,6 @@ export async function GET(request: Request) {
     }
 
     if (
-      cardPaymentsEnabled &&
       returnStatus &&
       order.payment_method === "card" &&
       order.status === "pending" &&
@@ -702,8 +779,7 @@ export async function GET(request: Request) {
         // melhor esforco; ainda retornamos o estado persistido
       }
     } else if (
-      order.provider_payment_id &&
-      (order.payment_method !== "card" || cardPaymentsEnabled)
+      order.provider_payment_id
     ) {
       try {
         const reconciled = await reconcilePaymentOrderRecord(order, {

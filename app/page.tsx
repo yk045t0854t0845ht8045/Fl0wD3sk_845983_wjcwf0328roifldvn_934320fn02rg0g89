@@ -1,5 +1,3 @@
-import Script from "next/script";
-
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -17,12 +15,6 @@ export default async function HomePage() {
 async function HomePageContent() {
   return (
     <>
-      <Script
-        async
-        src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4997317332626224"
-        crossOrigin="anonymous"
-        strategy="afterInteractive"
-      />
       <LandingRuntimeShell />
     </>
   );

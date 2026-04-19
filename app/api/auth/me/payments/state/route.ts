@@ -21,7 +21,6 @@ import {
   getApprovedOrdersForGuild,
   resolveLatestLicenseCoverageFromApprovedOrders,
 } from "@/lib/payments/licenseStatus";
-import { areHostedCardCheckoutsEnabled } from "@/lib/payments/cardAvailability";
 import {
   getCachedLatestPaymentOrderForUserAndGuild,
   invalidatePaymentOrderQueryCaches,
@@ -355,7 +354,6 @@ async function getLatestUserOrderForGuild(userId: number, guildId: string) {
 
 export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);
-  const cardPaymentsEnabled = areHostedCardCheckoutsEnabled();
   const respond = (body: unknown, init?: ResponseInit) =>
     attachRequestId(
       applyNoStoreHeaders(NextResponse.json(body, init)),
@@ -436,7 +434,6 @@ export async function GET(request: Request) {
     }
 
       const shouldResolveHostedCardByExternalReference =
-        cardPaymentsEnabled &&
         !!latestUserOrder &&
         latestUserOrder.payment_method === "card" &&
         latestUserOrder.status === "pending" &&
@@ -478,7 +475,6 @@ export async function GET(request: Request) {
       const shouldReconcileLatestOrder =
         !!latestUserOrder &&
         !!latestUserOrder.provider_payment_id &&
-        (latestUserOrder.payment_method !== "card" || cardPaymentsEnabled) &&
         (latestUserOrder.status === "pending" ||
           latestUserOrder.status === "failed" ||
           latestUserOrder.status === "expired" ||

@@ -1,6 +1,23 @@
 import { NextResponse } from "next/server";
 import { areHostsWithinSameFirstPartySite } from "@/lib/routing/subdomains";
 
+const FIRST_PARTY_CONNECT_SOURCES = [
+  "https://www.flwdesk.com",
+  "https://pay.flwdesk.com",
+  "https://account.flwdesk.com",
+  "https://config.flwdesk.com",
+  "https://status.flwdesk.com",
+  "https://fdesk.flwdesk.com",
+  "https://servers.flwdesk.com",
+  "https://*.flwdesk.com",
+  "wss://*.flwdesk.com",
+] as const;
+
+function isExplicitlyEnabled(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 export function isSameOriginRequest(request: Request) {
   const requestUrl = new URL(request.url);
   const originHeader = request.headers.get("origin");
@@ -39,20 +56,77 @@ export function isSameOriginRequest(request: Request) {
 
 export function buildContentSecurityPolicy(input?: { isDevelopment?: boolean }) {
   const isDevelopment = input?.isDevelopment === true;
+  const adsenseEnabled = isExplicitlyEnabled(
+    process.env.NEXT_PUBLIC_ENABLE_ADSENSE,
+  );
+  const scriptSources = [
+    "'self'",
+    "'unsafe-inline'",
+    "https://sdk.mercadopago.com",
+    "https://www.mercadopago.com",
+    ...(adsenseEnabled
+      ? [
+          "https://pagead2.googlesyndication.com",
+          "https://www.googletagmanager.com",
+          "https://googleads.g.doubleclick.net",
+        ]
+      : []),
+    ...(isDevelopment ? ["'unsafe-eval'"] : []),
+  ];
+  const connectSources = [
+    "'self'",
+    ...FIRST_PARTY_CONNECT_SOURCES,
+    "https://discord.com",
+    "https://api.discord.com",
+    "https://api.mercadopago.com",
+    "https://*.mercadopago.com",
+    "https://*.mercadolibre.com",
+    ...(adsenseEnabled
+      ? [
+          "https://pagead2.googlesyndication.com",
+          "https://googleads.g.doubleclick.net",
+          "https://www.google.com",
+          "https://www.googletagmanager.com",
+        ]
+      : []),
+  ];
+  const frameSources = [
+    "'self'",
+    "https://*.mercadopago.com",
+    "https://*.mercadolibre.com",
+    ...(adsenseEnabled
+      ? [
+          "https://googleads.g.doubleclick.net",
+          "https://tpc.googlesyndication.com",
+        ]
+      : []),
+  ];
+  const imgSources = [
+    "'self'",
+    "data:",
+    "blob:",
+    "https:",
+    ...(adsenseEnabled
+      ? [
+          "https://pagead2.googlesyndication.com",
+          "https://*.doubleclick.net",
+          "https://*.googlesyndication.com",
+          "https://*.googleusercontent.com",
+        ]
+      : []),
+  ];
   const directives = [
     "default-src 'self'",
     "base-uri 'self'",
     "object-src 'none'",
     "frame-ancestors 'self'",
     "form-action 'self'",
-    "img-src 'self' data: blob: https:",
+    `img-src ${imgSources.join(" ")}`,
     "font-src 'self' data: https://fonts.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    `script-src 'self' 'unsafe-inline' https://sdk.mercadopago.com https://www.mercadopago.com${
-      isDevelopment ? " 'unsafe-eval'" : ""
-    }`,
-    "connect-src 'self' https://discord.com https://api.discord.com https://api.mercadopago.com https://*.mercadopago.com https://*.mercadolibre.com",
-    "frame-src 'self' https://*.mercadopago.com https://*.mercadolibre.com",
+    `script-src ${scriptSources.join(" ")}`,
+    `connect-src ${connectSources.join(" ")}`,
+    `frame-src ${frameSources.join(" ")}`,
     "worker-src 'self' blob:",
     "media-src 'self' data: blob:",
     "manifest-src 'self'",

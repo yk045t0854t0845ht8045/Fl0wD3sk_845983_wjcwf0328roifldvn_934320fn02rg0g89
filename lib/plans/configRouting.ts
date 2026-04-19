@@ -9,6 +9,16 @@ type ConfigCheckoutQueryValueInput =
   | ConfigCheckoutQueryValue
   | ConfigCheckoutQueryValue[];
 
+function isNullishSearchParamString(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "" ||
+    normalized === "null" ||
+    normalized === "undefined" ||
+    normalized === "nan"
+  );
+}
+
 function normalizeSearchParamValues(value: ConfigCheckoutQueryValueInput) {
   const values = Array.isArray(value) ? value : [value];
   const normalizedValues: string[] = [];
@@ -19,7 +29,7 @@ function normalizeSearchParamValues(value: ConfigCheckoutQueryValueInput) {
     const normalizedValue =
       typeof item === "boolean" ? (item ? "1" : "0") : String(item).trim();
 
-    if (!normalizedValue) continue;
+    if (isNullishSearchParamString(normalizedValue)) continue;
     normalizedValues.push(normalizedValue);
   }
 
@@ -44,7 +54,7 @@ export function buildConfigCheckoutSearchParams(input?: {
       if (omitKeys.has(key.trim().toLowerCase())) continue;
 
       const normalizedValue = value.trim();
-      if (!normalizedValue) continue;
+      if (isNullishSearchParamString(normalizedValue)) continue;
       params.append(key, normalizedValue);
     }
 
