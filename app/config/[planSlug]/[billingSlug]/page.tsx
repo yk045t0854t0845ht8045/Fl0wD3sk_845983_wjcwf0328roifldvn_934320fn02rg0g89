@@ -14,6 +14,10 @@ import {
   shouldBlockConfigServerSelection,
   shouldBypassConfigServerSelectionBlock,
 } from "@/lib/plans/configServerSelection";
+import {
+  buildConfigPaymentRequiredHref,
+  hasActivePaidConfigPlan,
+} from "@/lib/plans/configAccess";
 import { buildConfigCheckoutEntryHref } from "@/lib/plans/configRouting";
 import { countPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { getUserPlanState } from "@/lib/plans/state";
@@ -57,6 +61,19 @@ export default async function ConfigPlanBillingPage({
     redirect(buildLoginHref(canonicalPath));
   }
 
+  const userPlanState = await getUserPlanState(user.id);
+  if (!hasActivePaidConfigPlan(userPlanState)) {
+    redirect(
+      buildConfigPaymentRequiredHref({
+        planCode: resolvedPricing.code,
+        billingPeriodCode: resolvedPricing.billingPeriodCode,
+        searchParams: query,
+        omitSearchParamKeys: ["plan", "billing"],
+        returnPath: canonicalPath,
+      }),
+    );
+  }
+
   if (
     `/config/${routeParams.planSlug}/${routeParams.billingSlug}`.toLowerCase() !==
     canonicalPathname.toLowerCase()
@@ -64,10 +81,7 @@ export default async function ConfigPlanBillingPage({
     redirect(canonicalPath);
   }
 
-  const [userPlanState, licensedServersCount] = await Promise.all([
-    getUserPlanState(user.id),
-    countPlanGuildsForUser(user.id),
-  ]);
+  const licensedServersCount = await countPlanGuildsForUser(user.id);
   const usage = buildAccountPlanUsageSnapshot(userPlanState, licensedServersCount);
 
   if (

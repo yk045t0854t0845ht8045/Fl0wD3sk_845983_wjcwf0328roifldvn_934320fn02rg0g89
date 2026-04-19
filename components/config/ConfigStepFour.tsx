@@ -1143,6 +1143,16 @@ function normalizeGuildIdFromQuery(value: string | null) {
   return /^\d{10,25}$/.test(guildId) ? guildId : null;
 }
 
+function normalizeConfigReturnPathFromQuery(value: string | null) {
+  if (!value) return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 600) return null;
+  if (!normalized.startsWith("/")) return null;
+  if (normalized.startsWith("//")) return null;
+  if (!normalized.startsWith("/config")) return null;
+  return normalized;
+}
+
 function normalizeServersTabFromQuery(value: string | null) {
   const normalized = (value || "").trim().toLowerCase();
   if (normalized === "payments") return "payments";
@@ -1163,6 +1173,15 @@ function resolveApprovedRedirectConfig(fallbackGuildId: string | null) {
   const params = new URLSearchParams(window.location.search);
   const isRenewFlow = params.get("renew")?.trim() === "1";
   const returnTarget = params.get("return")?.trim().toLowerCase() || null;
+  const explicitConfigReturnPath = normalizeConfigReturnPathFromQuery(
+    params.get("returnPath"),
+  );
+  if (returnTarget === "config") {
+    return {
+      targetUrl: explicitConfigReturnPath || "/config",
+      delayMs: 10_000,
+    };
+  }
   const shouldReturnToServers = isRenewFlow || returnTarget === "servers";
 
   if (!shouldReturnToServers) {

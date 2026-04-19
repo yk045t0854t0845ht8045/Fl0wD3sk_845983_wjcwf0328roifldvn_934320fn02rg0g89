@@ -238,9 +238,12 @@ export async function POST(request: NextRequest) {
         userId: result.userId,
         ipAddress: extractClientIp(request),
         userAgent: request.headers.get("user-agent"),
+        rememberSession: result.rememberSession,
       });
 
-      setSharedSessionCookie(request, response, session.sessionToken);
+      setSharedSessionCookie(request, response, session.sessionToken, {
+        maxAge: session.maxAgeSeconds,
+      });
     }
 
     return attachRequestId(response, requestContext.requestId);

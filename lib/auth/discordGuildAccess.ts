@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth/discord";
 import {
   type CurrentAuthSession,
+  findReusableDiscordSessionTokensForUser,
   getCurrentAuthSessionFromCookie,
   updateSessionDiscordTokens,
   updateSessionGuildsCache,
@@ -115,6 +116,26 @@ function sanitizeDiscordBotFailureMessage(resourceLabel: string) {
   return `Nao foi possivel sincronizar ${resourceLabel} do Discord agora. Tente novamente em instantes.`;
 }
 
+async function recoverLinkedDiscordTokens(authSession: CurrentAuthSession) {
+  if (!authSession.user.discord_user_id) {
+    return null;
+  }
+
+  const recoveredTokens = await findReusableDiscordSessionTokensForUser(
+    authSession.user.id,
+    {
+      excludeSessionId: authSession.id,
+    },
+  );
+
+  if (!recoveredTokens) {
+    return null;
+  }
+
+  await updateSessionDiscordTokens(authSession.id, recoveredTokens);
+  return recoveredTokens;
+}
+
 export async function resolveSessionAccessToken() {
   const authSession = await getCurrentAuthSessionFromCookie();
   if (!authSession) return null;
@@ -122,6 +143,19 @@ export async function resolveSessionAccessToken() {
   let accessToken = authSession.discordAccessToken;
   let refreshToken = authSession.discordRefreshToken;
   let tokenExpiresAt = authSession.discordTokenExpiresAt;
+
+  if (!accessToken && !refreshToken) {
+    try {
+      const recoveredTokens = await recoverLinkedDiscordTokens(authSession);
+      if (recoveredTokens) {
+        accessToken = recoveredTokens.discordAccessToken;
+        refreshToken = recoveredTokens.discordRefreshToken;
+        tokenExpiresAt = recoveredTokens.discordTokenExpiresAt;
+      }
+    } catch {
+      // Mantemos a sessao funcional para os fluxos que nao exigem OAuth do Discord.
+    }
+  }
 
   if ((!accessToken || isTokenExpired(tokenExpiresAt)) && refreshToken) {
     const refreshed = await refreshDiscordToken(refreshToken);

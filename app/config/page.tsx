@@ -18,6 +18,10 @@ import {
   buildConfigCheckoutSearchParams,
   buildConfigUrlWithHashRoute,
 } from "@/lib/plans/configRouting";
+import {
+  buildConfigPaymentRequiredHref,
+  hasActivePaidConfigPlan,
+} from "@/lib/plans/configAccess";
 import { countPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { getUserPlanState } from "@/lib/plans/state";
 
@@ -52,14 +56,23 @@ export default async function ConfigPage({ searchParams }: ConfigPageProps) {
     redirect(buildLoginHref(requestedNextPath));
   }
 
+  const userPlanState = await getUserPlanState(user.id);
+  if (!hasActivePaidConfigPlan(userPlanState)) {
+    redirect(
+      buildConfigPaymentRequiredHref({
+        planCode: requestedPlan || "pro",
+        billingPeriodCode: requestedBilling || "monthly",
+        searchParams: forwardedSearchParams,
+        returnPath: requestedNextPath,
+      }),
+    );
+  }
+
   if (requestedPlan) {
     redirect(requestedNextPath);
   }
 
-  const [userPlanState, licensedServersCount] = await Promise.all([
-    getUserPlanState(user.id),
-    countPlanGuildsForUser(user.id),
-  ]);
+  const licensedServersCount = await countPlanGuildsForUser(user.id);
   const usage = buildAccountPlanUsageSnapshot(userPlanState, licensedServersCount);
   const defaultPlan = resolvePlanPricing("pro", "monthly");
 

@@ -1,11 +1,18 @@
 export type CanonicalHost =
   | "public"
   | "login"
+  | "config"
   | "status"
   | "dashboard"
   | "servers"
   | "pay";
-export type WorkspaceArea = "login" | "status" | "dashboard" | "servers" | "account";
+export type WorkspaceArea =
+  | "login"
+  | "config"
+  | "status"
+  | "dashboard"
+  | "servers"
+  | "account";
 type CanonicalRoutingFallbackOptions = {
   fallbackHost?: CanonicalHost | null;
   fallbackArea?: WorkspaceArea | "public" | null;
@@ -52,6 +59,9 @@ const CANONICAL_HOST_CONFIG: Record<CanonicalHost, CanonicalHostConfig> = {
     subdomain: "account",
     legacySubdomains: ["login"],
   },
+  config: {
+    subdomain: "config",
+  },
   status: {
     subdomain: "status",
   },
@@ -70,6 +80,11 @@ const WORKSPACE_AREA_CONFIG: Record<WorkspaceArea, WorkspaceAreaConfig> = {
   login: {
     canonicalHost: "login",
     internalBasePath: "/login",
+    externalBasePath: "/",
+  },
+  config: {
+    canonicalHost: "config",
+    internalBasePath: "/config",
     externalBasePath: "/",
   },
   status: {
@@ -112,7 +127,6 @@ export const CANONICAL_PUBLIC_PATH_PREFIXES = [
   "/privacy",
   "/terms",
   "/affiliates",
-  "/config",
   "/payment",
   "/transcripts",
   "/discord",
@@ -526,6 +540,8 @@ export function detectWorkspaceAreaFromRequestHost(request: RequestLike) {
   switch (host) {
     case "login":
       return "login";
+    case "config":
+      return "config";
     case "status":
       return "status";
     case "dashboard":
@@ -546,6 +562,8 @@ export function detectWorkspaceAreaFromExternalPath(
   switch (host) {
     case "login":
       return "login";
+    case "config":
+      return "config";
     case "status":
       return "status";
     case "dashboard":

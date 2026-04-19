@@ -72,6 +72,43 @@ export function buildLoginRedirectLocation(
   });
 }
 
+export function buildLoginOtpRedirectLocation(
+  request: NextRequest,
+  input: {
+    challengeId: string;
+    maskedEmail: string;
+    expiresAt?: string | null;
+    resendAvailableAt?: string | null;
+    provider?: "discord" | "google" | "microsoft" | null;
+    nextPath?: string | null;
+  },
+) {
+  const url = new URL(
+    buildLoginRedirectLocation(request, {
+      nextPath: input.nextPath,
+      mode: "login",
+    }),
+  );
+
+  url.searchParams.set("otp", "1");
+  url.searchParams.set("challenge", input.challengeId);
+  url.searchParams.set("maskedEmail", input.maskedEmail);
+
+  if (input.expiresAt) {
+    url.searchParams.set("expiresAt", input.expiresAt);
+  }
+
+  if (input.resendAvailableAt) {
+    url.searchParams.set("resendAt", input.resendAvailableAt);
+  }
+
+  if (input.provider) {
+    url.searchParams.set("provider", input.provider);
+  }
+
+  return url.toString();
+}
+
 export function setLoginErrorFlashCookie(
   response: NextResponse,
   code: string,

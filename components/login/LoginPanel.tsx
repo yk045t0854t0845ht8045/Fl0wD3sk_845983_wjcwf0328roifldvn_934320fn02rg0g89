@@ -35,6 +35,14 @@ type LoginPanelProps = {
   googleEnabled?: boolean;
   microsoftEnabled?: boolean;
   emailOtpLength?: number;
+  initialOtpState?: {
+    challengeId: string;
+    maskedEmail: string;
+    expiresAt?: string | null;
+    resendAvailableAt?: string | null;
+    source: "social";
+    provider?: "discord" | "google" | "microsoft" | null;
+  } | null;
   currentSessionHint?: {
     displayName: string;
     email: string | null;
@@ -68,6 +76,7 @@ type EmailOtpResponse = {
 };
 
 type LoginStage = "chooser" | "password" | "otp";
+type OtpSource = "email" | "social";
 
 const inputShellClassName =
   "group relative flex h-[58px] w-full items-center rounded-[18px] border border-[rgba(255,255,255,0.06)] bg-[#090909] px-[18px] transition-[border-color,background-color,box-shadow] duration-200 focus-within:border-[rgba(255,255,255,0.13)] focus-within:bg-[#0C0C0C] focus-within:shadow-[0_0_0_4px_rgba(255,255,255,0.04)]";
@@ -152,21 +161,29 @@ export function LoginPanel({
   googleEnabled = false,
   microsoftEnabled = false,
   emailOtpLength = 6,
+  initialOtpState = null,
   currentSessionHint = null,
 }: LoginPanelProps) {
   const notifications = useNotifications();
   const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL || TERMS_PATH;
   const privacyUrl = process.env.NEXT_PUBLIC_PRIVACY_URL || PRIVACY_PATH;
-  const [stage, setStage] = useState<LoginStage>("chooser");
+  const [stage, setStage] = useState<LoginStage>(initialOtpState ? "otp" : "chooser");
   const [email, setEmail] = useState("");
-  const [maskedEmail, setMaskedEmail] = useState("");
+  const [maskedEmail, setMaskedEmail] = useState(initialOtpState?.maskedEmail || "");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordStep, setPasswordStep] = useState<"password" | "set_password">("password");
-  const [challengeId, setChallengeId] = useState("");
+  const [challengeId, setChallengeId] = useState(initialOtpState?.challengeId || "");
   const [otpCode, setOtpCode] = useState("");
-  const [otpExpiresAt, setOtpExpiresAt] = useState<string | null>(null);
-  const [otpResendAvailableAt, setOtpResendAvailableAt] = useState<string | null>(null);
+  const [otpExpiresAt, setOtpExpiresAt] = useState<string | null>(
+    initialOtpState?.expiresAt || null,
+  );
+  const [otpResendAvailableAt, setOtpResendAvailableAt] = useState<string | null>(
+    initialOtpState?.resendAvailableAt || null,
+  );
+  const [otpSource, setOtpSource] = useState<OtpSource>(
+    initialOtpState?.source || "email",
+  );
   const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [errorMessage, setErrorMessage] = useState<string | null>(initialErrorMessage);
   const [, setInfoMessage] = useState<string | null>(null);
@@ -254,6 +271,16 @@ export function LoginPanel({
     passwordCooldownRemainingMs > 0
       ? getPasswordCooldownLabel(passwordCooldownRemainingMs)
       : "Continuar";
+  const otpDeliveryLabel =
+    otpSource === "social"
+      ? initialOtpState?.provider === "discord"
+        ? "Confirmacao do login com Discord"
+        : initialOtpState?.provider === "google"
+          ? "Confirmacao do login com Google"
+          : initialOtpState?.provider === "microsoft"
+            ? "Confirmacao do login com Microsoft"
+            : "Confirmacao do login social"
+      : "Verificacao por email";
 
   useNotificationEffect(initialErrorMessage, {
     tone: "error",
@@ -309,6 +336,20 @@ export function LoginPanel({
 
     setErrorMessage(initialErrorMessage);
   }, [initialErrorMessage]);
+
+  useEffect(() => {
+    if (!initialOtpState?.challengeId) {
+      return;
+    }
+
+    setStage("otp");
+    setChallengeId(initialOtpState.challengeId);
+    setMaskedEmail(initialOtpState.maskedEmail || "");
+    setOtpExpiresAt(initialOtpState.expiresAt || null);
+    setOtpResendAvailableAt(initialOtpState.resendAvailableAt || null);
+    setOtpSource(initialOtpState.source);
+    setOtpCode("");
+  }, [initialOtpState]);
 
   useEffect(() => {
     if (stage !== "otp") {
@@ -587,6 +628,7 @@ export function LoginPanel({
       setOtpCode("");
       setOtpExpiresAt(payload.expiresAt || null);
       setOtpResendAvailableAt(payload.resendAvailableAt || null);
+      setOtpSource("email");
       setStage("otp");
       showInfoNotification(
         "Enviamos o codigo de acesso para o seu email.",
@@ -692,7 +734,15 @@ export function LoginPanel({
     setInfoMessage(null);
 
     if (stage === "otp") {
-      setStage("password");
+      if (otpSource === "social") {
+        setStage("chooser");
+        setChallengeId("");
+        setMaskedEmail("");
+        setOtpExpiresAt(null);
+        setOtpResendAvailableAt(null);
+      } else {
+        setStage("password");
+      }
       setOtpCode("");
       return;
     }
@@ -947,7 +997,7 @@ export function LoginPanel({
                 hour: "2-digit",
                 minute: "2-digit",
               })}`
-            : "Verificacao por email"}
+            : otpDeliveryLabel}
         </span>
         <button
           type="button"

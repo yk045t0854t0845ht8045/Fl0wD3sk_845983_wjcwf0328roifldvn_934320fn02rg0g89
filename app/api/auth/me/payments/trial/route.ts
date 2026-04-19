@@ -261,6 +261,15 @@ export async function POST(request: Request) {
     }
 
     const guildId = normalizeGuildId(body.guildId);
+    if (!guildId) {
+      return respond(
+        {
+          ok: false,
+          message: "Informe um servidor valido para ativar o plano gratuito.",
+        },
+        { status: 400 },
+      );
+    }
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {

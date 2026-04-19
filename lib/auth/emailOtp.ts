@@ -15,6 +15,17 @@ type EmailOtpChallengeRow = {
   last_sent_at: string;
   expires_at: string;
   consumed_at: string | null;
+  metadata: unknown;
+};
+
+type PendingOtpAuthMethod = "discord" | "email" | "google" | "microsoft";
+
+export type PendingOtpSessionContext = {
+  authMethod: PendingOtpAuthMethod;
+  nextPath: string | null;
+  discordAccessToken: string | null;
+  discordRefreshToken: string | null;
+  discordTokenExpiresAt: string | null;
 };
 
 export class EmailOtpError extends Error {
@@ -116,7 +127,7 @@ async function fetchChallengeById(challengeId: string) {
   const result = await supabase
     .from("auth_email_otp_challenges")
     .select(
-      "id, user_id, email, email_normalized, code_hash, attempts, max_attempts, resend_count, last_sent_at, expires_at, consumed_at",
+      "id, user_id, email, email_normalized, code_hash, attempts, max_attempts, resend_count, last_sent_at, expires_at, consumed_at, metadata",
     )
     .eq("id", challengeId)
     .maybeSingle<EmailOtpChallengeRow>();
@@ -137,11 +148,59 @@ async function sendOtpEmailForChallenge(email: string, code: string) {
   });
 }
 
+function parsePendingOtpSessionContext(metadata: unknown): PendingOtpSessionContext | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+
+  const session =
+    "session" in (metadata as Record<string, unknown>)
+      ? (metadata as Record<string, unknown>).session
+      : null;
+
+  if (!session || typeof session !== "object") {
+    return null;
+  }
+
+  const authMethod = (session as Record<string, unknown>).authMethod;
+  if (
+    authMethod !== "discord" &&
+    authMethod !== "email" &&
+    authMethod !== "google" &&
+    authMethod !== "microsoft"
+  ) {
+    return null;
+  }
+
+  const nextPath = (session as Record<string, unknown>).nextPath;
+  const discordAccessToken = (session as Record<string, unknown>).discordAccessToken;
+  const discordRefreshToken = (session as Record<string, unknown>).discordRefreshToken;
+  const discordTokenExpiresAt = (session as Record<string, unknown>).discordTokenExpiresAt;
+
+  return {
+    authMethod,
+    nextPath: typeof nextPath === "string" && nextPath.trim() ? nextPath.trim() : null,
+    discordAccessToken:
+      typeof discordAccessToken === "string" && discordAccessToken.trim()
+        ? discordAccessToken
+        : null,
+    discordRefreshToken:
+      typeof discordRefreshToken === "string" && discordRefreshToken.trim()
+        ? discordRefreshToken
+        : null,
+    discordTokenExpiresAt:
+      typeof discordTokenExpiresAt === "string" && discordTokenExpiresAt.trim()
+        ? discordTokenExpiresAt
+        : null,
+  };
+}
+
 export async function createLoginOtpChallenge(input: {
   userId: number;
   email: string;
   ipAddress: string | null;
   userAgent: string | null;
+  metadata?: Record<string, unknown> | null;
 }) {
   const normalizedEmail = normalizeAuthEmail(input.email);
   if (!normalizedEmail) {
@@ -163,6 +222,7 @@ export async function createLoginOtpChallenge(input: {
       user_agent: input.userAgent,
       max_attempts: 6,
       expires_at: expiresAt,
+      metadata: input.metadata || {},
     })
     .select("id")
     .single<{ id: string }>();
@@ -320,5 +380,6 @@ export async function verifyLoginOtpChallenge(input: {
     userId: challenge.user_id,
     email: challenge.email,
     maskedEmail: maskAuthEmail(challenge.email),
+    sessionContext: parsePendingOtpSessionContext(challenge.metadata),
   };
 }

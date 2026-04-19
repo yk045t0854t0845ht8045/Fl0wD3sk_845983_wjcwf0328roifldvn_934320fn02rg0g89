@@ -19,6 +19,12 @@ type LoginPageProps = {
     next?: string | string[];
     mode?: string | string[];
     error?: string | string[];
+    otp?: string | string[];
+    challenge?: string | string[];
+    maskedEmail?: string | string[];
+    expiresAt?: string | string[];
+    resendAt?: string | string[];
+    provider?: string | string[];
   }>;
 };
 
@@ -26,6 +32,8 @@ function takeFirstQueryValue(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] || null;
   return value || null;
 }
+
+type OtpProvider = "discord" | "google" | "microsoft";
 
 function resolveLoginErrorMessage(
   errorCode: string | null,
@@ -42,6 +50,8 @@ function resolveLoginErrorMessage(
         : "Sua autenticacao com Discord expirou ou ficou invalida. Tente novamente.";
     case "discord_conflict":
       return "Esta conta do Discord ja esta vinculada a outra conta Flowdesk.";
+    case "discord_unverified_email":
+      return "Sua conta Discord precisa ter email verificado para concluir o acesso.";
     case "discord_auth_failed":
       return loginMode === "link"
         ? "Nao foi possivel vincular sua conta Discord agora. Tente novamente."
@@ -80,6 +90,25 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const requestHeaders = await headers();
   const nextPath = normalizeInternalNextPath(takeFirstQueryValue(query.next));
   const loginMode = takeFirstQueryValue(query.mode) === "link" ? "link" : "login";
+  const initialOtpChallengeId = takeFirstQueryValue(query.challenge)?.trim() || null;
+  const rawOtpProvider = takeFirstQueryValue(query.provider);
+  const initialOtpProvider: OtpProvider | null =
+    rawOtpProvider === "discord" ||
+    rawOtpProvider === "google" ||
+    rawOtpProvider === "microsoft"
+      ? rawOtpProvider
+      : null;
+  const initialOtpState =
+    takeFirstQueryValue(query.otp) === "1" && initialOtpChallengeId
+      ? {
+          challengeId: initialOtpChallengeId,
+          maskedEmail: takeFirstQueryValue(query.maskedEmail) || "",
+          expiresAt: takeFirstQueryValue(query.expiresAt),
+          resendAvailableAt: takeFirstQueryValue(query.resendAt),
+          source: "social" as const,
+          provider: initialOtpProvider,
+        }
+      : null;
   const loginErrorFlash = decodeLoginErrorFlashPayload(
     requestHeaders.get(LOGIN_ERROR_FLASH_HEADER_NAME),
   );
@@ -117,6 +146,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               googleEnabled={googleEnabled}
               microsoftEnabled={microsoftEnabled}
               emailOtpLength={emailOtpLength}
+              initialOtpState={initialOtpState}
               currentSessionHint={
                 currentUser
                   ? {

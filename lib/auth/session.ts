@@ -26,13 +26,18 @@ type CreateSessionContext = {
   userAgent: string | null;
 };
 
-type AuthMethod = "discord" | "email" | "google" | "microsoft";
+export type AuthMethod = "discord" | "email" | "google" | "microsoft";
 
 type SessionTokens = {
   authMethod?: AuthMethod;
   discordAccessToken?: string | null;
   discordRefreshToken?: string | null;
   discordTokenExpiresAt?: string | null;
+};
+
+type CreateSessionOptions = {
+  rememberSession?: boolean;
+  sessionTtlHours?: number | null;
 };
 
 export type AuthUserRecord = {
@@ -52,6 +57,7 @@ export type AuthUserRecord = {
 
 type AuthSessionRecord = {
   id: string;
+  created_at?: string | null;
   discord_access_token: string | null;
   discord_refresh_token: string | null;
   discord_token_expires_at: string | null;
@@ -97,6 +103,22 @@ function createSessionToken() {
   return crypto.randomBytes(48).toString("base64url");
 }
 
+function resolveSessionTtlHours(options?: CreateSessionOptions) {
+  if (
+    typeof options?.sessionTtlHours === "number" &&
+    Number.isFinite(options.sessionTtlHours) &&
+    options.sessionTtlHours > 0
+  ) {
+    return options.sessionTtlHours;
+  }
+
+  if (options?.rememberSession) {
+    return Math.max(24, authConfig.rememberedDeviceDays * 24);
+  }
+
+  return authConfig.sessionTtlHours;
+}
+
 function unwrapUser(user: AuthSessionRecord["user"]) {
   if (!user) return null;
   if (Array.isArray(user)) return user[0] || null;
@@ -120,6 +142,80 @@ function parseDiscordGuildsCache(cache: unknown): DiscordGuild[] | null {
 
   if (guilds.length) return guilds;
   return cache.length === 0 ? [] : null;
+}
+
+export async function findReusableDiscordSessionTokensForUser(
+  userId: number,
+  options?: {
+    excludeSessionId?: string | null;
+  },
+) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("auth_sessions")
+    .select(
+      "id, created_at, discord_access_token, discord_refresh_token, discord_token_expires_at",
+    )
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: false })
+    .limit(16)
+    .returns<AuthSessionRecord[]>();
+
+  if (result.error) {
+    throw new Error(
+      `Erro ao reutilizar tokens Discord da conta: ${result.error.message}`,
+    );
+  }
+
+  const nowMs = Date.now();
+  const excludeSessionId = options?.excludeSessionId || null;
+  const candidates = (result.data || [])
+    .filter((session) => session.id !== excludeSessionId)
+    .filter(
+      (session) =>
+        Boolean(session.discord_access_token || session.discord_refresh_token),
+    )
+    .sort((left, right) => {
+      const leftHasRefresh = left.discord_refresh_token ? 1 : 0;
+      const rightHasRefresh = right.discord_refresh_token ? 1 : 0;
+      if (leftHasRefresh !== rightHasRefresh) {
+        return rightHasRefresh - leftHasRefresh;
+      }
+
+      const leftExpiryMs = left.discord_token_expires_at
+        ? Date.parse(left.discord_token_expires_at)
+        : Number.NaN;
+      const rightExpiryMs = right.discord_token_expires_at
+        ? Date.parse(right.discord_token_expires_at)
+        : Number.NaN;
+      const leftIsFresh = Number.isFinite(leftExpiryMs) && leftExpiryMs > nowMs ? 1 : 0;
+      const rightIsFresh =
+        Number.isFinite(rightExpiryMs) && rightExpiryMs > nowMs ? 1 : 0;
+      if (leftIsFresh !== rightIsFresh) {
+        return rightIsFresh - leftIsFresh;
+      }
+
+      const leftCreatedAtMs = left.created_at ? Date.parse(left.created_at) : Number.NaN;
+      const rightCreatedAtMs = right.created_at ? Date.parse(right.created_at) : Number.NaN;
+
+      if (Number.isFinite(leftCreatedAtMs) && Number.isFinite(rightCreatedAtMs)) {
+        return rightCreatedAtMs - leftCreatedAtMs;
+      }
+
+      return 0;
+    });
+
+  const reusableSession = candidates[0] || null;
+  if (!reusableSession) {
+    return null;
+  }
+
+  return {
+    discordAccessToken: reusableSession.discord_access_token,
+    discordRefreshToken: reusableSession.discord_refresh_token,
+    discordTokenExpiresAt: reusableSession.discord_token_expires_at,
+  };
 }
 
 async function selectAuthUserBy(
@@ -427,6 +523,9 @@ export async function resolveAuthUserForDiscordLogin(
   },
 ) {
   const existingByDiscord = await findAuthUserByDiscordUserId(discordUser.id);
+  const normalizedDiscordEmail = discordUser.verified
+    ? normalizeAuthEmail(discordUser.email)
+    : null;
 
   if (typeof input?.currentUserId === "number") {
     const currentUser = await findAuthUserById(input.currentUserId);
@@ -452,24 +551,212 @@ export async function resolveAuthUserForDiscordLogin(
     return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id);
   }
 
-  if (discordUser.verified) {
-    const normalizedEmail = normalizeAuthEmail(discordUser.email);
-    if (normalizedEmail) {
-      const existingByEmail = await findAuthUserByEmail(normalizedEmail);
-      if (existingByEmail) {
-        if (
-          existingByEmail.discord_user_id &&
-          existingByEmail.discord_user_id !== discordUser.id
-        ) {
-          throw new Error("O email desta conta ja esta vinculado a outro Discord.");
-        }
+  if (!normalizedDiscordEmail) {
+    throw new Error("Sua conta Discord precisa ter um email verificado para entrar.");
+  }
 
-        return saveDiscordUserToAuthUser(discordUser, existingByEmail.id);
-      }
+  const existingByEmail = await findAuthUserByEmail(normalizedDiscordEmail);
+  if (existingByEmail) {
+    if (
+      existingByEmail.discord_user_id &&
+      existingByEmail.discord_user_id !== discordUser.id
+    ) {
+      throw new Error("O email desta conta ja esta vinculado a outro Discord.");
     }
+
+    return saveDiscordUserToAuthUser(discordUser, existingByEmail.id);
   }
 
   return saveDiscordUserToAuthUser(discordUser);
+}
+
+async function touchAuthUserLastLogin(userId: number, authMethod: AuthMethod) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  try {
+    await supabase
+      .from("auth_users")
+      .update({
+        last_login_at: new Date().toISOString(),
+        last_auth_method: authMethod,
+      })
+      .eq("id", userId);
+  } catch {
+    // Mantemos o login funcional mesmo se colunas auxiliares ainda nao existirem.
+  }
+}
+
+export async function markAuthUserLastLogin(
+  userId: number,
+  authMethod: AuthMethod,
+) {
+  await touchAuthUserLastLogin(userId, authMethod);
+}
+
+async function createSession(
+  userId: number,
+  context: CreateSessionContext,
+  tokens: SessionTokens,
+  options?: CreateSessionOptions,
+) {
+  const sessionToken = createSessionToken();
+  const sessionTokenHash = hashToken(sessionToken);
+  const ttlHours = resolveSessionTtlHours(options);
+  const maxAgeSeconds = Math.max(60, Math.round(ttlHours * 60 * 60));
+  const expiresAt = new Date(Date.now() + maxAgeSeconds * 1000).toISOString();
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const reusableDiscordTokens =
+    tokens.discordAccessToken || tokens.discordRefreshToken
+      ? null
+      : await findReusableDiscordSessionTokensForUser(userId);
+  const discordAccessToken =
+    tokens.discordAccessToken ?? reusableDiscordTokens?.discordAccessToken ?? null;
+  const discordRefreshToken =
+    tokens.discordRefreshToken ?? reusableDiscordTokens?.discordRefreshToken ?? null;
+  const discordTokenExpiresAt =
+    tokens.discordTokenExpiresAt ??
+    reusableDiscordTokens?.discordTokenExpiresAt ??
+    null;
+  const authMethod =
+    tokens.authMethod || (discordAccessToken ? "discord" : "email");
+  const insertPayload = {
+    user_id: userId,
+    session_token_hash: sessionTokenHash,
+    ip_address: context.ipAddress,
+    user_agent: context.userAgent,
+    expires_at: expiresAt,
+    auth_method: authMethod,
+    discord_access_token: discordAccessToken,
+    discord_refresh_token: discordRefreshToken,
+    discord_token_expires_at: discordTokenExpiresAt,
+  };
+
+  let insertResult = await supabase.from("auth_sessions").insert(insertPayload);
+
+  if (
+    insertResult.error &&
+    insertResult.error.message.toLowerCase().includes("auth_method")
+  ) {
+    const legacyInsertPayload = (({
+      auth_method,
+      ...rest
+    }: typeof insertPayload) => rest)(insertPayload);
+    insertResult = await supabase.from("auth_sessions").insert(legacyInsertPayload);
+  }
+
+  if (insertResult.error) {
+    throw new Error(`Erro ao criar sessao no Supabase: ${insertResult.error.message}`);
+  }
+
+  await touchAuthUserLastLogin(userId, authMethod);
+
+  return {
+    sessionToken,
+    expiresAt,
+    maxAgeSeconds,
+  };
+}
+
+export async function createSessionForUser(
+  userId: number,
+  context: CreateSessionContext,
+  tokens: SessionTokens = {},
+  options?: CreateSessionOptions,
+) {
+  return createSession(userId, context, tokens, options);
+}
+
+export async function createUserSessionFromDiscordUser(
+  discordUser: DiscordUser,
+  context: CreateSessionContext,
+  tokens: SessionTokens,
+  options?: {
+    currentUserId?: number | null;
+    rememberSession?: boolean;
+  },
+) {
+  const user = await resolveAuthUserForDiscordLogin(discordUser, {
+    currentUserId: options?.currentUserId ?? null,
+  });
+  const session = await createSession(
+    user.id,
+    context,
+    {
+      ...tokens,
+      authMethod: "discord",
+    },
+    {
+      rememberSession: options?.rememberSession ?? false,
+    },
+  );
+
+  return {
+    user,
+    session,
+  };
+}
+
+export async function createUserSessionFromGoogleUser(
+  googleUser: GoogleUser,
+  context: CreateSessionContext,
+  options?: {
+    currentUserId?: number | null;
+    rememberSession?: boolean;
+  },
+) {
+  const user = await resolveAuthUserForGoogleLogin(googleUser, {
+    currentUserId: options?.currentUserId ?? null,
+  });
+  const session = await createSession(
+    user.id,
+    context,
+    {
+      authMethod: "google",
+      discordAccessToken: null,
+      discordRefreshToken: null,
+      discordTokenExpiresAt: null,
+    },
+    {
+      rememberSession: options?.rememberSession ?? false,
+    },
+  );
+
+  return {
+    user,
+    session,
+  };
+}
+
+export async function createUserSessionFromMicrosoftUser(
+  microsoftUser: MicrosoftUser,
+  context: CreateSessionContext,
+  options?: {
+    currentUserId?: number | null;
+    rememberSession?: boolean;
+  },
+) {
+  const user = await resolveAuthUserForMicrosoftLogin(microsoftUser, {
+    currentUserId: options?.currentUserId ?? null,
+  });
+  const session = await createSession(
+    user.id,
+    context,
+    {
+      authMethod: "microsoft",
+      discordAccessToken: null,
+      discordRefreshToken: null,
+      discordTokenExpiresAt: null,
+    },
+    {
+      rememberSession: options?.rememberSession ?? false,
+    },
+  );
+
+  return {
+    user,
+    session,
+  };
 }
 
 async function saveGoogleUserToAuthUser(
@@ -745,129 +1032,6 @@ export async function resolveAuthUserForMicrosoftLogin(
   return saveMicrosoftUserToAuthUser(microsoftUser);
 }
 
-async function createSession(
-  userId: number,
-  context: CreateSessionContext,
-  tokens: SessionTokens,
-) {
-  const sessionToken = createSessionToken();
-  const sessionTokenHash = hashToken(sessionToken);
-  const expiresAt = new Date(
-    Date.now() + authConfig.sessionTtlHours * 60 * 60 * 1000,
-  ).toISOString();
-
-  const supabase = getSupabaseAdminClientOrThrow();
-  const authMethod =
-    tokens.authMethod || (tokens.discordAccessToken ? "discord" : "email");
-
-  const insertResult = await supabase.from("auth_sessions").insert({
-    user_id: userId,
-    session_token_hash: sessionTokenHash,
-    ip_address: context.ipAddress,
-    user_agent: context.userAgent,
-    expires_at: expiresAt,
-    discord_access_token: tokens.discordAccessToken ?? null,
-    discord_refresh_token: tokens.discordRefreshToken ?? null,
-    discord_token_expires_at: tokens.discordTokenExpiresAt ?? null,
-  });
-
-  if (insertResult.error) {
-    throw new Error(`Erro ao criar sessao no Supabase: ${insertResult.error.message}`);
-  }
-
-  try {
-    await supabase
-      .from("auth_users")
-      .update({
-        last_login_at: new Date().toISOString(),
-        last_auth_method: authMethod,
-      })
-      .eq("id", userId);
-  } catch {
-    // Mantemos o login funcional mesmo se colunas auxiliares ainda nao existirem.
-  }
-
-  return {
-    sessionToken,
-    expiresAt,
-  };
-}
-
-export async function createSessionForUser(
-  userId: number,
-  context: CreateSessionContext,
-  tokens: SessionTokens = {},
-) {
-  return createSession(userId, context, tokens);
-}
-
-export async function createUserSessionFromDiscordUser(
-  discordUser: DiscordUser,
-  context: CreateSessionContext,
-  tokens: SessionTokens,
-  options?: {
-    currentUserId?: number | null;
-  },
-) {
-  const user = await resolveAuthUserForDiscordLogin(discordUser, {
-    currentUserId: options?.currentUserId ?? null,
-  });
-  const session = await createSession(user.id, context, {
-    ...tokens,
-    authMethod: "discord",
-  });
-
-  return {
-    user,
-    session,
-  };
-}
-
-export async function createUserSessionFromGoogleUser(
-  googleUser: GoogleUser,
-  context: CreateSessionContext,
-  options?: {
-    currentUserId?: number | null;
-  },
-) {
-  const user = await resolveAuthUserForGoogleLogin(googleUser, {
-    currentUserId: options?.currentUserId ?? null,
-  });
-  const session = await createSession(user.id, context, {
-    authMethod: "google",
-    discordAccessToken: null,
-    discordRefreshToken: null,
-    discordTokenExpiresAt: null,
-  });
-
-  return {
-    user,
-    session,
-  };
-}
-
-export async function createUserSessionFromMicrosoftUser(
-  microsoftUser: MicrosoftUser,
-  context: CreateSessionContext,
-  options?: {
-    currentUserId?: number | null;
-  },
-) {
-  const user = await resolveAuthUserForMicrosoftLogin(microsoftUser, {
-    currentUserId: options?.currentUserId ?? null,
-  });
-  const session = await createSession(user.id, context, {
-    authMethod: "microsoft",
-    discordAccessToken: null,
-    discordRefreshToken: null,
-    discordTokenExpiresAt: null,
-  });
-
-  return {
-    user,
-    session,
-  };
-}
 
 export type GetAuthSessionOptions = {
   fullContext?: boolean;

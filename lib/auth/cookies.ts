@@ -165,8 +165,14 @@ export function setSharedSessionCookie(
   request: RequestLike,
   response: NextResponse,
   sessionToken: string,
+  options?: {
+    maxAge?: number;
+  },
 ) {
-  const maxAge = authConfig.sessionTtlHours * 60 * 60;
+  const maxAge =
+    typeof options?.maxAge === "number" && Number.isFinite(options.maxAge) && options.maxAge > 0
+      ? Math.max(60, Math.trunc(options.maxAge))
+      : authConfig.sessionTtlHours * 60 * 60;
 
   setSharedAuthCookie(request, response, authConfig.sessionCookieName, sessionToken, {
     httpOnly: true,

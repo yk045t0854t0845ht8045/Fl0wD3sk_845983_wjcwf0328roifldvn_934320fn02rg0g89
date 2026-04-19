@@ -8,7 +8,7 @@ import { normalizeAuthEmail } from "@/lib/auth/email";
 import { createLoginOtpChallenge, resendLoginOtpChallenge, verifyLoginOtpChallenge } from "@/lib/auth/emailOtp";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { validatePasswordPolicy } from "@/lib/auth/passwordPolicy";
-import { validateTrustedEmailDevice } from "@/lib/auth/trustedDevice";
+import { validateTrustedDevice } from "@/lib/auth/trustedDevice";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type PasswordCredentialRow = {
@@ -146,7 +146,7 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
     throw new Error("Nao foi possivel identificar o email desta conta.");
   }
 
-  const trustedDeviceValidation = await validateTrustedEmailDevice({
+  const trustedDeviceValidation = await validateTrustedDevice({
     userId: user.id,
     token: input.trustedDeviceToken || null,
     tokenProof: input.trustedDeviceProof || null,
@@ -162,6 +162,7 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
       userId: user.id,
       maskedEmail: user.email,
       clearTrustedDeviceCookie,
+      rememberSession: true,
     };
   }
 
@@ -181,6 +182,7 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
     expiresAt: challenge.expiresAt,
     resendAvailableAt: challenge.resendAvailableAt,
     clearTrustedDeviceCookie,
+    rememberSession: false,
   };
 }
 
@@ -199,6 +201,7 @@ export async function createEmailSession(input: {
   userId: number;
   ipAddress: string | null;
   userAgent: string | null;
+  rememberSession?: boolean;
 }) {
   return createSessionForUser(
     input.userId,
@@ -211,6 +214,9 @@ export async function createEmailSession(input: {
       discordAccessToken: null,
       discordRefreshToken: null,
       discordTokenExpiresAt: null,
+    },
+    {
+      rememberSession: input.rememberSession ?? false,
     },
   );
 }

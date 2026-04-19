@@ -6,9 +6,10 @@ import {
   setSharedSessionCookie,
   setSharedTrustedDeviceCookie,
 } from "@/lib/auth/cookies";
-import { createEmailSession, verifyEmailLoginOtp } from "@/lib/auth/emailAuth";
+import { verifyEmailLoginOtp } from "@/lib/auth/emailAuth";
 import { EmailOtpError } from "@/lib/auth/emailOtp";
-import { issueTrustedEmailDevice } from "@/lib/auth/trustedDevice";
+import { createSessionForUser } from "@/lib/auth/session";
+import { issueTrustedDevice } from "@/lib/auth/trustedDevice";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -91,12 +92,25 @@ export async function POST(request: NextRequest) {
     const authenticatedContext = extendSecurityRequestContext(requestContext, {
       userId: verification.userId,
     });
-    const session = await createEmailSession({
-      userId: verification.userId,
-      ipAddress: extractClientIp(request),
-      userAgent: request.headers.get("user-agent"),
-    });
-    const redirectTo = nextPath || "/dashboard";
+    const sessionContext = verification.sessionContext;
+    const redirectTo =
+      nextPath || sessionContext?.nextPath || "/dashboard";
+    const session = await createSessionForUser(
+      verification.userId,
+      {
+        ipAddress: extractClientIp(request),
+        userAgent: request.headers.get("user-agent"),
+      },
+      {
+        authMethod: sessionContext?.authMethod || "email",
+        discordAccessToken: sessionContext?.discordAccessToken ?? null,
+        discordRefreshToken: sessionContext?.discordRefreshToken ?? null,
+        discordTokenExpiresAt: sessionContext?.discordTokenExpiresAt ?? null,
+      },
+      {
+        rememberSession,
+      },
+    );
     const response = applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
@@ -104,10 +118,12 @@ export async function POST(request: NextRequest) {
       }),
     );
 
-    setSharedSessionCookie(request, response, session.sessionToken);
+    setSharedSessionCookie(request, response, session.sessionToken, {
+      maxAge: session.maxAgeSeconds,
+    });
 
     if (rememberSession) {
-      const trustedDevice = await issueTrustedEmailDevice({
+      const trustedDevice = await issueTrustedDevice({
         userId: verification.userId,
         userAgent: request.headers.get("user-agent"),
       });

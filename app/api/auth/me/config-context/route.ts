@@ -16,6 +16,8 @@ import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
 } from "@/lib/security/errors";
+import { hasActivePaidConfigPlan } from "@/lib/plans/configAccess";
+import { getUserPlanState } from "@/lib/plans/state";
 import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
@@ -51,6 +53,22 @@ export async function GET(request: Request) {
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
       )), requestContext.requestId);
+    }
+
+    const userPlanState = await getUserPlanState(session.user.id);
+    if (!hasActivePaidConfigPlan(userPlanState)) {
+      return attachRequestId(
+        applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              ok: false,
+              message: "Plano ativo necessario para acessar o config.",
+            },
+            { status: 403 },
+          ),
+        ),
+        requestContext.requestId,
+      );
     }
 
     const cleanupSummary = await cleanupExpiredUnpaidServerSetups({
@@ -99,6 +117,22 @@ export async function PUT(request: Request) {
         { ok: false, message: "Nao autenticado." },
         { status: 401 },
       )), baseRequestContext.requestId);
+    }
+
+    const userPlanState = await getUserPlanState(session.user.id);
+    if (!hasActivePaidConfigPlan(userPlanState)) {
+      return attachRequestId(
+        applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              ok: false,
+              message: "Plano ativo necessario para acessar o config.",
+            },
+            { status: 403 },
+          ),
+        ),
+        baseRequestContext.requestId,
+      );
     }
 
     auditContext = extendSecurityRequestContext(baseRequestContext, {

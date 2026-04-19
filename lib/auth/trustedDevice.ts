@@ -69,7 +69,7 @@ function isPlausibleTrustedDeviceToken(token: string) {
   return /^[A-Za-z0-9_-]{32,200}$/.test(token);
 }
 
-export async function issueTrustedEmailDevice(input: {
+export async function issueTrustedDevice(input: {
   userId: number;
   userAgent: string | null;
 }) {
@@ -175,3 +175,6 @@ export async function validateTrustedEmailDevice(input: {
     shouldClearCookie: false,
   };
 }
+
+export const issueTrustedEmailDevice = issueTrustedDevice;
+export const validateTrustedDevice = validateTrustedEmailDevice;
