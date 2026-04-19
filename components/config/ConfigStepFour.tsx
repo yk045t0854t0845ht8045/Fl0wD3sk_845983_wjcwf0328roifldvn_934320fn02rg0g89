@@ -3062,6 +3062,7 @@ export function ConfigStepFour({
   const latestInitialStepFourDraftRef = useRef(initialStepFourDraft);
   const hasInitialStepFourDraftRef = useRef(hasInitialStepFourDraft);
   const paymentPollingInFlightRef = useRef(false);
+  const paymentOrderLookupInFlightRef = useRef(false);
   const orderBootstrapInFlightRef = useRef(false);
   const trialActivationRedirectTimeoutRef = useRef<number | null>(null);
   const lastHandledCardRedirectKeyRef = useRef(0);
@@ -3187,6 +3188,9 @@ export function ConfigStepFour({
   const [lastKnownOrderNumber, setLastKnownOrderNumber] = useState<number | null>(
     initialStepFourDraft.lastKnownOrderNumber,
   );
+  const lastKnownOrderNumberRef = useRef<number | null>(
+    initialStepFourDraft.lastKnownOrderNumber,
+  );
   const [copied, setCopied] = useState(false);
   const [isLoadingOrder, setIsLoadingOrder] = useState(true);
   const [isPreparingBaseOrder, setIsPreparingBaseOrder] = useState(false);
@@ -3197,6 +3201,10 @@ export function ConfigStepFour({
       forceNewCheckoutRef.current = true;
     }
   }, [forceFreshCheckout]);
+
+  useEffect(() => {
+    lastKnownOrderNumberRef.current = lastKnownOrderNumber;
+  }, [lastKnownOrderNumber]);
 
   const documentDigits = useMemo(() => normalizeBrazilDocumentDigits(payerDocument), [payerDocument]);
   const cardDocumentDigits = useMemo(() => normalizeBrazilDocumentDigits(cardDocument), [cardDocument]);
@@ -3694,6 +3702,10 @@ export function ConfigStepFour({
       }
     }
 
+    if (paymentOrderLookupInFlightRef.current) {
+      return;
+    }
+
     let isMounted = true;
     const controller = new AbortController();
     let abortedByTimeout = false;
@@ -3701,6 +3713,7 @@ export function ConfigStepFour({
       abortedByTimeout = true;
       controller.abort();
     }, 9000);
+    paymentOrderLookupInFlightRef.current = true;
     setIsLoadingOrder(true);
 
     async function loadLatestPixOrder() {
@@ -3816,8 +3829,8 @@ export function ConfigStepFour({
             (guildDraft.lastKnownOrderNumber
               ? guildDraft.lastKnownOrderNumber === remoteOrder.orderNumber
               : false) ||
-            (lastKnownOrderNumber
-              ? lastKnownOrderNumber === remoteOrder.orderNumber
+            (lastKnownOrderNumberRef.current
+              ? lastKnownOrderNumberRef.current === remoteOrder.orderNumber
               : false);
 
           if (!hasTrackedApprovalContext) {
@@ -4003,6 +4016,7 @@ export function ConfigStepFour({
       } finally {
         if (!isMounted) return;
         window.clearTimeout(timeoutId);
+        paymentOrderLookupInFlightRef.current = false;
         setIsLoadingOrder(false);
       }
     }
@@ -4013,6 +4027,7 @@ export function ConfigStepFour({
       isMounted = false;
       window.clearTimeout(timeoutId);
       controller.abort();
+      paymentOrderLookupInFlightRef.current = false;
     };
   }, [
     cardPaymentsEnabled,
@@ -4021,7 +4036,6 @@ export function ConfigStepFour({
     initialBillingPeriodCode,
     initialPlanCode,
     isPlanLoading,
-    lastKnownOrderNumber,
     selectedPlanChange.execution,
     selectedPlanChange.immediateSubtotalAmount,
     selectedBillingPeriodCode,
@@ -4090,6 +4104,7 @@ export function ConfigStepFour({
 
   useEffect(() => {
     if (isLoadingOrder || isPreparingBaseOrder || isPlanLoading) return;
+    if (paymentOrderLookupInFlightRef.current) return;
     if (resolvedPlan.isTrial) return;
     if (!resolvedPlan.isAvailable) return;
     if (selectedPlanChange.execution === "schedule_for_renewal") return;
@@ -4106,6 +4121,7 @@ export function ConfigStepFour({
     if (orderBootstrapInFlightRef.current) return;
 
     orderBootstrapInFlightRef.current = true;
+    paymentOrderLookupInFlightRef.current = true;
     setIsPreparingBaseOrder(true);
 
     const controller = new AbortController();
@@ -4169,6 +4185,7 @@ export function ConfigStepFour({
       } finally {
         window.clearTimeout(timeoutId);
         orderBootstrapInFlightRef.current = false;
+        paymentOrderLookupInFlightRef.current = false;
         setIsPreparingBaseOrder(false);
       }
     })();
@@ -4177,6 +4194,7 @@ export function ConfigStepFour({
       controller.abort();
       window.clearTimeout(timeoutId);
       orderBootstrapInFlightRef.current = false;
+      paymentOrderLookupInFlightRef.current = false;
     };
   }, [
     guildId,
@@ -4663,6 +4681,7 @@ export function ConfigStepFour({
       clearCheckoutStatusQuery();
       paymentPollingInFlightRef.current = false;
       orderBootstrapInFlightRef.current = false;
+      paymentOrderLookupInFlightRef.current = false;
       forceNewCheckoutRef.current = false;
       setPixOrder(null);
       setLastKnownOrderNumber(null);
@@ -4753,6 +4772,7 @@ export function ConfigStepFour({
 
       paymentPollingInFlightRef.current = false;
       orderBootstrapInFlightRef.current = false;
+      paymentOrderLookupInFlightRef.current = false;
       lastHandledCardRedirectKeyRef.current = 0;
       lastAutoResolvedPendingCardOrderRef.current = null;
       if (trialActivationRedirectTimeoutRef.current !== null) {
@@ -4826,6 +4846,7 @@ export function ConfigStepFour({
 
       paymentPollingInFlightRef.current = false;
       orderBootstrapInFlightRef.current = false;
+      paymentOrderLookupInFlightRef.current = false;
       lastHandledCardRedirectKeyRef.current = 0;
       lastAutoResolvedPendingCardOrderRef.current = null;
       if (trialActivationRedirectTimeoutRef.current !== null) {
@@ -5257,6 +5278,7 @@ export function ConfigStepFour({
 
     paymentPollingInFlightRef.current = false;
     orderBootstrapInFlightRef.current = false;
+    paymentOrderLookupInFlightRef.current = false;
     lastHandledCardRedirectKeyRef.current = 0;
     lastAutoResolvedPendingCardOrderRef.current = null;
 

@@ -75,7 +75,10 @@ import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
 } from "@/lib/security/errors";
-import { ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
+import {
+  applyNoStoreHeaders,
+  ensureSameOriginJsonMutationRequest,
+} from "@/lib/security/http";
 import {
   attachRequestId,
   createSecurityRequestContext,
@@ -83,6 +86,7 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+import { runCoalescedPaymentRequest } from "@/lib/payments/requestCoalescing";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CreatePixPaymentBody = {
@@ -133,10 +137,15 @@ type PaymentOrderRecord = {
 };
 
 type PaymentOrderEventPayload = Record<string, unknown>;
+type JsonRouteResolution = {
+  body: Record<string, unknown>;
+  status?: number;
+};
 
 const DEFAULT_PIX_CURRENCY = "BRL";
 const PENDING_REUSE_WINDOW_MS = 25 * 60 * 1000;
 const ORDER_EXPIRATION_SAFETY_BUFFER_MS = 45 * 1000;
+const PAYMENT_ROUTE_COALESCE_TTL_MS = 1500;
 const PAYMENT_ORDER_SELECT_COLUMNS =
   `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_payload, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
@@ -257,6 +266,69 @@ function parseAmount(amount: string | number) {
 function roundCurrencyAmount(amount: number) {
   if (!Number.isFinite(amount)) return 0;
   return Math.round(amount * 100) / 100;
+}
+
+function normalizeCoalescingText(value: unknown, maxLength = 120) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
+}
+
+function buildPixLookupCoalescingKey(input: {
+  userId: number;
+  guildId: string | null;
+  requestedPlanCode: string | null;
+  requestedBillingPeriodCode: string | null;
+  orderCode: number | null;
+  checkoutToken: string | null;
+  forceNew: boolean;
+}) {
+  return createStablePaymentIdempotencyKey({
+    namespace: "flowdesk-payment-pix-get",
+    parts: [
+      input.userId,
+      input.guildId || "__global__",
+      input.orderCode || null,
+      normalizePlanCode(input.requestedPlanCode) || input.requestedPlanCode || null,
+      normalizePlanBillingPeriodCode(input.requestedBillingPeriodCode) ||
+        input.requestedBillingPeriodCode ||
+        null,
+      input.checkoutToken || null,
+      input.forceNew,
+    ],
+  });
+}
+
+function buildPixMutationCoalescingKey(input: {
+  userId: number;
+  guildId: string | null;
+  requestedPlanCode: unknown;
+  requestedBillingPeriodCode: unknown;
+  payerName: string | null;
+  payerDocument: string | null;
+  couponCode: unknown;
+  giftCardCode: unknown;
+  forceNew: boolean;
+}) {
+  return createStablePaymentIdempotencyKey({
+    namespace: "flowdesk-payment-pix-post",
+    parts: [
+      input.userId,
+      input.guildId || "__global__",
+      normalizePlanCode(input.requestedPlanCode) ||
+        normalizeCoalescingText(input.requestedPlanCode, 48) ||
+        null,
+      normalizePlanBillingPeriodCode(input.requestedBillingPeriodCode) ||
+        normalizeCoalescingText(input.requestedBillingPeriodCode, 48) ||
+        null,
+      normalizeCoalescingText(input.payerName, 120),
+      input.payerDocument || null,
+      normalizeCoalescingText(input.couponCode, 64),
+      normalizeCoalescingText(input.giftCardCode, 64),
+      input.forceNew,
+    ],
+  });
 }
 
 function resolveFlowPointsGrantedFromSubtotal(input: {
@@ -957,75 +1029,92 @@ async function createDraftOrderForCheckout(input: {
   plan: PlanPricingDefinition;
   providerPayload?: Record<string, unknown>;
 }) {
-  const supabase = getSupabaseAdminClientOrThrow();
-
-  const createdOrderResult = await supabase
-    .from("payment_orders")
-    .insert({
-      user_id: input.userId,
-      guild_id: input.guildId,
-      payment_method: "pix",
-      status: "pending",
-      amount: input.amount,
-      currency: input.currency,
-      plan_code: input.plan.code,
-      plan_name: input.plan.name,
-      plan_billing_cycle_days: input.plan.billingCycleDays,
-      plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
-      plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
-      plan_max_automations: input.plan.entitlements.maxAutomations,
-      plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
-      provider: "mercado_pago",
-      expires_at: resolveUnpaidSetupExpiresAt(),
-      provider_payload: {
-        source: "flowdesk_checkout",
-        step: 4,
-        precreated: true,
-        plan: {
-          code: input.plan.code,
-          name: input.plan.name,
-          billingCycleDays: input.plan.billingCycleDays,
-          entitlements: {
-            ...input.plan.entitlements,
-          },
-        },
-        ...(input.providerPayload || {}),
-      },
-    })
-    .select(PAYMENT_ORDER_SELECT_COLUMNS)
-    .single<PaymentOrderRecord>();
-
-  if (createdOrderResult.error || !createdOrderResult.data) {
-    if (isUniqueConstraintError(createdOrderResult.error)) {
-      const existingDraftOrder = await getLatestPendingDraftOrderForUserAndGuild(
+  return runCoalescedPaymentRequest<PaymentOrderRecord>({
+    key: createStablePaymentIdempotencyKey({
+      namespace: "flowdesk-payment-draft-create",
+      parts: [
         input.userId,
-        input.guildId,
-        true,
-      );
+        input.guildId || "__global__",
+        input.plan.code,
+        input.plan.billingCycleDays,
+        input.amount,
+        input.currency,
+        JSON.stringify(input.providerPayload || {}),
+      ],
+    }),
+    ttlMs: PAYMENT_ROUTE_COALESCE_TTL_MS,
+    producer: async () => {
+      const supabase = getSupabaseAdminClientOrThrow();
 
-      if (existingDraftOrder) {
-        return reuseDraftOrderForCheckout({
-          order: existingDraftOrder,
+      const createdOrderResult = await supabase
+        .from("payment_orders")
+        .insert({
+          user_id: input.userId,
+          guild_id: input.guildId,
+          payment_method: "pix",
+          status: "pending",
           amount: input.amount,
           currency: input.currency,
-          plan: input.plan,
-          providerPayload: input.providerPayload,
-        });
+          plan_code: input.plan.code,
+          plan_name: input.plan.name,
+          plan_billing_cycle_days: input.plan.billingCycleDays,
+          plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
+          plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
+          plan_max_automations: input.plan.entitlements.maxAutomations,
+          plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
+          provider: "mercado_pago",
+          expires_at: resolveUnpaidSetupExpiresAt(),
+          provider_payload: {
+            source: "flowdesk_checkout",
+            step: 4,
+            precreated: true,
+            plan: {
+              code: input.plan.code,
+              name: input.plan.name,
+              billingCycleDays: input.plan.billingCycleDays,
+              entitlements: {
+                ...input.plan.entitlements,
+              },
+            },
+            ...(input.providerPayload || {}),
+          },
+        })
+        .select(PAYMENT_ORDER_SELECT_COLUMNS)
+        .single<PaymentOrderRecord>();
+
+      if (createdOrderResult.error || !createdOrderResult.data) {
+        if (isUniqueConstraintError(createdOrderResult.error)) {
+          const existingDraftOrder = await getLatestPendingDraftOrderForUserAndGuild(
+            input.userId,
+            input.guildId,
+            true,
+          );
+
+          if (existingDraftOrder) {
+            return reuseDraftOrderForCheckout({
+              order: existingDraftOrder,
+              amount: input.amount,
+              currency: input.currency,
+              plan: input.plan,
+              providerPayload: input.providerPayload,
+            });
+          }
+        }
+
+        throw new Error(createdOrderResult.error?.message || "Falha ao iniciar pedido.");
       }
-    }
 
-    throw new Error(createdOrderResult.error?.message || "Falha ao iniciar pedido.");
-  }
+      await createPaymentOrderEvent(createdOrderResult.data.id, "order_created", {
+        orderNumber: createdOrderResult.data.order_number,
+        guildId: input.guildId,
+        userId: input.userId,
+        precreated: true,
+      });
 
-  await createPaymentOrderEvent(createdOrderResult.data.id, "order_created", {
-    orderNumber: createdOrderResult.data.order_number,
-    guildId: input.guildId,
-    userId: input.userId,
-    precreated: true,
+      invalidatePaymentReadCachesForOrder(createdOrderResult.data);
+      return createdOrderResult.data;
+    },
   });
-
-  invalidatePaymentReadCachesForOrder(createdOrderResult.data);
-  return createdOrderResult.data;
 }
 
 async function reuseDraftOrderForCheckout(input: {
@@ -1035,64 +1124,84 @@ async function reuseDraftOrderForCheckout(input: {
   plan: PlanPricingDefinition;
   providerPayload?: Record<string, unknown>;
 }) {
-  const supabase = getSupabaseAdminClientOrThrow();
+  return runCoalescedPaymentRequest<PaymentOrderRecord>({
+    key: createStablePaymentIdempotencyKey({
+      namespace: "flowdesk-payment-draft-reuse",
+      parts: [
+        input.order.id,
+        input.plan.code,
+        input.plan.billingCycleDays,
+        input.amount,
+        input.currency,
+        JSON.stringify(input.providerPayload || {}),
+      ],
+    }),
+    ttlMs: PAYMENT_ROUTE_COALESCE_TTL_MS,
+    producer: async () => {
+      const supabase = getSupabaseAdminClientOrThrow();
 
-  const updatedOrderResult = await supabase
-    .from("payment_orders")
-    .update({
-      payment_method: "pix",
-      status: "pending",
-      amount: input.amount,
-      currency: input.currency,
-      plan_code: input.plan.code,
-      plan_name: input.plan.name,
-      plan_billing_cycle_days: input.plan.billingCycleDays,
-      plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
-      plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
-      plan_max_automations: input.plan.entitlements.maxAutomations,
-      plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
-      payer_name: null,
-      payer_document: null,
-      payer_document_type: null,
-      provider_status: null,
-      provider_status_detail: null,
-      provider_payload: {
-        source: "flowdesk_checkout",
-        step: 4,
-        precreated: true,
-        refreshedForPlanSwitch: true,
-        plan: {
-          code: input.plan.code,
-          name: input.plan.name,
-          billingCycleDays: input.plan.billingCycleDays,
-          entitlements: {
-            ...input.plan.entitlements,
+      const updatedOrderResult = await supabase
+        .from("payment_orders")
+        .update({
+          payment_method: "pix",
+          status: "pending",
+          amount: input.amount,
+          currency: input.currency,
+          plan_code: input.plan.code,
+          plan_name: input.plan.name,
+          plan_billing_cycle_days: input.plan.billingCycleDays,
+          plan_max_licensed_servers: input.plan.entitlements.maxLicensedServers,
+          plan_max_active_tickets: input.plan.entitlements.maxActiveTickets,
+          plan_max_automations: input.plan.entitlements.maxAutomations,
+          plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
+          payer_name: null,
+          payer_document: null,
+          payer_document_type: null,
+          provider_status: null,
+          provider_status_detail: null,
+          provider_payload: {
+            source: "flowdesk_checkout",
+            step: 4,
+            precreated: true,
+            refreshedForPlanSwitch: true,
+            plan: {
+              code: input.plan.code,
+              name: input.plan.name,
+              billingCycleDays: input.plan.billingCycleDays,
+              entitlements: {
+                ...input.plan.entitlements,
+              },
+            },
+            ...(input.providerPayload || {}),
           },
+          expires_at: resolveUnpaidSetupExpiresAt(input.order.created_at),
+        })
+        .eq("id", input.order.id)
+        .select(PAYMENT_ORDER_SELECT_COLUMNS)
+        .single<PaymentOrderRecord>();
+
+      if (updatedOrderResult.error || !updatedOrderResult.data) {
+        throw new Error(
+          updatedOrderResult.error?.message ||
+            "Falha ao atualizar o pedido base para o plano selecionado.",
+        );
+      }
+
+      await createPaymentOrderEventSafe(
+        updatedOrderResult.data.id,
+        "order_base_retargeted",
+        {
+          orderNumber: updatedOrderResult.data.order_number,
+          planCode: input.plan.code,
+          amount: input.amount,
+          currency: input.currency,
         },
-        ...(input.providerPayload || {}),
-      },
-      expires_at: resolveUnpaidSetupExpiresAt(input.order.created_at),
-    })
-    .eq("id", input.order.id)
-    .select(PAYMENT_ORDER_SELECT_COLUMNS)
-    .single<PaymentOrderRecord>();
+      );
 
-  if (updatedOrderResult.error || !updatedOrderResult.data) {
-    throw new Error(
-      updatedOrderResult.error?.message ||
-        "Falha ao atualizar o pedido base para o plano selecionado.",
-    );
-  }
-
-  await createPaymentOrderEventSafe(updatedOrderResult.data.id, "order_base_retargeted", {
-    orderNumber: updatedOrderResult.data.order_number,
-    planCode: input.plan.code,
-    amount: input.amount,
-    currency: input.currency,
+      invalidatePaymentReadCachesForOrder(updatedOrderResult.data);
+      return updatedOrderResult.data;
+    },
   });
-
-  invalidatePaymentReadCachesForOrder(updatedOrderResult.data);
-  return updatedOrderResult.data;
 }
 
 async function finalizeCreditCoveredCheckoutOrder(input: {
@@ -1172,6 +1281,13 @@ async function finalizeCreditCoveredCheckoutOrder(input: {
 }
 
 export async function GET(request: Request) {
+  const requestContext = createSecurityRequestContext(request);
+  const respond = (body: unknown, init?: ResponseInit) =>
+    attachRequestId(
+      applyNoStoreHeaders(NextResponse.json(body, init)),
+      requestContext.requestId,
+    );
+
   try {
     const url = new URL(request.url);
     const guildIdFromQuery = normalizeGuildId(url.searchParams.get("guildId"));
@@ -1183,29 +1299,26 @@ export async function GET(request: Request) {
     );
     const forceNew = parseForceNewFlag(url.searchParams.get("forceNew"));
 
-    const sessionData = await resolveSessionAccessToken();
-    if (!sessionData?.authSession) {
-      return NextResponse.json(
-        { ok: false, message: "Nao autenticado." },
-        { status: 401 },
-      );
-    }
-
     const guildId = guildIdFromQuery;
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {
-      return access.response;
+      return attachRequestId(
+        applyNoStoreHeaders(access.response),
+        requestContext.requestId,
+      );
     }
+
+    const userId = access.context.sessionData.authSession.user.id;
 
     if (orderCodeFromQuery) {
       const foundOrderByCode = await getOrderByCodeForUserAndGuild(
-        sessionData.authSession.user.id,
+        userId,
         guildId,
         orderCodeFromQuery,
       );
       if (!foundOrderByCode.order) {
-        return NextResponse.json(
+        return respond(
           {
             ok: false,
             message: foundOrderByCode.foreignOwner
@@ -1219,7 +1332,7 @@ export async function GET(request: Request) {
       let orderByCode = foundOrderByCode.order;
       const tokenValidation = verifyCheckoutAccessToken(orderByCode, checkoutToken);
       if (!tokenValidation.ok) {
-        return NextResponse.json(
+        return respond(
           {
             ok: false,
             message: resolveCheckoutLinkFailureMessage(tokenValidation.reason),
@@ -1248,7 +1361,7 @@ export async function GET(request: Request) {
           ? await getCoverageForApprovedOrder(securedOrder.order)
           : null;
 
-      return NextResponse.json({
+      return respond({
         ok: true,
         order: toApiOrder(
           securedOrder.order,
@@ -1261,18 +1374,18 @@ export async function GET(request: Request) {
     }
 
     let latestOrder = await getLatestOrderForUserAndGuild(
-      sessionData.authSession.user.id,
+      userId,
       guildId,
     );
     const checkoutPlan = await resolveCheckoutPlanForGuild({
-      userId: sessionData.authSession.user.id,
+      userId,
       guildId,
       requestedPlanCode,
       requestedBillingPeriodCode,
     });
 
     if (checkoutPlan.currentPlanRepurchaseBlocked) {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message:
@@ -1283,7 +1396,7 @@ export async function GET(request: Request) {
     }
 
     if (checkoutPlan.planChange.execution === "schedule_for_renewal") {
-      return NextResponse.json({
+      return respond({
         ok: true,
         order: null,
         requiresScheduledChange: true,
@@ -1293,7 +1406,7 @@ export async function GET(request: Request) {
     }
 
     if (checkoutPlan.plan.isTrial) {
-      return NextResponse.json(
+      return respond(
         {
           ok: false,
           message:
@@ -1304,7 +1417,7 @@ export async function GET(request: Request) {
     }
 
     if (checkoutPlan.amount <= 0) {
-      return NextResponse.json({
+      return respond({
         ok: true,
         order: null,
         coveredByCreditsPreview: true,
@@ -1323,7 +1436,7 @@ export async function GET(request: Request) {
         latestOrder = await reconcilePixOrderFromProvider(latestOrder, "poll");
         if (latestOrder?.status === "approved") {
           // Garante cache limpo se o polling acabou de aprovar o pedido
-          clearPlanStateCacheForUser(sessionData.authSession.user.id);
+          clearPlanStateCacheForUser(userId);
         }
       } catch {
         await createPaymentOrderEventSafe(
@@ -1365,7 +1478,7 @@ export async function GET(request: Request) {
         });
       } else {
         order = await createDraftOrderForCheckout({
-          userId: sessionData.authSession.user.id,
+          userId,
           guildId,
           amount: checkoutPlan.amount,
           currency: checkoutPlan.currency,
@@ -1395,7 +1508,7 @@ export async function GET(request: Request) {
       } else {
         // PIX já foi gerado ou rascunho expirado: cria novo
         order = await createDraftOrderForCheckout({
-          userId: sessionData.authSession.user.id,
+          userId,
           guildId,
           amount: checkoutPlan.amount,
           currency: checkoutPlan.currency,
@@ -1414,7 +1527,7 @@ export async function GET(request: Request) {
       )
     ) {
       order = await createDraftOrderForCheckout({
-        userId: sessionData.authSession.user.id,
+        userId,
         guildId,
         amount: checkoutPlan.amount,
         currency: checkoutPlan.currency,
@@ -1426,7 +1539,7 @@ export async function GET(request: Request) {
       });
     } else if (!order) {
       order = await createDraftOrderForCheckout({
-        userId: sessionData.authSession.user.id,
+        userId,
         guildId,
         amount: checkoutPlan.amount,
         currency: checkoutPlan.currency,
@@ -1444,7 +1557,7 @@ export async function GET(request: Request) {
       invalidateOtherOrders: forceNew,
     });
 
-    return NextResponse.json({
+    return respond({
       ok: true,
       order: toApiOrder(
         securedOrder.order,
@@ -1455,7 +1568,7 @@ export async function GET(request: Request) {
       licenseExpiresAt: null,
     });
   } catch (error) {
-    return NextResponse.json(
+    return respond(
       {
         ok: false,
         message: sanitizeErrorMessage(error, "Erro ao carregar pagamento PIX."),
@@ -1469,11 +1582,19 @@ export async function POST(request: Request) {
   const baseRequestContext = createSecurityRequestContext(request);
   let auditContext = baseRequestContext;
   const respond = (body: unknown, init?: ResponseInit) =>
-    attachRequestId(NextResponse.json(body, init), baseRequestContext.requestId);
+    attachRequestId(
+      applyNoStoreHeaders(NextResponse.json(body, init)),
+      baseRequestContext.requestId,
+    );
 
   try {
     const securityResponse = ensureSameOriginJsonMutationRequest(request);
-    if (securityResponse) return attachRequestId(securityResponse, baseRequestContext.requestId);
+    if (securityResponse) {
+      return attachRequestId(
+        applyNoStoreHeaders(securityResponse),
+        baseRequestContext.requestId,
+      );
+    }
 
     let body: CreatePixPaymentBody = {};
     try {
@@ -1492,7 +1613,10 @@ export async function POST(request: Request) {
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {
-      return attachRequestId(access.response, baseRequestContext.requestId);
+      return attachRequestId(
+        applyNoStoreHeaders(access.response),
+        baseRequestContext.requestId,
+      );
     }
     auditContext = extendSecurityRequestContext(baseRequestContext, {
       sessionId: access.context.sessionData.authSession.id,
