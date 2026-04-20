@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { maskAuthEmail, normalizeAuthEmail } from "@/lib/auth/email";
 import { sendLoginOtpEmail } from "@/lib/mail/authEmail";
+import {
+  constantTimeEqualText,
+  decryptFlowSecureValue,
+  encryptFlowSecureValue,
+  hashFlowSecureValue,
+} from "@/lib/security/flowSecure";
 
 type EmailOtpChallengeRow = {
   id: string;
@@ -47,6 +53,10 @@ export class EmailOtpError extends Error {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function getOtpAlphabet() {
   return (
     process.env.AUTH_EMAIL_OTP_ALPHABET?.trim().toUpperCase() ||
@@ -78,15 +88,6 @@ function getOtpMaxResends() {
   return Number.isInteger(value) && value >= 0 ? value : 4;
 }
 
-function resolveOtpSecret() {
-  return (
-    process.env.AUTH_EMAIL_OTP_SECRET?.trim() ||
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.DISCORD_CLIENT_SECRET?.trim() ||
-    "flowdesk-email-otp-secret"
-  );
-}
-
 function generateOtpCode() {
   const alphabet = getOtpAlphabet();
   const length = getOtpLength();
@@ -105,10 +106,14 @@ function normalizeOtpCode(code: string) {
 }
 
 function hashOtpCode(code: string) {
-  return crypto
-    .createHmac("sha256", resolveOtpSecret())
-    .update(normalizeOtpCode(code))
-    .digest("hex");
+  const hash = hashFlowSecureValue(normalizeOtpCode(code), {
+    purpose: "auth_email_otp_code",
+    encoding: "hex",
+  });
+  if (!hash) {
+    throw new Error("Nao foi possivel proteger o codigo OTP.");
+  }
+  return hash;
 }
 
 function getOtpExpiresAtIso() {
@@ -149,20 +154,33 @@ async function sendOtpEmailForChallenge(email: string, code: string) {
 }
 
 function parsePendingOtpSessionContext(metadata: unknown): PendingOtpSessionContext | null {
-  if (!metadata || typeof metadata !== "object") {
+  if (!isRecord(metadata)) {
     return null;
   }
 
-  const session =
-    "session" in (metadata as Record<string, unknown>)
-      ? (metadata as Record<string, unknown>).session
-      : null;
+  const encryptedSession =
+    typeof metadata.session_encrypted === "string" ? metadata.session_encrypted : null;
+  if (encryptedSession) {
+    try {
+      const decrypted = decryptFlowSecureValue(encryptedSession, {
+        purpose: "auth_email_otp_session",
+      });
+      if (!decrypted) {
+        return null;
+      }
 
-  if (!session || typeof session !== "object") {
+      return parsePendingOtpSessionContext(JSON.parse(decrypted));
+    } catch {
+      return null;
+    }
+  }
+
+  const session = isRecord(metadata.session) ? metadata.session : metadata;
+  if (!isRecord(session)) {
     return null;
   }
 
-  const authMethod = (session as Record<string, unknown>).authMethod;
+  const authMethod = session.authMethod;
   if (
     authMethod !== "discord" &&
     authMethod !== "email" &&
@@ -172,10 +190,10 @@ function parsePendingOtpSessionContext(metadata: unknown): PendingOtpSessionCont
     return null;
   }
 
-  const nextPath = (session as Record<string, unknown>).nextPath;
-  const discordAccessToken = (session as Record<string, unknown>).discordAccessToken;
-  const discordRefreshToken = (session as Record<string, unknown>).discordRefreshToken;
-  const discordTokenExpiresAt = (session as Record<string, unknown>).discordTokenExpiresAt;
+  const nextPath = session.nextPath;
+  const discordAccessToken = session.discordAccessToken;
+  const discordRefreshToken = session.discordRefreshToken;
+  const discordTokenExpiresAt = session.discordTokenExpiresAt;
 
   return {
     authMethod,
@@ -193,6 +211,20 @@ function parsePendingOtpSessionContext(metadata: unknown): PendingOtpSessionCont
         ? discordTokenExpiresAt
         : null,
   };
+}
+
+function serializeOtpMetadata(metadata: Record<string, unknown> | null | undefined) {
+  const payload = isRecord(metadata) ? { ...metadata } : {};
+  const session = parsePendingOtpSessionContext(payload);
+
+  if (session) {
+    payload.session_encrypted = encryptFlowSecureValue(JSON.stringify(session), {
+      purpose: "auth_email_otp_session",
+    });
+    delete payload.session;
+  }
+
+  return payload;
 }
 
 export async function createLoginOtpChallenge(input: {
@@ -222,7 +254,7 @@ export async function createLoginOtpChallenge(input: {
       user_agent: input.userAgent,
       max_attempts: 6,
       expires_at: expiresAt,
-      metadata: input.metadata || {},
+      metadata: serializeOtpMetadata(input.metadata || {}),
     })
     .select("id")
     .single<{ id: string }>();
@@ -334,12 +366,7 @@ export async function verifyLoginOtpChallenge(input: {
   }
 
   const candidateHash = hashOtpCode(normalizedCode);
-  const matches =
-    candidateHash.length === challenge.code_hash.length &&
-    crypto.timingSafeEqual(
-      Buffer.from(candidateHash, "utf8"),
-      Buffer.from(challenge.code_hash, "utf8"),
-    );
+  const matches = constantTimeEqualText(candidateHash, challenge.code_hash);
 
   const supabase = getSupabaseAdminClientOrThrow();
 

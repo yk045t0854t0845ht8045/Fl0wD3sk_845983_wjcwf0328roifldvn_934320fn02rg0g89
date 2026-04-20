@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { isDatabaseAvailabilityError } from "@/lib/security/databaseAvailability";
+import { redactSensitiveRecord } from "@/lib/security/flowSecure";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export type SecurityRequestContext = {
@@ -128,6 +129,9 @@ export async function logSecurityAuditEvent(
   input: AuditEventInput,
 ) {
   const supabase = getSupabaseAdminClientOrThrow();
+  const metadata = input.metadata
+    ? redactSensitiveRecord(input.metadata)
+    : {};
   const result = await supabase.from("auth_security_events").insert({
     request_id: context.requestId,
     session_id: context.sessionId,
@@ -139,7 +143,7 @@ export async function logSecurityAuditEvent(
     request_path: context.path,
     ip_fingerprint: context.ipFingerprint,
     user_agent: context.userAgent,
-    metadata: input.metadata || {},
+    metadata,
   });
 
   if (result.error) {

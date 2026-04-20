@@ -79,6 +79,11 @@ import {
   sanitizeErrorMessage,
 } from "@/lib/security/errors";
 import {
+  flowSecureDto,
+  FlowSecureDtoError,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import {
   resolveDatabaseFailureMessage,
   resolveDatabaseFailureStatus,
 } from "@/lib/security/databaseAvailability";
@@ -147,10 +152,6 @@ export type PaymentOrderRecord = {
 };
 
 type PaymentOrderEventPayload = Record<string, unknown>;
-type JsonRouteResolution = {
-  body: Record<string, unknown>;
-  status?: number;
-};
 
 const DEFAULT_PIX_CURRENCY = "BRL";
 const PENDING_REUSE_WINDOW_MS = 25 * 60 * 1000;
@@ -286,69 +287,6 @@ function parseAmount(amount: string | number) {
 function roundCurrencyAmount(amount: number) {
   if (!Number.isFinite(amount)) return 0;
   return Math.round(amount * 100) / 100;
-}
-
-function normalizeCoalescingText(value: unknown, maxLength = 120) {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) return null;
-  return normalized.slice(0, maxLength);
-}
-
-function buildPixLookupCoalescingKey(input: {
-  userId: number;
-  guildId: string | null;
-  requestedPlanCode: string | null;
-  requestedBillingPeriodCode: string | null;
-  orderCode: number | null;
-  checkoutToken: string | null;
-  forceNew: boolean;
-}) {
-  return createStablePaymentIdempotencyKey({
-    namespace: "flowdesk-payment-pix-get",
-    parts: [
-      input.userId,
-      input.guildId || "__global__",
-      input.orderCode || null,
-      normalizePlanCode(input.requestedPlanCode) || input.requestedPlanCode || null,
-      normalizePlanBillingPeriodCode(input.requestedBillingPeriodCode) ||
-        input.requestedBillingPeriodCode ||
-        null,
-      input.checkoutToken || null,
-      input.forceNew,
-    ],
-  });
-}
-
-function buildPixMutationCoalescingKey(input: {
-  userId: number;
-  guildId: string | null;
-  requestedPlanCode: unknown;
-  requestedBillingPeriodCode: unknown;
-  payerName: string | null;
-  payerDocument: string | null;
-  couponCode: unknown;
-  giftCardCode: unknown;
-  forceNew: boolean;
-}) {
-  return createStablePaymentIdempotencyKey({
-    namespace: "flowdesk-payment-pix-post",
-    parts: [
-      input.userId,
-      input.guildId || "__global__",
-      normalizePlanCode(input.requestedPlanCode) ||
-        normalizeCoalescingText(input.requestedPlanCode, 48) ||
-        null,
-      normalizePlanBillingPeriodCode(input.requestedBillingPeriodCode) ||
-        normalizeCoalescingText(input.requestedBillingPeriodCode, 48) ||
-        null,
-      normalizeCoalescingText(input.payerName, 120),
-      input.payerDocument || null,
-      normalizeCoalescingText(input.couponCode, 64),
-      normalizeCoalescingText(input.giftCardCode, 64),
-      input.forceNew,
-    ],
-  });
 }
 
 export function resolveFlowPointsGrantedFromSubtotal(input: {
@@ -1673,10 +1611,57 @@ export async function POST(request: Request) {
 
     let body: CreatePixPaymentBody = {};
     try {
-      body = (await request.json()) as CreatePixPaymentBody;
-    } catch {
+      body = parseFlowSecureDto<CreatePixPaymentBody>(
+        await request.json(),
+        {
+          guildId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          planCode: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 80,
+            }),
+          ),
+          billingPeriodCode: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 40,
+            }),
+          ),
+          payerName: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 120,
+            }),
+          ),
+          payerDocument: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          couponCode: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 80,
+            }),
+          ),
+          giftCardCode: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 80,
+            }),
+          ),
+          forceNew: flowSecureDto.optional(flowSecureDto.unknown()),
+        },
+        {
+          rejectUnknown: true,
+        },
+      );
+    } catch (error) {
+      const message =
+        error instanceof FlowSecureDtoError
+          ? error.issues[0] || error.message
+          : "Payload JSON invalido.";
       return respond(
-        { ok: false, message: "Payload JSON invalido." },
+        { ok: false, message },
         { status: 400 },
       );
     }

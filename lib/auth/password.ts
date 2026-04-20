@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import { validatePasswordPolicy } from "@/lib/auth/passwordPolicy";
 
 const PASSWORD_KEY_LENGTH = 64;
-const PASSWORD_HASH_PREFIX = "scrypt";
-const DEFAULT_PASSWORD_SCRYPT_N = 16_384;
+const PASSWORD_HASH_PREFIX = "scryptv2";
+const LEGACY_PASSWORD_HASH_PREFIX = "scrypt";
+const DEFAULT_PASSWORD_SCRYPT_N = 32_768;
 const DEFAULT_PASSWORD_SCRYPT_R = 8;
 const DEFAULT_PASSWORD_SCRYPT_P = 1;
 const PASSWORD_SCRYPT_MIN_MAXMEM_BYTES = 32 * 1024 * 1024;
@@ -17,6 +17,27 @@ type ResolvedScryptParams = {
   p: number;
   maxmem: number;
 };
+
+function resolvePasswordPepper() {
+  const candidates = [
+    process.env.AUTH_PASSWORD_PEPPER,
+    process.env.FLOWSECURE_MASTER_KEY,
+    process.env.AUTH_SECRET,
+    process.env.NEXTAUTH_SECRET,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return "flowdesk-password-pepper-dev";
+  }
+
+  return null;
+}
 
 function readPositiveIntegerEnv(name: string, fallback: number) {
   const rawValue = process.env[name]?.trim();
@@ -156,13 +177,30 @@ function scryptAsync(
   });
 }
 
+function preparePasswordForPrefix(password: string, prefix: string) {
+  if (prefix !== PASSWORD_HASH_PREFIX) {
+    return password;
+  }
+
+  const pepper = resolvePasswordPepper();
+  if (!pepper) {
+    throw new Error("AUTH_PASSWORD_PEPPER/FLOWSECURE_MASTER_KEY nao configurado no ambiente.");
+  }
+
+  return crypto
+    .createHmac("sha256", pepper)
+    .update(password, "utf8")
+    .digest("base64url");
+}
+
 export async function hashPassword(password: string) {
   const scryptParams = resolveDefaultScryptParams();
   const salt = crypto.randomBytes(16);
   let derivedKey: Buffer;
+  const preparedPassword = preparePasswordForPrefix(password, PASSWORD_HASH_PREFIX);
 
   try {
-    derivedKey = (await scryptAsync(password, salt, PASSWORD_KEY_LENGTH, {
+    derivedKey = (await scryptAsync(preparedPassword, salt, PASSWORD_KEY_LENGTH, {
       N: scryptParams.N,
       r: scryptParams.r,
       p: scryptParams.p,
@@ -191,14 +229,9 @@ export async function verifyPassword(
   }
 
   const [prefix, rawN, rawR, rawP, saltBase64, keyBase64] = storedHash.split("$");
-  if (
-    prefix !== PASSWORD_HASH_PREFIX ||
-    !rawN ||
-    !rawR ||
-    !rawP ||
-    !saltBase64 ||
-    !keyBase64
-  ) {
+  const supportsPrefix =
+    prefix === PASSWORD_HASH_PREFIX || prefix === LEGACY_PASSWORD_HASH_PREFIX;
+  if (!supportsPrefix || !rawN || !rawR || !rawP || !saltBase64 || !keyBase64) {
     return false;
   }
 
@@ -213,9 +246,10 @@ export async function verifyPassword(
   const salt = Buffer.from(saltBase64, "base64url");
   const expectedKey = Buffer.from(keyBase64, "base64url");
   let derivedKey: Buffer;
+  const preparedPassword = preparePasswordForPrefix(password, prefix);
 
   try {
-    derivedKey = (await scryptAsync(password, salt, expectedKey.length, {
+    derivedKey = (await scryptAsync(preparedPassword, salt, expectedKey.length, {
       N: scryptParams.N,
       r: scryptParams.r,
       p: scryptParams.p,
@@ -230,4 +264,22 @@ export async function verifyPassword(
   }
 
   return crypto.timingSafeEqual(derivedKey, expectedKey);
+}
+
+export function shouldUpgradePasswordHash(storedHash: string | null | undefined) {
+  if (!storedHash || typeof storedHash !== "string") {
+    return true;
+  }
+
+  const [prefix, rawN, rawR, rawP] = storedHash.split("$");
+  if (prefix !== PASSWORD_HASH_PREFIX) {
+    return true;
+  }
+
+  const defaults = resolveDefaultScryptParams();
+  return (
+    Number(rawN) < defaults.N ||
+    Number(rawR) < defaults.r ||
+    Number(rawP) < defaults.p
+  );
 }

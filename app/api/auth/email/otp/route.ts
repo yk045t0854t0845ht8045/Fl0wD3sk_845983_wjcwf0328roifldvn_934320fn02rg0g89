@@ -10,6 +10,11 @@ import { verifyEmailLoginOtp } from "@/lib/auth/emailAuth";
 import { EmailOtpError } from "@/lib/auth/emailOtp";
 import { createSessionForUser } from "@/lib/auth/session";
 import { issueTrustedDevice } from "@/lib/auth/trustedDevice";
+import {
+  flowSecureDto,
+  FlowSecureDtoError,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -68,25 +73,34 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const payload = await request.json().catch(() => ({}));
-    const challengeId =
-      payload && typeof payload === "object" && typeof payload.challengeId === "string"
-        ? payload.challengeId.trim()
-        : "";
-    const code =
-      payload && typeof payload === "object" && typeof payload.code === "string"
-        ? payload.code
-        : "";
-    const nextPath =
-      payload && typeof payload === "object" && typeof payload.next === "string"
-        ? normalizeInternalNextPath(payload.next)
-        : null;
-    const rememberSession =
-      payload &&
-      typeof payload === "object" &&
-      typeof payload.rememberSession === "boolean"
-        ? payload.rememberSession
-        : false;
+    const payload = parseFlowSecureDto(
+      await request.json().catch(() => ({})),
+      {
+        challengeId: flowSecureDto.string({
+          maxLength: 120,
+        }),
+        code: flowSecureDto.string({
+          maxLength: 16,
+        }),
+        next: flowSecureDto.optional(
+          flowSecureDto.string({
+            maxLength: 2048,
+          }),
+        ),
+        rememberSession: flowSecureDto.optional(
+          flowSecureDto.boolean({
+            defaultValue: false,
+          }),
+        ),
+      },
+      {
+        rejectUnknown: true,
+      },
+    );
+    const challengeId = payload.challengeId;
+    const code = payload.code;
+    const nextPath = payload.next ? normalizeInternalNextPath(payload.next) : null;
+    const rememberSession = payload.rememberSession ?? false;
 
     const verification = await verifyEmailLoginOtp(challengeId, code);
     const authenticatedContext = extendSecurityRequestContext(requestContext, {
@@ -142,8 +156,17 @@ export async function POST(request: NextRequest) {
     return attachRequestId(response, authenticatedContext.requestId);
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nao foi possivel validar o codigo.";
-    const statusCode = error instanceof EmailOtpError ? error.statusCode : 400;
+      error instanceof FlowSecureDtoError
+        ? error.issues[0] || error.message
+        : error instanceof Error
+          ? error.message
+          : "Nao foi possivel validar o codigo.";
+    const statusCode =
+      error instanceof FlowSecureDtoError
+        ? error.statusCode
+        : error instanceof EmailOtpError
+          ? error.statusCode
+          : 400;
     const retryAfterSeconds =
       error instanceof EmailOtpError ? error.retryAfterSeconds : null;
 

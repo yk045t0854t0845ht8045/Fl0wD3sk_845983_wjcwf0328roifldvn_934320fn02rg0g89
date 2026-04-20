@@ -13,6 +13,11 @@ import {
   authenticateEmailPasswordAndIssueOtp,
   createEmailSession,
 } from "@/lib/auth/emailAuth";
+import {
+  flowSecureDto,
+  FlowSecureDtoError,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -111,25 +116,63 @@ export async function POST(request: NextRequest) {
   }
 
   const requestContext = createSecurityRequestContext(request);
-  const payload = await request.json().catch(() => ({}));
-  const email =
-    payload && typeof payload === "object" && typeof payload.email === "string"
-      ? payload.email
-      : "";
-  const password =
-    payload && typeof payload === "object" && typeof payload.password === "string"
-      ? payload.password
-      : "";
-  const confirmPassword =
-    payload &&
-    typeof payload === "object" &&
-    typeof payload.confirmPassword === "string"
-      ? payload.confirmPassword
-      : null;
-  const nextPath =
-    payload && typeof payload === "object" && typeof payload.next === "string"
-      ? normalizeInternalNextPath(payload.next)
-      : null;
+  let payload: {
+    email: string;
+    password: string;
+    confirmPassword?: string | null;
+    next?: string;
+  };
+  try {
+    payload = parseFlowSecureDto(
+      await request.json().catch(() => ({})),
+      {
+        email: flowSecureDto.string({
+          maxLength: 254,
+        }),
+        password: flowSecureDto.string({
+          allowEmpty: true,
+          maxLength: 512,
+        }),
+        confirmPassword: flowSecureDto.optional(
+          flowSecureDto.nullable(
+            flowSecureDto.string({
+              allowEmpty: true,
+              maxLength: 512,
+            }),
+          ),
+        ),
+        next: flowSecureDto.optional(
+          flowSecureDto.string({
+            maxLength: 2048,
+          }),
+        ),
+      },
+      {
+        rejectUnknown: true,
+      },
+    );
+  } catch (error) {
+    const message =
+      error instanceof FlowSecureDtoError
+        ? error.issues[0] || error.message
+        : "Payload invalido.";
+    return attachRequestId(
+      applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message,
+          },
+          { status: 400 },
+        ),
+      ),
+      requestContext.requestId,
+    );
+  }
+  const email = payload.email;
+  const password = payload.password;
+  const confirmPassword = payload.confirmPassword ?? null;
+  const nextPath = payload.next ? normalizeInternalNextPath(payload.next) : null;
   const normalizedEmail = normalizeAuthEmail(email) || email.trim().toLowerCase();
 
   pruneLocalPasswordCooldownMapIfNeeded();

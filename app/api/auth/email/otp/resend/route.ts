@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resendEmailLoginOtp } from "@/lib/auth/emailAuth";
 import { EmailOtpError } from "@/lib/auth/emailOtp";
+import {
+  flowSecureDto,
+  FlowSecureDtoError,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -52,11 +57,18 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const payload = await request.json().catch(() => ({}));
-    const challengeId =
-      payload && typeof payload === "object" && typeof payload.challengeId === "string"
-        ? payload.challengeId.trim()
-        : "";
+    const payload = parseFlowSecureDto(
+      await request.json().catch(() => ({})),
+      {
+        challengeId: flowSecureDto.string({
+          maxLength: 120,
+        }),
+      },
+      {
+        rejectUnknown: true,
+      },
+    );
+    const challengeId = payload.challengeId;
 
     const result = await resendEmailLoginOtp(challengeId);
 
@@ -79,8 +91,17 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nao foi possivel reenviar o codigo.";
-    const statusCode = error instanceof EmailOtpError ? error.statusCode : 400;
+      error instanceof FlowSecureDtoError
+        ? error.issues[0] || error.message
+        : error instanceof Error
+          ? error.message
+          : "Nao foi possivel reenviar o codigo.";
+    const statusCode =
+      error instanceof FlowSecureDtoError
+        ? error.statusCode
+        : error instanceof EmailOtpError
+          ? error.statusCode
+          : 400;
     const retryAfterSeconds =
       error instanceof EmailOtpError ? error.retryAfterSeconds : null;
 

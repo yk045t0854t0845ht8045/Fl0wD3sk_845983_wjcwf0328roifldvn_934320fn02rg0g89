@@ -19,6 +19,11 @@ import {
   buildEmailUsername,
   normalizeAuthEmail,
 } from "@/lib/auth/email";
+import {
+  decryptFlowSecureValue,
+  encryptFlowSecureValue,
+  hashFlowSecureValue,
+} from "@/lib/security/flowSecure";
 import { isDatabaseAvailabilityError } from "@/lib/security/databaseAvailability";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
@@ -58,6 +63,7 @@ export type AuthUserRecord = {
 
 type AuthSessionRecord = {
   id: string;
+  session_token_hash?: string | null;
   created_at?: string | null;
   discord_access_token: string | null;
   discord_refresh_token: string | null;
@@ -111,8 +117,41 @@ const authSessionCache = new Map<string, AuthSessionCacheEntry>();
 const authSessionInflight = new Map<string, Promise<CurrentAuthSession | null>>();
 let authSessionCircuitOpenUntilMs = 0;
 
-function hashToken(token: string) {
+function hashLegacyToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function hashToken(token: string) {
+  const hash = hashFlowSecureValue(token, {
+    purpose: "sensitive_lookup",
+    subcontext: "auth_session_token",
+    encoding: "hex",
+  });
+  if (!hash) {
+    throw new Error("Nao foi possivel proteger o identificador da sessao.");
+  }
+  return `h2:${hash}`;
+}
+
+function buildSessionTokenHashCandidates(token: string) {
+  const primaryHash = hashToken(token);
+  const legacyHash = hashLegacyToken(token);
+  return primaryHash === legacyHash
+    ? [primaryHash]
+    : [primaryHash, legacyHash];
+}
+
+function encryptStoredOAuthToken(token: string | null | undefined) {
+  return encryptFlowSecureValue(token, {
+    purpose: "auth_session_oauth",
+  });
+}
+
+function decryptStoredOAuthToken(token: string | null | undefined) {
+  return decryptFlowSecureValue(token, {
+    purpose: "auth_session_oauth",
+    allowPlaintextFallback: true,
+  });
 }
 
 function cloneAuthSession<T>(value: T): T {
@@ -287,6 +326,11 @@ export async function findReusableDiscordSessionTokensForUser(
   const nowMs = Date.now();
   const excludeSessionId = options?.excludeSessionId || null;
   const candidates = (result.data || [])
+    .map((session) => ({
+      ...session,
+      discord_access_token: decryptStoredOAuthToken(session.discord_access_token),
+      discord_refresh_token: decryptStoredOAuthToken(session.discord_refresh_token),
+    }))
     .filter((session) => session.id !== excludeSessionId)
     .filter(
       (session) =>
@@ -743,8 +787,8 @@ async function createSession(
     user_agent: context.userAgent,
     expires_at: expiresAt,
     auth_method: authMethod,
-    discord_access_token: discordAccessToken,
-    discord_refresh_token: discordRefreshToken,
+    discord_access_token: encryptStoredOAuthToken(discordAccessToken),
+    discord_refresh_token: encryptStoredOAuthToken(discordRefreshToken),
     discord_token_expires_at: discordTokenExpiresAt,
   };
 
@@ -754,10 +798,8 @@ async function createSession(
     insertResult.error &&
     insertResult.error.message.toLowerCase().includes("auth_method")
   ) {
-    const legacyInsertPayload = (({
-      auth_method,
-      ...rest
-    }: typeof insertPayload) => rest)(insertPayload);
+    const legacyInsertPayload = { ...insertPayload } as Record<string, unknown>;
+    delete legacyInsertPayload.auth_method;
     insertResult = await supabase.from("auth_sessions").insert(legacyInsertPayload);
   }
 
@@ -1173,8 +1215,9 @@ export async function getCurrentAuthSessionFromCookie(
     return null;
   }
 
-  const sessionTokenHash = hashToken(sessionCookie);
-  const cacheKey = buildAuthSessionCacheKey(sessionTokenHash, options);
+  const sessionTokenHashes = buildSessionTokenHashCandidates(sessionCookie);
+  const primarySessionTokenHash = sessionTokenHashes[0];
+  const cacheKey = buildAuthSessionCacheKey(primarySessionTokenHash, options);
   const cachedSession = readAuthSessionCache(cacheKey);
   if (cachedSession.hit) {
     return cachedSession.value;
@@ -1197,49 +1240,72 @@ export async function getCurrentAuthSessionFromCookie(
     const nowIso = new Date().toISOString();
 
     const selectColumns = options.fullContext
-      ? "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cache, discord_guilds_cached_at, config_current_step, config_draft, config_context_updated_at, user:auth_users(id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale)"
-      : "id, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cached_at, config_current_step, config_context_updated_at, user:auth_users(id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale)";
+      ? "id, session_token_hash, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cache, discord_guilds_cached_at, config_current_step, config_draft, config_context_updated_at, user:auth_users(id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale)"
+      : "id, session_token_hash, discord_access_token, discord_refresh_token, discord_token_expires_at, active_guild_id, discord_guilds_cached_at, config_current_step, config_context_updated_at, user:auth_users(id, discord_user_id, google_user_id, microsoft_user_id, username, global_name, display_name, avatar, email, email_normalized, email_verified_at, locale)";
 
     try {
       const result = await supabase
         .from("auth_sessions")
         .select(selectColumns)
-        .eq("session_token_hash", sessionTokenHash)
+        .in("session_token_hash", sessionTokenHashes)
         .is("revoked_at", null)
         .gt("expires_at", nowIso)
-        .maybeSingle<AuthSessionRecord>();
+        .limit(2)
+        .returns<AuthSessionRecord[]>();
 
       if (result.error) {
         throw new Error(`Erro ao validar sessao: ${result.error.message}`);
       }
 
-      if (!result.data) {
+      const matchedRecord =
+        (result.data || []).sort((left, right) => {
+          const leftPriority =
+            left.session_token_hash === primarySessionTokenHash ? 0 : 1;
+          const rightPriority =
+            right.session_token_hash === primarySessionTokenHash ? 0 : 1;
+          return leftPriority - rightPriority;
+        })[0] || null;
+
+      if (!matchedRecord) {
         writeAuthSessionCache(cacheKey, null);
         return null;
       }
 
-      const user = unwrapUser(result.data.user);
+      if (
+        matchedRecord.session_token_hash &&
+        matchedRecord.session_token_hash !== primarySessionTokenHash
+      ) {
+        await supabase
+          .from("auth_sessions")
+          .update({
+            session_token_hash: primarySessionTokenHash,
+          })
+          .eq("id", matchedRecord.id)
+          .eq("session_token_hash", matchedRecord.session_token_hash);
+      }
+
+      const user = unwrapUser(matchedRecord.user);
       if (!user) {
         writeAuthSessionCache(cacheKey, null);
         return null;
       }
 
       const session = {
-        id: result.data.id,
+        id: matchedRecord.id,
         user,
-        discordAccessToken: result.data.discord_access_token,
-        discordRefreshToken: result.data.discord_refresh_token,
-        discordTokenExpiresAt: result.data.discord_token_expires_at,
-        activeGuildId: result.data.active_guild_id,
+        discordAccessToken: decryptStoredOAuthToken(matchedRecord.discord_access_token),
+        discordRefreshToken: decryptStoredOAuthToken(matchedRecord.discord_refresh_token),
+        discordTokenExpiresAt: matchedRecord.discord_token_expires_at,
+        activeGuildId: matchedRecord.active_guild_id,
         discordGuildsCache: options.fullContext
-          ? parseDiscordGuildsCache(result.data.discord_guilds_cache)
+          ? parseDiscordGuildsCache(matchedRecord.discord_guilds_cache)
           : null,
-        discordGuildsCachedAt: result.data.discord_guilds_cached_at,
-        configCurrentStep: normalizeConfigStep(result.data.config_current_step) || 1,
+        discordGuildsCachedAt: matchedRecord.discord_guilds_cached_at,
+        configCurrentStep: normalizeConfigStep(matchedRecord.config_current_step) || 1,
         configDraft: options.fullContext
-          ? sanitizeConfigDraft(result.data.config_draft)
+          ? sanitizeConfigDraft(matchedRecord.config_draft)
           : createEmptyConfigDraft(),
-        configContextUpdatedAt: result.data.config_context_updated_at,
+        configContextUpdatedAt: matchedRecord.config_context_updated_at,
       } satisfies CurrentAuthSession;
 
       authSessionCircuitOpenUntilMs = 0;
@@ -1296,8 +1362,8 @@ export async function updateSessionDiscordTokens(
   const result = await supabase
     .from("auth_sessions")
     .update({
-      discord_access_token: tokens.discordAccessToken ?? null,
-      discord_refresh_token: tokens.discordRefreshToken ?? null,
+      discord_access_token: encryptStoredOAuthToken(tokens.discordAccessToken ?? null),
+      discord_refresh_token: encryptStoredOAuthToken(tokens.discordRefreshToken ?? null),
       discord_token_expires_at: tokens.discordTokenExpiresAt ?? null,
     })
     .eq("id", sessionId);
@@ -1423,7 +1489,7 @@ export async function revokeCurrentSessionFromCookie() {
     return false;
   }
 
-  const sessionTokenHash = hashToken(sessionCookie);
+  const sessionTokenHashes = buildSessionTokenHashCandidates(sessionCookie);
   const supabase = getSupabaseAdminClientOrThrow();
 
   const result = await supabase
@@ -1431,7 +1497,7 @@ export async function revokeCurrentSessionFromCookie() {
     .update({
       revoked_at: new Date().toISOString(),
     })
-    .eq("session_token_hash", sessionTokenHash)
+    .in("session_token_hash", sessionTokenHashes)
     .is("revoked_at", null);
 
   if (result.error) {

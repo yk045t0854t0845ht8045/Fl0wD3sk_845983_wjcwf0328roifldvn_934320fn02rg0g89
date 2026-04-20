@@ -6,7 +6,11 @@ import {
 } from "@/lib/auth/session";
 import { normalizeAuthEmail } from "@/lib/auth/email";
 import { createLoginOtpChallenge, resendLoginOtpChallenge, verifyLoginOtpChallenge } from "@/lib/auth/emailOtp";
-import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import {
+  hashPassword,
+  shouldUpgradePasswordHash,
+  verifyPassword,
+} from "@/lib/auth/password";
 import { validatePasswordPolicy } from "@/lib/auth/passwordPolicy";
 import { validateTrustedDevice } from "@/lib/auth/trustedDevice";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
@@ -120,6 +124,10 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
     const passwordOk = await verifyPassword(input.password, credential.password_hash);
     if (!passwordOk) {
       throw new Error("Senha incorreta. Revise e tente novamente.");
+    }
+
+    if (shouldUpgradePasswordHash(credential.password_hash)) {
+      await upsertPasswordCredential(user.id, input.password).catch(() => null);
     }
 
     await markPasswordLogin(user.id);

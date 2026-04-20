@@ -28,6 +28,11 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import {
+  flowSecureDto,
+  FlowSecureDtoError,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import {
   attachRequestId,
   createSecurityRequestContext,
   enforceRequestRateLimit,
@@ -172,10 +177,71 @@ export async function POST(request: Request) {
 
     let body: CreatePaymentMethodBody = {};
     try {
-      body = (await request.json()) as CreatePaymentMethodBody;
-    } catch {
+      body = parseFlowSecureDto<CreatePaymentMethodBody>(
+        await request.json(),
+        {
+          guildId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          brand: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          firstSix: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 6,
+            }),
+          ),
+          lastFour: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 4,
+            }),
+          ),
+          expMonth: flowSecureDto.optional(flowSecureDto.unknown()),
+          expYear: flowSecureDto.optional(flowSecureDto.unknown()),
+          nickname: flowSecureDto.optional(
+            flowSecureDto.string({
+              allowEmpty: true,
+              maxLength: 80,
+            }),
+          ),
+          payerName: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 120,
+            }),
+          ),
+          payerDocument: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          cardToken: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 256,
+            }),
+          ),
+          paymentMethodId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 64,
+            }),
+          ),
+          issuerId: flowSecureDto.optional(flowSecureDto.unknown()),
+          deviceSessionId: flowSecureDto.optional(flowSecureDto.unknown()),
+        },
+        {
+          rejectUnknown: true,
+        },
+      );
+    } catch (error) {
+      const message =
+        error instanceof FlowSecureDtoError
+          ? error.issues[0] || error.message
+          : "Payload JSON invalido.";
       return respond(
-        { ok: false, message: "Payload JSON invalido." },
+        { ok: false, message },
         { status: 400 },
       );
     }
@@ -453,10 +519,37 @@ export async function PATCH(request: Request) {
 
     let body: UpdatePaymentMethodBody = {};
     try {
-      body = (await request.json()) as UpdatePaymentMethodBody;
-    } catch {
+      body = parseFlowSecureDto<UpdatePaymentMethodBody>(
+        await request.json(),
+        {
+          guildId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          methodId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 120,
+            }),
+          ),
+          nickname: flowSecureDto.optional(
+            flowSecureDto.string({
+              allowEmpty: true,
+              maxLength: 80,
+            }),
+          ),
+        },
+        {
+          rejectUnknown: true,
+        },
+      );
+    } catch (error) {
+      const message =
+        error instanceof FlowSecureDtoError
+          ? error.issues[0] || error.message
+          : "Payload JSON invalido.";
       return respond(
-        { ok: false, message: "Payload JSON invalido." },
+        { ok: false, message },
         { status: 400 },
       );
     }
@@ -571,10 +664,31 @@ export async function DELETE(request: Request) {
 
     let body: DeletePaymentMethodBody = {};
     try {
-      body = (await request.json()) as DeletePaymentMethodBody;
-    } catch {
+      body = parseFlowSecureDto<DeletePaymentMethodBody>(
+        await request.json(),
+        {
+          guildId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 32,
+            }),
+          ),
+          methodId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 120,
+            }),
+          ),
+        },
+        {
+          rejectUnknown: true,
+        },
+      );
+    } catch (error) {
+      const message =
+        error instanceof FlowSecureDtoError
+          ? error.issues[0] || error.message
+          : "Payload JSON invalido.";
       return respond(
-        { ok: false, message: "Payload JSON invalido." },
+        { ok: false, message },
         { status: 400 },
       );
     }

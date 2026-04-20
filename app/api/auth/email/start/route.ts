@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveEmailAuthStart } from "@/lib/auth/emailAuth";
 import { maskAuthEmail } from "@/lib/auth/email";
+import {
+  flowSecureDto,
+  FlowSecureDtoError,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -52,11 +57,18 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const payload = await request.json().catch(() => ({}));
-    const email =
-      payload && typeof payload === "object" && typeof payload.email === "string"
-        ? payload.email
-        : "";
+    const payload = parseFlowSecureDto(
+      await request.json().catch(() => ({})),
+      {
+        email: flowSecureDto.string({
+          maxLength: 254,
+        }),
+      },
+      {
+        rejectUnknown: true,
+      },
+    );
+    const email = payload.email;
     const start = await resolveEmailAuthStart(email);
 
     await logSecurityAuditEventSafe(requestContext, {
@@ -81,7 +93,11 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Nao foi possivel preparar o login por email.";
+      error instanceof FlowSecureDtoError
+        ? error.issues[0] || error.message
+        : error instanceof Error
+          ? error.message
+          : "Nao foi possivel preparar o login por email.";
 
     await logSecurityAuditEventSafe(requestContext, {
       action: "auth_email_start",
