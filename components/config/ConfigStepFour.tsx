@@ -1182,51 +1182,46 @@ function normalizeServersTabFromQuery(value: string | null) {
   return "settings";
 }
 
-function resolveApprovedRedirectConfig(fallbackGuildId: string | null) {
+function resolveApprovedRedirectConfig(
+  fallbackGuildId: string | null,
+  hasExistingServer: boolean = false,
+) {
   if (typeof window === "undefined") {
     return {
-      targetUrl: fallbackGuildId ? "/servers" : "/account/plans",
+      targetUrl: fallbackGuildId || hasExistingServer ? "http://fdesk.localhost:3000/" : "http://config.localhost:3000/",
       delayMs: 10_000,
     };
   }
 
   const currentUrl = new URL(window.location.href);
+  const hostname = currentUrl.hostname;
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+  const port = currentUrl.port ? `:${currentUrl.port}` : "";
+  const baseDomain = isLocal ? `localhost${port}` : "flwdesk.com";
+  const protocol = currentUrl.protocol || "https:";
+
   const params = new URLSearchParams(window.location.search);
   const isRenewFlow = params.get("renew")?.trim() === "1";
   const returnTarget = params.get("return")?.trim().toLowerCase() || null;
   const explicitConfigReturnPath = normalizeConfigReturnPathFromQuery(
     params.get("returnPath"),
   );
+
+  const userHasServer = Boolean(fallbackGuildId || hasExistingServer || isRenewFlow || returnTarget === "servers");
+  
   if (returnTarget === "config") {
     return {
-      targetUrl: explicitConfigReturnPath || "/config",
-      delayMs: 10_000,
-    };
-  }
-  const shouldReturnToServers = isRenewFlow || returnTarget === "servers";
-
-  if (!shouldReturnToServers) {
-    return {
-      targetUrl:
-        !fallbackGuildId && isPaymentCheckoutPathname(currentUrl.pathname)
-          ? "/account/plans"
-          : "/servers",
+      targetUrl: explicitConfigReturnPath 
+        ? `${protocol}//config.${baseDomain}${explicitConfigReturnPath}`
+        : `${protocol}//config.${baseDomain}/`,
       delayMs: 10_000,
     };
   }
 
-  const returnGuildId =
-    normalizeGuildIdFromQuery(params.get("returnGuild")) || fallbackGuildId;
-  const returnTab = normalizeServersTabFromQuery(params.get("returnTab"));
-
-  const targetUrl = returnGuildId
-    ? returnTab === "settings"
-      ? `/servers/${encodeURIComponent(returnGuildId)}`
-      : `/servers/${encodeURIComponent(returnGuildId)}?tab=${encodeURIComponent(returnTab)}`
-    : "/servers";
+  const targetDomain = userHasServer ? `fdesk.${baseDomain}` : `config.${baseDomain}`;
 
   return {
-    targetUrl,
+    targetUrl: `${protocol}//${targetDomain}/`,
     delayMs: isRenewFlow ? 5_000 : 10_000,
   };
 }
@@ -4538,7 +4533,10 @@ export function ConfigStepFour({
       return;
     }
 
-    const redirectConfig = resolveApprovedRedirectConfig(guildId);
+    const redirectConfig = resolveApprovedRedirectConfig(
+      guildId,
+      Boolean(accountPlan?.lastPaymentGuildId)
+    );
 
     const timeoutId = window.setTimeout(() => {
       markApprovedOrderAutoRedirected(resolvedOrderNumber);
@@ -4624,7 +4622,10 @@ export function ConfigStepFour({
         // seguir para fallback padrao
       }
 
-      return resolveApprovedRedirectConfig(guildId).targetUrl || "/servers/plans";
+      return resolveApprovedRedirectConfig(
+        guildId,
+        Boolean(accountPlan?.lastPaymentGuildId)
+      ).targetUrl || "/servers/plans";
     })();
 
     window.location.assign(fallbackUrl);
@@ -5216,7 +5217,10 @@ export function ConfigStepFour({
         onApproved(payload.order);
       }
 
-      const redirectConfig = resolveApprovedRedirectConfig(guildId);
+      const redirectConfig = resolveApprovedRedirectConfig(
+        guildId,
+        Boolean(accountPlan?.lastPaymentGuildId)
+      );
       trialActivationRedirectTimeoutRef.current = window.setTimeout(() => {
         window.location.assign(redirectConfig.targetUrl);
       }, 1200);
@@ -6228,7 +6232,7 @@ export function ConfigStepFour({
   const showCartDiscountEditor =
     isDiscountEditorOpen || Boolean(couponCode.trim()) || Boolean(giftCardCode.trim());
   const approvedRedirectConfig = shouldShowApprovedConfirmationPanel
-    ? resolveApprovedRedirectConfig(guildId)
+    ? resolveApprovedRedirectConfig(guildId, Boolean(accountPlan?.lastPaymentGuildId))
     : null;
   const checkoutPanelTitle = shouldShowApprovedConfirmationPanel
     ? pixOrder?.method === "trial"

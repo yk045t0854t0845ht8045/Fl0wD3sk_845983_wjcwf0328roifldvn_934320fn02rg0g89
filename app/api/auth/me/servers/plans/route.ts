@@ -5,8 +5,9 @@ import {
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
-import { buildSavedMethods, isValidSavedMethodId } from "@/lib/payments/savedMethods";
+import { isValidSavedMethodId } from "@/lib/payments/savedMethods";
 import {
+  isStoredPaymentMethodReusableForRecurring,
   mergeSavedMethodsWithStored,
   toSavedMethodFromStoredRecord,
   type StoredPaymentMethodRecord,
@@ -59,12 +60,6 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type HiddenMethodRecord = {
   method_id: string;
-};
-
-type PaymentOrderForMethod = {
-  payment_method: "pix" | "card";
-  provider_payload: unknown;
-  created_at: string;
 };
 
 type SavedMethodSummary = {
@@ -215,15 +210,7 @@ async function getAvailableSavedMethodsForUser(userId: number) {
 
   const supabase = getSupabaseAdminClientOrThrow();
 
-  const [ordersResult, hiddenMethodsResult, storedMethodsResult] = await Promise.all([
-    supabase
-      .from("payment_orders")
-      .select("payment_method, provider_payload, created_at")
-      .eq("user_id", userId)
-      .eq("payment_method", "card")
-      .order("created_at", { ascending: false })
-      .limit(500)
-      .returns<PaymentOrderForMethod[]>(),
+  const [hiddenMethodsResult, storedMethodsResult] = await Promise.all([
     supabase
       .from("auth_user_hidden_payment_methods")
       .select("method_id")
@@ -232,16 +219,12 @@ async function getAvailableSavedMethodsForUser(userId: number) {
     supabase
       .from("auth_user_payment_methods")
       .select(
-        "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, verified_at, last_context_guild_id, created_at, updated_at",
+        "method_id, nickname, brand, first_six, last_four, exp_month, exp_year, is_active, verification_status, verification_status_detail, verification_amount, provider_customer_id, provider_card_id, verified_at, last_context_guild_id, created_at, updated_at",
       )
       .eq("user_id", userId)
       .eq("is_active", true)
       .returns<StoredPaymentMethodRecord[]>(),
   ]);
-
-  if (ordersResult.error) {
-    throw new Error(`Erro ao carregar metodos de pagamento: ${ordersResult.error.message}`);
-  }
 
   if (hiddenMethodsResult.error) {
     throw new Error(`Erro ao carregar metodos ocultos: ${hiddenMethodsResult.error.message}`);
@@ -255,16 +238,16 @@ async function getAvailableSavedMethodsForUser(userId: number) {
     (hiddenMethodsResult.data || []).map((item) => item.method_id),
   );
 
-  const derivedMethods = buildSavedMethods(ordersResult.data || []);
-  const storedMethods = (storedMethodsResult.data || [])
+  const storedRows = (storedMethodsResult.data || []).filter(
+    isStoredPaymentMethodReusableForRecurring,
+  );
+  const storedMethods = storedRows
     .map((row) => toSavedMethodFromStoredRecord(row))
     .filter((method): method is NonNullable<typeof method> => Boolean(method));
 
   return mergeSavedMethodsWithStored({
-    derivedMethods,
-    storedMethods: storedMethods.filter(
-      (method) => method.verificationStatus === "verified",
-    ),
+    derivedMethods: [],
+    storedMethods,
     hiddenMethodSet,
   });
 }

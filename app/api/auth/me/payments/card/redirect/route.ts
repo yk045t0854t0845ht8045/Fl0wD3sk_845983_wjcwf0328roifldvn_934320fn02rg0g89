@@ -592,7 +592,7 @@ export async function POST(request: Request) {
           })
           .eq("id", securedOrder.order.id)
           .select(
-            "id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_payload, provider_status, provider_status_detail, paid_at, expires_at, user_id, checkout_link_nonce, checkout_link_expires_at, checkout_link_invalidated_at, created_at, updated_at",
+            "id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_last4, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_payload, provider_status, provider_status_detail, paid_at, expires_at, user_id, checkout_link_nonce, checkout_link_expires_at, checkout_link_invalidated_at, created_at, updated_at",
           )
           .single<PaymentOrderRecord>();
 

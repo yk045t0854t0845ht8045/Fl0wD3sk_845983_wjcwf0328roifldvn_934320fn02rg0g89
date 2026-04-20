@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { areHostsWithinSameFirstPartySite } from "@/lib/routing/subdomains";
+import {
+  areHostsWithinSameFirstPartySite,
+  detectCanonicalHostFromHostname,
+} from "@/lib/routing/subdomains";
 
 const FIRST_PARTY_CONNECT_SOURCES = [
   "https://www.flwdesk.com",
@@ -16,6 +19,21 @@ const FIRST_PARTY_CONNECT_SOURCES = [
 function isExplicitlyEnabled(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function isLoopbackHost(host: string) {
+  const hostname = host.split(":")[0]?.trim().toLowerCase() || "";
+  return (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1"
+  );
+}
+
+function isTrustedFirstPartyMutationHost(host: string) {
+  return isLoopbackHost(host) || Boolean(detectCanonicalHostFromHostname(host));
 }
 
 export function isSameOriginRequest(request: Request) {
@@ -44,6 +62,14 @@ export function isSameOriginRequest(request: Request) {
       }
 
       if (!areHostsWithinSameFirstPartySite(originUrl.host, requestUrl.host)) {
+        return false;
+      }
+
+      // Bloqueia subdominios arbitrarios mesmo dentro do mesmo eTLD+1.
+      if (
+        !isTrustedFirstPartyMutationHost(originUrl.host) ||
+        !isTrustedFirstPartyMutationHost(requestUrl.host)
+      ) {
         return false;
       }
     } catch {
@@ -160,6 +186,13 @@ export function applyStandardSecurityHeaders<T extends NextResponse>(
   response.headers.set("X-DNS-Prefetch-Control", "off");
   response.headers.set("X-Permitted-Cross-Domain-Policies", "none");
   response.headers.set("X-Download-Options", "noopen");
+
+  if (process.env.NODE_ENV === "production") {
+    response.headers.set(
+      "Strict-Transport-Security",
+      "max-age=63072000; includeSubDomains; preload",
+    );
+  }
 
   if (input?.contentSecurityPolicy) {
     response.headers.set(

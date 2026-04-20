@@ -1580,7 +1580,7 @@ function toSafeVerificationStatus(value: unknown): SavedMethod["verificationStat
   if (value === "pending") return "pending";
   if (value === "failed") return "failed";
   if (value === "cancelled") return "cancelled";
-  return "verified";
+  return "pending";
 }
 
 function sanitizePaymentOrder(input: unknown): PaymentOrder | null {

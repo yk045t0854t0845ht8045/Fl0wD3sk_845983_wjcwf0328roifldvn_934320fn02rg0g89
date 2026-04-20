@@ -515,7 +515,28 @@ export function resolveMercadoPagoHostedCheckoutUrl(
   }
 
   const normalizedUrl = preferredUrl.trim();
-  return normalizedUrl || null;
+  if (!normalizedUrl) return null;
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    const hostname = parsed.hostname.trim().toLowerCase();
+
+    if (parsed.protocol !== "https:") {
+      return null;
+    }
+
+    const isTrustedMercadoPagoHost =
+      /(^|\.)mercadopago\.(com|com\.ar|com\.br|cl|co|com\.mx|com\.uy|com\.pe|com\.ec|com\.ve)$/i.test(
+        hostname,
+      ) ||
+      /(^|\.)mercadolibre\.(com|com\.ar|com\.br|cl|co|com\.mx|com\.uy|com\.pe|com\.ec|com\.ve)$/i.test(
+        hostname,
+      );
+
+    return isTrustedMercadoPagoHost ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveMercadoPagoFetchTokens(preferCardToken: boolean) {

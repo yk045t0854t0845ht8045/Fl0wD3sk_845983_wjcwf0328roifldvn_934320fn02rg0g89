@@ -45,7 +45,7 @@ function normalizeVerificationStatus(value: unknown) {
   if (value === "pending") return "pending";
   if (value === "failed") return "failed";
   if (value === "cancelled") return "cancelled";
-  return "verified";
+  return "pending";
 }
 
 function normalizeNullableNumber(value: unknown) {
@@ -162,6 +162,17 @@ export function toSavedMethodFromStoredRecord(
     verifiedAt: normalizeNullableString(row.verified_at),
     lastContextGuildId: normalizeNullableString(row.last_context_guild_id),
   };
+}
+
+export function isStoredPaymentMethodReusableForRecurring(
+  row: StoredPaymentMethodRecord,
+) {
+  return (
+    row.is_active === true &&
+    normalizeVerificationStatus(row.verification_status) === "verified" &&
+    normalizeNullableString(row.provider_customer_id) !== null &&
+    normalizeNullableString(row.provider_card_id) !== null
+  );
 }
 
 export function mergeSavedMethodsWithStored(input: {

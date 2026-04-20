@@ -72,6 +72,7 @@ type PaymentOrderRecord = {
   plan_billing_cycle_days: number;
   payer_name: string | null;
   payer_document: string | null;
+  payer_document_last4: string | null;
   payer_document_type: "CPF" | "CNPJ" | null;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
@@ -91,7 +92,7 @@ type PaymentOrderRecord = {
 };
 
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, payer_name, payer_document, payer_document_last4, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 function normalizeNullableProviderQueryValue(value: string | null) {
   if (!value) return null;
@@ -175,11 +176,22 @@ function parseAmount(amount: string | number) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function maskPayerDocument(document: string | null) {
-  if (!document) return null;
-  const digits = document.replace(/\D/g, "");
-  if (digits.length <= 4) return digits;
-  return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+function maskPayerDocument(
+  document: string | null,
+  documentLast4?: string | null,
+) {
+  const digits = document?.replace(/\D/g, "") || "";
+  if (digits) {
+    if (digits.length <= 4) return digits;
+    return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+  }
+
+  const normalizedLast4 =
+    typeof documentLast4 === "string" && /^\d{1,4}$/.test(documentLast4.trim())
+      ? documentLast4.trim()
+      : null;
+  if (!normalizedLast4) return null;
+  return `${"*".repeat(Math.max(4, normalizedLast4.length))}${normalizedLast4}`;
 }
 
 function toApiOrder(
@@ -198,7 +210,10 @@ function toApiOrder(
     planName: record.plan_name,
     planBillingCycleDays: record.plan_billing_cycle_days,
     payerName: record.payer_name,
-    payerDocumentMasked: maskPayerDocument(record.payer_document),
+    payerDocumentMasked: maskPayerDocument(
+      record.payer_document,
+      record.payer_document_last4,
+    ),
     payerDocumentType: record.payer_document_type,
     providerPaymentId: record.provider_payment_id,
     providerExternalReference: record.provider_external_reference,

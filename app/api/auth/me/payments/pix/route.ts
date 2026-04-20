@@ -26,6 +26,10 @@ import {
   resolveNextPaymentOrderStatus,
   resolveTrustedMercadoPagoPaymentTimestamps,
 } from "@/lib/payments/paymentIntegrity";
+import {
+  encryptPaymentSensitiveValue,
+  resolvePaymentDocumentLast4,
+} from "@/lib/payments/paymentPii";
 import { resolveDiscountPricing } from "@/lib/payments/discountPricing";
 import {
   ensureCheckoutAccessTokenForOrder,
@@ -121,7 +125,9 @@ export type PaymentOrderRecord = {
   plan_max_monthly_actions: number;
   payer_name: string | null;
   payer_document: string | null;
+  payer_document_last4: string | null;
   payer_document_type: "CPF" | "CNPJ" | null;
+  payer_document_encrypted?: string | null;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
   provider_qr_code: string | null;
@@ -151,7 +157,7 @@ const PENDING_REUSE_WINDOW_MS = 25 * 60 * 1000;
 const ORDER_EXPIRATION_SAFETY_BUFFER_MS = 45 * 1000;
 const PAYMENT_ROUTE_COALESCE_TTL_MS = 1500;
 export const PAYMENT_ORDER_SELECT_COLUMNS =
-  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_payload, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_last4, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_payload, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 export function invalidatePaymentReadCachesForOrder(
   order:
@@ -253,12 +259,22 @@ export function parseForceNewFlag(value: unknown) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function maskPayerDocument(document: string | null) {
-  if (!document) return null;
+function maskPayerDocument(
+  document: string | null,
+  documentLast4?: string | null,
+) {
+  const digits = document?.replace(/\D/g, "") || "";
+  if (digits) {
+    if (digits.length <= 4) return digits;
+    return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+  }
 
-  const digits = document.replace(/\D/g, "");
-  if (digits.length <= 4) return digits;
-  return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+  const normalizedLast4 =
+    typeof documentLast4 === "string" && /^\d{1,4}$/.test(documentLast4.trim())
+      ? documentLast4.trim()
+      : null;
+  if (!normalizedLast4) return null;
+  return `${"*".repeat(Math.max(4, normalizedLast4.length))}${normalizedLast4}`;
 }
 
 function parseAmount(amount: string | number) {
@@ -655,7 +671,10 @@ export function toApiOrder(
     planName: record.plan_name,
     planBillingCycleDays: record.plan_billing_cycle_days,
     payerName: record.payer_name,
-    payerDocumentMasked: maskPayerDocument(record.payer_document),
+    payerDocumentMasked: maskPayerDocument(
+      record.payer_document,
+      record.payer_document_last4,
+    ),
     payerDocumentType: record.payer_document_type,
     providerPaymentId: record.provider_payment_id,
     providerExternalReference: record.provider_external_reference,
@@ -1207,7 +1226,9 @@ export async function reuseDraftOrderForCheckout(input: {
           plan_max_monthly_actions: input.plan.entitlements.maxMonthlyActions,
           payer_name: null,
           payer_document: null,
+          payer_document_last4: null,
           payer_document_type: null,
+          payer_document_encrypted: null,
           provider_status: null,
           provider_status_detail: null,
           provider_payload: {
@@ -1843,10 +1864,8 @@ export async function POST(request: Request) {
       planChange: checkoutPlan.planChange,
       discountedSubtotalAmount: pricing.subtotalAmount,
     });
-    const payerName =
-      requestedPayerName || normalizePayerName(latestOrder?.payer_name);
-    const payerDocument =
-      requestedPayerDocument || normalizePayerDocument(latestOrder?.payer_document);
+    const payerName = requestedPayerName;
+    const payerDocument = requestedPayerDocument;
     const amount = pricingWithFlowPoints.totalAmount;
     const currency = pricingWithFlowPoints.currency;
     const transitionProviderPayload = buildCheckoutTransitionProviderPayload({
@@ -1946,8 +1965,13 @@ export async function POST(request: Request) {
           plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
           plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
           payer_name: payerName || null,
-          payer_document: payerDocument?.normalized || null,
+          payer_document: null,
+          payer_document_last4:
+            resolvePaymentDocumentLast4(payerDocument?.normalized || null),
           payer_document_type: payerDocument?.type || null,
+          payer_document_encrypted: encryptPaymentSensitiveValue(
+            payerDocument?.normalized || null,
+          ),
           provider_status: null,
           provider_status_detail: null,
           provider_payload: {
@@ -2005,8 +2029,13 @@ export async function POST(request: Request) {
           plan_max_automations: checkoutPlan.plan.entitlements.maxAutomations,
           plan_max_monthly_actions: checkoutPlan.plan.entitlements.maxMonthlyActions,
           payer_name: payerName || null,
-          payer_document: payerDocument?.normalized || null,
+          payer_document: null,
+          payer_document_last4:
+            resolvePaymentDocumentLast4(payerDocument?.normalized || null),
           payer_document_type: payerDocument?.type || null,
+          payer_document_encrypted: encryptPaymentSensitiveValue(
+            payerDocument?.normalized || null,
+          ),
           provider_payload: {
             source: "flowdesk_checkout",
             step: 4,

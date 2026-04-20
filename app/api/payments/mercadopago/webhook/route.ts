@@ -167,6 +167,11 @@ function resolveWebhookSignatureSecret() {
   );
 }
 
+function isExplicitlyEnabled(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 function resolveWebhookSignatureMaxAgeSeconds() {
   const rawValue =
     process.env.MERCADO_PAGO_WEBHOOK_SIGNATURE_MAX_AGE_SECONDS?.trim() || "";
@@ -177,12 +182,24 @@ function resolveWebhookSignatureMaxAgeSeconds() {
   return Math.floor(numeric);
 }
 
+function resolveEffectiveWebhookSignatureMaxAgeSeconds() {
+  const configuredValue = resolveWebhookSignatureMaxAgeSeconds();
+  if (configuredValue !== null) {
+    return configuredValue;
+  }
+
+  return 5 * 60;
+}
+
 function resolveWebhookAuthorization(input: {
   request: Request;
   url: URL;
   paymentId: string | null;
 }) {
   const signatureSecret = resolveWebhookSignatureSecret();
+  const allowLegacyTokenFallback = isExplicitlyEnabled(
+    process.env.MERCADO_PAGO_WEBHOOK_ALLOW_LEGACY_TOKEN,
+  );
   const signatureVerification = signatureSecret
     ? verifyMercadoPagoWebhookSignature({
         secret: signatureSecret,
@@ -192,7 +209,7 @@ function resolveWebhookAuthorization(input: {
           input.url.searchParams.get("data.id") ||
           input.url.searchParams.get("id") ||
           input.paymentId,
-        maxAgeSeconds: resolveWebhookSignatureMaxAgeSeconds(),
+        maxAgeSeconds: resolveEffectiveWebhookSignatureMaxAgeSeconds(),
       })
     : null;
 
@@ -206,12 +223,29 @@ function resolveWebhookAuthorization(input: {
     };
   }
 
-  if (validateLegacyWebhookToken(input.request, input.url)) {
+  if (
+    !signatureSecret &&
+    validateLegacyWebhookToken(input.request, input.url)
+  ) {
     return {
       ok: true as const,
       mode: "token" as const,
       signatureVerified: false,
       reason: "legacy_token",
+      ageSeconds: signatureVerification?.ageSeconds ?? null,
+    };
+  }
+
+  if (
+    signatureSecret &&
+    allowLegacyTokenFallback &&
+    validateLegacyWebhookToken(input.request, input.url)
+  ) {
+    return {
+      ok: true as const,
+      mode: "token" as const,
+      signatureVerified: false,
+      reason: "legacy_token_explicitly_allowed",
       ageSeconds: signatureVerification?.ageSeconds ?? null,
     };
   }
