@@ -103,7 +103,7 @@ const WORKSPACE_AREA_CONFIG: Record<WorkspaceArea, WorkspaceAreaConfig> = {
     externalBasePath: "/",
   },
   account: {
-    canonicalHost: "servers",
+    canonicalHost: "dashboard",
     internalBasePath: "/account",
     externalBasePath: "/account",
   },
@@ -567,6 +567,9 @@ export function detectWorkspaceAreaFromExternalPath(
     case "status":
       return "status";
     case "dashboard":
+      if (normalizedPathname === "/account" || normalizedPathname.startsWith("/account/")) {
+        return "account";
+      }
       return "dashboard";
     case "servers":
       if (normalizedPathname === "/account" || normalizedPathname.startsWith("/account/")) {

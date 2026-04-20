@@ -16,11 +16,13 @@ type LandingRevealProps = {
     "data-flowdesk-visible"?: "true" | "false";
   }>;
   delay?: number;
+  duration?: number;
 };
 
 export function LandingReveal({
   children,
   delay = 0,
+  duration = 620,
 }: LandingRevealProps) {
   const [isVisible, setIsVisible] = useState(false);
 
@@ -66,6 +68,7 @@ export function LandingReveal({
     style: {
       ...(childProps.style ?? {}),
       "--flowdesk-reveal-delay": `${delay}ms`,
+      "--flowdesk-reveal-duration": `${duration}ms`,
     } as CSSProperties,
     // We explicitly use a string "false" during the first render to match hydration
     "data-flowdesk-visible": isVisible ? "true" : "false",

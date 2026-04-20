@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+import { scheduleWarmBrowserRoutes } from "@/lib/routing/browserWarmup";
 
 export function RoutePrefetcher() {
   const router = useRouter();
@@ -19,12 +19,20 @@ export function RoutePrefetcher() {
       return;
     }
 
-    ["/dashboard", "/dashboard/", "/servers", "/servers/", "/account", "/account/"].forEach(
-      (href) => {
-        const target = buildBrowserRoutingTargetFromInternalPath(href);
-        if (target.sameOrigin) {
-          router.prefetch(target.path);
-        }
+    return scheduleWarmBrowserRoutes(
+      [
+        "/dashboard",
+        "/dashboard/",
+        "/servers",
+        "/servers/",
+        "/servers/plans",
+        "/account",
+        "/account/",
+        "/discord/link",
+      ],
+      {
+        router,
+        delayMs: 120,
       },
     );
   }, [pathname, router]);

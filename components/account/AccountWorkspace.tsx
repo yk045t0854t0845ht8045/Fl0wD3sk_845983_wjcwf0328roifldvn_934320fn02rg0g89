@@ -1,17 +1,31 @@
 "use client";
 
-import { useCallback, useRef, useState, useEffect, useTransition } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  useEffect,
+  useTransition,
+  type RefObject,
+} from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   BadgePercent,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Cog,
   CreditCard,
   History,
   Key,
   LifeBuoy,
   LogOut,
+  Palette,
+  Plus,
   Search,
   Settings2,
   ShieldAlert,
@@ -27,8 +41,20 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useAccountStatus } from "@/hooks/useAccountData";
 
+import {
+  ACCOUNT_RETURN_QUERY_PARAM,
+  getAccountReturnLabel,
+  readStoredAccountReturnPath,
+  sanitizeAccountReturnPath,
+  storeAccountReturnPath,
+} from "@/lib/account/navigation";
+import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import { type AccountTab, ACCOUNT_TABS, validateTab } from "@/lib/account/tabs";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+import {
+  scheduleWarmBrowserRoutes,
+  warmBrowserRoute,
+} from "@/lib/routing/browserWarmup";
 export { validateTab };
 export type { AccountTab };
 
@@ -47,6 +73,15 @@ type NavItem = {
 type NavGroup = {
   category: string;
   items: NavItem[];
+};
+
+type SavedPanelAccount = {
+  authUserId: number;
+  discordUserId: string | null;
+  displayName: string;
+  username: string;
+  avatarUrl: string | null;
+  lastSeenAt: number;
 };
 
 const NAV_GROUPS: NavGroup[] = [
@@ -82,6 +117,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 const ACCOUNT_SIDEBAR_COLLAPSE_KEY = "flowdesk_account_sidebar_groups_v1";
+const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
 
 function buildAccountGroupKey(group: NavGroup, groupIndex: number) {
   return `${group.category}-${groupIndex}`;
@@ -113,16 +149,77 @@ function readStoredCollapsedGroups() {
   }
 }
 
+function accountInitial(name: string, username: string) {
+  const source = name.trim() || username.trim();
+  return source ? source.charAt(0).toUpperCase() : "F";
+}
+
+function normalizeSavedPanelAccounts(input: unknown) {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Partial<SavedPanelAccount>;
+      if (
+        typeof record.authUserId !== "number" ||
+        typeof record.displayName !== "string" ||
+        typeof record.username !== "string" ||
+        typeof record.lastSeenAt !== "number"
+      ) {
+        return null;
+      }
+
+      return {
+        authUserId: record.authUserId,
+        discordUserId:
+          typeof record.discordUserId === "string" ? record.discordUserId : null,
+        displayName: record.displayName,
+        username: record.username,
+        avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl : null,
+        lastSeenAt: record.lastSeenAt,
+      } satisfies SavedPanelAccount;
+    })
+    .filter((value): value is SavedPanelAccount => value !== null)
+    .slice(0, 3);
+}
+
+function resolveSavedAccountKey(account: {
+  authUserId: number;
+  discordUserId: string | null;
+}) {
+  return account.discordUserId || `auth:${account.authUserId}`;
+}
+
+function mergeSavedPanelAccounts(
+  currentAccount: SavedPanelAccount,
+  previousAccounts: SavedPanelAccount[],
+) {
+  const currentAccountKey = resolveSavedAccountKey(currentAccount);
+  return [
+    currentAccount,
+    ...previousAccounts.filter(
+      (account) => resolveSavedAccountKey(account) !== currentAccountKey,
+    ),
+  ]
+    .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+    .slice(0, 3);
+}
+
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
 function AccountAvatar({
   avatarUrl,
   displayName,
+  username,
   size = 38,
+  className = "",
 }: {
   avatarUrl: string | null;
   displayName: string;
+  username: string;
   size?: number;
+  className?: string;
 }) {
   if (avatarUrl) {
     return (
@@ -131,19 +228,20 @@ function AccountAvatar({
         alt={displayName}
         width={size}
         height={size}
-        className="rounded-full object-cover"
+        className={`rounded-full object-cover ${className}`.trim()}
         style={{ width: size, height: size }}
         unoptimized
       />
     );
   }
-  const initials = displayName.slice(0, 2).toUpperCase();
+
   return (
     <div
-      className="flex items-center justify-center rounded-full bg-[linear-gradient(135deg,#1a3a7a,#0d1f47)] text-[#8AB6FF] font-semibold"
+      className={`relative flex items-center justify-center rounded-full bg-[radial-gradient(circle_at_top,#7D3BFF_0%,#3C0F6D_54%,#170822_100%)] font-semibold text-[#F0F0F0] shadow-[0_0_28px_rgba(125,59,255,0.14)] ${className}`.trim()}
       style={{ width: size, height: size, fontSize: size * 0.36 }}
     >
-      {initials}
+      {accountInitial(displayName, username)}
+      <span className="absolute bottom-[2px] right-[2px] h-[8px] w-[8px] rounded-full bg-[#0062FF]" />
     </div>
   );
 }
@@ -151,6 +249,8 @@ function AccountAvatar({
 // ─── Main Workspace Shell ──────────────────────────────────────────────────────
 
 type AccountWorkspaceProps = {
+  authUserId: number;
+  discordUserId: string | null;
   displayName: string;
   username: string;
   avatarUrl: string | null;
@@ -158,6 +258,8 @@ type AccountWorkspaceProps = {
 };
 
 export function AccountWorkspace({
+  authUserId,
+  discordUserId,
   displayName,
   username,
   avatarUrl,
@@ -169,6 +271,8 @@ export function AccountWorkspace({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => buildDefaultCollapsedGroups());
   const [hasLoadedCollapsedGroups, setHasLoadedCollapsedGroups] = useState(false);
   const [pendingTab, setPendingTab] = useState<AccountTab | null>(null);
+  const [savedAccounts, setSavedAccounts] = useState<SavedPanelAccount[]>([]);
+  const [returnPath, setReturnPath] = useState<string | null>(null);
   const [, startSidebarNavigationTransition] = useTransition();
 
   const { statusData } = useAccountStatus();
@@ -177,7 +281,19 @@ export function AccountWorkspace({
 
   const router = useRouter();
   const pathname = usePathname();
-  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const searchParams = useSearchParams();
+  const desktopProfileMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileProfileMenuRef = useRef<HTMLDivElement | null>(null);
+  const currentAccount = useMemo(
+    () => ({
+      authUserId,
+      discordUserId,
+      displayName,
+      username,
+      avatarUrl,
+    }),
+    [authUserId, avatarUrl, discordUserId, displayName, username],
+  );
 
   // Derive active tab from pathname reactively
   const segments = pathname.split("/").filter(Boolean);
@@ -192,51 +308,132 @@ export function AccountWorkspace({
     return tab === "overview" ? "/account" : `/account/${tab}`;
   }, []);
 
+  const prefetchHref = useCallback((href: string) => {
+    warmBrowserRoute(href, { router });
+  }, [router]);
+
   const prefetchTab = useCallback((tab: AccountTab) => {
-    const target = buildBrowserRoutingTargetFromInternalPath(buildTabHref(tab));
-    if (!target.sameOrigin) return;
-    router.prefetch(target.path);
-  }, [buildTabHref, router]);
+    prefetchHref(buildTabHref(tab));
+  }, [buildTabHref, prefetchHref]);
+
+  const navigateToHref = useCallback((href: string, nextTab?: AccountTab | null) => {
+    setIsProfileMenuOpen(false);
+    const target = warmBrowserRoute(href, {
+      router,
+      prefetchDocument: true,
+    });
+    if (normalizeComparablePath(pathname) === normalizeComparablePath(target.path)) {
+      return;
+    }
+
+    if (nextTab) {
+      setPendingTab(nextTab);
+    }
+
+    if (!target.sameOrigin) {
+      window.location.assign(target.href);
+      return;
+    }
+
+    prefetchHref(href);
+    startSidebarNavigationTransition(() => {
+      router.push(target.path, { scroll: false });
+    });
+  }, [pathname, prefetchHref, router, startSidebarNavigationTransition]);
 
   const navigateToTab = useCallback((tab: AccountTab) => {
-    setIsProfileMenuOpen(false);
-    const href = buildTabHref(tab);
-    const target = buildBrowserRoutingTargetFromInternalPath(href);
-    if (normalizeComparablePath(pathname) !== normalizeComparablePath(target.path)) {
-      setPendingTab(tab);
-      if (!target.sameOrigin) {
-        window.location.assign(target.href);
-        return;
-      }
-
-      prefetchTab(tab);
-      startSidebarNavigationTransition(() => {
-        router.push(target.path, { scroll: false });
-      });
-    }
-  }, [buildTabHref, pathname, prefetchTab, router, startSidebarNavigationTransition]);
+    navigateToHref(buildTabHref(tab), tab);
+  }, [buildTabHref, navigateToHref]);
 
   useEffect(() => {
     setPendingTab(null);
   }, [pathname]);
 
   useEffect(() => {
-    ACCOUNT_TABS.forEach((tab) => {
-      prefetchTab(tab);
-    });
-    const serversTarget = buildBrowserRoutingTargetFromInternalPath("/servers");
-    const dashboardTarget = buildBrowserRoutingTargetFromInternalPath("/dashboard");
-    if (serversTarget.sameOrigin) {
-      router.prefetch(serversTarget.path);
-    }
-    if (dashboardTarget.sameOrigin) {
-      router.prefetch(dashboardTarget.path);
-    }
-  }, [prefetchTab, router]);
+    return scheduleWarmBrowserRoutes(
+      [
+        ...ACCOUNT_TABS.map((tab) =>
+          tab === "overview" ? "/account" : `/account/${tab}`,
+        ),
+        "/servers",
+        "/dashboard",
+        "/discord/link",
+      ],
+      {
+        router,
+        delayMs: 80,
+      },
+    );
+  }, [router]);
 
   useEffect(() => {
     setCollapsedGroups(readStoredCollapsedGroups());
     setHasLoadedCollapsedGroups(true);
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SAVED_PANEL_ACCOUNTS_KEY);
+      const currentSnapshot: SavedPanelAccount = {
+        ...currentAccount,
+        lastSeenAt: Date.now(),
+      };
+      const nextAccounts = mergeSavedPanelAccounts(
+        currentSnapshot,
+        normalizeSavedPanelAccounts(raw ? JSON.parse(raw) : []),
+      );
+      setSavedAccounts(nextAccounts);
+      window.localStorage.setItem(
+        SAVED_PANEL_ACCOUNTS_KEY,
+        JSON.stringify(nextAccounts),
+      );
+    } catch {
+      setSavedAccounts([
+        {
+          ...currentAccount,
+          lastSeenAt: Date.now(),
+        },
+      ]);
+    }
+  }, [currentAccount]);
+
+  useEffect(() => {
+    const queryReturnPath = sanitizeAccountReturnPath(
+      searchParams.get(ACCOUNT_RETURN_QUERY_PARAM),
+    );
+    const storedReturnPath = readStoredAccountReturnPath();
+    const resolvedReturnPath =
+      storeAccountReturnPath(queryReturnPath ?? storedReturnPath ?? "/dashboard") ||
+      "/dashboard";
+
+    setReturnPath(resolvedReturnPath);
+  }, [searchParams]);
+
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+
+      const clickedInsideDesktop = desktopProfileMenuRef.current?.contains(target);
+      const clickedInsideMobile = mobileProfileMenuRef.current?.contains(target);
+      if (!clickedInsideDesktop && !clickedInsideMobile) {
+        setIsProfileMenuOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsProfileMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, []);
 
   async function handleLogout() {
@@ -256,11 +453,7 @@ export function AccountWorkspace({
       } catch {
         // noop
       }
-      window.location.replace(
-        buildBrowserRoutingTargetFromInternalPath("/login", {
-          fallbackArea: "account",
-        }).href,
-      );
+      window.location.replace(buildLoginHref());
     }
   }
 
@@ -297,6 +490,67 @@ export function AccountWorkspace({
     if (!normalizedSearch) return true;
     return item.label.toLowerCase().includes(normalizedSearch);
   }
+
+  const openDiscordLoginFlow = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const nextPath = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(buildDiscordAuthStartHref(nextPath));
+  }, []);
+
+  const handleAddAnotherAccount = useCallback(() => {
+    setIsProfileMenuOpen(false);
+    openDiscordLoginFlow();
+  }, [openDiscordLoginFlow]);
+
+  const handleSwitchSavedAccount = useCallback((account: SavedPanelAccount) => {
+    if (resolveSavedAccountKey(account) === resolveSavedAccountKey(currentAccount)) {
+      setIsProfileMenuOpen(false);
+      return;
+    }
+
+    if (!account.discordUserId) {
+      setIsProfileMenuOpen(false);
+      window.location.replace(buildLoginHref());
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        "flowdesk_pending_account_switch_v1",
+        JSON.stringify({
+          discordUserId: account.discordUserId,
+          requestedAt: Date.now(),
+        }),
+      );
+    } catch {
+      // noop
+    }
+
+    setIsProfileMenuOpen(false);
+    openDiscordLoginFlow();
+  }, [currentAccount, openDiscordLoginFlow]);
+
+  const handleOpenAccountSettings = useCallback(() => {
+    navigateToHref("/account", "overview");
+  }, [navigateToHref]);
+
+  const handleOpenMyAccount = useCallback(() => {
+    setIsProfileMenuOpen(false);
+    window.location.assign(
+      buildBrowserRoutingTargetFromInternalPath("/discord/link", {
+        fallbackArea: "public",
+      }).href,
+    );
+  }, []);
+
+  const handleOpenHelp = useCallback(() => {
+    setIsProfileMenuOpen(false);
+    window.open("https://discord.gg/ddXtHhvvrx", "_blank", "noopener,noreferrer");
+  }, []);
+
+  const handleReturnToPreviousPage = useCallback(() => {
+    navigateToHref(returnPath || "/dashboard");
+  }, [navigateToHref, returnPath]);
 
   // ── Page title / description ─────────────────────────────────────────────────
 
@@ -349,11 +603,12 @@ export function AccountWorkspace({
   };
 
   const meta = PAGE_META[activeTab];
+  const returnLabel = getAccountReturnLabel(returnPath);
 
   const sidebarShellClass =
     "border border-[#111111] bg-[#060606] flex flex-col overflow-hidden";
 
-  const renderSidebarContent = () => (
+  const renderSidebarContent = (profileMenuRef: RefObject<HTMLDivElement | null>) => (
     <div className="flex h-full flex-col px-[14px] pb-[14px] pt-[20px]">
       <div className="flex items-center gap-[10px] rounded-[16px] border border-[#141414] bg-[#080808] px-[14px] py-[12px]">
         <Search className="h-[18px] w-[18px] shrink-0 text-[#6F6F6F]" strokeWidth={1.85} aria-hidden="true" />
@@ -368,6 +623,23 @@ export function AccountWorkspace({
         <span className="inline-flex h-[28px] min-w-[28px] items-center justify-center rounded-[9px] border border-[#1A1A1A] bg-[#101010] px-[8px] text-[12px] font-medium text-[#A7A7A7]">
           F
         </span>
+      </div>
+
+      <div className="mt-[14px] space-y-[4px]">
+        <button
+          type="button"
+          onMouseEnter={() => prefetchHref(returnPath || "/dashboard")}
+          onFocus={() => prefetchHref(returnPath || "/dashboard")}
+          onClick={handleReturnToPreviousPage}
+          className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B5B5B5] transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3]"
+        >
+          <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#8A8A8A] group-hover:text-[#DADADA]">
+            <ChevronLeft className="h-[18px] w-[18px] shrink-0" strokeWidth={1.85} aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
+            {returnLabel}
+          </span>
+        </button>
       </div>
 
       <div className="mt-[14px] flex-1 overflow-y-auto pr-[2px]">
@@ -483,45 +755,106 @@ export function AccountWorkspace({
               <div className="space-y-[8px]">
                 <button
                   type="button"
-                  onMouseEnter={() => {
-                    const target = buildBrowserRoutingTargetFromInternalPath("/servers");
-                    if (target.sameOrigin) {
-                      router.prefetch(target.path);
-                    }
-                  }}
-                  onFocus={() => {
-                    const target = buildBrowserRoutingTargetFromInternalPath("/servers");
-                    if (target.sameOrigin) {
-                      router.prefetch(target.path);
-                    }
-                  }}
-                  onClick={() => {
-                    setIsProfileMenuOpen(false);
-                    const target = buildBrowserRoutingTargetFromInternalPath("/servers");
-                    if (!target.sameOrigin) {
-                      window.location.assign(target.href);
-                      return;
-                    }
-                    startSidebarNavigationTransition(() => {
-                      router.push(target.path, { scroll: false });
-                    });
-                  }}
+                  onClick={handleAddAnotherAccount}
                   className="flex w-full items-center gap-[12px] rounded-[16px] border border-[#171717] bg-[#0D0D0D] px-[12px] py-[12px] text-left text-[#D8D8D8] transition-colors hover:border-[#222222] hover:bg-[#111111]"
                 >
                   <span className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[11px] border border-[#1A1A1A] bg-[#101010] text-[#CFCFCF]">
-                    <Settings2 className="h-[16px] w-[16px] shrink-0" />
+                    <Plus className="h-[18px] w-[18px] shrink-0" strokeWidth={2.2} aria-hidden="true" />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
-                      Central de servidores
+                      Adicionar outra conta
                     </span>
                     <span className="mt-[6px] block truncate text-[11px] leading-none text-[#686868]">
-                      Voltar ao painel
+                      Ate 3 contas salvas neste navegador
                     </span>
                   </span>
                 </button>
+
+                <div className="border-t border-[#121212] pt-[12px]">
+                  <p className="px-[4px] text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">
+                    Contas salvas
+                  </p>
+                  <div className="mt-[10px] space-y-[6px]">
+                    {savedAccounts.map((account) => {
+                      const isCurrent =
+                        resolveSavedAccountKey(account) ===
+                        resolveSavedAccountKey(currentAccount);
+
+                      return (
+                        <button
+                          key={resolveSavedAccountKey(account)}
+                          type="button"
+                          onClick={() => handleSwitchSavedAccount(account)}
+                          className={`flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-colors ${
+                            isCurrent
+                              ? "bg-[#141414] text-[#ECECEC]"
+                              : "text-[#A7A7A7] hover:bg-[#111111] hover:text-[#E6E6E6]"
+                          }`}
+                        >
+                          <AccountAvatar
+                            avatarUrl={account.avatarUrl}
+                            displayName={account.displayName}
+                            username={account.username}
+                            size={36}
+                            className="shrink-0"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
+                              {account.displayName}
+                            </span>
+                            <span className="mt-[6px] block truncate text-[11px] leading-none text-[#666666]">
+                              @{account.username}
+                            </span>
+                          </span>
+                          {isCurrent ? (
+                            <span className="inline-flex rounded-full border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.1)] px-[8px] py-[5px] text-[10px] leading-none font-medium text-[#8AB6FF]">
+                              ativa
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="border-t border-[#121212] pt-[12px]">
                   <div className="space-y-[4px]">
+                    <button
+                      type="button"
+                      onClick={handleOpenMyAccount}
+                      className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B7B7B7] transition-colors hover:bg-[#111111] hover:text-[#ECECEC]"
+                    >
+                      <UserRound className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} />
+                      <span className="text-[14px] leading-none font-medium">Minha conta</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenAccountSettings}
+                      className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B7B7B7] transition-colors hover:bg-[#111111] hover:text-[#ECECEC]"
+                    >
+                      <Cog className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} />
+                      <span className="text-[14px] leading-none font-medium">Configuracoes</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#656565]"
+                    >
+                      <Palette className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} />
+                      <span className="text-[14px] leading-none font-medium">Personalizacao</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenHelp}
+                      className="flex w-full items-center justify-between gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B7B7B7] transition-colors hover:bg-[#111111] hover:text-[#ECECEC]"
+                    >
+                      <span className="inline-flex items-center gap-[12px]">
+                        <CircleHelp className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} />
+                        <span className="text-[14px] leading-none font-medium">Ajuda</span>
+                      </span>
+                      <ChevronRight className="h-[14px] w-[14px] shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => { void handleLogout(); }}
@@ -543,13 +876,18 @@ export function AccountWorkspace({
 
           <button
             type="button"
-            onClick={() => setIsProfileMenuOpen((p) => !p)}
+            onClick={() => setIsProfileMenuOpen((current) => !current)}
             className="flex w-full items-center justify-between gap-[12px] rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px] text-left transition-colors hover:border-[#1A1A1A] hover:bg-[#0B0B0B]"
             aria-expanded={isProfileMenuOpen}
             aria-haspopup="menu"
           >
             <div className="flex min-w-0 items-center gap-[10px]">
-              <AccountAvatar avatarUrl={avatarUrl} displayName={displayName} size={38} />
+              <AccountAvatar
+                avatarUrl={avatarUrl}
+                displayName={displayName}
+                username={username}
+                size={38}
+              />
               <div className="min-w-0">
                 <p className="truncate text-[15px] leading-none font-medium tracking-[-0.03em] text-[#E5E5E5]">
                   {displayName}
@@ -578,8 +916,8 @@ export function AccountWorkspace({
       <div className="hidden xl:block">
         <aside className="fixed inset-y-0 left-0 z-20 w-[318px]">
           <div className={`${sidebarShellClass} h-full rounded-none border-y-0 border-l-0 border-r-[#151515]`}>
-            <LandingReveal delay={90}>
-              {renderSidebarContent()}
+            <LandingReveal delay={24} duration={240}>
+              {renderSidebarContent(desktopProfileMenuRef)}
             </LandingReveal>
           </div>
         </aside>
@@ -588,15 +926,15 @@ export function AccountWorkspace({
       <main className="relative px-[20px] pt-[32px] pb-[56px] md:px-6 lg:px-8 xl:min-h-screen xl:pl-[358px] xl:pr-[42px]">
         <div className="mx-auto w-full max-w-[1220px]">
           <aside className="mb-[20px] min-w-0 xl:hidden">
-            <LandingReveal delay={90}>
+            <LandingReveal delay={24} duration={240}>
               <div className={`${sidebarShellClass} rounded-[28px]`}>
-                {renderSidebarContent()}
+                {renderSidebarContent(mobileProfileMenuRef)}
               </div>
             </LandingReveal>
           </aside>
 
           <section className="min-w-0">
-            <LandingReveal delay={120}>
+            <LandingReveal delay={36} duration={240}>
               <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
                 <div>
                   <LandingGlowTag className="px-[24px]">{meta.eyebrow}</LandingGlowTag>
@@ -610,7 +948,7 @@ export function AccountWorkspace({
               </div>
             </LandingReveal>
 
-            <LandingReveal delay={180}>
+            <LandingReveal delay={52} duration={240}>
               <div className="mt-[28px]">
                 {/* Suspension Banner */}
                 {isSuspended && activeTab !== "status" && (

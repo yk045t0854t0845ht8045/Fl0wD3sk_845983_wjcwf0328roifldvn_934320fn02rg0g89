@@ -33,8 +33,16 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
+import {
+  buildAccountPathWithReturn,
+  getCurrentBrowserPath,
+} from "@/lib/account/navigation";
 import type { ManagedServer } from "@/lib/servers/managedServers";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+import {
+  scheduleWarmBrowserRoutes,
+  warmBrowserRoute,
+} from "@/lib/routing/browserWarmup";
 import {
   readCachedManagedServers,
   readManagedServersMemoryCache,
@@ -754,21 +762,29 @@ export function DashboardWorkspace({
 
   const prefetchRoute = useCallback(
     (href: string) => {
-      const target = buildBrowserRoutingTargetFromInternalPath(href);
-      if (!target.sameOrigin) return;
-      void router.prefetch(target.path);
+      warmBrowserRoute(href, { router });
     },
     [router],
   );
 
   useEffect(() => {
-    [...PRIMARY_ITEMS, ...SECONDARY_ITEMS, ...DOMAIN_ITEMS, ...BILLING_ITEMS].forEach((item) => {
-      prefetchRoute(item.href);
-    });
-    prefetchRoute("/servers");
-    prefetchRoute("/servers/plans");
-    prefetchRoute("/account");
-  }, [prefetchRoute]);
+    return scheduleWarmBrowserRoutes(
+      [
+        ...PRIMARY_ITEMS.map((item) => item.href),
+        ...SECONDARY_ITEMS.map((item) => item.href),
+        ...DOMAIN_ITEMS.map((item) => item.href),
+        ...BILLING_ITEMS.map((item) => item.href),
+        "/servers",
+        "/servers/plans",
+        "/account",
+        "/discord/link",
+      ],
+      {
+        router,
+        delayMs: 80,
+      },
+    );
+  }, [router]);
 
   useEffect(() => {
     try {
@@ -838,7 +854,10 @@ export function DashboardWorkspace({
     (href: string, nextViewId?: DashboardViewId | null) => {
       setIsTeamMenuOpen(false);
       setIsProfileMenuOpen(false);
-      const target = buildBrowserRoutingTargetFromInternalPath(href);
+      const target = warmBrowserRoute(href, {
+        router,
+        prefetchDocument: true,
+      });
       const comparableCurrentPath = normalizeComparablePath(pathname);
       const comparableNextPath = normalizeComparablePath(target.path);
       if (comparableCurrentPath === comparableNextPath) return;
@@ -1111,7 +1130,7 @@ export function DashboardWorkspace({
   );
 
   const handleOpenAccountSettings = useCallback(() => {
-    navigateToHref("/account");
+    navigateToHref(buildAccountPathWithReturn(getCurrentBrowserPath()));
   }, [navigateToHref]);
 
   const handleOpenMyAccount = useCallback(() => {
@@ -1676,7 +1695,7 @@ export function DashboardWorkspace({
           }`}
         >
           <div className={`${sidebarShellClass} h-full rounded-none border-y-0 border-l-0 border-r-[#151515]`}>
-            <LandingReveal delay={90}>
+            <LandingReveal delay={24} duration={240}>
               {renderSidebarContent(desktopTeamMenuRef, desktopProfileMenuRef)}
             </LandingReveal>
           </div>
@@ -1690,7 +1709,7 @@ export function DashboardWorkspace({
       >
         <div className="mx-auto w-full max-w-[1220px]">
           <aside className="mb-[20px] min-w-0 lg:hidden">
-            <LandingReveal delay={90}>
+            <LandingReveal delay={24} duration={240}>
               <div className={`${sidebarShellClass} rounded-[28px]`}>
                 {renderSidebarContent(mobileTeamMenuRef, mobileProfileMenuRef)}
               </div>
@@ -1698,7 +1717,7 @@ export function DashboardWorkspace({
           </aside>
 
           <section className="min-w-0">
-            <LandingReveal delay={120}>
+            <LandingReveal delay={36} duration={240}>
               <div className="relative z-[700] flex flex-col gap-[18px]">
                 <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
                   <div>
@@ -1717,7 +1736,7 @@ export function DashboardWorkspace({
             </LandingReveal>
 
             {showPlaceholder ? (
-              <LandingReveal delay={180}>
+              <LandingReveal delay={52} duration={240}>
                 <div className={`mt-[22px] ${shellClass} px-[22px] py-[24px]`}>
                   <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[22px] py-[26px]">
                     <p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">

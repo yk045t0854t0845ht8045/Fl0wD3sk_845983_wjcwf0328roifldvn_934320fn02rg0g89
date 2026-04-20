@@ -339,12 +339,12 @@ html {
   opacity: 0;
   transform: translateY(14px) scale(0.985);
   filter: blur(8px);
-  animation: flowdesk-landing-reveal 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: flowdesk-landing-reveal var(--flowdesk-reveal-duration, 620ms) cubic-bezier(0.22, 1, 0.36, 1) both;
   animation-delay: var(--flowdesk-reveal-delay, 0ms);
   transition:
-    opacity 620ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 620ms cubic-bezier(0.22, 1, 0.36, 1),
-    filter 620ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--flowdesk-reveal-duration, 620ms) cubic-bezier(0.22, 1, 0.36, 1),
+    transform var(--flowdesk-reveal-duration, 620ms) cubic-bezier(0.22, 1, 0.36, 1),
+    filter var(--flowdesk-reveal-duration, 620ms) cubic-bezier(0.22, 1, 0.36, 1);
   transition-delay: var(--flowdesk-reveal-delay, 0ms);
   will-change: transform, opacity, filter;
 }

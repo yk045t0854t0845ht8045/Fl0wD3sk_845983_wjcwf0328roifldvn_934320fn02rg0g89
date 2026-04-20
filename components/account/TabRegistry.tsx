@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { ComponentType } from "react";
+import { useCallback, useEffect, type ComponentType } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import Image from "next/image";
@@ -18,7 +18,10 @@ import {
 } from "lucide-react";
 
 import { type AccountTab } from "@/lib/account/tabs";
-import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+import {
+  scheduleWarmBrowserRoutes,
+  warmBrowserRoute,
+} from "@/lib/routing/browserWarmup";
 
 type AccountSummaryData = {
   plan?: {
@@ -47,15 +50,47 @@ type TabRendererProps = {
   [key: string]: unknown;
 };
 
-const TAB_COMPONENTS: Record<string, ComponentType<any>> = {
-  plans: dynamic<any>(() => import("@/components/account/tabs/PlansTab").then((m) => m.PlansTab), { ssr: false }),
-  payment_methods: dynamic<any>(() => import("@/components/account/tabs/PaymentMethodsTab").then((m) => m.PaymentMethodsTab), { ssr: false }),
-  payment_history: dynamic<any>(() => import("@/components/account/tabs/PaymentHistoryTab").then((m) => m.PaymentHistoryTab), { ssr: false }),
-  api_keys: dynamic<any>(() => import("@/components/account/tabs/ApiKeysTab").then((m) => m.ApiKeysTab), { ssr: false }),
-  teams: dynamic<any>(() => import("@/components/account/tabs/TeamsTab").then((m) => m.TeamsTab), { ssr: false }),
-  tickets: dynamic<any>(() => import("@/components/account/tabs/TicketsTab").then((m) => m.TicketsTab), { ssr: false }),
-  status: dynamic<any>(() => import("@/components/account/tabs/StatusTab").then((m) => m.StatusTab), { ssr: false }),
-  delete_account: dynamic<any>(() => import("@/components/account/tabs/DeleteAccountTab").then((m) => m.DeleteAccountTab), { ssr: false }),
+const ACCOUNT_TAB_IMPORTERS = {
+  plans: () => import("@/components/account/tabs/PlansTab"),
+  payment_methods: () => import("@/components/account/tabs/PaymentMethodsTab"),
+  payment_history: () => import("@/components/account/tabs/PaymentHistoryTab"),
+  api_keys: () => import("@/components/account/tabs/ApiKeysTab"),
+  teams: () => import("@/components/account/tabs/TeamsTab"),
+  tickets: () => import("@/components/account/tabs/TicketsTab"),
+  status: () => import("@/components/account/tabs/StatusTab"),
+  delete_account: () => import("@/components/account/tabs/DeleteAccountTab"),
+} as const;
+
+const PRELOADABLE_ACCOUNT_TABS = Object.keys(
+  ACCOUNT_TAB_IMPORTERS,
+) as Array<Exclude<AccountTab, "overview">>;
+
+function AccountTabLoadingState() {
+  return (
+    <div className="space-y-[16px]">
+      <div className="flowdesk-shimmer h-[68px] rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+      <div className="grid gap-[12px] md:grid-cols-2">
+        <div className="flowdesk-shimmer h-[140px] rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+        <div className="flowdesk-shimmer h-[140px] rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+      </div>
+      <div className="flowdesk-shimmer h-[220px] rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />
+    </div>
+  );
+}
+
+function preloadAccountTabModule(tab: Exclude<AccountTab, "overview">) {
+  return ACCOUNT_TAB_IMPORTERS[tab]().catch(() => null);
+}
+
+const TAB_COMPONENTS: Record<string, ComponentType<Record<string, unknown>>> = {
+  plans: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.plans().then((m) => m.PlansTab), { ssr: false, loading: AccountTabLoadingState }),
+  payment_methods: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.payment_methods().then((m) => m.PaymentMethodsTab), { ssr: false, loading: AccountTabLoadingState }),
+  payment_history: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.payment_history().then((m) => m.PaymentHistoryTab), { ssr: false, loading: AccountTabLoadingState }),
+  api_keys: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.api_keys().then((m) => m.ApiKeysTab), { ssr: false, loading: AccountTabLoadingState }),
+  teams: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.teams().then((m) => m.TeamsTab), { ssr: false, loading: AccountTabLoadingState }),
+  tickets: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.tickets().then((m) => m.TicketsTab), { ssr: false, loading: AccountTabLoadingState }),
+  status: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.status().then((m) => m.StatusTab), { ssr: false, loading: AccountTabLoadingState }),
+  delete_account: dynamic<Record<string, unknown>>(() => ACCOUNT_TAB_IMPORTERS.delete_account().then((m) => m.DeleteAccountTab), { ssr: false, loading: AccountTabLoadingState }),
 };
 
 export function TabRenderer({
@@ -67,15 +102,43 @@ export function TabRenderer({
   ...props
 }: TabRendererProps) {
   const router = useRouter();
-  const navigateToAccountPath = (href: string) => {
-    const target = buildBrowserRoutingTargetFromInternalPath(href);
+  const navigateToAccountPath = useCallback((href: string) => {
+    const target = warmBrowserRoute(href, {
+      router,
+      prefetchDocument: true,
+    });
     if (!target.sameOrigin) {
       window.location.assign(target.href);
       return;
     }
 
-    router.push(target.path);
-  };
+    router.push(target.path, { scroll: false });
+  }, [router]);
+
+  useEffect(() => {
+    return scheduleWarmBrowserRoutes(
+      PRELOADABLE_ACCOUNT_TABS.map((tab) => `/account/${tab}`),
+      {
+        router,
+        delayMs: 90,
+      },
+    );
+  }, [router]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      PRELOADABLE_ACCOUNT_TABS.forEach((tab) => {
+        void preloadAccountTabModule(tab);
+      });
+    }, 60);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, []);
 
   if (id === "overview") {
     return (
@@ -176,17 +239,19 @@ function OverviewContent({
   );
 
   const router = useRouter();
-  const onNavigate = (tab: AccountTab) =>
-    {
-      const href = tab === "overview" ? "/account" : `/account/${tab}`;
-      const target = buildBrowserRoutingTargetFromInternalPath(href);
-      if (!target.sameOrigin) {
-        window.location.assign(target.href);
-        return;
-      }
+  const onNavigate = useCallback((tab: AccountTab) => {
+    const href = tab === "overview" ? "/account" : `/account/${tab}`;
+    const target = warmBrowserRoute(href, {
+      router,
+      prefetchDocument: true,
+    });
+    if (!target.sameOrigin) {
+      window.location.assign(target.href);
+      return;
+    }
 
-      router.push(target.path);
-    };
+    router.push(target.path, { scroll: false });
+  }, [router]);
 
   const summary = data?.ok ? data.summary ?? null : initialSummary ?? null;
   const summaryWarning =
@@ -322,6 +387,14 @@ function OverviewContent({
               key={card.id}
               type="button"
               onClick={() => onNavigate(card.id)}
+              onMouseEnter={() => {
+                warmBrowserRoute(`/account/${card.id}`, { router });
+                void preloadAccountTabModule(card.id);
+              }}
+              onFocus={() => {
+                warmBrowserRoute(`/account/${card.id}`, { router });
+                void preloadAccountTabModule(card.id);
+              }}
               className="group flex min-h-[130px] w-full flex-col items-start justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[20px] text-left transition-all duration-300 hover:scale-[1.01] hover:border-[#222222] hover:bg-gradient-to-b hover:from-[#0D0D0D] hover:to-[#0A0A0A]"
             >
               <div className="flex h-[38px] w-[38px] items-center justify-center rounded-[12px] border border-[#1A1A1A] bg-[#111111] transition-colors group-hover:border-[#2A2A2A] group-hover:bg-[#151515]">

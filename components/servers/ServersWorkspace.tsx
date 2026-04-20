@@ -46,6 +46,10 @@ import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor"
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
 import { resolveAddServerTargetHref } from "@/lib/plans/addServerFlow";
+import {
+  buildAccountPathWithReturn,
+  getCurrentBrowserPath,
+} from "@/lib/account/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import type { ManagedServer, ManagedServerStatus } from "@/lib/servers/managedServers";
 import {
@@ -65,6 +69,10 @@ import {
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
 import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+import {
+  scheduleWarmBrowserRoutes,
+  warmBrowserRoute,
+} from "@/lib/routing/browserWarmup";
 
 type ServersWorkspaceProps = {
   displayName: string;
@@ -308,9 +316,9 @@ const sidebarShellClass =
 
 const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
 const editorPanelRevealClass =
-  "origin-top transform-gpu transition-[opacity,transform,filter] duration-[620ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[flowdesk-visible=false]:translate-y-[18px] data-[flowdesk-visible=false]:scale-[0.985] data-[flowdesk-visible=false]:opacity-0 data-[flowdesk-visible=true]:translate-y-0 data-[flowdesk-visible=true]:scale-100 data-[flowdesk-visible=true]:opacity-100";
+  "origin-top transform-gpu transition-[opacity,transform,filter] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[flowdesk-visible=false]:translate-y-[18px] data-[flowdesk-visible=false]:scale-[0.985] data-[flowdesk-visible=false]:opacity-0 data-[flowdesk-visible=true]:translate-y-0 data-[flowdesk-visible=true]:scale-100 data-[flowdesk-visible=true]:opacity-100";
 const workspacePaneRevealClass =
-  "transform-gpu transition-[opacity,transform,filter] duration-[620ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[flowdesk-visible=false]:translate-y-[14px] data-[flowdesk-visible=false]:scale-[0.992] data-[flowdesk-visible=false]:opacity-0 data-[flowdesk-visible=true]:translate-y-0 data-[flowdesk-visible=true]:scale-100 data-[flowdesk-visible=true]:opacity-100";
+  "transform-gpu transition-[opacity,transform,filter] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[flowdesk-visible=false]:translate-y-[14px] data-[flowdesk-visible=false]:scale-[0.992] data-[flowdesk-visible=false]:opacity-0 data-[flowdesk-visible=true]:translate-y-0 data-[flowdesk-visible=true]:scale-100 data-[flowdesk-visible=true]:opacity-100";
 
 const TEAM_ICON_OPTIONS = [
   {
@@ -570,6 +578,26 @@ function FilterIcon() {
   return <SlidersHorizontal className="h-[18px] w-[18px] shrink-0" strokeWidth={1.85} aria-hidden="true" />;
 }
 
+function ServersEmptyState({ selectedTeamName }: { selectedTeamName?: string | null }) {
+  const description = selectedTeamName
+    ? `Nao ha servidores vinculados para ${selectedTeamName} com o filtro atual.`
+    : "Ajuste a busca ou os filtros para encontrar um servidor.";
+
+  return (
+    <div className="flex flex-col items-center justify-center rounded-[18px] border border-[#141414] bg-[#090909] px-[20px] py-[48px] text-center">
+      <div className="flex h-[48px] w-[48px] items-center justify-center rounded-full bg-[#111111]">
+        <FolderKanban className="h-[24px] w-[24px] text-[#888888]" />
+      </div>
+      <p className="mt-[16px] text-[15px] font-medium text-[#E5E5E5]">
+        Nenhum servidor encontrado
+      </p>
+      <p className="mt-[4px] max-w-[360px] text-[14px] text-[#777777]">
+        {description}
+      </p>
+    </div>
+  );
+}
+
 function GridIcon() {
   return <Grid2x2 className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} aria-hidden="true" />;
 }
@@ -810,7 +838,7 @@ function ServerListRow({
   const style = statusStyle(server.status);
 
   return (
-    <LandingReveal delay={Math.min(index, 10) * 55}>
+    <LandingReveal delay={Math.min(index, 10) * 18} duration={220}>
       <article className={`flowdesk-landing-soft-motion relative cursor-pointer border-b border-[#141414] bg-[#0A0A0A] px-[18px] py-[18px] transition-[background-color,border-color] duration-250 hover:border-[#1E1E1E] hover:bg-[#0D0D0D] ${isSelected ? "bg-[#101010]" : ""}`} onClick={() => onOpen(server.guildId)} onMouseEnter={() => onPrefetch(server.guildId)} onFocus={() => onPrefetch(server.guildId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(server.guildId); } }} role="button" tabIndex={0}>
         <div className="flex flex-col gap-[18px] xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 items-center gap-[16px]">
@@ -883,7 +911,7 @@ function ServerGridCard({
   const style = statusStyle(server.status);
 
   return (
-    <LandingReveal delay={Math.min(index, 8) * 60}>
+    <LandingReveal delay={Math.min(index, 8) * 20} duration={220}>
       <article
         className={`flowdesk-landing-soft-motion relative cursor-pointer rounded-[26px] border border-[#151515] bg-[#0A0A0A] p-[18px] transition-[border-color,background-color,transform] duration-250 hover:border-[#1E1E1E] hover:bg-[#0D0D0D] ${isSelected ? "border-[rgba(0,98,255,0.28)] bg-[#0E0E0E]" : ""}`}
         onClick={() => onOpen(server.guildId)}
@@ -1874,14 +1902,19 @@ export function ServersWorkspace({
   }, [errorMessage, filteredServers, isLoading, selectedGuildIdForConfig]);
 
   useEffect(() => {
-    const dashboardTarget = buildBrowserRoutingTargetFromInternalPath("/dashboard");
-    const accountTarget = buildBrowserRoutingTargetFromInternalPath("/account");
-    if (dashboardTarget.sameOrigin) {
-      router.prefetch(dashboardTarget.path);
-    }
-    if (accountTarget.sameOrigin) {
-      router.prefetch(accountTarget.path);
-    }
+    return scheduleWarmBrowserRoutes(
+      [
+        "/dashboard",
+        "/account",
+        "/discord/link",
+        "/servers",
+        "/servers/plans",
+      ],
+      {
+        router,
+        delayMs: 80,
+      },
+    );
   }, [router]);
 
   const buildServerConfigUrl = useCallback((
@@ -1925,7 +1958,10 @@ export function ServersWorkspace({
 
   const navigateToUrl = useCallback((nextUrl: string, mode: "push" | "replace" = "push") => {
     if (typeof window === "undefined") return;
-    const target = buildBrowserRoutingTargetFromInternalPath(nextUrl);
+    const target = warmBrowserRoute(nextUrl, {
+      router,
+      prefetchDocument: true,
+    });
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const comparableCurrentUrl = normalizeComparablePath(currentUrl);
     const comparableNextUrl = normalizeComparablePath(target.path);
@@ -2105,7 +2141,7 @@ export function ServersWorkspace({
 
   const handleOpenAccountSettings = useCallback(() => {
     setIsProfileMenuOpen(false);
-    navigateToUrl("/account");
+    navigateToUrl(buildAccountPathWithReturn(getCurrentBrowserPath()));
   }, [navigateToUrl]);
 
   const handleOpenMyAccount = useCallback(() => {
@@ -3225,7 +3261,7 @@ export function ServersWorkspace({
           }`}
         >
           <div className={`${sidebarShellClass} h-full rounded-none border-y-0 border-l-0 border-r-[#151515]`}>
-            <LandingReveal delay={90}>
+            <LandingReveal delay={24} duration={240}>
               {renderSidebarContent(desktopTeamMenuRef, desktopProfileMenuRef, desktopSidebarSearchInputRef)}
             </LandingReveal>
           </div>
@@ -3238,14 +3274,14 @@ export function ServersWorkspace({
       >
         <div className="mx-auto w-full max-w-[1220px]">
           <aside className="mb-[20px] min-w-0 lg:hidden">
-            <LandingReveal delay={90}>
+            <LandingReveal delay={24} duration={240}>
               <div className={`${sidebarShellClass} rounded-[28px]`}>
                 {renderSidebarContent(mobileTeamMenuRef, mobileProfileMenuRef, mobileSidebarSearchInputRef)}
               </div>
             </LandingReveal>
           </aside>
           <section className="min-w-0">
-            <LandingReveal delay={120}>
+            <LandingReveal delay={36} duration={240}>
               <div className="relative z-[700] flex flex-col gap-[18px]">
                 <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
                   <div>
@@ -3384,7 +3420,7 @@ export function ServersWorkspace({
             </LandingReveal>
             <div className="relative z-[10] mt-[22px]">
               {selectedServer ? (
-                <LandingReveal delay={180}>
+                <LandingReveal delay={52} duration={240}>
                   <div className={editorPanelRevealClass}>
                     <ServerSettingsEditor
                       {...selectedServer}
@@ -3408,13 +3444,13 @@ export function ServersWorkspace({
                   </div>
                 </LandingReveal>
               ) : shouldShowEditorSkeleton ? (
-                <LandingReveal delay={180}>
+                <LandingReveal delay={52} duration={240}>
                   <div className={editorPanelRevealClass}>
                     <ServerSettingsEditorSkeleton standalone />
                   </div>
                 </LandingReveal>
               ) : shouldShowEditorUnavailableState ? (
-                <LandingReveal delay={180}>
+                <LandingReveal delay={52} duration={240}>
                   <div className={`${editorPanelRevealClass} ${shellClass} px-[22px] py-[24px]`}>
                     <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[20px] py-[20px]">
                       {errorMessage === "Acesso negado." ? (
@@ -3462,7 +3498,7 @@ export function ServersWorkspace({
                   </div>
                 </LandingReveal>
               ) : (
-                <LandingReveal delay={180}>
+                <LandingReveal delay={52} duration={240}>
                   {viewMode === "overview" ? (
                     <div className={workspacePaneRevealClass}>
                       <div className="mb-[18px] flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between">
@@ -3509,13 +3545,13 @@ export function ServersWorkspace({
                           ))}
                         </div>
                       ) : (
-                        <div className="py-[34px] text-center text-[13px] text-[#C2C2C2]">{selectedTeam ? "Nenhum servidor vinculado ou encontrado para essa equipe." : "Nenhum servidor encontrado para esse filtro."}</div>
+                        <ServersEmptyState selectedTeamName={selectedTeam?.name} />
                       )}
                     </div>
                   ) : (
                     <div className={`${shellClass} ${workspacePaneRevealClass} overflow-visible`}>
                       <div className="border-b border-[#141414] px-[18px] py-[18px]"><div className="flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">Projetos</p><h2 className="mt-[10px] text-[26px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">{selectedTeam ? `Servidores da equipe ${selectedTeam.name}` : "Todos os servidores"}</h2></div><p className="text-[13px] leading-[1.5] text-[#6F6F6F]">{filteredServers.length} resultado(s) exibidos de {activeTeamServerCount} servidor(es).</p></div></div>
-                      {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} />)}</div> : <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{selectedTeam ? "Nenhum servidor vinculado ou encontrado para essa equipe." : "Nenhum servidor encontrado para esse filtro."}</div>}
+                      {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} />)}</div> : <div className="px-[18px] py-[24px]"><ServersEmptyState selectedTeamName={selectedTeam?.name} /></div>}
                     </div>
                   )}
                 </LandingReveal>

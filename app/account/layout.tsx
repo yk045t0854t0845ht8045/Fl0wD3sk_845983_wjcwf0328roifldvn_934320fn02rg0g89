@@ -25,6 +25,8 @@ async function AccountLayoutContent({
 
   return (
     <AccountWorkspace
+      authUserId={user.id}
+      discordUserId={user.discord_user_id}
       displayName={user.display_name}
       username={user.username}
       avatarUrl={buildDiscordAvatarUrl(user.discord_user_id, user.avatar)}
