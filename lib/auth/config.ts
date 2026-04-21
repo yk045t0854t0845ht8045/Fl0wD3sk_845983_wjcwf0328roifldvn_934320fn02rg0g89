@@ -17,15 +17,40 @@ const LEGACY_PRODUCTION_HOSTS = new Set([
 const OAUTH_PROVIDER_COOKIE_PREFIX = "flowdesk_oauth";
 
 export type OAuthProvider = "discord" | "google" | "microsoft";
+type AuthConfig = {
+  readonly discordClientId: string;
+  readonly discordClientSecret: string;
+  readonly discordRedirectUriLocal: string;
+  readonly discordRedirectUriProd: string;
+  readonly googleClientId: string | null;
+  readonly googleClientSecret: string | null;
+  readonly microsoftClientId: string | null;
+  readonly microsoftClientSecret: string | null;
+  readonly googleRedirectUriLocal: string;
+  readonly googleRedirectUriProd: string;
+  readonly microsoftRedirectUriLocal: string;
+  readonly microsoftRedirectUriProd: string;
+  readonly loginSuccessBasePath: string;
+  readonly loginSuccessHashPath: string;
+  readonly sessionCookieName: string;
+  readonly rememberedDeviceCookieName: string;
+  readonly sessionTtlHours: number;
+  readonly rememberedDeviceDays: number;
+};
 
 function requireEnv(name: string) {
-  const value = process.env[name];
+  const value = process.env[name]?.trim();
 
   if (!value) {
     throw new Error(`Variavel obrigatoria ausente: ${name}`);
   }
 
   return value;
+}
+
+function optionalEnv(name: string) {
+  const value = process.env[name]?.trim();
+  return value || null;
 }
 
 function parseSessionHours() {
@@ -92,55 +117,97 @@ function buildDefaultRedirectUri(origin: string, pathname: string) {
   return new URL(pathname, origin).toString();
 }
 
-export const authConfig = {
-  discordClientId: requireEnv("DISCORD_CLIENT_ID"),
-  discordClientSecret: requireEnv("DISCORD_CLIENT_SECRET"),
-  discordRedirectUriLocal:
-    process.env.DISCORD_REDIRECT_URI_LOCAL ||
-    buildDefaultRedirectUri(
-      resolveDefaultLocalAuthOrigin(),
-      "/api/auth/discord/callback",
-    ),
-  discordRedirectUriProd:
-    process.env.DISCORD_REDIRECT_URI_PROD ||
-    buildDefaultRedirectUri(
-      resolveDefaultProductionAuthOrigin(),
-      "/api/auth/discord/callback",
-    ),
-  googleClientId: process.env.GOOGLE_CLIENT_ID?.trim() || null,
-  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || null,
-  microsoftClientId: process.env.MICROSOFT_CLIENT_ID?.trim() || null,
-  microsoftClientSecret: process.env.MICROSOFT_CLIENT_SECRET?.trim() || null,
-  googleRedirectUriLocal:
-    process.env.GOOGLE_REDIRECT_URI_LOCAL ||
-    buildDefaultRedirectUri(
-      resolveDefaultLocalAuthOrigin(),
-      "/api/auth/google/callback",
-    ),
-  googleRedirectUriProd:
-    process.env.GOOGLE_REDIRECT_URI_PROD ||
-    buildDefaultRedirectUri(
-      resolveDefaultProductionAuthOrigin(),
-      "/api/auth/google/callback",
-    ),
-  microsoftRedirectUriLocal:
-    process.env.MICROSOFT_REDIRECT_URI_LOCAL ||
-    buildDefaultRedirectUri(
-      resolveDefaultLocalAuthOrigin(),
-      "/api/auth/microsoft/callback",
-    ),
-  microsoftRedirectUriProd:
-    process.env.MICROSOFT_REDIRECT_URI_PROD ||
-    buildDefaultRedirectUri(
-      resolveDefaultProductionAuthOrigin(),
-      "/api/auth/microsoft/callback",
-    ),
-  loginSuccessBasePath: process.env.LOGIN_SUCCESS_BASE_PATH || "/dashboard",
-  loginSuccessHashPath: process.env.LOGIN_SUCCESS_HASH_PATH || "",
-  sessionCookieName: "flowdesk_auth_session",
-  rememberedDeviceCookieName: "flowdesk_auth_trusted_device",
-  sessionTtlHours: parseSessionHours(),
-  rememberedDeviceDays: parseRememberDeviceDays(),
+export const authConfig: AuthConfig = {
+  get discordClientId() {
+    return requireEnv("DISCORD_CLIENT_ID");
+  },
+  get discordClientSecret() {
+    return requireEnv("DISCORD_CLIENT_SECRET");
+  },
+  get discordRedirectUriLocal() {
+    return (
+      optionalEnv("DISCORD_REDIRECT_URI_LOCAL") ||
+      buildDefaultRedirectUri(
+        resolveDefaultLocalAuthOrigin(),
+        "/api/auth/discord/callback",
+      )
+    );
+  },
+  get discordRedirectUriProd() {
+    return (
+      optionalEnv("DISCORD_REDIRECT_URI_PROD") ||
+      buildDefaultRedirectUri(
+        resolveDefaultProductionAuthOrigin(),
+        "/api/auth/discord/callback",
+      )
+    );
+  },
+  get googleClientId() {
+    return optionalEnv("GOOGLE_CLIENT_ID");
+  },
+  get googleClientSecret() {
+    return optionalEnv("GOOGLE_CLIENT_SECRET");
+  },
+  get microsoftClientId() {
+    return optionalEnv("MICROSOFT_CLIENT_ID");
+  },
+  get microsoftClientSecret() {
+    return optionalEnv("MICROSOFT_CLIENT_SECRET");
+  },
+  get googleRedirectUriLocal() {
+    return (
+      optionalEnv("GOOGLE_REDIRECT_URI_LOCAL") ||
+      buildDefaultRedirectUri(
+        resolveDefaultLocalAuthOrigin(),
+        "/api/auth/google/callback",
+      )
+    );
+  },
+  get googleRedirectUriProd() {
+    return (
+      optionalEnv("GOOGLE_REDIRECT_URI_PROD") ||
+      buildDefaultRedirectUri(
+        resolveDefaultProductionAuthOrigin(),
+        "/api/auth/google/callback",
+      )
+    );
+  },
+  get microsoftRedirectUriLocal() {
+    return (
+      optionalEnv("MICROSOFT_REDIRECT_URI_LOCAL") ||
+      buildDefaultRedirectUri(
+        resolveDefaultLocalAuthOrigin(),
+        "/api/auth/microsoft/callback",
+      )
+    );
+  },
+  get microsoftRedirectUriProd() {
+    return (
+      optionalEnv("MICROSOFT_REDIRECT_URI_PROD") ||
+      buildDefaultRedirectUri(
+        resolveDefaultProductionAuthOrigin(),
+        "/api/auth/microsoft/callback",
+      )
+    );
+  },
+  get loginSuccessBasePath() {
+    return process.env.LOGIN_SUCCESS_BASE_PATH || "/dashboard";
+  },
+  get loginSuccessHashPath() {
+    return process.env.LOGIN_SUCCESS_HASH_PATH || "";
+  },
+  get sessionCookieName() {
+    return "flowdesk_auth_session";
+  },
+  get rememberedDeviceCookieName() {
+    return "flowdesk_auth_trusted_device";
+  },
+  get sessionTtlHours() {
+    return parseSessionHours();
+  },
+  get rememberedDeviceDays() {
+    return parseRememberDeviceDays();
+  },
 };
 
 function resolveRequestScopedRedirectUri(
