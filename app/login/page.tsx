@@ -11,8 +11,19 @@ import {
   normalizeInternalNextPath,
 } from "@/lib/auth/config";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
+import { buildFlowCwvMetadata } from "@/lib/seo/flowCwv";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = buildFlowCwvMetadata({
+  title: "Login do painel",
+  description:
+    "Acesse o painel Flowdesk para gerenciar automacoes, tickets, dominios, infraestrutura e operacao integrada com Discord.",
+  pathname: "/login",
+  noIndex: true,
+  keywords: ["login", "painel", "discord", "infraestrutura"],
+});
 
 type LoginPageProps = {
   searchParams?: Promise<{

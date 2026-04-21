@@ -38,6 +38,24 @@ export type DiscordGuildRole = {
   managed: boolean;
 };
 
+export type DiscordGuildMemberSummary = {
+  avatarUrl: string | null;
+  displayName: string;
+  memberId: string;
+  mentionLabel: string;
+};
+
+type DiscordBotGuildMemberPayload = {
+  avatar?: string | null;
+  nick?: string | null;
+  user?: {
+    avatar?: string | null;
+    global_name?: string | null;
+    id?: string;
+    username?: string | null;
+  } | null;
+};
+
 type BotResourceCacheEntry<T> = {
   timestamp: number;
   value: T;
@@ -51,6 +69,10 @@ const botGuildChannelsCache = new Map<
 const botGuildRolesCache = new Map<
   string,
   BotResourceCacheEntry<DiscordGuildRole[]>
+>();
+const botGuildMemberSummaryCache = new Map<
+  string,
+  BotResourceCacheEntry<DiscordGuildMemberSummary>
 >();
 
 export function isGuildId(value: string) {
@@ -114,6 +136,35 @@ function sleep(ms: number) {
 
 function sanitizeDiscordBotFailureMessage(resourceLabel: string) {
   return `Nao foi possivel sincronizar ${resourceLabel} do Discord agora. Tente novamente em instantes.`;
+}
+
+function buildDiscordAvatarUrl(
+  userId: string,
+  avatarHash: string | null | undefined,
+) {
+  if (!avatarHash) return null;
+  const extension = avatarHash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${extension}?size=64`;
+}
+
+function buildDiscordGuildMemberAvatarUrl(
+  guildId: string,
+  userId: string,
+  avatarHash: string | null | undefined,
+) {
+  if (!avatarHash) return null;
+  const extension = avatarHash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/guilds/${guildId}/users/${userId}/avatars/${avatarHash}.${extension}?size=64`;
+}
+
+function buildFallbackGuildMemberSummary(memberId: string): DiscordGuildMemberSummary {
+  const suffix = memberId.slice(-6);
+  return {
+    avatarUrl: null,
+    displayName: `Membro ${suffix}`,
+    memberId,
+    mentionLabel: `@${suffix}`,
+  };
 }
 
 async function recoverLinkedDiscordTokens(authSession: CurrentAuthSession) {
@@ -459,6 +510,77 @@ export async function fetchGuildRolesByBot(guildId: string) {
     });
 
     throw new Error(sanitizeDiscordBotFailureMessage("os cargos"));
+  }
+}
+
+export async function fetchGuildMemberSummaryByBot(
+  guildId: string,
+  memberId: string,
+): Promise<DiscordGuildMemberSummary | null> {
+  const botToken = resolveBotToken();
+  if (!botToken) {
+    return buildFallbackGuildMemberSummary(memberId);
+  }
+
+  const cacheKey = `${guildId}:${memberId}`;
+  const freshCached = readBotResourceCache(
+    botGuildMemberSummaryCache,
+    cacheKey,
+    BOT_RESOURCE_FRESH_TTL_MS,
+  );
+  if (freshCached) {
+    return freshCached;
+  }
+
+  const staleCached = readBotResourceCache(
+    botGuildMemberSummaryCache,
+    cacheKey,
+    BOT_RESOURCE_STALE_TTL_MS,
+  );
+
+  try {
+    const payload = await fetchDiscordBotJsonWithRetry<DiscordBotGuildMemberPayload>({
+      url: `https://discord.com/api/v10/guilds/${guildId}/members/${memberId}`,
+      botToken,
+      resourceLabel: "o membro",
+    });
+
+    if (!payload?.user?.id) {
+      return staleCached || buildFallbackGuildMemberSummary(memberId);
+    }
+
+    const displayName =
+      payload.nick?.trim() ||
+      payload.user.global_name?.trim() ||
+      payload.user.username?.trim() ||
+      buildFallbackGuildMemberSummary(memberId).displayName;
+    const mentionLabel = displayName.startsWith("@")
+      ? displayName
+      : `@${displayName}`;
+    const avatarUrl =
+      buildDiscordGuildMemberAvatarUrl(guildId, payload.user.id, payload.avatar) ||
+      buildDiscordAvatarUrl(payload.user.id, payload.user.avatar);
+    const summary = {
+      avatarUrl,
+      displayName,
+      memberId: payload.user.id,
+      mentionLabel,
+    } satisfies DiscordGuildMemberSummary;
+
+    writeBotResourceCache(botGuildMemberSummaryCache, cacheKey, summary);
+    return summary;
+  } catch (error) {
+    if (staleCached) {
+      return staleCached;
+    }
+
+    console.error("discord bot member summary fetch failed", {
+      error,
+      guildId,
+      memberId,
+    });
+
+    return buildFallbackGuildMemberSummary(memberId);
   }
 }
 

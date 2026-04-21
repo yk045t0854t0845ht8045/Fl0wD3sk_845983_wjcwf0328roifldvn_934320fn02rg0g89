@@ -4,12 +4,21 @@ import { LandingHeader } from "@/components/landing/LandingHeader";
 import { LandingFooter } from "@/components/landing/LandingFooter";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
 import type { Metadata } from "next";
+import { buildFlowCwvMetadata } from "@/lib/seo/flowCwv";
+import { TopBetaBanner } from "@/components/landing/TopBetaBanner";
 
-export const metadata: Metadata = {
-  title: "Programa de Afiliados — Flowdesk",
+export const metadata: Metadata = buildFlowCwvMetadata({
+  title: "Programa de Afiliados - Flowdesk",
   description:
-    "Indique o Flowdesk e ganhe até 35% de comissão por cada venda aprovada. Dashboard exclusivo, ranking com bônus, webhook em tempo real e muito mais.",
-};
+    "Indique o Flowdesk e ganhe ate 35% de comissao por cada venda aprovada. Dashboard exclusivo, ranking com bonus, webhook em tempo real e muito mais.",
+  pathname: "/affiliates",
+  keywords: [
+    "programa de afiliados",
+    "afiliados flowdesk",
+    "comissao",
+    "dashboard de afiliado",
+  ],
+});
 
 function buildDiscordAvatarUrl(
   discordUserId: string | null,
@@ -19,8 +28,6 @@ function buildDiscordAvatarUrl(
   const extension = avatarHash.startsWith("a_") ? "gif" : "png";
   return `https://cdn.discordapp.com/avatars/${discordUserId}/${avatarHash}.${extension}?size=96`;
 }
-
-import { TopBetaBanner } from "@/components/landing/TopBetaBanner";
 
 export default async function AffiliatesPage() {
   const user = await getCurrentUserFromSessionCookie();

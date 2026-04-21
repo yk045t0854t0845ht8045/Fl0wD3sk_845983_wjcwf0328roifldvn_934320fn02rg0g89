@@ -354,7 +354,6 @@ function AccountAvatar({
         height={size}
         className="rounded-full object-cover"
         style={{ width: size, height: size }}
-        unoptimized
       />
     );
   }
@@ -901,7 +900,7 @@ function RankingTab({ ranking }: { ranking: AffiliateRankEntry[] }) {
                 className="mx-auto flex h-[48px] w-[48px] items-center justify-center rounded-full text-[20px] font-bold bg-[#111] text-[#E5E5E5] border border-[#181818]"
               >
                 {entry.avatarUrl ? (
-                    <Image src={entry.avatarUrl} alt={entry.displayName} width={48} height={48} className="rounded-full" unoptimized />
+                    <Image src={entry.avatarUrl} alt={entry.displayName} width={48} height={48} className="rounded-full" />
                 ) : entry.displayName[0]}
               </div>
               <p className="mt-[10px] text-[15px] font-medium text-[#E8E8E8]">{entry.displayName}</p>
@@ -926,7 +925,7 @@ function RankingTab({ ranking }: { ranking: AffiliateRankEntry[] }) {
                 className="flex h-[36px] w-[36px] items-center justify-center rounded-full text-[14px] font-bold bg-[#111] text-[#AFAFAF] border border-[#151515]"
               >
                 {entry.avatarUrl ? (
-                    <Image src={entry.avatarUrl} alt={entry.displayName} width={36} height={36} className="rounded-full" unoptimized />
+                    <Image src={entry.avatarUrl} alt={entry.displayName} width={36} height={36} className="rounded-full" />
                 ) : entry.displayName[0]}
               </div>
               <div className="min-w-0 flex-1">

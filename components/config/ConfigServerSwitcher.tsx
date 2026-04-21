@@ -99,7 +99,6 @@ function GuildAvatar({
           fill
           sizes="48px"
           className="object-cover"
-          unoptimized
         />
       ) : (
         buildGuildInitial(guild)

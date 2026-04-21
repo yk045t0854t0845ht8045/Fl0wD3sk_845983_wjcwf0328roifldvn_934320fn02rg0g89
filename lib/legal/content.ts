@@ -1,13 +1,18 @@
 export const TERMS_PATH = "/terms";
 export const PRIVACY_PATH = "/privacy";
 
-const APP_URL = "https://www.flwdesk.com";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+  process.env.APP_URL?.trim() ||
+  process.env.SITE_URL?.trim() ||
+  "https://www.flwdesk.com";
 const SUPABASE_PUBLIC_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
   process.env.SUPABASE_URL?.trim() ||
-  "https://sqkhmyhnoyfotifengxv.supabase.co";
+  "https://supabase.com";
 const DISCORD_INVITE_URL =
   process.env.NEXT_PUBLIC_DISCORD_INVITE_URL?.trim() ||
-  "https://discord.gg/ddXtHhvvrx";
+  "https://discord.com";
 
 export type LegalTableCell = {
   text: string;

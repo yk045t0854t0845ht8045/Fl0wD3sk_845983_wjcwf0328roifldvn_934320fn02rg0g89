@@ -33,11 +33,12 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
+import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 import {
   buildAccountPathWithReturn,
   getCurrentBrowserPath,
 } from "@/lib/account/navigation";
-import type { ManagedServer } from "@/lib/servers/managedServers";
+import type { ManagedServer } from "@/lib/servers/managedServersShared";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 import {
   scheduleWarmBrowserRoutes,
@@ -324,7 +325,6 @@ function AccountAvatar({
         width={44}
         height={44}
         className={`rounded-full object-cover ${className}`.trim()}
-        unoptimized
       />
     );
   }
@@ -1144,7 +1144,7 @@ export function DashboardWorkspace({
 
   const handleOpenHelp = useCallback(() => {
     setIsProfileMenuOpen(false);
-    window.open("https://discord.gg/ddXtHhvvrx", "_blank", "noopener,noreferrer");
+    window.open(OFFICIAL_DISCORD_INVITE_URL, "_blank", "noopener,noreferrer");
   }, []);
 
   const renderProfileCard = (profileDropdownRef: RefObject<HTMLDivElement | null>) => (
@@ -1927,7 +1927,6 @@ export function DashboardWorkspace({
                                     width={36}
                                     height={36}
                                     className="h-[36px] w-[36px] rounded-[12px] object-cover"
-                                    unoptimized
                                   />
                                 ) : (
                                   <div className="flex h-[36px] w-[36px] items-center justify-center rounded-[12px] bg-[#131313] text-[11px] font-semibold text-[#8A8A8A]">

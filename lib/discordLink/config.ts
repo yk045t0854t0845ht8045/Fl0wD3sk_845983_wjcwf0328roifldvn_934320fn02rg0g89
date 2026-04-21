@@ -1,11 +1,11 @@
 export const OFFICIAL_DISCORD_GUILD_ID =
-  process.env.OFFICIAL_SUPPORT_GUILD_ID?.trim() || "1353259338759671838";
+  process.env.OFFICIAL_SUPPORT_GUILD_ID?.trim() || "";
 
 export const OFFICIAL_DISCORD_LINK_CHANNEL_ID =
-  process.env.OFFICIAL_LINK_CHANNEL_ID?.trim() || "1358209486363295885";
+  process.env.OFFICIAL_LINK_CHANNEL_ID?.trim() || "";
 
 export const OFFICIAL_DISCORD_LINKED_ROLE_ID =
-  process.env.OFFICIAL_LINKED_ROLE_ID?.trim() || "1358203612672692495";
+  process.env.OFFICIAL_LINKED_ROLE_ID?.trim() || "";
 
 export const OFFICIAL_DISCORD_LINK_PATH =
   process.env.OFFICIAL_ACCOUNT_LINK_PATH?.trim() || "/discord/link";
@@ -18,7 +18,7 @@ export const OFFICIAL_DISCORD_LINKED_ROLE_NAME =
 
 export const OFFICIAL_DISCORD_INVITE_URL =
   process.env.NEXT_PUBLIC_DISCORD_INVITE_URL?.trim() ||
-  "https://discord.gg/ddXtHhvvrx";
+  "https://discord.com";
 
 export const FLOWDESK_APP_URL =
   process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://www.flwdesk.com";
@@ -33,5 +33,9 @@ export function buildOfficialDiscordLinkUrl(origin?: string | null) {
 }
 
 export function buildOfficialDiscordChannelUrl() {
+  if (!OFFICIAL_DISCORD_GUILD_ID || !OFFICIAL_DISCORD_LINK_CHANNEL_ID) {
+    return OFFICIAL_DISCORD_INVITE_URL;
+  }
+
   return `https://discord.com/channels/${OFFICIAL_DISCORD_GUILD_ID}/${OFFICIAL_DISCORD_LINK_CHANNEL_ID}`;
 }

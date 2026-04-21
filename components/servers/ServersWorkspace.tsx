@@ -37,6 +37,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
+import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
@@ -51,7 +52,12 @@ import {
   getCurrentBrowserPath,
 } from "@/lib/account/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
-import type { ManagedServer, ManagedServerStatus } from "@/lib/servers/managedServers";
+import {
+  DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+  type ManagedServer,
+  type ManagedServerStatus,
+  type ManagedServersSyncState,
+} from "@/lib/servers/managedServersShared";
 import {
   buildServerMetaLabel,
   buildServerStatusDescription,
@@ -78,7 +84,7 @@ type ServersWorkspaceProps = {
   displayName: string;
   currentAccount: {
     authUserId: number;
-    discordUserId: string;
+    discordUserId: string | null;
     displayName: string;
     username: string;
     avatarUrl: string | null;
@@ -87,6 +93,7 @@ type ServersWorkspaceProps = {
   initialTab?: "settings" | "payments" | "methods" | "plans";
   initialSettingsSection?: ServerSettingsSection;
   initialServers?: ManagedServer[] | null;
+  initialServersSync?: ManagedServersSyncState | null;
   initialTeams?: UserTeam[] | null;
   initialPendingInvites?: PendingTeamInvite[] | null;
 };
@@ -109,6 +116,7 @@ type ServersApiResponse = {
   ok: boolean;
   message?: string;
   servers?: ManagedServer[];
+  sync?: ManagedServersSyncState;
 };
 
 type TeamsApiResponse = {
@@ -126,6 +134,13 @@ type SavedPanelAccount = {
   username: string;
   avatarUrl: string | null;
   lastSeenAt: number;
+};
+
+type ServersSyncContent = {
+  actionLabel: string;
+  badgeLabel: string;
+  description: string;
+  title: string;
 };
 
 const FILTER_LABEL: Record<FilterOption, string> = {
@@ -575,6 +590,33 @@ function serverAccountChipLabel(server: ManagedServer) {
   return server.canManage ? "conta da equipe" : "conta vinculada";
 }
 
+function resolveServersSyncContent(
+  sync: ManagedServersSyncState,
+  hasDiscordLink: boolean,
+): ServersSyncContent | null {
+  if (!hasDiscordLink || sync.requiresDiscordRelink) {
+    return {
+      actionLabel: "Vincular novamente",
+      badgeLabel: "Discord",
+      description:
+        "O FlowSecure manteve o painel ativo com os dados validados do banco, mas a sincronizacao ao vivo precisa ser refeita para evitar inconsistencias.",
+      title: "Reconecte sua conta Discord para concluir a sincronizacao",
+    };
+  }
+
+  if (!sync.degraded) {
+    return null;
+  }
+
+  return {
+    actionLabel: "Atualizar agora",
+    badgeLabel: "FlowSecure",
+    description:
+      "Entramos em modo seguro para evitar que o painel zere dados validos. O banco continua como fonte principal enquanto a sincronizacao externa se estabiliza.",
+    title: "Sincronizacao temporariamente instavel, mas seus servidores continuam protegidos",
+  };
+}
+
 function WorkspaceAlertPixelAccent({ side }: { side: "left" | "right" }) {
   const isLeft = side === "left";
   const edgeClass = isLeft ? "left-0" : "right-0";
@@ -617,22 +659,190 @@ function FilterIcon() {
   return <SlidersHorizontal className="h-[18px] w-[18px] shrink-0" strokeWidth={1.85} aria-hidden="true" />;
 }
 
-function ServersEmptyState({ selectedTeamName }: { selectedTeamName?: string | null }) {
-  const description = selectedTeamName
-    ? `Nao ha servidores vinculados para ${selectedTeamName} com o filtro atual.`
-    : "Ajuste a busca ou os filtros para encontrar um servidor.";
+function ServersEmptyState({
+  onPrimaryAction,
+  selectedTeamName,
+  syncContent,
+}: {
+  onPrimaryAction?: (() => void) | null;
+  selectedTeamName?: string | null;
+  syncContent?: ServersSyncContent | null;
+}) {
+  const title = syncContent?.title || "Nenhum servidor encontrado";
+  const description = syncContent?.description
+    || (selectedTeamName
+      ? `Nao ha servidores vinculados para ${selectedTeamName} com o filtro atual.`
+      : "Ajuste a busca ou os filtros para encontrar um servidor.");
 
   return (
     <div className="flex flex-col items-center justify-center rounded-[18px] border border-[#141414] bg-[#090909] px-[20px] py-[48px] text-center">
       <div className="flex h-[48px] w-[48px] items-center justify-center rounded-full bg-[#111111]">
-        <FolderKanban className="h-[24px] w-[24px] text-[#888888]" />
+        {syncContent ? (
+          <Shield className="h-[24px] w-[24px] text-[#8AB6FF]" />
+        ) : (
+          <FolderKanban className="h-[24px] w-[24px] text-[#888888]" />
+        )}
       </div>
       <p className="mt-[16px] text-[15px] font-medium text-[#E5E5E5]">
-        Nenhum servidor encontrado
+        {title}
       </p>
       <p className="mt-[4px] max-w-[360px] text-[14px] text-[#777777]">
         {description}
       </p>
+      {syncContent && onPrimaryAction ? (
+        <button
+          type="button"
+          onClick={onPrimaryAction}
+          className="mt-[18px] inline-flex h-[42px] items-center justify-center rounded-[12px] border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.12)] px-[16px] text-[13px] font-medium text-[#B9D2FF] transition-colors hover:border-[rgba(0,98,255,0.38)] hover:bg-[rgba(0,98,255,0.18)]"
+        >
+          {syncContent.actionLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ServersSyncBanner({
+  diagnosticsFingerprint,
+  onAction,
+  syncContent,
+}: {
+  diagnosticsFingerprint?: string | null;
+  onAction: () => void;
+  syncContent: ServersSyncContent;
+}) {
+  return (
+    <div className="rounded-[24px] border border-[rgba(0,98,255,0.2)] bg-[linear-gradient(180deg,rgba(8,14,26,0.98)_0%,rgba(5,8,15,0.98)_100%)] p-[18px] shadow-[0_20px_60px_rgba(0,0,0,0.32)]">
+      <div className="flex flex-col gap-[16px] lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <span className="inline-flex items-center rounded-full border border-[rgba(0,98,255,0.24)] bg-[rgba(0,98,255,0.1)] px-[10px] py-[6px] text-[11px] leading-none font-semibold uppercase tracking-[0.16em] text-[#9FC3FF]">
+            {syncContent.badgeLabel}
+          </span>
+          <p className="mt-[14px] text-[17px] leading-[1.35] font-medium tracking-[-0.03em] text-[#EAF1FF]">
+            {syncContent.title}
+          </p>
+          <p className="mt-[8px] max-w-[720px] text-[13px] leading-[1.6] text-[#8D99AD]">
+            {syncContent.description}
+          </p>
+          {diagnosticsFingerprint ? (
+            <p className="mt-[10px] text-[11px] uppercase tracking-[0.16em] text-[#5E6D86]">
+              Diagnostico FlowSecure: {diagnosticsFingerprint}
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={onAction}
+          className="inline-flex h-[44px] shrink-0 items-center justify-center rounded-[13px] border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.14)] px-[18px] text-[13px] font-semibold text-[#C8DBFF] transition-colors hover:border-[rgba(0,98,255,0.42)] hover:bg-[rgba(0,98,255,0.2)]"
+        >
+          {syncContent.actionLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DiscordReconnectModal({
+  diagnosticsFingerprint,
+  isOpen,
+  onClose,
+  onReconnect,
+}: {
+  diagnosticsFingerprint?: string | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onReconnect: () => void;
+}) {
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[1700] overflow-y-auto overscroll-contain p-[18px]">
+      <button
+        type="button"
+        aria-label="Fechar modal de reconexao do Discord"
+        className="absolute inset-0 bg-[rgba(0,0,0,0.8)] backdrop-blur-[6px]"
+        onClick={onClose}
+      />
+      <div className="relative z-10 mx-auto flex min-h-full max-w-[640px] items-center justify-center">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Reconectar conta Discord"
+          className="relative w-full overflow-hidden rounded-[30px] border border-[#121212] bg-[linear-gradient(180deg,rgba(9,12,18,0.985)_0%,rgba(5,7,11,0.985)_100%)] p-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.54)] sm:p-[28px]"
+        >
+          <div className="flex items-start justify-between gap-[16px]">
+            <div>
+              <span className="inline-flex items-center rounded-full border border-[rgba(0,98,255,0.26)] bg-[rgba(0,98,255,0.1)] px-[12px] py-[6px] text-[11px] leading-none font-semibold uppercase tracking-[0.16em] text-[#A5C8FF]">
+                FlowSecure Module
+              </span>
+              <h2 className="mt-[18px] text-[28px] leading-[1.02] tracking-[-0.05em] text-[#F3F7FF] sm:text-[34px]">
+                Reconecte o Discord
+                <br />
+                sem perder seu painel
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+              aria-label="Fechar modal"
+            >
+              <span className="text-[18px] leading-none">x</span>
+            </button>
+          </div>
+
+          <div className="mt-[20px] rounded-[22px] border border-[rgba(0,98,255,0.16)] bg-[rgba(5,9,18,0.86)] p-[18px]">
+            <p className="text-[15px] leading-[1.7] text-[#C7D3E8]">
+              Detectamos um problema de vinculacao ou token do Discord nesta conta.
+              O Flowdesk manteve os dados validados do banco e a sidebar continua
+              disponivel, mas a sincronizacao ao vivo precisa ser refeita para evitar
+              sumico incorreto de servidores.
+            </p>
+            {diagnosticsFingerprint ? (
+              <p className="mt-[14px] text-[11px] uppercase tracking-[0.16em] text-[#62718A]">
+                Diagnostico FlowSecure: {diagnosticsFingerprint}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="mt-[18px] grid gap-[12px] text-[13px] leading-[1.6] text-[#8A96AA]">
+            <div className="rounded-[18px] border border-[#151515] bg-[#0A0D12] px-[16px] py-[14px]">
+              A configuracao do servidor continua acessivel.
+            </div>
+            <div className="rounded-[18px] border border-[#151515] bg-[#0A0D12] px-[16px] py-[14px]">
+              Os dados do banco ficam preservados enquanto a reconexao nao acontece.
+            </div>
+            <div className="rounded-[18px] border border-[#151515] bg-[#0A0D12] px-[16px] py-[14px]">
+              A reconexao atualiza os servidores, equipes e vinculos que dependem do Discord.
+            </div>
+          </div>
+
+          <div className="mt-[24px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1]"
+            >
+              Agora nao
+            </button>
+            <button
+              type="button"
+              onClick={onReconnect}
+              className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
+            >
+              <span
+                aria-hidden="true"
+                className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+              />
+              <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+                Vincular novamente
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -756,7 +966,6 @@ function AccountAvatar({
         width={44}
         height={44}
         className={`rounded-full object-cover ${className}`.trim()}
-        unoptimized
       />
     );
   }
@@ -881,7 +1090,7 @@ function ServerListRow({
       <article className={`flowdesk-landing-soft-motion relative cursor-pointer border-b border-[#141414] bg-[#0A0A0A] px-[18px] py-[18px] transition-[background-color,border-color] duration-250 hover:border-[#1E1E1E] hover:bg-[#0D0D0D] ${isSelected ? "bg-[#101010]" : ""}`} onClick={() => onOpen(server.guildId)} onMouseEnter={() => onPrefetch(server.guildId)} onFocus={() => onPrefetch(server.guildId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(server.guildId); } }} role="button" tabIndex={0}>
         <div className="flex flex-col gap-[18px] xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 items-center gap-[16px]">
-            {server.iconUrl ? <Image src={server.iconUrl} alt={server.guildName} width={56} height={56} className="h-[56px] w-[56px] rounded-[16px] object-cover" unoptimized /> : <FallbackServerIcon />}
+            {server.iconUrl ? <Image src={server.iconUrl} alt={server.guildName} width={56} height={56} className="h-[56px] w-[56px] rounded-[16px] object-cover" /> : <FallbackServerIcon />}
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-[12px] gap-y-[8px]">
                 <h3 className="truncate text-[18px] leading-none font-medium tracking-[-0.03em] text-[#E5E5E5]">{server.guildName}</h3>
@@ -974,7 +1183,6 @@ function ServerGridCard({
                 width={56}
                 height={56}
                 className="h-[56px] w-[56px] rounded-[16px] object-cover"
-                unoptimized
               />
             ) : (
               <FallbackServerIcon />
@@ -1098,12 +1306,13 @@ export function ServersWorkspace({
   initialTab = "settings",
   initialSettingsSection = "overview",
   initialServers = null,
+  initialServersSync = null,
   initialTeams = null,
   initialPendingInvites = null,
 }: ServersWorkspaceProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const workspaceCacheKey = `${currentAccount.authUserId}:${currentAccount.discordUserId}`;
+  const workspaceCacheKey = `${currentAccount.authUserId}:${currentAccount.discordUserId ?? "no-discord"}`;
   const initialServersSnapshot =
     initialServers ?? readManagedServersMemoryCache(workspaceCacheKey);
   const initialTeamsSnapshot =
@@ -1114,6 +1323,19 @@ export function ServersWorkspace({
         }
       : readTeamsSnapshotMemoryCache(workspaceCacheKey);
   const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [serversSync, setServersSync] = useState<ManagedServersSyncState>(
+    initialServersSync ?? (
+      currentAccount.discordUserId
+        ? DEFAULT_MANAGED_SERVERS_SYNC_STATE
+        : {
+            ...DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+            degraded: true,
+            reason: "discord_not_linked",
+            requiresDiscordRelink: true,
+            usedDatabaseFallback: true,
+          }
+    ),
+  );
   const [isLoading, setIsLoading] = useState(initialServersSnapshot === null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -1143,6 +1365,9 @@ export function ServersWorkspace({
   const [memberDraftIds, setMemberDraftIds] = useState<string[]>([""]);
   const [savedAccounts, setSavedAccounts] = useState<SavedPanelAccount[]>([]);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isDiscordReconnectModalOpen, setIsDiscordReconnectModalOpen] = useState(
+    !currentAccount.discordUserId || Boolean(initialServersSync?.requiresDiscordRelink),
+  );
   const [teamActionMessage, setTeamActionMessage] = useState<string | null>(null);
   const [teamActionError, setTeamActionError] = useState<string | null>(null);
   const [isCreatingTeam, setIsCreatingTeam] = useState(false);
@@ -1172,6 +1397,7 @@ export function ServersWorkspace({
   const [serversReloadToken, setServersReloadToken] = useState(0);
   const [teamsReloadToken, setTeamsReloadToken] = useState(0);
   const previousRouteGuildIdRef = useRef<string | null>(null);
+  const serversRef = useRef<ManagedServer[]>(initialServersSnapshot ?? []);
   const [, startOpenServerTransition] = useTransition();
 
   const isEditingServer = Boolean(selectedGuildIdForConfig);
@@ -1194,6 +1420,12 @@ export function ServersWorkspace({
     }
     setTeamsReloadToken((current) => current + 1);
   }, [pendingTeamInvites.length, teams.length]);
+  const isDiscordRelinkRequired =
+    !currentAccount.discordUserId || serversSync.requiresDiscordRelink;
+  const serversSyncContent = useMemo(
+    () => resolveServersSyncContent(serversSync, Boolean(currentAccount.discordUserId)),
+    [currentAccount.discordUserId, serversSync],
+  );
 
   const applyTeamsSnapshot = useCallback(
     (payload: TeamsApiResponse, preferredTeamId: number | null = null) => {
@@ -1220,31 +1452,45 @@ export function ServersWorkspace({
   );
 
   useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
+
+  useEffect(() => {
     try {
       const raw = window.localStorage.getItem(SAVED_PANEL_ACCOUNTS_KEY);
-      const currentSnapshot: SavedPanelAccount = {
-        ...currentAccount,
-        lastSeenAt: Date.now(),
-      };
-      const nextAccounts = mergeSavedPanelAccounts(
-        currentSnapshot,
-        normalizeSavedPanelAccounts(raw ? JSON.parse(raw) : []),
-      );
+      const previousAccounts = normalizeSavedPanelAccounts(raw ? JSON.parse(raw) : []);
+      const nextAccounts = currentAccount.discordUserId
+        ? mergeSavedPanelAccounts(
+            {
+              ...currentAccount,
+              discordUserId: currentAccount.discordUserId,
+              lastSeenAt: Date.now(),
+            },
+            previousAccounts,
+          )
+        : previousAccounts;
       setSavedAccounts(nextAccounts);
       window.localStorage.setItem(SAVED_PANEL_ACCOUNTS_KEY, JSON.stringify(nextAccounts));
     } catch {
-      setSavedAccounts([
-        {
-          ...currentAccount,
-          lastSeenAt: Date.now(),
-        },
-      ]);
+      setSavedAccounts(
+        currentAccount.discordUserId
+          ? [
+              {
+                ...currentAccount,
+                discordUserId: currentAccount.discordUserId,
+                lastSeenAt: Date.now(),
+              },
+            ]
+          : [],
+      );
     }
   }, [currentAccount]);
 
   useEffect(() => {
     if (initialServers !== null) {
       storeCachedManagedServers(workspaceCacheKey, initialServers);
+      setServers(initialServers);
+      setServersSync(initialServersSync ?? DEFAULT_MANAGED_SERVERS_SYNC_STATE);
       return;
     }
 
@@ -1254,9 +1500,22 @@ export function ServersWorkspace({
     }
 
     setServers(cachedServers);
+    setServersSync(
+      initialServersSync ?? (
+        currentAccount.discordUserId
+          ? DEFAULT_MANAGED_SERVERS_SYNC_STATE
+          : {
+              ...DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+              degraded: true,
+              reason: "discord_not_linked",
+              requiresDiscordRelink: true,
+              usedDatabaseFallback: true,
+            }
+      ),
+    );
     setErrorMessage(null);
     setIsLoading(false);
-  }, [initialServers, workspaceCacheKey]);
+  }, [currentAccount.discordUserId, initialServers, initialServersSync, workspaceCacheKey]);
 
   useEffect(() => {
     if (initialTeams !== null) {
@@ -1265,6 +1524,8 @@ export function ServersWorkspace({
         initialTeams,
         initialPendingInvites ?? [],
       );
+      setTeams(initialTeams);
+      setPendingTeamInvites(initialPendingInvites ?? []);
       return;
     }
 
@@ -1280,10 +1541,6 @@ export function ServersWorkspace({
   }, [initialPendingInvites, initialTeams, workspaceCacheKey]);
 
   useEffect(() => {
-    if (initialServers !== null) {
-      return;
-    }
-
     let isMounted = true;
     let activeController: AbortController | null = null;
     let activeTimeoutId: number | null = null;
@@ -1357,9 +1614,22 @@ export function ServersWorkspace({
         }
         requestAttempt = 0;
         hasTriggeredRefresh = false;
+        const nextSync = payload.sync || DEFAULT_MANAGED_SERVERS_SYNC_STATE;
         const nextServers = payload.servers || [];
-        storeCachedManagedServers(workspaceCacheKey, nextServers);
-        setServers(nextServers);
+        const cachedServers = readCachedManagedServers(workspaceCacheKey) || [];
+        const fallbackServers =
+          serversRef.current.length > 0 ? serversRef.current : cachedServers;
+        const shouldPreserveCurrentServers =
+          nextSync.degraded && nextServers.length === 0 && fallbackServers.length > 0;
+
+        setServersSync(nextSync);
+        if (shouldPreserveCurrentServers) {
+          storeCachedManagedServers(workspaceCacheKey, fallbackServers);
+          setServers(fallbackServers);
+        } else {
+          storeCachedManagedServers(workspaceCacheKey, nextServers);
+          setServers(nextServers);
+        }
         setErrorMessage(null);
         setIsLoading(false);
       } catch (error) {
@@ -1405,7 +1675,7 @@ export function ServersWorkspace({
       clearActiveTimeout();
       activeController?.abort("unmount");
     };
-  }, [initialServers, router, serversReloadToken, workspaceCacheKey]);
+  }, [router, serversReloadToken, workspaceCacheKey]);
 
   useEffect(() => {
     setSelectedGuildIdForConfig((current) => {
@@ -1435,10 +1705,6 @@ export function ServersWorkspace({
   ]);
 
   useEffect(() => {
-    if (initialTeams !== null) {
-      return;
-    }
-
     let isMounted = true;
     let activeController: AbortController | null = null;
     let activeTimeoutId: number | null = null;
@@ -1563,13 +1829,9 @@ export function ServersWorkspace({
       clearActiveTimeout();
       activeController?.abort("unmount");
     };
-  }, [applyTeamsSnapshot, initialTeams, router, teamsReloadToken]);
+  }, [applyTeamsSnapshot, router, teamsReloadToken]);
 
   useEffect(() => {
-    if (initialServers !== null || initialTeams !== null) {
-      return;
-    }
-
     function shouldRecoverDashboardState() {
       if (!pathname?.startsWith("/servers")) return false;
       if (isLoading || isTeamsLoading) return false;
@@ -1617,8 +1879,6 @@ export function ServersWorkspace({
     };
   }, [
     errorMessage,
-    initialServers,
-    initialTeams,
     isLoading,
     isTeamsLoading,
     pathname,
@@ -1746,7 +2006,17 @@ export function ServersWorkspace({
     () => teams.find((team) => team.id === selectedTeamId) || null,
     [selectedTeamId, teams],
   );
-  useBodyScrollLock(isCreateTeamModalOpen);
+  const emptyStateSyncContent = servers.length === 0 ? serversSyncContent : null;
+  useEffect(() => {
+    if (isDiscordRelinkRequired) {
+      setIsDiscordReconnectModalOpen(true);
+      return;
+    }
+
+    setIsDiscordReconnectModalOpen(false);
+  }, [isDiscordRelinkRequired]);
+
+  useBodyScrollLock(isCreateTeamModalOpen || isDiscordReconnectModalOpen);
   const linkedGuildIdsInTeams = useMemo(
     () => new Set(teams.flatMap((team) => team.linkedGuildIds)),
     [teams],
@@ -2142,11 +2412,23 @@ export function ServersWorkspace({
     }
   }, [isLoggingOut]);
 
-  const openDiscordLoginFlow = useCallback(() => {
+  const openDiscordLoginFlow = useCallback((mode: "login" | "link" = "login") => {
     if (typeof window === "undefined") return;
     const nextPath = `${window.location.pathname}${window.location.search}`;
-    window.location.assign(buildDiscordAuthStartHref(nextPath));
+    window.location.assign(buildDiscordAuthStartHref(nextPath, mode));
   }, []);
+  const handleReconnectDiscord = useCallback(() => {
+    setIsDiscordReconnectModalOpen(false);
+    openDiscordLoginFlow("link");
+  }, [openDiscordLoginFlow]);
+  const handleServersSyncAction = useCallback(() => {
+    if (isDiscordRelinkRequired) {
+      setIsDiscordReconnectModalOpen(true);
+      return;
+    }
+
+    requestServersReload({ silent: servers.length > 0 });
+  }, [isDiscordRelinkRequired, requestServersReload, servers.length]);
 
   const handleAddAnotherAccount = useCallback(() => {
     setIsProfileMenuOpen(false);
@@ -2194,7 +2476,7 @@ export function ServersWorkspace({
 
   const handleOpenHelp = useCallback(() => {
     setIsProfileMenuOpen(false);
-    window.open("https://discord.gg/ddXtHhvvrx", "_blank", "noopener,noreferrer");
+    window.open(OFFICIAL_DISCORD_INVITE_URL, "_blank", "noopener,noreferrer");
   }, []);
 
   const handleStartAddServer = useCallback(async () => {
@@ -2444,6 +2726,9 @@ export function ServersWorkspace({
   const selectedServer = useMemo(
     () => servers.find((server) => server.guildId === selectedGuildIdForConfig) || null,
     [selectedGuildIdForConfig, servers],
+  );
+  const shouldShowServersSyncBanner = Boolean(
+    serversSyncContent && (servers.length > 0 || isDiscordRelinkRequired),
   );
   const workspaceAlertMessage = useMemo(
     () =>
@@ -3370,6 +3655,13 @@ export function ServersWorkspace({
                     </LandingActionButton>
                   ) : null}
                 </div>
+                {shouldShowServersSyncBanner && serversSyncContent ? (
+                  <ServersSyncBanner
+                    diagnosticsFingerprint={serversSync.diagnosticsFingerprint}
+                    onAction={handleServersSyncAction}
+                    syncContent={serversSyncContent}
+                  />
+                ) : null}
                 {!isEditingServer ? (
                   <div
                     className={`${shellClass} relative z-[900] overflow-visible px-[14px] py-[14px] sm:px-[18px] sm:py-[18px]`}
@@ -3590,13 +3882,17 @@ export function ServersWorkspace({
                           ))}
                         </div>
                       ) : (
-                        <ServersEmptyState selectedTeamName={selectedTeam?.name} />
+                        <ServersEmptyState
+                          onPrimaryAction={emptyStateSyncContent ? handleServersSyncAction : null}
+                          selectedTeamName={selectedTeam?.name}
+                          syncContent={emptyStateSyncContent}
+                        />
                       )}
                     </div>
                   ) : (
                     <div className={`${shellClass} ${workspacePaneRevealClass} overflow-visible`}>
                       <div className="border-b border-[#141414] px-[18px] py-[18px]"><div className="flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">Projetos</p><h2 className="mt-[10px] text-[26px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">{selectedTeam ? `Servidores da equipe ${selectedTeam.name}` : "Todos os servidores"}</h2></div><p className="text-[13px] leading-[1.5] text-[#6F6F6F]">{filteredServers.length} resultado(s) exibidos de {activeTeamServerCount} servidor(es).</p></div></div>
-                      {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} />)}</div> : <div className="px-[18px] py-[24px]"><ServersEmptyState selectedTeamName={selectedTeam?.name} /></div>}
+                      {isLoading ? <div className="px-[18px] py-[24px]"><div className="space-y-[12px]">{Array.from({ length: 5 }, (_, index) => <div key={index} className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"><div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" /></div>)}</div></div> : errorMessage ? <div className="px-[18px] py-[34px] text-center text-[13px] text-[#C2C2C2]">{errorMessage}</div> : filteredServers.length ? <div>{filteredServers.map((server, index) => <ServerListRow key={server.guildId} server={server} index={index} isSelected={selectedGuildIdForConfig === server.guildId} isCopied={copiedGuildId === server.guildId} openCardMenuGuildId={openCardMenuGuildId} onOpen={handleOpenServerConfig} onPrefetch={prefetchServerConfig} onCopy={(guildId) => { void handleCopyGuildId(guildId); }} onToggleMenu={(guildId) => { setOpenCardMenuGuildId((current) => current === guildId ? null : guildId); }} onCopyFromMenu={handleCardMenuCopyId} />)}</div> : <div className="px-[18px] py-[24px]"><ServersEmptyState onPrimaryAction={emptyStateSyncContent ? handleServersSyncAction : null} selectedTeamName={selectedTeam?.name} syncContent={emptyStateSyncContent} /></div>}
                     </div>
                   )}
                 </LandingReveal>
@@ -3605,6 +3901,13 @@ export function ServersWorkspace({
           </section>
         </div>
       </main>
+      <DiscordReconnectModal
+        diagnosticsFingerprint={serversSync.diagnosticsFingerprint}
+        isOpen={isDiscordReconnectModalOpen}
+        onClose={() => setIsDiscordReconnectModalOpen(false)}
+        onReconnect={handleReconnectDiscord}
+      />
+
       {isCreateTeamModalOpen ? (
         <div className="fixed inset-y-0 left-0 right-0 z-[5000] isolate overflow-y-auto overscroll-contain xl:left-[318px]">
           <button
@@ -3774,7 +4077,6 @@ export function ServersWorkspace({
                                   width={36}
                                   height={36}
                                   className="h-[36px] w-[36px] rounded-[12px] object-cover"
-                                  unoptimized
                                 />
                               ) : (
                                 <div className="flex h-[36px] w-[36px] items-center justify-center rounded-[12px] bg-[#131313] text-[11px] font-semibold text-[#8A8A8A]">

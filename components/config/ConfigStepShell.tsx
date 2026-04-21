@@ -104,7 +104,6 @@ function ConfigGuildSummaryCard({
               fill
               sizes="58px"
               className="object-cover"
-              unoptimized
             />
           ) : (
             buildGuildFallbackLetter(guild)

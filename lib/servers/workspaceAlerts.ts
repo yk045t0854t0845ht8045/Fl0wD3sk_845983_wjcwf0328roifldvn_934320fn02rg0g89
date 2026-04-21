@@ -1,4 +1,4 @@
-import type { ManagedServer } from "@/lib/servers/managedServers";
+import type { ManagedServer } from "@/lib/servers/managedServersShared";
 
 export function resolveServersWorkspaceAlertMessage(input: {
   isEditingServer: boolean;

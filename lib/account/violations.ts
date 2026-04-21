@@ -1,17 +1,20 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-export const OFFICIAL_GUILD_ID = "1353259338759671838";
+export const OFFICIAL_GUILD_ID =
+  process.env.OFFICIAL_SUPPORT_GUILD_ID?.trim() || "";
 
-export const VIOLATION_ROLE_IDS: Record<number, string> = {
-  1: "1493281297039097958", // Limitado
-  2: "1493281298352181350", // Muito Limitado
-  3: "1493281190566957187", // Em Risco
-  4: "1493281297945334022", // Suspenso
+export const VIOLATION_ROLE_IDS: Partial<Record<ViolationStatusLevel, string>> = {
+  1: process.env.OFFICIAL_VIOLATION_ROLE_LEVEL_1_ID?.trim() || undefined,
+  2: process.env.OFFICIAL_VIOLATION_ROLE_LEVEL_2_ID?.trim() || undefined,
+  3: process.env.OFFICIAL_VIOLATION_ROLE_LEVEL_3_ID?.trim() || undefined,
+  4: process.env.OFFICIAL_VIOLATION_ROLE_LEVEL_4_ID?.trim() || undefined,
 };
 
 // All violation role ids as a set for easy removal
-export const ALL_VIOLATION_ROLE_IDS = Object.values(VIOLATION_ROLE_IDS);
+export const ALL_VIOLATION_ROLE_IDS = Object.values(VIOLATION_ROLE_IDS).filter(
+  (roleId): roleId is string => typeof roleId === "string" && roleId.length > 0,
+);
 
 export type ViolationStatusLevel = 0 | 1 | 2 | 3 | 4;
 
@@ -39,6 +42,10 @@ export type ViolationRecord = {
   expiresAt: string | null;
   expired: boolean;
 };
+
+function getViolationRoleId(level: ViolationStatusLevel) {
+  return VIOLATION_ROLE_IDS[level] || null;
+}
 
 // ─── Status level resolver ───────────────────────────────────────────────────
 
@@ -119,11 +126,11 @@ export async function getViolationStatusForUser(internalUserId: number): Promise
     return {
       level,
       label,
-      discordRoleId: level > 0 ? VIOLATION_ROLE_IDS[level] : null,
+      discordRoleId: level > 0 ? getViolationRoleId(level) : null,
       activeViolations,
       expiredViolations,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[violations] Error fetching status:", error);
     // Return empty status instead of crashing the site
     return {
@@ -173,7 +180,7 @@ function resolveBotToken() {
 
 async function setDiscordRole(discordUserId: string, roleId: string) {
   const botToken = resolveBotToken();
-  if (!botToken) return;
+  if (!botToken || !OFFICIAL_GUILD_ID || !roleId) return;
 
   await fetch(
     `https://discord.com/api/v10/guilds/${OFFICIAL_GUILD_ID}/members/${discordUserId}/roles/${roleId}`,
@@ -190,7 +197,7 @@ async function setDiscordRole(discordUserId: string, roleId: string) {
 
 async function removeDiscordRole(discordUserId: string, roleId: string) {
   const botToken = resolveBotToken();
-  if (!botToken) return;
+  if (!botToken || !OFFICIAL_GUILD_ID || !roleId) return;
 
   await fetch(
     `https://discord.com/api/v10/guilds/${OFFICIAL_GUILD_ID}/members/${discordUserId}/roles/${roleId}`,
@@ -214,8 +221,8 @@ export async function syncDiscordViolationRoles(
   targetLevel: ViolationStatusLevel,
 ): Promise<void> {
   const botToken = resolveBotToken();
-  if (!botToken) {
-    console.warn("[violations] Bot token not configured, skipping Discord role sync.");
+  if (!botToken || !OFFICIAL_GUILD_ID) {
+    console.warn("[violations] Official guild or bot token not configured, skipping Discord role sync.");
     return;
   }
 
@@ -226,7 +233,7 @@ export async function syncDiscordViolationRoles(
 
   // Apply the new role if suspended/penalized
   if (targetLevel > 0) {
-    const newRoleId = VIOLATION_ROLE_IDS[targetLevel];
+    const newRoleId = getViolationRoleId(targetLevel);
     if (newRoleId) {
       await setDiscordRole(discordUserId, newRoleId);
     }

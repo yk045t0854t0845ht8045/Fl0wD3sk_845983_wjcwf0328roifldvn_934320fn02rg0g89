@@ -4,10 +4,7 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import type { DiscordGuild } from "@/lib/auth/discord";
-import {
-  getLockedGuildLicenseMap,
-  getLockedGuildLicenseMapByUserId,
-} from "@/lib/payments/licenseStatus";
+import { getLockedGuildLicenseMapByUserId } from "@/lib/payments/licenseStatus";
 import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { getUserPlanScheduledChange } from "@/lib/plans/change";
@@ -23,35 +20,36 @@ import {
   getUserPlanState,
   repairOrphanPlanGuildLinkForUser,
 } from "@/lib/plans/state";
-import { 
+import { buildFlowSecureDiagnosticFingerprint } from "@/lib/security/flowSecure";
+import {
   getAcceptedTeamGuildIdsForUser,
-  getGlobalTeamLinkedGuildIds
+  getGlobalTeamLinkedGuildIds,
 } from "@/lib/teams/userTeams";
+import {
+  DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+  type ManagedServer,
+  type ManagedServerStatus,
+  type ManagedServersSnapshot,
+  type ManagedServersSyncReason,
+  type ManagedServersSyncState,
+} from "@/lib/servers/managedServersShared";
 
-const managedServersCache = new Map<number, { servers: ManagedServer[]; timestamp: number }>();
+export {
+  DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+  type ManagedServer,
+  type ManagedServerStatus,
+  type ManagedServersSnapshot,
+  type ManagedServersSyncReason,
+  type ManagedServersSyncState,
+} from "@/lib/servers/managedServersShared";
+
+const managedServersCache = new Map<
+  number,
+  { snapshot: ManagedServersSnapshot; timestamp: number }
+>();
 const refreshingUserIds = new Set<number>();
-const CACHE_TTL_MS = 600000; // 10 minutos (TTL global)
-const STALE_THRESHOLD_MS = 20000; // 20 segundos (tempo até disparar refresh em background)
-
-
-export type ManagedServerStatus = "paid" | "expired" | "off" | "pending_payment";
-
-export type ManagedServer = {
-  guildId: string;
-  guildName: string;
-  iconUrl: string | null;
-  status: ManagedServerStatus;
-  accessMode: "owner" | "viewer";
-  canManage: boolean;
-  blockedByPlanLimit: boolean;
-  pendingDowngradePayment: boolean;
-  licenseOwnerUserId: number;
-  licensePaidAt: string;
-  licenseExpiresAt: string;
-  graceExpiresAt: string;
-  daysUntilExpire: number;
-  daysUntilOff: number;
-};
+const CACHE_TTL_MS = 600000;
+const STALE_THRESHOLD_MS = 20000;
 
 function buildGuildIconUrl(guildId: string, icon: string | null) {
   if (!icon) return null;
@@ -70,6 +68,14 @@ function buildFallbackGuildName(guildId: string) {
   return `Servidor ${guildId.slice(-6)}`;
 }
 
+function isManagedGuildId(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d{10,25}$/.test(value);
+}
+
+function toUniqueManagedGuildIds(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.filter(isManagedGuildId)));
+}
+
 function buildGuildLookup(guilds: DiscordGuild[] | null) {
   return new Map(
     (guilds || []).map((guild) => [
@@ -84,58 +90,139 @@ function buildGuildLookup(guilds: DiscordGuild[] | null) {
   );
 }
 
-export async function getManagedServersForCurrentSession(): Promise<ManagedServer[]> {
+function buildManagedServersSyncState(input: {
+  authUserId: number;
+  accessibleGuildCount: number;
+  coveredGuildCount: number;
+  degraded: boolean;
+  reason: ManagedServersSyncReason;
+  requiresDiscordRelink: boolean;
+  usedDatabaseFallback: boolean;
+}) {
+  const syncState: ManagedServersSyncState = {
+    degraded: input.degraded,
+    requiresDiscordRelink: input.requiresDiscordRelink,
+    usedDatabaseFallback: input.usedDatabaseFallback,
+    reason: input.reason,
+    diagnosticsFingerprint: null,
+  };
+
+  if (!syncState.degraded && !syncState.requiresDiscordRelink) {
+    return syncState;
+  }
+
+  syncState.diagnosticsFingerprint = buildFlowSecureDiagnosticFingerprint(
+    {
+      authUserId: input.authUserId,
+      accessibleGuildCount: input.accessibleGuildCount,
+      coveredGuildCount: input.coveredGuildCount,
+      degraded: syncState.degraded,
+      reason: syncState.reason,
+      requiresDiscordRelink: syncState.requiresDiscordRelink,
+      usedDatabaseFallback: syncState.usedDatabaseFallback,
+    },
+    {
+      prefix: "serversync",
+      subcontext: "managed_servers",
+    },
+  );
+
+  return syncState;
+}
+
+export async function getManagedServersSnapshotForCurrentSession(): Promise<ManagedServersSnapshot> {
   const sessionData = await resolveSessionAccessToken();
 
   if (!sessionData?.authSession) {
     throw new Error("Nao autenticado.");
   }
 
-  if (!sessionData.accessToken) {
-    throw new Error("Token OAuth ausente na sessao.");
+  const userId = sessionData.authSession.user.id;
+  const cached = managedServersCache.get(userId);
+  if (cached) {
+    const cacheAgeMs = Date.now() - cached.timestamp;
+    const cacheTtlMs =
+      cached.snapshot.sync.degraded || cached.snapshot.sync.requiresDiscordRelink
+        ? 15000
+        : CACHE_TTL_MS;
+    const staleThresholdMs =
+      cached.snapshot.sync.degraded || cached.snapshot.sync.requiresDiscordRelink
+        ? 3000
+        : STALE_THRESHOLD_MS;
+
+    if (cacheAgeMs >= cacheTtlMs) {
+      managedServersCache.delete(userId);
+    } else {
+      const isStale = cacheAgeMs > staleThresholdMs;
+
+      if (isStale && !refreshingUserIds.has(userId)) {
+        refreshingUserIds.add(userId);
+        void fetchManagedServersFresh(sessionData)
+          .catch(() => null)
+          .finally(() => refreshingUserIds.delete(userId));
+      }
+
+      return cached.snapshot;
+    }
   }
 
-  const userId = sessionData.authSession.user.id;
-
-  // 1. Verificar Cache (SWR Pattern)
-  const cached = managedServersCache.get(userId);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    const isStale = Date.now() - cached.timestamp > STALE_THRESHOLD_MS;
-
-    // Se estiver "stale" (velho demais pro tempo ideal), atualiza em background
-    if (isStale && !refreshingUserIds.has(userId)) {
-      refreshingUserIds.add(userId);
-      // Fire and forget: atualiza o cache silenciosamente
-      void fetchManagedServersFresh(sessionData)
-        .catch(() => null)
-        .finally(() => refreshingUserIds.delete(userId));
+  try {
+    return await fetchManagedServersFresh(sessionData);
+  } catch (error) {
+    if (cached) {
+      return cached.snapshot;
     }
 
-    return cached.servers;
+    throw error;
   }
-
-  // Se for MISS (primeira vez ou expirou tudo), espera o fresh carregar
-  return fetchManagedServersFresh(sessionData);
 }
 
-// Helper para carga TOTALMENTE PARALELA (Fase Única)
+export async function getManagedServersForCurrentSession(): Promise<ManagedServer[]> {
+  const snapshot = await getManagedServersSnapshotForCurrentSession();
+  return snapshot.servers;
+}
+
 async function fetchManagedServersFresh(
   sessionData: Awaited<ReturnType<typeof resolveSessionAccessToken>>,
-): Promise<ManagedServer[]> {
-  if (!sessionData?.authSession) return [];
-  if (!sessionData.accessToken) {
-    throw new Error("Token OAuth ausente na sessao.");
+): Promise<ManagedServersSnapshot> {
+  if (!sessionData?.authSession) {
+    return {
+      servers: [],
+      sync: DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+    };
   }
-  const userId = sessionData.authSession.user.id;
 
-  void cleanupExpiredUnpaidServerSetups({ userId, source: "auth_servers" }).catch(() => null);
-  void reconcileRecentPaymentOrders({ userId, limit: 6, source: "auth_servers" }).catch(() => null);
+  const authSession = sessionData.authSession;
+  const userId = authSession.user.id;
+  const discordUserId = authSession.user.discord_user_id;
+  const requiresDiscordRelink = !discordUserId || !sessionData.accessToken;
+  const baseSyncReason: ManagedServersSyncReason = !discordUserId
+    ? "discord_not_linked"
+    : !sessionData.accessToken
+      ? "discord_oauth_missing"
+      : "ok";
 
-  // DISPARAR TUDO EM PARALELO (Fase Única - Estilo Microsoft/Google)
+  void cleanupExpiredUnpaidServerSetups({
+    userId,
+    source: "auth_servers",
+  }).catch(() => null);
+  void reconcileRecentPaymentOrders({
+    userId,
+    limit: 6,
+    source: "auth_servers",
+  }).catch(() => null);
+
+  const accessibleGuildsPromise = sessionData.accessToken
+    ? getAccessibleGuildsForSession({
+        authSession,
+        accessToken: sessionData.accessToken,
+      })
+    : Promise.resolve<DiscordGuild[]>([]);
+
   const [
     userPlanState,
     scheduledChange,
-    accessibleGuilds,
+    accessibleGuildsResult,
     acceptedTeamGuildIdsList,
     ownedPlanGuilds,
     lockedGuildMap,
@@ -143,13 +230,12 @@ async function fetchManagedServersFresh(
   ] = await Promise.all([
     getUserPlanState(userId),
     getUserPlanScheduledChange(userId),
-    getAccessibleGuildsForSession({
-      authSession: sessionData.authSession,
-      accessToken: sessionData.accessToken,
-    }),
+    accessibleGuildsPromise
+      .then((guilds) => ({ ok: true as const, guilds }))
+      .catch((error) => ({ ok: false as const, error })),
     getAcceptedTeamGuildIdsForUser({
       authUserId: userId,
-      discordUserId: sessionData.authSession.user.discord_user_id,
+      discordUserId,
     }),
     getPlanGuildsForUser(userId, { includeInactive: true }),
     getLockedGuildLicenseMapByUserId(userId),
@@ -167,16 +253,37 @@ async function fetchManagedServersFresh(
     scheduledChange,
   }).catch(() => null);
 
-  const acceptedTeamGuildIds = new Set(acceptedTeamGuildIdsList);
-  const ownedPlanGuildsByGuildId = new Map(
-    ownedPlanGuilds.map((record) => [record.guild_id, record]),
+  const accessibleGuilds = accessibleGuildsResult.ok ? accessibleGuildsResult.guilds : [];
+  const accessibleGuildLookup = buildGuildLookup(accessibleGuilds);
+  const sessionGuildLookup = buildGuildLookup(authSession.discordGuildsCache);
+
+  const acceptedTeamGuildIds = new Set(
+    toUniqueManagedGuildIds(acceptedTeamGuildIdsList),
   );
-  const ownedPlanGuildIds = new Set(ownedPlanGuilds.map((record) => record.guild_id));
+  const normalizedOwnedPlanGuilds = ownedPlanGuilds.filter((record) =>
+    isManagedGuildId(record.guild_id),
+  );
+  const ownedPlanGuildsByGuildId = new Map(
+    normalizedOwnedPlanGuilds.map((record) => [record.guild_id, record]),
+  );
+  const ownedPlanGuildIds = new Set(
+    normalizedOwnedPlanGuilds.map((record) => record.guild_id),
+  );
   const ownedActivePlanGuildIds = new Set(
-    ownedPlanGuilds
+    normalizedOwnedPlanGuilds
       .filter((record) => record.is_active !== false)
       .map((record) => record.guild_id),
   );
+  const normalizedLockedGuildMap = new Map(
+    Array.from(lockedGuildMap.entries()).filter(([guildId]) =>
+      isManagedGuildId(guildId),
+    ),
+  );
+  const coveredGuildIds = toUniqueManagedGuildIds([
+    ...Array.from(acceptedTeamGuildIds),
+    ...Array.from(ownedPlanGuildIds),
+    ...Array.from(normalizedLockedGuildMap.keys()),
+  ]);
 
   const hasPendingDowngradePayment = Boolean(
     downgradeEnforcement &&
@@ -189,18 +296,12 @@ async function fetchManagedServersFresh(
     guildLicensed: ownedPlanGuildIds.size > 0 || ownedActivePlanGuildIds.size > 0,
   });
 
-  const accessibleGuildLookup = buildGuildLookup(accessibleGuilds);
-  const sessionGuildLookup = buildGuildLookup(
-    sessionData.authSession.discordGuildsCache,
-  );
-
-  const missingTeamGuildIds = Array.from(acceptedTeamGuildIds).filter(
+  const missingCoveredGuildIds = coveredGuildIds.filter(
     (guildId) => !accessibleGuildLookup.has(guildId),
   );
 
-  // 5. Resolvê Guildas de Time Suplementares
-  const supplementalTeamGuilds = await Promise.all(
-    missingTeamGuildIds.map(async (guildId) => {
+  const supplementalGuilds = await Promise.all(
+    missingCoveredGuildIds.map(async (guildId) => {
       const cachedGuild = sessionGuildLookup.get(guildId);
       if (cachedGuild) {
         return cachedGuild;
@@ -213,7 +314,7 @@ async function fetchManagedServersFresh(
             id: botGuild.id,
             name: botGuild.name,
             icon: botGuild.icon,
-            owner: false,
+            owner: ownedPlanGuildIds.has(guildId),
           };
         }
       } catch {
@@ -224,7 +325,7 @@ async function fetchManagedServersFresh(
         id: guildId,
         name: buildFallbackGuildName(guildId),
         icon: null,
-        owner: false,
+        owner: ownedPlanGuildIds.has(guildId),
       };
     }),
   );
@@ -237,7 +338,7 @@ async function fetchManagedServersFresh(
         icon: guild.icon,
         owner: guild.owner,
       })),
-      ...supplementalTeamGuilds,
+      ...supplementalGuilds,
     ].map((guild) => [guild.id, guild]),
   );
 
@@ -248,20 +349,21 @@ async function fetchManagedServersFresh(
     .filter(
       (guild) =>
         ownedPlanGuildIds.has(guild.id) ||
-        lockedGuildMap.has(guild.id) ||
+        normalizedLockedGuildMap.has(guild.id) ||
         acceptedTeamGuildIds.has(guild.id),
     )
     .map((guild) => {
       const ownedPlanGuild = ownedPlanGuildsByGuildId.get(guild.id) || null;
-      const lockedRecord = lockedGuildMap.get(guild.id) || null;
+      const lockedRecord = normalizedLockedGuildMap.get(guild.id) || null;
       const currentLicenseBelongsToViewer = Boolean(
-        lockedRecord && lockedRecord.userId !== sessionData.authSession.user.id,
+        lockedRecord && lockedRecord.userId !== authSession.user.id,
       );
       const selfAccountLockedRecord =
-        lockedRecord && lockedRecord.userId === sessionData.authSession.user.id
+        lockedRecord && lockedRecord.userId === authSession.user.id
           ? lockedRecord
           : null;
-      const accessMode: ManagedServer["accessMode"] = guild.owner ? "owner" : "viewer";
+      const accessMode: ManagedServer["accessMode"] =
+        ownedPlanGuildIds.has(guild.id) || guild.owner ? "owner" : "viewer";
       const isOwnedPlanGuildInactive = Boolean(
         !currentLicenseBelongsToViewer &&
           ownedPlanGuild &&
@@ -305,7 +407,6 @@ async function fetchManagedServersFresh(
         : ownedPlanGuild
           ? ownedPlanCoverage.graceExpiresAt || null
           : selfAccountLockedRecord?.graceExpiresAt || null;
-
       const licenseExpiresAtMs = licenseExpiresAt ? Date.parse(licenseExpiresAt) : Number.NaN;
       const graceExpiresAtMs = graceExpiresAt ? Date.parse(graceExpiresAt) : Number.NaN;
 
@@ -321,7 +422,7 @@ async function fetchManagedServersFresh(
           (!globalTeamLinkedGuildIds.has(guild.id) && (guild.owner || false)),
         blockedByPlanLimit: isOwnedPlanGuildInactive || isPendingDowngradePayment,
         pendingDowngradePayment: isPendingDowngradePayment,
-        licenseOwnerUserId: lockedRecord?.userId || sessionData.authSession.user.id,
+        licenseOwnerUserId: lockedRecord?.userId || authSession.user.id,
         licensePaidAt: referencePaidAt || referenceCreatedAt || new Date().toISOString(),
         licenseExpiresAt: licenseExpiresAt || referenceCreatedAt || new Date().toISOString(),
         graceExpiresAt: graceExpiresAt || referenceCreatedAt || new Date().toISOString(),
@@ -336,11 +437,36 @@ async function fetchManagedServersFresh(
       return a.guildName.localeCompare(b.guildName, "pt-BR");
     });
 
-  // Atualizar Cache
-  managedServersCache.set(userId, {
+  const coveredGuildCount = coveredGuildIds.length;
+  const shouldMarkDiscordSyncFailed =
+    !requiresDiscordRelink &&
+    (!accessibleGuildsResult.ok ||
+      (ownedPlanGuildIds.size > 0 && accessibleGuilds.length === 0));
+  const sync = buildManagedServersSyncState({
+    authUserId: userId,
+    accessibleGuildCount: accessibleGuilds.length,
+    coveredGuildCount,
+    degraded: requiresDiscordRelink || shouldMarkDiscordSyncFailed,
+    reason: requiresDiscordRelink
+      ? baseSyncReason
+      : shouldMarkDiscordSyncFailed
+        ? "discord_sync_failed"
+        : "ok",
+    requiresDiscordRelink,
+    usedDatabaseFallback:
+      coveredGuildCount > accessibleGuilds.length ||
+      requiresDiscordRelink ||
+      !accessibleGuildsResult.ok,
+  });
+  const snapshot = {
     servers,
+    sync,
+  } satisfies ManagedServersSnapshot;
+
+  managedServersCache.set(userId, {
+    snapshot,
     timestamp: Date.now(),
   });
 
-  return servers;
+  return snapshot;
 }
