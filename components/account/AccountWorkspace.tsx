@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
+import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
@@ -230,7 +231,6 @@ function AccountAvatar({
         height={size}
         className={`rounded-full object-cover ${className}`.trim()}
         style={{ width: size, height: size }}
-        unoptimized
       />
     );
   }
@@ -545,7 +545,7 @@ export function AccountWorkspace({
 
   const handleOpenHelp = useCallback(() => {
     setIsProfileMenuOpen(false);
-    window.open("https://discord.gg/ddXtHhvvrx", "_blank", "noopener,noreferrer");
+    window.open(OFFICIAL_DISCORD_INVITE_URL, "_blank", "noopener,noreferrer");
   }, []);
 
   const handleReturnToPreviousPage = useCallback(() => {

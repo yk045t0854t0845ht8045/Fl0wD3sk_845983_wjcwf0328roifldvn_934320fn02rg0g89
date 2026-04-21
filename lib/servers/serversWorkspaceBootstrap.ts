@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
-import { buildLoginHref } from "@/lib/auth/paths";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
-import { getManagedServersForCurrentSession } from "@/lib/servers/managedServers";
+import {
+  DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+  getManagedServersSnapshotForCurrentSession,
+} from "@/lib/servers/managedServers";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
 
 function buildDiscordAvatarUrl(
@@ -20,12 +22,19 @@ export async function getServersWorkspaceBootstrap() {
     redirect("/login");
   }
 
-  if (!user.discord_user_id) {
-    redirect(buildLoginHref("/servers", "link"));
-  }
-
-  const [initialServers, teamsSnapshot] = await Promise.all([
-    getManagedServersForCurrentSession().catch(() => []),
+  const [serversSnapshot, teamsSnapshot] = await Promise.all([
+    getManagedServersSnapshotForCurrentSession().catch(() => ({
+      servers: [],
+      sync: !user.discord_user_id
+        ? {
+            ...DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+            degraded: true,
+            reason: "discord_not_linked" as const,
+            requiresDiscordRelink: true,
+            usedDatabaseFallback: true,
+          }
+        : DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+    })),
     getUserTeamsSnapshotForUser({
       authUserId: user.id,
       discordUserId: user.discord_user_id,
@@ -41,7 +50,8 @@ export async function getServersWorkspaceBootstrap() {
       username: user.username,
       avatarUrl: buildDiscordAvatarUrl(user.discord_user_id, user.avatar),
     },
-    initialServers,
+    initialServers: serversSnapshot.servers,
+    initialServersSync: serversSnapshot.sync,
     initialTeams: teamsSnapshot.teams,
     initialPendingInvites: teamsSnapshot.pendingInvites,
   };

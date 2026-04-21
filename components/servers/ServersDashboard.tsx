@@ -782,7 +782,6 @@ export function ServersDashboard({
                               height={serversScale.cardIconSize}
                               className="object-cover"
                               style={{ borderRadius: `${serversScale.cardIconRadius}px` }}
-                              unoptimized
                             />
                           ) : (
                             <FallbackServerIcon />

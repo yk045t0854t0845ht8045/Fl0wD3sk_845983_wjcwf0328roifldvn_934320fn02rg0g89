@@ -1,6 +1,6 @@
 "use client";
 
-import type { ManagedServer } from "@/lib/servers/managedServers";
+import type { ManagedServer } from "@/lib/servers/managedServersShared";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
 
 const WORKSPACE_CACHE_TTL_MS = 5_000;

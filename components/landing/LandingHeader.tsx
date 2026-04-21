@@ -10,6 +10,7 @@ import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 
 type NavigationItem = {
   label: string;
@@ -475,7 +476,6 @@ function HeaderAccountButton({
             width={26}
             height={26}
             className="h-[26px] w-[26px] rounded-full object-cover"
-            unoptimized
           />
         ) : (
           <span
@@ -619,7 +619,7 @@ export function LandingHeader({
         { label: "Ver servicos", href: "/#services" },
         { label: "Conhecer produtos", href: "/#products" },
         { label: "Escolher um plano", href: "/#plans" },
-        { label: "Falar com o time", href: "https://discord.gg/ddXtHhvvrx" },
+        { label: "Falar com o time", href: OFFICIAL_DISCORD_INVITE_URL },
       ],
     },
     Produtos: {

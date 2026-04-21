@@ -2,11 +2,16 @@ import { redirect } from "next/navigation";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 import { AffiliatesWorkspace } from "@/components/affiliates/AffiliatesWorkspace";
 import type { Metadata } from "next";
+import { buildFlowCwvMetadata } from "@/lib/seo/flowCwv";
 
-export const metadata: Metadata = {
-  title: "Dashboard de Afiliado — Flowdesk",
-  description: "Gerencie seus links, acompanhe comissões e saques no dashboard exclusivo de afiliado Flowdesk.",
-};
+export const metadata: Metadata = buildFlowCwvMetadata({
+  title: "Dashboard de Afiliado - Flowdesk",
+  description:
+    "Gerencie seus links, acompanhe comissoes e saques no dashboard exclusivo de afiliado Flowdesk.",
+  pathname: "/affiliates/dashboard",
+  noIndex: true,
+  keywords: ["dashboard", "afiliados", "comissoes", "saques"],
+});
 
 function buildDiscordAvatarUrl(
   discordUserId: string | null,
@@ -43,7 +48,9 @@ export default async function AffiliatesDashboardPage({
   type Tab = typeof validTabs[number];
 
   const rawTab = params.tab;
-  const activeTab: Tab = validTabs.includes(rawTab as Tab) ? (rawTab as Tab) : "overview";
+  const activeTab: Tab = validTabs.includes(rawTab as Tab)
+    ? (rawTab as Tab)
+    : "overview";
 
   return (
     <AffiliatesWorkspace

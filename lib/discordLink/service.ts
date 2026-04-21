@@ -58,6 +58,18 @@ function resolveBotToken() {
   return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || null;
 }
 
+function assertOfficialDiscordConfig() {
+  if (
+    !OFFICIAL_DISCORD_GUILD_ID ||
+    !OFFICIAL_DISCORD_LINK_CHANNEL_ID ||
+    !OFFICIAL_DISCORD_LINKED_ROLE_ID
+  ) {
+    throw new Error(
+      "OFFICIAL_SUPPORT_GUILD_ID, OFFICIAL_LINK_CHANNEL_ID ou OFFICIAL_LINKED_ROLE_ID nao configurados.",
+    );
+  }
+}
+
 async function parseDiscordErrorMessage(response: Response) {
   try {
     const payload = (await response.clone().json()) as {
@@ -83,6 +95,7 @@ async function parseDiscordErrorMessage(response: Response) {
 }
 
 async function fetchOfficialGuildMember(discordUserId: string) {
+  assertOfficialDiscordConfig();
   const botToken = resolveBotToken();
   if (!botToken) {
     throw new Error("DISCORD_BOT_TOKEN nao configurado para sincronizar a vinculacao.");
@@ -114,6 +127,7 @@ async function fetchOfficialGuildMember(discordUserId: string) {
 }
 
 async function grantOfficialLinkedRole(discordUserId: string) {
+  assertOfficialDiscordConfig();
   const botToken = resolveBotToken();
   if (!botToken) {
     throw new Error("DISCORD_BOT_TOKEN nao configurado para aplicar o cargo de vinculacao.");
@@ -252,6 +266,7 @@ export async function syncOfficialDiscordLink(input: {
   requestId: string;
   discordAccessToken?: string | null;
 }) {
+  assertOfficialDiscordConfig();
   const nowIso = new Date().toISOString();
   const currentRecord = await getDiscordLinkRecordForUser(input.userId);
   const openDiscordUrl = buildOfficialDiscordChannelUrl();

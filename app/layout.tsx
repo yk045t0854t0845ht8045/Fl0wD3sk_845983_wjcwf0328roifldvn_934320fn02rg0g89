@@ -5,7 +5,12 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { AdsenseScript } from "@/components/ads/AdsenseScript";
 import { CookieConsentManager } from "@/components/cookies/CookieConsentManager";
 import { NotificationsProvider } from "@/components/notifications/NotificationsProvider";
+import { FlowCwvStructuredData } from "@/components/seo/FlowCwvStructuredData";
 import { COOKIE_CONSENT_COOKIE_NAME } from "@/lib/cookies/consent";
+import {
+  buildFlowCwvSiteGraph,
+  buildFlowCwvSiteMetadata,
+} from "@/lib/seo/flowCwv";
 import { RoutePrefetcher } from "@/components/RoutePrefetcher";
 
 import "./globals.css";
@@ -20,10 +25,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "Flowdesk",
-  description: "Login do painel Flowdesk",
-};
+export const metadata: Metadata = buildFlowCwvSiteMetadata();
 
 export default async function RootLayout({
   children,
@@ -36,11 +38,22 @@ export default async function RootLayout({
 
   return (
     <html
-      lang="en"
+      lang="pt-BR"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <meta name="theme-color" content="#040404" />
+        <link rel="dns-prefetch" href="//cdn.discordapp.com" />
+        <link rel="dns-prefetch" href="//media.discordapp.net" />
+        <link rel="preconnect" href="https://cdn.discordapp.com" crossOrigin="" />
+        <link rel="preconnect" href="https://media.discordapp.net" crossOrigin="" />
+      </head>
       <body className="min-h-full flex flex-col">
         <AdsenseScript />
+        <FlowCwvStructuredData
+          id="flowcwv-site-graph"
+          payload={buildFlowCwvSiteGraph()}
+        />
         <NotificationsProvider>
           <RoutePrefetcher />
           {children}

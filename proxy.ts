@@ -12,6 +12,15 @@ import {
   isSameOriginRequest,
 } from "@/lib/security/http";
 import {
+  applyFlowSecureTransportPriority,
+  isNextInternalAssetPath,
+  isStaticPublicAssetPath,
+} from "@/lib/security/httpPriority";
+import {
+  buildFlowSecureRateLimitResponse,
+  evaluateFlowSecureRateLimit,
+} from "@/lib/security/rateLimit";
+import {
   buildCanonicalUrlFromInternalPath,
   buildCanonicalPaymentUrl,
   buildCanonicalWorkspaceUrl,
@@ -27,24 +36,7 @@ import {
 } from "@/lib/routing/subdomains";
 
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const STATIC_PUBLIC_ASSET_PREFIXES = ["/cdn/", "/icons/"] as const;
-const STATIC_PUBLIC_ROOT_FILE_PATTERN =
-  /^\/[^/]+\.(?:png|jpe?g|gif|webp|svg|ico|txt|xml|json|webmanifest|woff2?|ttf|otf)$/i;
 const DEFAULT_PAYMENT_CHECKOUT_PATH = "/payment/pro/monthly";
-
-function isStaticPublicAssetPath(pathname: string) {
-  if (pathname === "/ads.txt") {
-    return true;
-  }
-
-  if (
-    STATIC_PUBLIC_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix))
-  ) {
-    return true;
-  }
-
-  return STATIC_PUBLIC_ROOT_FILE_PATTERN.test(pathname);
-}
 
 function isSensitiveApiPath(pathname: string) {
   return (
@@ -119,6 +111,7 @@ function buildProtectedErrorResponse(
     requestId,
     noIndex: request.nextUrl.pathname.startsWith("/api/"),
   });
+  applyFlowSecureTransportPriority(response, request);
 
   if (isSensitiveApiPath(request.nextUrl.pathname)) {
     applySensitiveApiHeaders(response);
@@ -148,6 +141,7 @@ function buildRewriteResponse(
     requestId,
     noIndex: rewriteUrl.pathname.startsWith("/api/"),
   });
+  applyFlowSecureTransportPriority(response, request);
 
   if (isSensitiveApiPath(rewriteUrl.pathname)) {
     applySensitiveApiHeaders(response);
@@ -175,6 +169,7 @@ function buildRedirectResponse(
     requestId,
     noIndex: request.nextUrl.pathname.startsWith("/api/"),
   });
+  applyFlowSecureTransportPriority(response, request);
 
   if (isSensitiveApiPath(request.nextUrl.pathname)) {
     applySensitiveApiHeaders(response);
@@ -441,11 +436,14 @@ function maybeBuildCanonicalWorkspaceRedirect(
   return null;
 }
 
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const requestId =
     request.headers.get("x-request-id")?.trim() || crypto.randomUUID();
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-request-id", requestId);
+  const isNextInternalAssetRequest = isNextInternalAssetPath(
+    request.nextUrl.pathname,
+  );
   const isOAuthHandshakeRequest = isOAuthHandshakePath(request.nextUrl.pathname);
   const loginErrorFlash = decodeLoginErrorFlashPayload(
     request.cookies.get(LOGIN_ERROR_FLASH_COOKIE_NAME)?.value,
@@ -462,6 +460,36 @@ export function proxy(request: NextRequest) {
     isDevelopment: process.env.NODE_ENV !== "production",
   });
 
+  if (isNextInternalAssetRequest) {
+    const response = NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
+
+    response.headers.set("X-Request-Id", requestId);
+    applyFlowSecureTransportPriority(response, request);
+    return response;
+  }
+
+  const blockedByRateLimit = await evaluateFlowSecureRateLimit(request, {
+    requestId,
+  });
+  if (blockedByRateLimit) {
+    const response = buildFlowSecureRateLimitResponse(request, blockedByRateLimit, {
+      contentSecurityPolicy: csp,
+      requestId,
+    });
+
+    if (isSensitiveApiPath(request.nextUrl.pathname)) {
+      applySensitiveApiHeaders(response);
+    }
+
+    applyFlowSecureTransportPriority(response, request);
+
+    return response;
+  }
+
   if (!isOAuthHandshakeRequest) {
     const canonicalHostRedirectResponse = maybeBuildCanonicalHostRedirect(
       request,
@@ -472,23 +500,23 @@ export function proxy(request: NextRequest) {
       return canonicalHostRedirectResponse;
     }
 
-  const authRedirectResponse = maybeBuildCanonicalAuthRedirect(
-    request,
-    requestId,
-    csp,
-  );
-  if (authRedirectResponse) {
-    return authRedirectResponse;
-  }
+    const authRedirectResponse = maybeBuildCanonicalAuthRedirect(
+      request,
+      requestId,
+      csp,
+    );
+    if (authRedirectResponse) {
+      return authRedirectResponse;
+    }
 
-  const paymentRedirectResponse = maybeBuildCanonicalPaymentRedirect(
-    request,
-    requestId,
-    csp,
-  );
-  if (paymentRedirectResponse) {
-    return paymentRedirectResponse;
-  }
+    const paymentRedirectResponse = maybeBuildCanonicalPaymentRedirect(
+      request,
+      requestId,
+      csp,
+    );
+    if (paymentRedirectResponse) {
+      return paymentRedirectResponse;
+    }
   }
 
   const loginErrorFlashRedirectResponse = maybeBuildLoginErrorFlashRedirect(
@@ -543,6 +571,7 @@ export function proxy(request: NextRequest) {
     requestId,
     noIndex: request.nextUrl.pathname.startsWith("/api/"),
   });
+  applyFlowSecureTransportPriority(response, request);
 
   if (isSensitiveApiPath(request.nextUrl.pathname)) {
     applySensitiveApiHeaders(response);
@@ -557,5 +586,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)"],
+  matcher: ["/((?!_next/image|favicon.ico|robots.txt|sitemap.xml).*)"],
 };

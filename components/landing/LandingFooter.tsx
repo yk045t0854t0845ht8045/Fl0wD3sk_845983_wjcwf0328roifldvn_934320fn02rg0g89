@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { LandingReveal } from "@/components/landing/LandingReveal";
+import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 
 type FooterLinkItem = {
   label: string;
@@ -14,7 +15,6 @@ type FooterGroup = {
   links: FooterLinkItem[];
 };
 
-const DISCORD_HREF = "https://discord.gg/ddXtHhvvrx";
 const DOCUMENTATION_HREF =
   process.env.NEXT_PUBLIC_DOCUMENTATION_URL || "/terms";
 
@@ -113,11 +113,11 @@ const FOOTER_GROUPS: FooterGroup[] = [
   {
     title: "Comunidade",
     links: [
-      { label: "Discord", href: DISCORD_HREF },
-      { label: "Contato", href: DISCORD_HREF },
-      { label: "Suporte", href: DISCORD_HREF },
+      { label: "Discord", href: OFFICIAL_DISCORD_INVITE_URL },
+      { label: "Contato", href: OFFICIAL_DISCORD_INVITE_URL },
+      { label: "Suporte", href: OFFICIAL_DISCORD_INVITE_URL },
       { label: "Atualizacoes", href: "/status" },
-      { label: "Feedback", href: DISCORD_HREF },
+      { label: "Feedback", href: OFFICIAL_DISCORD_INVITE_URL },
     ],
   },
 ];
@@ -260,7 +260,7 @@ export function LandingFooter({
             </Link>
 
             <div className="flex flex-wrap items-center gap-x-[18px] gap-y-[10px]">
-              <FooterLink item={{ label: "Discord", href: DISCORD_HREF }} />
+              <FooterLink item={{ label: "Discord", href: OFFICIAL_DISCORD_INVITE_URL }} />
               <FooterLink item={{ label: "Privacidade", href: "/privacy" }} />
               <FooterLink item={{ label: "Termos", href: "/terms" }} />
               <FooterLink item={{ label: "Documentacao", href: DOCUMENTATION_HREF }} />

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
+  fetchGuildMemberSummaryByBot,
   fetchGuildRolesByBot,
   isGuildId,
   resolveSessionAccessToken,
@@ -29,6 +30,164 @@ import {
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const MAX_AUTOROLE_ROLE_IDS = 20;
+const MAX_AUTOROLE_CONSOLE_ENTRIES = 12;
+
+type AutoRoleSyncStatus = "idle" | "pending" | "processing" | "completed" | "failed";
+type AutoRoleConsoleEntryStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+type AutoRoleSettingsRow = {
+  enabled: boolean;
+  role_ids: unknown;
+  assignment_delay_minutes: number | null;
+  existing_members_sync_requested_at: string | null;
+  existing_members_sync_started_at: string | null;
+  existing_members_sync_completed_at: string | null;
+  existing_members_sync_status: string | null;
+  existing_members_sync_error: string | null;
+  updated_at: string | null;
+};
+
+type AutoRoleQueueConsoleRow = {
+  id: number;
+  member_id: string;
+  status: string;
+  last_error: string | null;
+  processed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  due_at: string | null;
+};
+
+type AutoRoleConsoleEntry = {
+  queueId: string;
+  memberId: string;
+  status: AutoRoleConsoleEntryStatus;
+  detail: string | null;
+  occurredAt: string | null;
+  displayName: string;
+  mentionLabel: string;
+  avatarUrl: string | null;
+};
+
+function normalizeAutoRoleSyncStatus(value: unknown): AutoRoleSyncStatus {
+  return value === "pending" ||
+    value === "processing" ||
+    value === "completed" ||
+    value === "failed"
+    ? value
+    : "idle";
+}
+
+function normalizeAutoRoleConsoleEntryStatus(
+  value: unknown,
+): AutoRoleConsoleEntryStatus {
+  return value === "processing" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled"
+    ? value
+    : "pending";
+}
+
+async function loadAutoRoleConsoleEntries(input: {
+  guildId: string;
+  syncRequestedAt: string | null;
+}) {
+  if (!input.syncRequestedAt) {
+    return [] as AutoRoleConsoleEntry[];
+  }
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const query = supabase
+    .from("guild_autorole_queue")
+    .select(
+      "id, member_id, status, last_error, processed_at, created_at, updated_at, due_at",
+    )
+    .eq("guild_id", input.guildId)
+    .eq("requested_source", "existing_members_sync")
+    .gte("created_at", input.syncRequestedAt)
+    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(MAX_AUTOROLE_CONSOLE_ENTRIES);
+
+  const result = await query;
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  const rows = (result.data ?? []) as AutoRoleQueueConsoleRow[];
+  const entries = await Promise.all(
+    rows.map(async (row) => {
+      const memberSummary = await fetchGuildMemberSummaryByBot(
+        input.guildId,
+        row.member_id,
+      );
+      return {
+        queueId: String(row.id),
+        memberId: row.member_id,
+        status: normalizeAutoRoleConsoleEntryStatus(row.status),
+        detail:
+          typeof row.last_error === "string" && row.last_error.trim().length > 0
+            ? row.last_error.trim()
+            : null,
+        occurredAt:
+          row.processed_at ||
+          row.updated_at ||
+          row.created_at ||
+          row.due_at ||
+          null,
+        displayName: memberSummary?.displayName || `Membro ${row.member_id.slice(-6)}`,
+        mentionLabel:
+          memberSummary?.mentionLabel ||
+          `@${memberSummary?.displayName || row.member_id.slice(-6)}`,
+        avatarUrl: memberSummary?.avatarUrl || null,
+      } satisfies AutoRoleConsoleEntry;
+    }),
+  );
+
+  return entries;
+}
+
+async function serializeAutoRoleSettings(
+  guildId: string,
+  row: AutoRoleSettingsRow,
+) {
+  let consoleEntries: AutoRoleConsoleEntry[] = [];
+
+  try {
+    consoleEntries = await loadAutoRoleConsoleEntries({
+      guildId,
+      syncRequestedAt: row.existing_members_sync_requested_at,
+    });
+  } catch (error) {
+    console.error("autorole console entries load failed", {
+      error,
+      guildId,
+    });
+  }
+
+  return {
+    enabled: Boolean(row.enabled),
+    roleIds: Array.isArray(row.role_ids)
+      ? row.role_ids.filter((roleId): roleId is string => typeof roleId === "string")
+      : [],
+    assignmentDelayMinutes: normalizeAssignmentDelayMinutes(
+      row.assignment_delay_minutes,
+    ),
+    syncStatus: normalizeAutoRoleSyncStatus(row.existing_members_sync_status),
+    syncRequestedAt: row.existing_members_sync_requested_at,
+    syncStartedAt: row.existing_members_sync_started_at,
+    syncCompletedAt: row.existing_members_sync_completed_at,
+    syncError: row.existing_members_sync_error,
+    updatedAt: row.updated_at,
+    consoleEntries,
+  };
+}
 
 type AutoRoleAssignmentDelayMinutes = 0 | 10 | 20 | 30;
 
@@ -221,29 +380,10 @@ export async function GET(request: Request) {
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        settings: {
-          enabled: Boolean(result.data.enabled),
-          roleIds: Array.isArray(result.data.role_ids)
-            ? result.data.role_ids.filter(
-                (roleId): roleId is string => typeof roleId === "string",
-              )
-            : [],
-          assignmentDelayMinutes: normalizeAssignmentDelayMinutes(
-            result.data.assignment_delay_minutes,
-          ),
-          syncStatus:
-            result.data.existing_members_sync_status === "pending" ||
-            result.data.existing_members_sync_status === "processing" ||
-            result.data.existing_members_sync_status === "completed" ||
-            result.data.existing_members_sync_status === "failed"
-              ? result.data.existing_members_sync_status
-              : "idle",
-          syncRequestedAt: result.data.existing_members_sync_requested_at,
-          syncStartedAt: result.data.existing_members_sync_started_at,
-          syncCompletedAt: result.data.existing_members_sync_completed_at,
-          syncError: result.data.existing_members_sync_error,
-          updatedAt: result.data.updated_at,
-        },
+        settings: await serializeAutoRoleSettings(
+          guildId,
+          result.data as AutoRoleSettingsRow,
+        ),
       }),
     );
   } catch (error) {
@@ -533,29 +673,10 @@ export async function POST(request: Request) {
         ok: true,
         queuedExistingMembersSync:
           syncExistingMembers && enabled && roleIds.length > 0,
-        settings: {
-          enabled: Boolean(savedSettings.enabled),
-          roleIds: Array.isArray(savedSettings.role_ids)
-            ? savedSettings.role_ids.filter(
-                (roleId): roleId is string => typeof roleId === "string",
-              )
-            : [],
-          assignmentDelayMinutes: normalizeAssignmentDelayMinutes(
-            savedSettings.assignment_delay_minutes,
-          ),
-          syncStatus:
-            savedSettings.existing_members_sync_status === "pending" ||
-            savedSettings.existing_members_sync_status === "processing" ||
-            savedSettings.existing_members_sync_status === "completed" ||
-            savedSettings.existing_members_sync_status === "failed"
-              ? savedSettings.existing_members_sync_status
-              : "idle",
-          syncRequestedAt: savedSettings.existing_members_sync_requested_at,
-          syncStartedAt: savedSettings.existing_members_sync_started_at,
-          syncCompletedAt: savedSettings.existing_members_sync_completed_at,
-          syncError: savedSettings.existing_members_sync_error,
-          updatedAt: savedSettings.updated_at,
-        },
+        settings: await serializeAutoRoleSettings(
+          guildId,
+          savedSettings as AutoRoleSettingsRow,
+        ),
       }),
     );
   } catch (error) {

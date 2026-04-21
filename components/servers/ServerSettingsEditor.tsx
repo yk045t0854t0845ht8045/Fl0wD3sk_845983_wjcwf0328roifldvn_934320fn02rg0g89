@@ -208,6 +208,24 @@ type AutoRoleSyncStatus =
   | "completed"
   | "failed";
 
+type AutoRoleConsoleEntryStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+type AutoRoleConsoleEntry = {
+  queueId: string;
+  memberId: string;
+  status: AutoRoleConsoleEntryStatus;
+  detail: string | null;
+  occurredAt: string | null;
+  displayName: string;
+  mentionLabel: string;
+  avatarUrl: string | null;
+};
+
 type SecurityLogEventKey =
   | "nicknameChange"
   | "avatarChange"
@@ -640,6 +658,134 @@ function areAutoRoleSettingsDraftsEqual(
   return JSON.stringify(normalizeAutoRoleSettingsDraft(left)) === JSON.stringify(normalizeAutoRoleSettingsDraft(right));
 }
 
+function normalizeAutoRoleSyncStatus(value: unknown): AutoRoleSyncStatus {
+  return value === "pending" ||
+    value === "processing" ||
+    value === "completed" ||
+    value === "failed"
+    ? value
+    : "idle";
+}
+
+function normalizeAutoRoleConsoleEntryStatus(
+  value: unknown,
+): AutoRoleConsoleEntryStatus {
+  return value === "processing" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled"
+    ? value
+    : "pending";
+}
+
+function isAutoRoleSyncStatusActive(status: AutoRoleSyncStatus) {
+  return status === "pending" || status === "processing";
+}
+
+function normalizeAutoRoleConsoleEntries(value: unknown): AutoRoleConsoleEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const memberId =
+        typeof record.memberId === "string" ? record.memberId.trim() : "";
+
+      if (!memberId) {
+        return null;
+      }
+
+      const displayName =
+        typeof record.displayName === "string" && record.displayName.trim().length > 0
+          ? record.displayName.trim()
+          : `Membro ${memberId.slice(-6)}`;
+      const mentionLabel =
+        typeof record.mentionLabel === "string" && record.mentionLabel.trim().length > 0
+          ? record.mentionLabel.trim()
+          : `@${displayName}`;
+
+      return {
+        queueId:
+          typeof record.queueId === "string" && record.queueId.trim().length > 0
+            ? record.queueId.trim()
+            : memberId,
+        memberId,
+        status: normalizeAutoRoleConsoleEntryStatus(record.status),
+        detail:
+          typeof record.detail === "string" && record.detail.trim().length > 0
+            ? record.detail.trim()
+            : null,
+        occurredAt:
+          typeof record.occurredAt === "string" && record.occurredAt.trim().length > 0
+            ? record.occurredAt
+            : null,
+        displayName,
+        mentionLabel,
+        avatarUrl:
+          typeof record.avatarUrl === "string" && record.avatarUrl.trim().length > 0
+            ? record.avatarUrl
+            : null,
+      } satisfies AutoRoleConsoleEntry;
+    })
+    .filter((entry): entry is AutoRoleConsoleEntry => entry !== null);
+}
+
+function getAutoRoleConsoleStatusMeta(status: AutoRoleConsoleEntryStatus) {
+  if (status === "completed") {
+    return {
+      label: "Concluido",
+      accentClassName:
+        "border-[rgba(115,206,151,0.2)] bg-[rgba(115,206,151,0.08)] text-[#8FE4AE]",
+      dotClassName: "bg-[#73CE97]",
+      actionText: "Adicionou o cargo a",
+    };
+  }
+
+  if (status === "processing") {
+    return {
+      label: "Executando",
+      accentClassName:
+        "border-[rgba(99,165,255,0.22)] bg-[rgba(99,165,255,0.08)] text-[#8BB8FF]",
+      dotClassName: "bg-[#63A5FF]",
+      actionText: "Adicionando o cargo para",
+    };
+  }
+
+  if (status === "failed") {
+    return {
+      label: "Falhou",
+      accentClassName:
+        "border-[rgba(217,138,138,0.22)] bg-[rgba(217,138,138,0.08)] text-[#E0A3A3]",
+      dotClassName: "bg-[#D98A8A]",
+      actionText: "Falhou ao adicionar o cargo para",
+    };
+  }
+
+  if (status === "cancelled") {
+    return {
+      label: "Cancelado",
+      accentClassName:
+        "border-[rgba(201,162,97,0.22)] bg-[rgba(201,162,97,0.08)] text-[#E6C27A]",
+      dotClassName: "bg-[#C9A261]",
+      actionText: "Sincronizacao cancelada para",
+    };
+  }
+
+  return {
+    label: "Na fila",
+    accentClassName:
+      "border-[rgba(120,120,120,0.2)] bg-[rgba(120,120,120,0.08)] text-[#B3B3B3]",
+    dotClassName: "bg-[#6D6D6D]",
+    actionText: "Entrou na fila para receber o cargo",
+  };
+}
+
 function createDefaultSecurityLogEventsDraft(): SecurityLogEventsDraft {
   return {
     nicknameChange: { enabled: false, channelId: null },
@@ -841,7 +987,6 @@ function PaymentMethodIcon({
       height={size}
       className="object-contain"
       loading="lazy"
-      unoptimized
       onError={(event) => {
         const target = event.currentTarget as HTMLImageElement;
         if (target.src.endsWith(fallbackSrc)) return;
@@ -1790,6 +1935,13 @@ export function ServerSettingsEditor({
   const [autoRoleSyncError, setAutoRoleSyncError] = useState<string | null>(
     null,
   );
+  const [autoRoleConsoleEntries, setAutoRoleConsoleEntries] = useState<
+    AutoRoleConsoleEntry[]
+  >([]);
+  const [isAutoRoleConsoleLoading, setIsAutoRoleConsoleLoading] =
+    useState(false);
+  const [autoRoleConsoleLastUpdatedAt, setAutoRoleConsoleLastUpdatedAt] =
+    useState<string | null>(null);
   const [securityLogsDraft, setSecurityLogsDraft] =
     useState<SecurityLogsSettingsDraft>(createDefaultSecurityLogsSettingsDraft);
   const [savedSecurityLogsDraft, setSavedSecurityLogsDraft] =
@@ -1935,6 +2087,30 @@ export function ServerSettingsEditor({
     "Neste acesso o painel esta disponivel somente para visualizacao.";
   const financialViewerMessage =
     "As funcoes financeiras desta area ficam disponiveis apenas para a conta responsavel pelo plano vinculado.";
+  const applyAutoRoleRuntimePayload = useCallback((settings: unknown) => {
+    const record =
+      settings && typeof settings === "object"
+        ? (settings as Record<string, unknown>)
+        : null;
+
+    setAutoRoleSyncStatus(normalizeAutoRoleSyncStatus(record?.syncStatus));
+    setAutoRoleSyncRequestedAt(
+      typeof record?.syncRequestedAt === "string" ? record.syncRequestedAt : null,
+    );
+    setAutoRoleSyncStartedAt(
+      typeof record?.syncStartedAt === "string" ? record.syncStartedAt : null,
+    );
+    setAutoRoleSyncCompletedAt(
+      typeof record?.syncCompletedAt === "string" ? record.syncCompletedAt : null,
+    );
+    setAutoRoleSyncError(
+      typeof record?.syncError === "string" && record.syncError.trim().length > 0
+        ? record.syncError.trim()
+        : null,
+    );
+    setAutoRoleConsoleEntries(normalizeAutoRoleConsoleEntries(record?.consoleEntries));
+    setAutoRoleConsoleLastUpdatedAt(new Date().toISOString());
+  }, []);
 
   const applyDashboardSettingsPayload = useCallback(
     (payload: ServerDashboardSettingsPayload) => {
@@ -1985,32 +2161,31 @@ export function ServerSettingsEditor({
       const defaultEntryLayout = createDefaultWelcomeEntryLayout();
       const defaultExitLayout = createDefaultWelcomeExitLayout();
       const hasWelcomeSettings = Boolean(payload.welcomeSettings);
-      const defaultTextChannelId = text[0]?.id ?? null;
       const nextWelcomeEnabled = Boolean(payload.welcomeSettings?.enabled);
       const nextEntryPublicChannelId = hasWelcomeSettings
         ? payload.welcomeSettings?.entryPublicChannelId &&
           textSet.has(payload.welcomeSettings.entryPublicChannelId)
           ? payload.welcomeSettings.entryPublicChannelId
           : null
-        : defaultTextChannelId;
+        : null;
       const nextEntryLogChannelId = hasWelcomeSettings
         ? payload.welcomeSettings?.entryLogChannelId &&
           textSet.has(payload.welcomeSettings.entryLogChannelId)
           ? payload.welcomeSettings.entryLogChannelId
           : null
-        : defaultTextChannelId;
+        : null;
       const nextExitPublicChannelId = hasWelcomeSettings
         ? payload.welcomeSettings?.exitPublicChannelId &&
           textSet.has(payload.welcomeSettings.exitPublicChannelId)
           ? payload.welcomeSettings.exitPublicChannelId
           : null
-        : defaultTextChannelId;
+        : null;
       const nextExitLogChannelId = hasWelcomeSettings
         ? payload.welcomeSettings?.exitLogChannelId &&
           textSet.has(payload.welcomeSettings.exitLogChannelId)
           ? payload.welcomeSettings.exitLogChannelId
           : null
-        : defaultTextChannelId;
+        : null;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const rawWelcome = payload.welcomeSettings as any;
@@ -2423,6 +2598,9 @@ export function ServerSettingsEditor({
     setRecurringMethodDraftId(null);
     setShouldEnableRecurringAfterMethodAdd(false);
     setAutoRoleSyncExistingMembers(false);
+    setAutoRoleConsoleEntries([]);
+    setIsAutoRoleConsoleLoading(false);
+    setAutoRoleConsoleLastUpdatedAt(null);
 
     if (!shouldHardResetEditor) {
       return;
@@ -2465,6 +2643,9 @@ export function ServerSettingsEditor({
     setAutoRoleSyncStartedAt(null);
     setAutoRoleSyncCompletedAt(null);
     setAutoRoleSyncError(null);
+    setAutoRoleConsoleEntries([]);
+    setIsAutoRoleConsoleLoading(false);
+    setAutoRoleConsoleLastUpdatedAt(null);
     setSecurityLogsDraft(createDefaultSecurityLogsSettingsDraft());
     setDashboardPermissions([]);
   }, [guildId, initialTab]);
@@ -2604,6 +2785,74 @@ export function ServerSettingsEditor({
       controller.abort("unmount");
     };
   }, [applyDashboardSettingsPayload, guildId, markDashboardSnapshotLoaded]);
+
+  useEffect(() => {
+    const isSectionActive = settingsSection === "security_autorole";
+    if (!isSectionActive || !guildId) {
+      return;
+    }
+
+    const shouldKeepPolling = isAutoRoleSyncStatusActive(autoRoleSyncStatus);
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let isFirstLoad = true;
+
+    const loadAutoRoleRuntime = async () => {
+      if (cancelled) {
+        return;
+      }
+
+      if (isFirstLoad) {
+        setIsAutoRoleConsoleLoading(true);
+      }
+
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/autorole-settings?guildId=${encodeURIComponent(guildId)}`,
+          {
+            cache: "no-store",
+          },
+        );
+        const payload = await response.json().catch(() => null);
+
+        if (cancelled || !response.ok || !payload?.ok) {
+          if (!cancelled && shouldKeepPolling) {
+            timeoutId = window.setTimeout(loadAutoRoleRuntime, 3800);
+          }
+          return;
+        }
+
+        applyAutoRoleRuntimePayload(payload.settings ?? null);
+
+        if (isAutoRoleSyncStatusActive(normalizeAutoRoleSyncStatus(payload.settings?.syncStatus))) {
+          timeoutId = window.setTimeout(loadAutoRoleRuntime, 2400);
+        }
+      } catch {
+        if (!cancelled && shouldKeepPolling) {
+          timeoutId = window.setTimeout(loadAutoRoleRuntime, 3800);
+        }
+      } finally {
+        isFirstLoad = false;
+        if (!cancelled) {
+          setIsAutoRoleConsoleLoading(false);
+        }
+      }
+    };
+
+    void loadAutoRoleRuntime();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [
+    applyAutoRoleRuntimePayload,
+    autoRoleSyncStatus,
+    guildId,
+    settingsSection,
+  ]);
 
   useEffect(() => {
     setMethodNicknameDrafts((current) => {
@@ -3453,8 +3702,13 @@ export function ServerSettingsEditor({
     isSaving || settingsReadOnly || !antiLinkEnabled || isActivatingAntiLink;
   const autoRoleControlsDisabled =
     isSaving || settingsReadOnly || !autoRoleEnabled;
+  const autoRoleSyncInFlight = isAutoRoleSyncStatusActive(autoRoleSyncStatus);
+  const autoRoleSyncCheckboxChecked =
+    autoRoleSyncExistingMembers || autoRoleSyncInFlight;
   const autoRoleSyncExistingMembersDisabled =
-    autoRoleControlsDisabled || autoRoleRoleIds.length === 0;
+    autoRoleControlsDisabled ||
+    autoRoleRoleIds.length === 0 ||
+    autoRoleSyncInFlight;
   const securityLogsModuleControlsDisabled = isSaving || settingsReadOnly;
   const securityLogsControlsDisabled =
     securityLogsModuleControlsDisabled || !securityLogsDraft.enabled;
@@ -4487,18 +4741,7 @@ export function ServerSettingsEditor({
               payload.settings.assignmentDelayMinutes,
             ),
           );
-          setAutoRoleSyncStatus(
-            payload.settings.syncStatus === "pending" ||
-              payload.settings.syncStatus === "processing" ||
-              payload.settings.syncStatus === "completed" ||
-              payload.settings.syncStatus === "failed"
-              ? payload.settings.syncStatus
-              : "idle",
-          );
-          setAutoRoleSyncRequestedAt(payload.settings.syncRequestedAt || null);
-          setAutoRoleSyncStartedAt(payload.settings.syncStartedAt || null);
-          setAutoRoleSyncCompletedAt(payload.settings.syncCompletedAt || null);
-          setAutoRoleSyncError(payload.settings.syncError || null);
+          applyAutoRoleRuntimePayload(payload.settings);
         }
 
         setAutoRoleSyncExistingMembers(false);
@@ -4738,6 +4981,7 @@ export function ServerSettingsEditor({
     autoRoleEnabled,
     autoRoleRoleIds,
     autoRoleSyncExistingMembers,
+    applyAutoRoleRuntimePayload,
     adminRoleId,
     canPersistSettings,
     claimRoleIds,
@@ -4821,15 +5065,17 @@ export function ServerSettingsEditor({
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    const fallbackChannelId = textChannelOptions[0]?.id ?? null;
-    const nextEntryPublicId = entryPublicChannelId || fallbackChannelId;
-    const nextEntryLogId = entryLogChannelId || fallbackChannelId;
-    const nextExitPublicId = exitPublicChannelId || fallbackChannelId;
-    const nextExitLogId = exitLogChannelId || fallbackChannelId;
+    const nextEntryPublicId = entryPublicChannelId;
+    const nextEntryLogId = entryLogChannelId;
+    const nextExitPublicId = exitPublicChannelId;
+    const nextExitLogId = exitLogChannelId;
 
-    if (!nextEntryPublicId || !nextExitPublicId) {
+    if (
+      !(nextEntryPublicId || nextEntryLogId) ||
+      !(nextExitPublicId || nextExitLogId)
+    ) {
       setErrorMessage(
-        "Escolha pelo menos um canal de texto antes de ativar o modulo.",
+        "Escolha pelo menos um canal para entrada e um canal para saida antes de ativar o modulo.",
       );
       setIsActivatingWelcome(false);
       return;
@@ -4910,7 +5156,6 @@ export function ServerSettingsEditor({
     guildId,
     isActivatingWelcome,
     settingsReadOnly,
-    textChannelOptions,
   ]);
 
   const handleActivateAntiLink = useCallback(async () => {
@@ -5564,7 +5809,7 @@ export function ServerSettingsEditor({
 
                         <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
                           <ConfigStepSelect label="Canal de entrada publico" placeholder="Escolha o canal" options={textChannelOptions} value={entryPublicChannelId} onChange={setEntryPublicChannelId} disabled={welcomeControlsDisabled} controlHeightPx={serverSettingsControlHeight} />
-                          <ConfigStepSelect label="Log privado de entrada" placeholder="Escolha o canal de log" options={textChannelOptions} value={entryLogChannelId} onChange={setEntryLogChannelId} disabled={welcomeControlsDisabled} controlHeightPx={serverSettingsControlHeight} />
+                          <ConfigStepSelect label="Log privado de entrada" placeholder="Escolha o canal" options={textChannelOptions} value={entryLogChannelId} onChange={setEntryLogChannelId} disabled={welcomeControlsDisabled} controlHeightPx={serverSettingsControlHeight} />
                         </div>
                       </div>
 
@@ -5586,7 +5831,7 @@ export function ServerSettingsEditor({
 
                         <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
                           <ConfigStepSelect label="Canal de saida publico" placeholder="Escolha o canal" options={textChannelOptions} value={exitPublicChannelId} onChange={setExitPublicChannelId} disabled={welcomeControlsDisabled} controlHeightPx={serverSettingsControlHeight} />
-                          <ConfigStepSelect label="Log privado de saida" placeholder="Escolha o canal de log" options={textChannelOptions} value={exitLogChannelId} onChange={setExitLogChannelId} disabled={welcomeControlsDisabled} controlHeightPx={serverSettingsControlHeight} />
+                          <ConfigStepSelect label="Log privado de saida" placeholder="Escolha o canal" options={textChannelOptions} value={exitLogChannelId} onChange={setExitLogChannelId} disabled={welcomeControlsDisabled} controlHeightPx={serverSettingsControlHeight} />
                         </div>
                       </div>
                     </div>
@@ -5788,7 +6033,7 @@ export function ServerSettingsEditor({
                         <div className="mt-[16px] space-y-[12px]">
                           <label
                             className={`flex items-start gap-[12px] rounded-[16px] border px-[14px] py-[12px] transition-colors ${
-                              autoRoleSyncExistingMembers
+                              autoRoleSyncCheckboxChecked
                                 ? "border-[rgba(0,98,255,0.32)] bg-[rgba(0,98,255,0.08)]"
                                 : "border-[#141414] bg-[#0A0A0A] hover:border-[#1F1F1F] hover:bg-[#0D0D0D]"
                             } ${
@@ -5799,7 +6044,7 @@ export function ServerSettingsEditor({
                           >
                             <input
                               type="checkbox"
-                              checked={autoRoleSyncExistingMembers}
+                              checked={autoRoleSyncCheckboxChecked}
                               onChange={(event) =>
                                 setAutoRoleSyncExistingMembers(
                                   event.currentTarget.checked,
@@ -5810,29 +6055,71 @@ export function ServerSettingsEditor({
                             />
                             <span
                               className={`mt-[1px] inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[6px] border ${
-                                autoRoleSyncExistingMembers
+                                autoRoleSyncCheckboxChecked
                                   ? "border-[#0062FF] bg-[#0062FF]"
                                   : "border-[#303030] bg-[#111111]"
                               }`}
                             >
-                              {autoRoleSyncExistingMembers ? (
+                              {autoRoleSyncCheckboxChecked ? (
                                 <span className="h-[6px] w-[6px] rounded-full bg-white" />
                               ) : null}
                             </span>
                             <span className="min-w-0 flex-1">
-                              <span className="block text-[14px] leading-none font-medium text-[#E8E8E8]">
-                                Adicionar tambem para membros atuais (em massa)
+                              <span className="flex flex-wrap items-center gap-[8px]">
+                                <span className="block text-[14px] leading-none font-medium text-[#E8E8E8]">
+                                  Adicionar tambem para membros atuais (em massa)
+                                </span>
+                                {autoRoleSyncInFlight ? (
+                                  <span className="inline-flex items-center gap-[6px] rounded-full border border-[rgba(99,165,255,0.22)] bg-[rgba(99,165,255,0.08)] px-[10px] py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8BB8FF]">
+                                    <span className="h-[6px] w-[6px] rounded-full bg-[#63A5FF] animate-pulse" />
+                                    Em andamento
+                                  </span>
+                                ) : null}
                               </span>
                               <span className="mt-[6px] block text-[12px] leading-[1.55] text-[#6B6B6B]">
-                                Ao salvar, o bot tenta adicionar esses cargos em quem ja esta no servidor e ainda nao possui.
+                                {autoRoleSyncInFlight
+                                  ? "A sincronizacao em massa segue ativa abaixo. O marcador fica ligado ate o lote terminar."
+                                  : "Ao salvar, o bot tenta adicionar esses cargos em quem ja esta no servidor e ainda nao possui."}
                               </span>
                             </span>
                           </label>
 
                           <div className="rounded-[16px] border border-[#141414] bg-[#0A0A0A] px-[14px] py-[12px]">
-                            <p className="text-[12px] uppercase tracking-[0.16em] text-[#666666]">
-                              Status da sincronizacao
-                            </p>
+                            <div className="flex flex-wrap items-center justify-between gap-[10px]">
+                              <p className="text-[12px] uppercase tracking-[0.16em] text-[#666666]">
+                                Status da sincronizacao
+                              </p>
+                              <span
+                                className={`inline-flex items-center gap-[6px] rounded-full border px-[10px] py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                  autoRoleSyncInFlight
+                                    ? "border-[rgba(99,165,255,0.22)] bg-[rgba(99,165,255,0.08)] text-[#8BB8FF]"
+                                    : autoRoleSyncStatus === "completed"
+                                      ? "border-[rgba(115,206,151,0.2)] bg-[rgba(115,206,151,0.08)] text-[#8FE4AE]"
+                                      : autoRoleSyncStatus === "failed"
+                                        ? "border-[rgba(217,138,138,0.22)] bg-[rgba(217,138,138,0.08)] text-[#E0A3A3]"
+                                        : "border-[#171717] bg-[#101010] text-[#8A8A8A]"
+                                }`}
+                              >
+                                <span
+                                  className={`h-[6px] w-[6px] rounded-full ${
+                                    autoRoleSyncInFlight
+                                      ? "bg-[#63A5FF] animate-pulse"
+                                      : autoRoleSyncStatus === "completed"
+                                        ? "bg-[#73CE97]"
+                                        : autoRoleSyncStatus === "failed"
+                                          ? "bg-[#D98A8A]"
+                                          : "bg-[#676767]"
+                                  }`}
+                                />
+                                {autoRoleSyncInFlight
+                                  ? "Ao vivo"
+                                  : autoRoleSyncStatus === "completed"
+                                    ? "Concluido"
+                                    : autoRoleSyncStatus === "failed"
+                                      ? "Falhou"
+                                      : "Inativo"}
+                              </span>
+                            </div>
                             <p className="mt-[8px] text-[13px] leading-[1.6] text-[#7B7B7B]">
                               {autoRoleSyncStatus === "pending"
                                 ? `Em fila desde ${formatDateTime(autoRoleSyncRequestedAt)}.`
@@ -5849,6 +6136,122 @@ export function ServerSettingsEditor({
                                 {autoRoleSyncError}
                               </p>
                             ) : null}
+                          </div>
+
+                          <div className="overflow-hidden rounded-[20px] border border-[#141414] bg-[linear-gradient(180deg,#090909_0%,#050505_100%)]">
+                            <div className="border-b border-[#111111] px-[14px] py-[12px]">
+                              <div className="flex flex-wrap items-center justify-between gap-[10px]">
+                                <div>
+                                  <p className="text-[12px] uppercase tracking-[0.16em] text-[#666666]">
+                                    Console AutoRole
+                                  </p>
+                                  <p className="mt-[6px] text-[12px] leading-[1.55] text-[#6E6E6E]">
+                                    Acompanhe em tempo real quem esta entrando na fila e quem ja recebeu os cargos.
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-[8px]">
+                                  <span
+                                    className={`inline-flex items-center gap-[6px] rounded-full border px-[10px] py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                      autoRoleSyncInFlight
+                                        ? "border-[rgba(99,165,255,0.22)] bg-[rgba(99,165,255,0.08)] text-[#8BB8FF]"
+                                        : "border-[#171717] bg-[#0E0E0E] text-[#8A8A8A]"
+                                    }`}
+                                  >
+                                    <span
+                                      className={`h-[6px] w-[6px] rounded-full ${
+                                        autoRoleSyncInFlight
+                                          ? "bg-[#63A5FF] animate-pulse"
+                                          : "bg-[#666666]"
+                                      }`}
+                                    />
+                                    {autoRoleSyncInFlight ? "Realtime" : "Ultimo lote"}
+                                  </span>
+                                  {autoRoleConsoleLastUpdatedAt ? (
+                                    <span className="inline-flex items-center rounded-full border border-[#171717] bg-[#0E0E0E] px-[10px] py-[5px] text-[10px] font-medium uppercase tracking-[0.12em] text-[#787878]">
+                                      Atualizado {formatDateTime(autoRoleConsoleLastUpdatedAt)}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-[10px] px-[14px] py-[14px]">
+                              {isAutoRoleConsoleLoading && autoRoleConsoleEntries.length === 0 ? (
+                                <div className="flex items-center gap-[10px] rounded-[16px] border border-[#121212] bg-[#090909] px-[14px] py-[14px] text-[13px] text-[#7A7A7A]">
+                                  <ButtonLoader size={14} colorClassName="text-[#D8D8D8]" />
+                                  Carregando console do autorole...
+                                </div>
+                              ) : autoRoleConsoleEntries.length === 0 ? (
+                                <div className="rounded-[16px] border border-dashed border-[#191919] bg-[#080808] px-[14px] py-[16px]">
+                                  <p className="font-mono text-[13px] leading-[1.7] text-[#767676]">
+                                    {autoRoleSyncInFlight
+                                      ? "Aguardando o bot registrar os primeiros membros desta sincronizacao..."
+                                      : "Nenhum processamento em massa recente foi registrado para este servidor."}
+                                  </p>
+                                </div>
+                              ) : (
+                                autoRoleConsoleEntries.map((entry) => {
+                                  const statusMeta = getAutoRoleConsoleStatusMeta(entry.status);
+                                  const avatarFallbackLetter =
+                                    entry.displayName.trim().charAt(0).toUpperCase() || "?";
+
+                                  return (
+                                    <div
+                                      key={entry.queueId}
+                                      className="rounded-[18px] border border-[#111111] bg-[linear-gradient(180deg,#0A0A0A_0%,#080808_100%)] px-[14px] py-[12px] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+                                    >
+                                      <div className="flex flex-wrap items-start justify-between gap-[10px]">
+                                        <div className="flex min-w-0 flex-1 items-start gap-[10px]">
+                                          <span
+                                            className={`mt-[4px] h-[8px] w-[8px] shrink-0 rounded-full ${statusMeta.dotClassName}`}
+                                          />
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-[8px]">
+                                              <span
+                                                className={`inline-flex items-center rounded-full border px-[10px] py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] ${statusMeta.accentClassName}`}
+                                              >
+                                                {statusMeta.label}
+                                              </span>
+                                              <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-[#666666]">
+                                                {formatDateTime(entry.occurredAt)}
+                                              </span>
+                                            </div>
+                                            <div className="mt-[10px] flex flex-wrap items-center gap-[8px]">
+                                              <span className="font-mono text-[13px] text-[#C8C8C8]">
+                                                {statusMeta.actionText}
+                                              </span>
+                                              <span className="inline-flex max-w-full items-center gap-[8px] rounded-full border border-[#181818] bg-[#101010] px-[10px] py-[7px]">
+                                                {entry.avatarUrl ? (
+                                                  <Image
+                                                    src={entry.avatarUrl}
+                                                    alt={entry.displayName}
+                                                    width={24}
+                                                    height={24}
+                                                    className="h-[24px] w-[24px] rounded-full object-cover"
+                                                  />
+                                                ) : (
+                                                  <span className="inline-flex h-[24px] w-[24px] items-center justify-center rounded-full border border-[#202020] bg-[#151515] text-[11px] font-semibold text-[#D2D2D2]">
+                                                    {avatarFallbackLetter}
+                                                  </span>
+                                                )}
+                                                <span className="truncate text-[12px] font-medium text-[#E2E2E2]">
+                                                  {entry.mentionLabel}
+                                                </span>
+                                              </span>
+                                            </div>
+                                            {entry.detail ? (
+                                              <p className="mt-[10px] text-[12px] leading-[1.6] text-[#9E7B7B]">
+                                                {entry.detail}
+                                              </p>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>

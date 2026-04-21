@@ -13,7 +13,9 @@ export type FlowSecurePurpose =
   | "auth_email_otp_code"
   | "auth_email_otp_session"
   | "auth_session_oauth"
+  | "diagnostic_fingerprint"
   | "payment_pii"
+  | "rate_limit_ip"
   | "sensitive_lookup"
   | "sensitive_fingerprint";
 
@@ -283,6 +285,54 @@ export function hashFlowSecureValue(
     )
     .update(normalized, "utf8")
     .digest(input.encoding || "hex");
+}
+
+function normalizeFlowSecureDiagnosticValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeFlowSecureDiagnosticValue(item));
+  }
+
+  if (!isRecord(value)) {
+    return value ?? null;
+  }
+
+  const normalizedEntries = Object.entries(value)
+    .filter(([, fieldValue]) => fieldValue !== undefined)
+    .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey, "en-US"))
+    .map(([key, fieldValue]) => [
+      key,
+      normalizeFlowSecureDiagnosticValue(fieldValue),
+    ]);
+
+  return Object.fromEntries(normalizedEntries);
+}
+
+export function buildFlowSecureDiagnosticFingerprint(
+  value: unknown,
+  input?: {
+    prefix?: string | null;
+    subcontext?: string | null;
+    maxPayloadLength?: number;
+  },
+) {
+  const serialized = JSON.stringify(normalizeFlowSecureDiagnosticValue(value));
+  if (!serialized) {
+    return null;
+  }
+
+  const trimmedPayload = serialized.slice(0, input?.maxPayloadLength || 2048);
+  const fingerprint = hashFlowSecureValue(trimmedPayload, {
+    purpose: "diagnostic_fingerprint",
+    subcontext: input?.subcontext || "default",
+    encoding: "base64url",
+  });
+
+  if (!fingerprint) {
+    return null;
+  }
+
+  const prefix = input?.prefix?.trim() || "fsdiag";
+  return `${prefix}_${fingerprint.slice(0, 22)}`;
 }
 
 export function constantTimeEqualText(

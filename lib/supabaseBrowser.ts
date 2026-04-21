@@ -1,11 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Use public environment variables (provided by user)
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://sqkhmyhnoyfotifengxv.supabase.co";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const configuredSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || "";
+const supabaseUrl = configuredSupabaseUrl || "https://example.invalid";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() || "";
 
-if (!supabaseAnonKey) {
-  console.warn("[supabaseBrowser] NEXT_PUBLIC_SUPABASE_ANON_KEY is missing. Real-time updates will be disabled.");
+if (!configuredSupabaseUrl || !supabaseAnonKey) {
+  console.warn(
+    "[supabaseBrowser] NEXT_PUBLIC_SUPABASE_URL ou NEXT_PUBLIC_SUPABASE_ANON_KEY ausente. Recursos do Supabase no navegador podem ficar indisponiveis.",
+  );
 }
 
 export const supabaseBrowser = createClient(supabaseUrl, supabaseAnonKey || "missing", {

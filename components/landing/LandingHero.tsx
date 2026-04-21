@@ -9,6 +9,7 @@ import { LandingOfferPlans } from "@/components/landing/LandingOfferPlans";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingServerUsageRow } from "@/components/landing/LandingServerUsageRow";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 
 const FEATURE_DIVIDER_POSITIONS = [
   { left: "5.1601%" },
@@ -35,7 +36,6 @@ const FEATURE_COLUMN_DESCRIPTIONS = [
 ] as const;
 
 const FEATURE_COLUMN_NUMBERS = ["01", "02", "03"] as const;
-const CONTACT_HREF = "https://discord.gg/ddXtHhvvrx";
 const DOCUMENTATION_HREF =
   process.env.NEXT_PUBLIC_DOCUMENTATION_URL || "/terms";
 
@@ -432,7 +432,7 @@ export function LandingHero({
                 <span className="mt-[4px] block">
                   que prestaremos todo o suporte{" "}
                   <a
-                    href={CONTACT_HREF}
+                    href={OFFICIAL_DISCORD_INVITE_URL}
                     target="_blank"
                     rel="noreferrer noopener"
                     className="underline decoration-[rgba(218,218,218,0.72)] underline-offset-[4px] transition-colors duration-200 hover:text-[#DADADA]"
@@ -453,7 +453,7 @@ export function LandingHero({
 
             <LandingReveal delay={2520}>
               <LandingActionButton
-                href={CONTACT_HREF}
+                href={OFFICIAL_DISCORD_INVITE_URL}
                 variant="light"
                 className="mt-[28px] h-[46px] rounded-[12px] px-6 text-[16px]"
               >
