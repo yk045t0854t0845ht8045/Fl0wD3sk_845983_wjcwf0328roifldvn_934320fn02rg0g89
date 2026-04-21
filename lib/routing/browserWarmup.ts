@@ -15,23 +15,61 @@ type ScheduleWarmBrowserRoutesOptions = WarmBrowserRouteOptions & {
   delayMs?: number;
 };
 
-const warmedOrigins = new Set<string>();
-const warmedDocuments = new Set<string>();
-const warmedSameOriginPaths = new Set<string>();
+const ORIGIN_HINT_TTL_MS = 10 * 60_000;
+const DOCUMENT_HINT_TTL_MS = 45_000;
+const ROUTER_PREFETCH_TTL_MS = 35_000;
+
+const warmedOrigins = new Map<string, number>();
+const warmedHints = new Map<string, number>();
+const warmedSameOriginPaths = new Map<string, number>();
 
 function canUseBrowserWarmup() {
   return typeof window !== "undefined" && typeof document !== "undefined";
 }
 
-function appendHintLink(
-  key: string,
-  configure: (link: HTMLLinkElement) => void,
-) {
-  if (!canUseBrowserWarmup() || warmedDocuments.has(key)) {
+function isWarmEntryActive(cache: Map<string, number>, key: string) {
+  const expiresAt = cache.get(key);
+  if (!expiresAt) {
+    return false;
+  }
+
+  if (expiresAt <= Date.now()) {
+    cache.delete(key);
+    return false;
+  }
+
+  return true;
+}
+
+function markWarmEntry(cache: Map<string, number>, key: string, ttlMs: number) {
+  cache.set(key, Date.now() + ttlMs);
+}
+
+function removeExistingHintLink(key: string) {
+  if (!canUseBrowserWarmup()) {
     return;
   }
 
-  warmedDocuments.add(key);
+  document
+    .querySelectorAll<HTMLLinkElement>("link[data-flowdesk-warmup]")
+    .forEach((link) => {
+      if (link.dataset.flowdeskWarmup === key) {
+        link.remove();
+      }
+    });
+}
+
+function appendHintLink(
+  key: string,
+  configure: (link: HTMLLinkElement) => void,
+  ttlMs: number,
+) {
+  if (!canUseBrowserWarmup() || isWarmEntryActive(warmedHints, key)) {
+    return;
+  }
+
+  markWarmEntry(warmedHints, key, ttlMs);
+  removeExistingHintLink(key);
   const link = document.createElement("link");
   configure(link);
   link.dataset.flowdeskWarmup = key;
@@ -39,23 +77,23 @@ function appendHintLink(
 }
 
 function warmOrigin(origin: string) {
-  if (!canUseBrowserWarmup() || warmedOrigins.has(origin)) {
+  if (!canUseBrowserWarmup() || isWarmEntryActive(warmedOrigins, origin)) {
     return;
   }
 
-  warmedOrigins.add(origin);
+  markWarmEntry(warmedOrigins, origin, ORIGIN_HINT_TTL_MS);
 
   const url = new URL(origin);
   appendHintLink(`dns:${url.host}`, (link) => {
     link.rel = "dns-prefetch";
     link.href = `//${url.host}`;
-  });
+  }, ORIGIN_HINT_TTL_MS);
 
   appendHintLink(`preconnect:${origin}`, (link) => {
     link.rel = "preconnect";
     link.href = origin;
     link.crossOrigin = "use-credentials";
-  });
+  }, ORIGIN_HINT_TTL_MS);
 }
 
 function warmDocument(href: string, crossOrigin: boolean) {
@@ -66,7 +104,7 @@ function warmDocument(href: string, crossOrigin: boolean) {
     if (crossOrigin) {
       link.crossOrigin = "use-credentials";
     }
-  });
+  }, DOCUMENT_HINT_TTL_MS);
 }
 
 export function warmBrowserRoute(
@@ -90,9 +128,13 @@ export function warmBrowserRoute(
   if (
     target.sameOrigin &&
     options?.router &&
-    !warmedSameOriginPaths.has(target.path)
+    !isWarmEntryActive(warmedSameOriginPaths, target.path)
   ) {
-    warmedSameOriginPaths.add(target.path);
+    markWarmEntry(
+      warmedSameOriginPaths,
+      target.path,
+      ROUTER_PREFETCH_TTL_MS,
+    );
     void options.router.prefetch(target.path);
   }
 
@@ -118,7 +160,7 @@ export function scheduleWarmBrowserRoutes(
   const requestIdleCallbackRef = window.requestIdleCallback;
   if (typeof requestIdleCallbackRef === "function") {
     const idleHandle = requestIdleCallbackRef(runWarmup, {
-      timeout: options?.delayMs ?? 180,
+      timeout: options?.delayMs ?? 120,
     });
 
     return () => {
@@ -131,7 +173,7 @@ export function scheduleWarmBrowserRoutes(
 
   const timeoutHandle = window.setTimeout(
     runWarmup,
-    options?.delayMs ?? 60,
+    options?.delayMs ?? 40,
   );
 
   return () => {

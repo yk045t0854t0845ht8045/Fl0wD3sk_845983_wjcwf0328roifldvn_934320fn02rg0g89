@@ -23,16 +23,22 @@ export function RoutePrefetcher() {
       [
         "/dashboard",
         "/dashboard/",
+        "/dashboard/hosting",
+        "/dashboard/flowai-api",
+        "/dashboard/domains",
+        "/dashboard/billing/subscriptions",
         "/servers",
         "/servers/",
         "/servers/plans",
         "/account",
         "/account/",
+        "/account/tickets",
+        "/account/status",
         "/discord/link",
       ],
       {
         router,
-        delayMs: 120,
+        delayMs: 90,
       },
     );
   }, [pathname, router]);

@@ -400,11 +400,24 @@ function OverviewContent({
               type="button"
               onClick={() => onNavigate(card.id)}
               onMouseEnter={() => {
-                warmBrowserRoute(`/account/${card.id}`, { router });
+                warmBrowserRoute(`/account/${card.id}`, {
+                  router,
+                  prefetchDocument: true,
+                });
                 void preloadAccountTabModule(card.id);
               }}
               onFocus={() => {
-                warmBrowserRoute(`/account/${card.id}`, { router });
+                warmBrowserRoute(`/account/${card.id}`, {
+                  router,
+                  prefetchDocument: true,
+                });
+                void preloadAccountTabModule(card.id);
+              }}
+              onPointerDown={() => {
+                warmBrowserRoute(`/account/${card.id}`, {
+                  router,
+                  prefetchDocument: true,
+                });
                 void preloadAccountTabModule(card.id);
               }}
               className="group flex min-h-[130px] w-full flex-col items-start justify-between rounded-[20px] border border-[#141414] bg-[#0A0A0A] p-[20px] text-left transition-all duration-300 hover:scale-[1.01] hover:border-[#222222] hover:bg-gradient-to-b hover:from-[#0D0D0D] hover:to-[#0A0A0A]"

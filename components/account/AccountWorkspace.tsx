@@ -309,7 +309,10 @@ export function AccountWorkspace({
   }, []);
 
   const prefetchHref = useCallback((href: string) => {
-    warmBrowserRoute(href, { router });
+    warmBrowserRoute(href, {
+      router,
+      prefetchDocument: true,
+    });
   }, [router]);
 
   const prefetchTab = useCallback((tab: AccountTab) => {
@@ -626,13 +629,14 @@ export function AccountWorkspace({
       </div>
 
       <div className="mt-[14px] space-y-[4px]">
-        <button
-          type="button"
-          onMouseEnter={() => prefetchHref(returnPath || "/dashboard")}
-          onFocus={() => prefetchHref(returnPath || "/dashboard")}
-          onClick={handleReturnToPreviousPage}
-          className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B5B5B5] transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3]"
-        >
+          <button
+            type="button"
+            onMouseEnter={() => prefetchHref(returnPath || "/dashboard")}
+            onFocus={() => prefetchHref(returnPath || "/dashboard")}
+            onPointerDown={() => prefetchHref(returnPath || "/dashboard")}
+            onClick={handleReturnToPreviousPage}
+            className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B5B5B5] transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3]"
+          >
           <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#8A8A8A] group-hover:text-[#DADADA]">
             <ChevronLeft className="h-[18px] w-[18px] shrink-0" strokeWidth={1.85} aria-hidden="true" />
           </span>
@@ -711,6 +715,7 @@ export function AccountWorkspace({
                         onClick={() => navigateToTab(item.id)}
                         onMouseEnter={() => prefetchTab(item.id)}
                         onFocus={() => prefetchTab(item.id)}
+                        onPointerDown={() => prefetchTab(item.id)}
                         className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
                           isActive
                             ? isDanger

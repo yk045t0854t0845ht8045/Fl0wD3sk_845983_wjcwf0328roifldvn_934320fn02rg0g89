@@ -459,6 +459,7 @@ function DashboardNavButton({
       type="button"
       onMouseEnter={() => onPrefetch?.(item)}
       onFocus={() => onPrefetch?.(item)}
+      onPointerDown={() => onPrefetch?.(item)}
       onClick={() => onNavigate(item)}
       className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
         active
@@ -762,7 +763,10 @@ export function DashboardWorkspace({
 
   const prefetchRoute = useCallback(
     (href: string) => {
-      warmBrowserRoute(href, { router });
+      warmBrowserRoute(href, {
+        router,
+        prefetchDocument: true,
+      });
     },
     [router],
   );
@@ -1657,13 +1661,14 @@ export function DashboardWorkspace({
       />
 
       {workspaceAlertMessage ? (
-        <button
-          type="button"
-          onMouseEnter={() => prefetchRoute("/servers/plans")}
-          onFocus={() => prefetchRoute("/servers/plans")}
-          onClick={() => {
-            navigateToHref("/servers/plans");
-          }}
+          <button
+            type="button"
+            onMouseEnter={() => prefetchRoute("/servers/plans")}
+            onFocus={() => prefetchRoute("/servers/plans")}
+            onPointerDown={() => prefetchRoute("/servers/plans")}
+            onClick={() => {
+              navigateToHref("/servers/plans");
+            }}
           className="fixed inset-x-0 top-0 z-[1400] h-[42px] overflow-hidden bg-[linear-gradient(90deg,#731015_0%,#971D22_10%,#BC2D32_24%,#D94141_40%,#E45555_50%,#D94141_60%,#BC2D32_76%,#971D22_90%,#731015_100%)] text-white transition-opacity hover:opacity-95 md:h-[46px]"
           aria-label={`${workspaceAlertMessage} Abrir pagina de planos.`}
         >

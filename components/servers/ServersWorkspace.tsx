@@ -1087,7 +1087,7 @@ function ServerListRow({
 
   return (
     <LandingReveal delay={Math.min(index, 10) * 18} duration={220}>
-      <article className={`flowdesk-landing-soft-motion relative cursor-pointer border-b border-[#141414] bg-[#0A0A0A] px-[18px] py-[18px] transition-[background-color,border-color] duration-250 hover:border-[#1E1E1E] hover:bg-[#0D0D0D] ${isSelected ? "bg-[#101010]" : ""}`} onClick={() => onOpen(server.guildId)} onMouseEnter={() => onPrefetch(server.guildId)} onFocus={() => onPrefetch(server.guildId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(server.guildId); } }} role="button" tabIndex={0}>
+      <article className={`flowdesk-landing-soft-motion relative cursor-pointer border-b border-[#141414] bg-[#0A0A0A] px-[18px] py-[18px] transition-[background-color,border-color] duration-250 hover:border-[#1E1E1E] hover:bg-[#0D0D0D] ${isSelected ? "bg-[#101010]" : ""}`} onClick={() => onOpen(server.guildId)} onMouseEnter={() => onPrefetch(server.guildId)} onFocus={() => onPrefetch(server.guildId)} onPointerDown={() => onPrefetch(server.guildId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(server.guildId); } }} role="button" tabIndex={0}>
         <div className="flex flex-col gap-[18px] xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 items-center gap-[16px]">
             {server.iconUrl ? <Image src={server.iconUrl} alt={server.guildName} width={56} height={56} className="h-[56px] w-[56px] rounded-[16px] object-cover" /> : <FallbackServerIcon />}
@@ -1165,6 +1165,7 @@ function ServerGridCard({
         onClick={() => onOpen(server.guildId)}
         onMouseEnter={() => onPrefetch(server.guildId)}
         onFocus={() => onPrefetch(server.guildId)}
+        onPointerDown={() => onPrefetch(server.guildId)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
@@ -2202,13 +2203,20 @@ export function ServersWorkspace({
     const timeoutId = window.setTimeout(() => {
       guildIdsToWarm.forEach((guildId) => {
         void prefetchServerDashboardSettings(guildId);
+        warmBrowserRoute(
+          `/servers/${encodeURIComponent(guildId)}/tickets/overview/`,
+          {
+            router,
+            prefetchDocument: true,
+          },
+        );
       });
     }, 80);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [errorMessage, filteredServers, isLoading, selectedGuildIdForConfig]);
+  }, [errorMessage, filteredServers, isLoading, router, selectedGuildIdForConfig]);
 
   useEffect(() => {
     return scheduleWarmBrowserRoutes(
@@ -2324,6 +2332,13 @@ export function ServersWorkspace({
     });
   }, [applySelectedServerRouteState, navigateToUrl, startOpenServerTransition]);
 
+  const prefetchDashboardRoute = useCallback(() => {
+    warmBrowserRoute("/dashboard", {
+      router,
+      prefetchDocument: true,
+    });
+  }, [router]);
+
   const prefetchWorkspaceSections = useCallback((guildId: string) => {
     void prefetchServerDashboardSettings(guildId);
     [
@@ -2342,6 +2357,28 @@ export function ServersWorkspace({
       });
     });
   }, [buildServerConfigUrl, router]);
+
+  const prefetchSelectedWorkspaceSections = useCallback((tab?: ServerEditorTab | null) => {
+    if (!selectedGuildIdForConfig || !tab) {
+      return;
+    }
+
+    prefetchWorkspaceSections(selectedGuildIdForConfig);
+  }, [prefetchWorkspaceSections, selectedGuildIdForConfig]);
+
+  useEffect(() => {
+    if (!isEditingServer || !selectedGuildIdForConfig) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      prefetchWorkspaceSections(selectedGuildIdForConfig);
+    }, 45);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isEditingServer, prefetchWorkspaceSections, selectedGuildIdForConfig]);
 
   const handleSidebarSettingsSectionNavigation = useCallback(
     (input: {
@@ -3065,18 +3102,17 @@ export function ServersWorkspace({
                         type="button"
                         onMouseEnter={() => {
                           if (item.kind === "dashboard") {
-                            const target = buildBrowserRoutingTargetFromInternalPath("/dashboard");
-                            if (target.sameOrigin) {
-                              router.prefetch(target.path);
-                            }
+                            prefetchDashboardRoute();
                           }
                         }}
                         onFocus={() => {
                           if (item.kind === "dashboard") {
-                            const target = buildBrowserRoutingTargetFromInternalPath("/dashboard");
-                            if (target.sameOrigin) {
-                              router.prefetch(target.path);
-                            }
+                            prefetchDashboardRoute();
+                          }
+                        }}
+                        onPointerDown={() => {
+                          if (item.kind === "dashboard") {
+                            prefetchDashboardRoute();
                           }
                         }}
                         onClick={() => {
@@ -3152,22 +3188,9 @@ export function ServersWorkspace({
                           <button
                             key={item.label}
                             type="button"
-                            onMouseEnter={() => {
-                              if (!isDisabled || selectedServer) {
-                                const guildId = selectedServer?.guildId;
-                                if (guildId && item.tab) {
-                                  prefetchWorkspaceSections(guildId);
-                                }
-                              }
-                            }}
-                            onFocus={() => {
-                              if (!isDisabled || selectedServer) {
-                                const guildId = selectedServer?.guildId;
-                                if (guildId && item.tab) {
-                                  prefetchWorkspaceSections(guildId);
-                                }
-                              }
-                            }}
+                            onMouseEnter={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onFocus={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onPointerDown={() => prefetchSelectedWorkspaceSections(item.tab)}
                             onClick={() => {
                               if (isDisabled || !selectedServer || !item.tab) return;
                               handleSidebarSettingsSectionNavigation({
@@ -3245,22 +3268,9 @@ export function ServersWorkspace({
                           <button
                             key={item.label}
                             type="button"
-                            onMouseEnter={() => {
-                              if (!isDisabled || selectedServer) {
-                                const guildId = selectedServer?.guildId;
-                                if (guildId && item.tab) {
-                                  prefetchWorkspaceSections(guildId);
-                                }
-                              }
-                            }}
-                            onFocus={() => {
-                              if (!isDisabled || selectedServer) {
-                                const guildId = selectedServer?.guildId;
-                                if (guildId && item.tab) {
-                                  prefetchWorkspaceSections(guildId);
-                                }
-                              }
-                            }}
+                            onMouseEnter={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onFocus={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onPointerDown={() => prefetchSelectedWorkspaceSections(item.tab)}
                             onClick={() => {
                               if (isDisabled || !selectedServer || !item.tab) return;
                               handleSidebarSettingsSectionNavigation({
@@ -3338,22 +3348,9 @@ export function ServersWorkspace({
                           <button
                             key={item.label}
                             type="button"
-                            onMouseEnter={() => {
-                              if (!isDisabled || selectedServer) {
-                                const guildId = selectedServer?.guildId;
-                                if (guildId && item.tab) {
-                                  prefetchWorkspaceSections(guildId);
-                                }
-                              }
-                            }}
-                            onFocus={() => {
-                              if (!isDisabled || selectedServer) {
-                                const guildId = selectedServer?.guildId;
-                                if (guildId && item.tab) {
-                                  prefetchWorkspaceSections(guildId);
-                                }
-                              }
-                            }}
+                            onMouseEnter={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onFocus={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onPointerDown={() => prefetchSelectedWorkspaceSections(item.tab)}
                             onClick={() => {
                               if (isDisabled || !selectedServer || !item.tab) return;
                               handleSidebarSettingsSectionNavigation({
@@ -3558,6 +3555,9 @@ export function ServersWorkspace({
       {workspaceAlertMessage ? (
         <button
           type="button"
+          onMouseEnter={() => warmBrowserRoute("/servers/plans", { router, prefetchDocument: true })}
+          onFocus={() => warmBrowserRoute("/servers/plans", { router, prefetchDocument: true })}
+          onPointerDown={() => warmBrowserRoute("/servers/plans", { router, prefetchDocument: true })}
           onClick={() => {
             navigateToUrl("/servers/plans");
           }}

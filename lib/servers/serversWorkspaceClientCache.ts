@@ -3,7 +3,7 @@
 import type { ManagedServer } from "@/lib/servers/managedServersShared";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
 
-const WORKSPACE_CACHE_TTL_MS = 5_000;
+const WORKSPACE_CACHE_TTL_MS = 90_000;
 
 type CachedServersEntry = {
   timestamp: number;
@@ -57,16 +57,26 @@ function writeStorageEntry(storageKey: string, value: unknown) {
   }
 }
 
+function deleteStorageEntry(storageKey: string) {
+  if (!canUseStorage()) return;
+
+  try {
+    window.sessionStorage.removeItem(storageKey);
+  } catch {
+    // noop
+  }
+}
+
 export function readCachedManagedServers(accountKey: string) {
+  const storageKey = getServersStorageKey(accountKey);
   const memoryEntry = serversMemoryCache.get(accountKey);
   if (memoryEntry && isFresh(memoryEntry.timestamp)) {
     return memoryEntry.servers;
   }
 
-  const storageEntry = readStorageEntry<CachedServersEntry>(
-    getServersStorageKey(accountKey),
-  );
+  const storageEntry = readStorageEntry<CachedServersEntry>(storageKey);
   if (!storageEntry || !isFresh(storageEntry.timestamp)) {
+    deleteStorageEntry(storageKey);
     return null;
   }
 
@@ -97,6 +107,7 @@ export function storeCachedManagedServers(
 }
 
 export function readCachedTeamsSnapshot(accountKey: string) {
+  const storageKey = getTeamsStorageKey(accountKey);
   const memoryEntry = teamsMemoryCache.get(accountKey);
   if (memoryEntry && isFresh(memoryEntry.timestamp)) {
     return {
@@ -105,10 +116,9 @@ export function readCachedTeamsSnapshot(accountKey: string) {
     };
   }
 
-  const storageEntry = readStorageEntry<CachedTeamsEntry>(
-    getTeamsStorageKey(accountKey),
-  );
+  const storageEntry = readStorageEntry<CachedTeamsEntry>(storageKey);
   if (!storageEntry || !isFresh(storageEntry.timestamp)) {
+    deleteStorageEntry(storageKey);
     return null;
   }
 
