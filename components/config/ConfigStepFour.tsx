@@ -285,9 +285,16 @@ type PlanChangeSummary = {
   currentBillingCycleDays: number | null;
   currentExpiresAt: string | null;
   currentStatus: string | null;
+  currentCycleAmount: number;
+  currentConsumedAmount: number;
   currentCreditAmount: number;
+  currentCycleTotalDaysExact: number;
+  currentCycleUsedDaysExact: number;
   remainingDaysExact: number;
+  creditAppliedToTargetAmount: number;
+  surplusCreditAmount: number;
   immediateSubtotalAmount: number;
+  payableBeforeDiscountsAmount: number;
   targetTotalAmount: number;
   flowPointsBalance: number;
   flowPointsGrantPreview: number;
@@ -403,9 +410,16 @@ function buildFallbackPlanChangeSummary(
     currentBillingCycleDays: null,
     currentExpiresAt: null,
     currentStatus: null,
+    currentCycleAmount: 0,
+    currentConsumedAmount: 0,
     currentCreditAmount: 0,
+    currentCycleTotalDaysExact: 0,
+    currentCycleUsedDaysExact: 0,
     remainingDaysExact: 0,
+    creditAppliedToTargetAmount: 0,
+    surplusCreditAmount: 0,
     immediateSubtotalAmount: plan.totalAmount,
+    payableBeforeDiscountsAmount: plan.totalAmount,
     targetTotalAmount: plan.totalAmount,
     flowPointsBalance: normalizedFlowPointsBalance,
     flowPointsGrantPreview: 0,
@@ -415,14 +429,11 @@ function buildFallbackPlanChangeSummary(
 }
 
 function resolveFlowPointsGrantFromSubtotal(input: {
-  planChange: Pick<PlanChangeSummary, "kind" | "currentCreditAmount" | "targetTotalAmount">;
-  subtotalAmount: number;
+  planChange: Pick<PlanChangeSummary, "kind" | "flowPointsGrantPreview">;
 }) {
   if (input.planChange.kind !== "upgrade") return 0;
-  const normalizedCredit = roundMoney(Math.max(0, input.planChange.currentCreditAmount));
+  return roundMoney(Math.max(0, input.planChange.flowPointsGrantPreview));
   // Usar preço ORIGINAL do novo plano — cupons/gift cards não devem aumentar o grant.
-  const targetTotalAmount = roundMoney(Math.max(0, input.planChange.targetTotalAmount));
-  return roundMoney(Math.max(0, normalizedCredit - targetTotalAmount));
 }
 
 function toPlanSummaryFromApi(
@@ -999,6 +1010,13 @@ function formatMoney(amount: number, currency = "BRL") {
     currency,
     minimumFractionDigits: 2,
   }).format(roundMoney(amount));
+}
+
+function formatDecimalValue(value: number, maximumFractionDigits = 1) {
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(roundMoney(Math.max(0, value)));
 }
 
 function buildFallbackDiscountPreview(input: {
@@ -6191,8 +6209,19 @@ export function ConfigStepFour({
     activeDiscountPreview.totalAmount,
     activeDiscountPreview.currency,
   );
-  const summaryBaseLabel = formatMoney(
-    activeDiscountPreview.baseAmount,
+  const payableBeforePromotionsAmount = roundMoney(
+    Math.max(
+      0,
+      selectedPlanChange.payableBeforeDiscountsAmount ||
+        activeDiscountPreview.baseAmount,
+    ),
+  );
+  const targetCycleAmountLabel = formatMoney(
+    selectedPlanChange.targetTotalAmount || resolvedPlan.totalAmount,
+    activeDiscountPreview.currency,
+  );
+  const payableBeforePromotionsLabel = formatMoney(
+    payableBeforePromotionsAmount,
     activeDiscountPreview.currency,
   );
   const compareMonthlyAmountLabel = formatMoney(
@@ -6248,13 +6277,54 @@ export function ConfigStepFour({
     0,
     resolveFlowPointsGrantFromSubtotal({
       planChange: selectedPlanChange,
-      subtotalAmount: activeDiscountPreview.subtotalAmount,
     }),
   );
   const flowPointsGrantLabel =
     flowPointsGrantAmount > 0
       ? `+ ${formatMoney(flowPointsGrantAmount, activeDiscountPreview.currency)}`
       : formatMoney(0, activeDiscountPreview.currency);
+  const shouldShowUpgradeCreditReview =
+    selectedPlanChange.kind === "upgrade" &&
+    (selectedPlanChange.currentCreditAmount > 0 ||
+      selectedPlanChange.creditAppliedToTargetAmount > 0 ||
+      selectedPlanChange.surplusCreditAmount > 0);
+  const currentCycleAmountLabel = formatMoney(
+    selectedPlanChange.currentCycleAmount,
+    activeDiscountPreview.currency,
+  );
+  const currentConsumedAmountLabel = formatMoney(
+    selectedPlanChange.currentConsumedAmount,
+    activeDiscountPreview.currency,
+  );
+  const currentCreditAmountLabel = formatMoney(
+    selectedPlanChange.currentCreditAmount,
+    activeDiscountPreview.currency,
+  );
+  const creditAppliedToTargetLabel =
+    selectedPlanChange.creditAppliedToTargetAmount > 0
+      ? `- ${formatMoney(
+          selectedPlanChange.creditAppliedToTargetAmount,
+          activeDiscountPreview.currency,
+        )}`
+      : formatMoney(0, activeDiscountPreview.currency);
+  const surplusCreditLabel =
+    selectedPlanChange.surplusCreditAmount > 0
+      ? `+ ${formatMoney(
+          selectedPlanChange.surplusCreditAmount,
+          activeDiscountPreview.currency,
+        )}`
+      : formatMoney(0, activeDiscountPreview.currency);
+  const currentCycleUsedDaysLabel = `${formatDecimalValue(
+    selectedPlanChange.currentCycleUsedDaysExact,
+  )} dias`;
+  const currentCycleRemainingDaysLabel = `${formatDecimalValue(
+    selectedPlanChange.remainingDaysExact,
+  )} dias`;
+  const currentCycleTotalDaysLabel = `${formatDecimalValue(
+    selectedPlanChange.currentCycleTotalDaysExact,
+  )} dias`;
+  const shouldShowCoveredByCreditNotice =
+    shouldShowUpgradeCreditReview && activeDiscountPreview.totalAmount <= 0;
   const showCartDiscountEditor =
     isDiscountEditorOpen || hasManualDiscountCode;
   const approvedRedirectConfig = shouldShowApprovedConfirmationPanel
@@ -6429,7 +6499,7 @@ export function ConfigStepFour({
                               </p>
                             ) : null}
                             <p className="mt-[5px] text-[13px] text-[#8E8E8E] xl:text-right">
-                              Cobrado hoje: {summaryBaseLabel}
+                              Valor cobrável antes das promoções: {payableBeforePromotionsLabel}
                             </p>
                           </div>
                         </div>
@@ -6458,7 +6528,10 @@ export function ConfigStepFour({
                           {planPeriodLabel}
                         </span>
                         <span className="inline-flex min-h-[30px] items-center rounded-full border border-[#202020] bg-[#111111] px-[12px] font-medium text-[#ECECEC]">
-                          Total do ciclo {summaryBaseLabel} {planTotalLabel}
+                          Total do novo ciclo {targetCycleAmountLabel} {planTotalLabel}
+                        </span>
+                        <span className="inline-flex min-h-[30px] items-center rounded-full border border-[#202020] bg-[#111111] px-[12px] font-medium text-[#ECECEC]">
+                          Valor cobrável antes das promoções {payableBeforePromotionsLabel}
                         </span>
                         {showCompareAmount ? (
                           <span className="inline-flex min-h-[30px] items-center rounded-full border border-[#202020] bg-[#111111] px-[12px] font-medium text-[#A0A0A0] line-through">
@@ -6666,7 +6739,7 @@ export function ConfigStepFour({
 
                   <div className="mt-[18px] space-y-[14px] text-[15px] text-[#E6E6E6]">
                     <div className="flex items-center justify-between gap-[14px]">
-                      <span className="text-[#DDDDDD]">Total do ciclo</span>
+                      <span className="text-[#DDDDDD]">Total do novo ciclo</span>
                       <div className="flex items-center gap-[10px]">
                         {showCompareAmount ? (
                           <span className="text-[14px] text-[#7B7B7B] line-through">
@@ -6674,9 +6747,16 @@ export function ConfigStepFour({
                           </span>
                         ) : null}
                         <span className="text-[18px] font-semibold text-[#F5F5F5]">
-                          {summaryBaseLabel}
+                          {targetCycleAmountLabel}
                         </span>
                       </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-[14px]">
+                      <span className="text-[#DDDDDD]">Valor cobrável antes das promoções</span>
+                      <span className="font-medium text-[#F5F5F5]">
+                        {payableBeforePromotionsLabel}
+                      </span>
                     </div>
 
                     <div className="flex items-center justify-between gap-[14px]">
@@ -6692,6 +6772,87 @@ export function ConfigStepFour({
                         </span>
                       </div>
                     </div>
+
+                    {shouldShowUpgradeCreditReview ? (
+                      <div className="rounded-[18px] border border-[rgba(99,165,255,0.22)] bg-[rgba(9,24,48,0.62)] px-[14px] py-[14px]">
+                        <div className="flex flex-col gap-[14px]">
+                          <div className="flex flex-wrap items-start justify-between gap-[10px]">
+                            <div>
+                              <p className="text-[14px] font-semibold text-[#EAF3FF]">
+                                Credito proporcional do plano atual
+                              </p>
+                              <p className="mt-[4px] text-[12px] leading-[1.55] text-[#AAC0DF]">
+                                A troca imediata usa so o saldo proporcional ainda disponivel no ciclo atual,
+                                sem inventar desconto fora da sua licenca.
+                              </p>
+                            </div>
+                            <span className="inline-flex min-h-[28px] items-center rounded-full bg-[rgba(99,165,255,0.14)] px-[12px] text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9BC5FF]">
+                              {shouldShowCoveredByCreditNotice ? "Troca coberta" : "Troca imediata"}
+                            </span>
+                          </div>
+
+                          <div className="grid gap-[8px] sm:grid-cols-3">
+                            <div className="rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] px-[12px] py-[10px]">
+                              <p className="text-[11px] uppercase tracking-[0.12em] text-[#7E96B7]">
+                                Dias usados
+                              </p>
+                              <p className="mt-[4px] text-[14px] font-semibold text-[#F5F5F5]">
+                                {currentCycleUsedDaysLabel}
+                              </p>
+                            </div>
+                            <div className="rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] px-[12px] py-[10px]">
+                              <p className="text-[11px] uppercase tracking-[0.12em] text-[#7E96B7]">
+                                Dias restantes
+                              </p>
+                              <p className="mt-[4px] text-[14px] font-semibold text-[#F5F5F5]">
+                                {currentCycleRemainingDaysLabel}
+                              </p>
+                            </div>
+                            <div className="rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] px-[12px] py-[10px]">
+                              <p className="text-[11px] uppercase tracking-[0.12em] text-[#7E96B7]">
+                                Ciclo total
+                              </p>
+                              <p className="mt-[4px] text-[14px] font-semibold text-[#F5F5F5]">
+                                {currentCycleTotalDaysLabel}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-[10px]">
+                            <div className="flex items-center justify-between gap-[14px]">
+                              <span className="text-[#D6E4F8]">Plano atual no ciclo</span>
+                              <span className="font-medium text-[#F5F5F5]">{currentCycleAmountLabel}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-[14px]">
+                              <span className="text-[#D6E4F8]">Ja consumido neste ciclo</span>
+                              <span className="font-medium text-[#F5F5F5]">{currentConsumedAmountLabel}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-[14px]">
+                              <span className="text-[#D6E4F8]">Credito do plano atual</span>
+                              <span className="font-medium text-[#0ECF9C]">
+                                - {currentCreditAmountLabel}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-[14px]">
+                              <span className="text-[#D6E4F8]">Cobertura do novo ciclo</span>
+                              <span className="font-medium text-[#0ECF9C]">{creditAppliedToTargetLabel}</span>
+                            </div>
+                            {selectedPlanChange.surplusCreditAmount > 0 ? (
+                              <div className="flex items-center justify-between gap-[14px]">
+                                <span className="text-[#D6E4F8]">Sobra que vai para FlowPoints</span>
+                                <span className="font-medium text-[#81B8FF]">{surplusCreditLabel}</span>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <p className="text-[12px] leading-[1.55] text-[#9DB4D4]">
+                            {shouldShowCoveredByCreditNotice
+                              ? "Essa troca fica com total em R$ 0,00 porque o credito proporcional cobriu o novo ciclo inteiro. Se sobrar valor, ele vai para a carteira FlowPoints."
+                              : "Depois desse credito proporcional, promocoes, vales e FlowPoints da carteira ainda podem reduzir mais o total final."}
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
 
                     {activeDiscountPreview.coupon && activeDiscountPreview.coupon.amount > 0 ? (
                       <div className="flex items-center justify-between gap-[14px]">
