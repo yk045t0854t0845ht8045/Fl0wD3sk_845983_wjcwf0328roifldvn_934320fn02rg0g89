@@ -2008,14 +2008,16 @@ export function ServersWorkspace({
       isServersWorkspacePath(currentPathname) &&
       isServersWorkspacePath(nextPathname);
 
-    // Atualiza a URL imediatamente enquanto mantemos a arvore viva no mesmo workspace.
+    // CORRECAO: Restaura window.history.pushState para roteamento interno.
+    // Next.js router.push falha ao resolver paths reescritos por middleware
+    // no client-side nav. O estado React do painel é sincronizado manualmente
+    // com applySelectedServerRouteState para que as configs abram sem F5.
     if (isInternalServersPath) {
       if (mode === "replace") {
-        window.history.replaceState(window.history.state, "", target.path);
+        window.history.replaceState(null, "", target.path);
         return;
       }
-
-      window.history.pushState(window.history.state, "", target.path);
+      window.history.pushState(null, "", target.path);
       return;
     }
 
