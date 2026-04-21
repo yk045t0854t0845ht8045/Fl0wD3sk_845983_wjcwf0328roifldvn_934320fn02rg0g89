@@ -1921,7 +1921,6 @@ export function ServersWorkspace({
     guildId: string,
     tab: ServerEditorTab,
     settingsSection: ServerSettingsSection = "overview",
-    options?: { explicitSection?: boolean },
   ) => {
     if (tab !== "settings") {
       const encodedGuildId = encodeURIComponent(guildId);
@@ -1950,10 +1949,7 @@ export function ServersWorkspace({
     if (settingsSection === "security_logs") {
       return `/servers/${encodedGuildId}/security/logs/`;
     }
-    if (options?.explicitSection) {
-      return `/servers/${encodedGuildId}/tickets/overview/`;
-    }
-    return `/servers/${encodedGuildId}/`;
+    return `/servers/${encodedGuildId}/tickets/overview/`;
   }, []);
 
   const navigateToUrl = useCallback((nextUrl: string, mode: "push" | "replace" = "push") => {
@@ -2059,7 +2055,6 @@ export function ServersWorkspace({
           input.guildId,
           input.tab,
           input.settingsSection,
-          { explicitSection: true },
         ),
         "replace",
       );
@@ -2363,7 +2358,10 @@ export function ServersWorkspace({
     }
 
     prefetchWorkspaceSections(guildId);
-    navigateToUrl(buildServerConfigUrl(guildId, tab), "push");
+    navigateToUrl(
+      buildServerConfigUrl(guildId, tab, nextSettingsSection),
+      "push",
+    );
     startOpenServerTransition(() => {
       applySelectedServerRouteState(guildId, tab, nextSettingsSection);
       setErrorMessage(null);

@@ -20,6 +20,11 @@ import {
   resolveBrazilDocumentType,
 } from "@/lib/payments/brazilDocument";
 import {
+  buildUnifiedDiscountCodePayload,
+  normalizeDiscountCodeValue,
+  sanitizeDiscountCodeInput,
+} from "@/lib/payments/discountCodeInput";
+import {
   resolvePaymentDiagnostic,
   type PaymentDiagnosticCategory,
 } from "@/lib/payments/paymentDiagnostics";
@@ -685,8 +690,8 @@ function buildStepFourDraft(
       input.lastKnownOrderNumber > 0
         ? input.lastKnownOrderNumber
         : null,
-    couponCode: normalizeDraftText(input.couponCode, 64),
-    giftCardCode: normalizeDraftText(input.giftCardCode, 64),
+    couponCode: sanitizeDiscountCodeInput(input.couponCode),
+    giftCardCode: sanitizeDiscountCodeInput(input.giftCardCode),
     payerDocument: normalizeDraftText(input.payerDocument, 24),
     payerName: normalizeDraftText(input.payerName, 120),
     billingFullName: normalizeDraftText(input.billingFullName, 120),
@@ -3001,7 +3006,9 @@ export function ConfigStepFour({
   const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
   const [pixTermsAccepted, setPixTermsAccepted] = useState(false);
   const [couponCode, setCouponCode] = useState(
-    initialStepFourDraft.couponCode || initialStepFourDraft.giftCardCode,
+    sanitizeDiscountCodeInput(
+      initialStepFourDraft.couponCode || initialStepFourDraft.giftCardCode,
+    ),
   );
   const [giftCardCode, setGiftCardCode] = useState("");
   const [billingFullName, setBillingFullName] = useState(
@@ -3031,7 +3038,11 @@ export function ConfigStepFour({
   const [discountRefreshTick, setDiscountRefreshTick] = useState(0);
   const [isCartNoticeDismissed, setIsCartNoticeDismissed] = useState(false);
   const [isDiscountEditorOpen, setIsDiscountEditorOpen] = useState(
-    Boolean(initialStepFourDraft.couponCode || initialStepFourDraft.giftCardCode),
+    Boolean(
+      normalizeDiscountCodeValue(
+        initialStepFourDraft.couponCode || initialStepFourDraft.giftCardCode,
+      ),
+    ),
   );
 
   const [payerDocument, setPayerDocument] = useState(initialStepFourDraft.payerDocument);
@@ -3174,6 +3185,20 @@ export function ConfigStepFour({
       currency: checkoutCurrency,
       flowPointsBalance: knownFlowPointsBalance,
     });
+  const normalizedDiscountCode = useMemo(
+    () =>
+      normalizeDiscountCodeValue(couponCode) ||
+      normalizeDiscountCodeValue(giftCardCode),
+    [couponCode, giftCardCode],
+  );
+  const manualDiscountPayload = useMemo(
+    () => buildUnifiedDiscountCodePayload(normalizedDiscountCode),
+    [normalizedDiscountCode],
+  );
+  const hasManualDiscountCode = Boolean(
+    manualDiscountPayload.couponCode || manualDiscountPayload.giftCardCode,
+  );
+  const hasAccountLastPaymentGuild = Boolean(accountPlan?.lastPaymentGuildId);
   const promoTargetTimestamp = useMemo(
     () => Date.now() + 3 * 24 * 60 * 60 * 1000,
     [],
@@ -3310,12 +3335,6 @@ export function ConfigStepFour({
       flowPointsBalance: knownFlowPointsBalance,
     });
 
-    const trimmedCouponCode = couponCode.trim();
-    const trimmedGiftCardCode = giftCardCode.trim();
-    const hasManualDiscountCode = Boolean(
-      trimmedCouponCode || trimmedGiftCardCode,
-    );
-
     setDiscountPreview((current) =>
       hasManualDiscountCode ? current || localFallbackPreview : localFallbackPreview,
     );
@@ -3347,8 +3366,7 @@ export function ConfigStepFour({
             },
             body: JSON.stringify({
               ...(guildId ? { guildId } : {}),
-              couponCode: trimmedCouponCode,
-              giftCardCode: trimmedGiftCardCode,
+              ...manualDiscountPayload,
               baseAmount: baseCheckoutAmount,
               currency: checkoutCurrency,
               planCode: selectedPlanCode,
@@ -3417,11 +3435,11 @@ export function ConfigStepFour({
   }, [
     baseCheckoutAmount,
     checkoutCurrency,
-    couponCode,
-    giftCardCode,
     knownFlowPointsBalance,
     guildId,
     discountRefreshTick,
+    hasManualDiscountCode,
+    manualDiscountPayload,
     selectedBillingPeriodCode,
     selectedPlanCode,
   ]);
@@ -3543,9 +3561,19 @@ export function ConfigStepFour({
       setSelectedPlanCode(activePlanCode);
       setSelectedBillingPeriodCode(activeBillingPeriodCode);
       setMethodMessage(null);
-      setCouponCode(guildDraft.couponCode || guildDraft.giftCardCode);
+      setCouponCode(
+        sanitizeDiscountCodeInput(
+          guildDraft.couponCode || guildDraft.giftCardCode,
+        ),
+      );
       setGiftCardCode("");
-      setIsDiscountEditorOpen(Boolean(guildDraft.couponCode || guildDraft.giftCardCode));
+      setIsDiscountEditorOpen(
+        Boolean(
+          normalizeDiscountCodeValue(
+            guildDraft.couponCode || guildDraft.giftCardCode,
+          ),
+        ),
+      );
       setBillingFullName(guildDraft.billingFullName);
       setBillingEmail(guildDraft.billingEmail);
       setBillingCountry(guildDraft.billingCountry || "Brasil");
@@ -3936,7 +3964,7 @@ export function ConfigStepFour({
       selectedPlanCode,
       selectedBillingPeriodCode,
       lastKnownOrderNumber,
-      couponCode,
+      couponCode: normalizedDiscountCode || "",
       giftCardCode: "",
       payerDocument,
       payerName,
@@ -3962,8 +3990,6 @@ export function ConfigStepFour({
     cardExpiry,
     cardHolderName,
     cardNumber,
-    couponCode,
-    giftCardCode,
     guildId,
     isLoadingOrder,
     lastKnownOrderNumber,
@@ -3974,6 +4000,7 @@ export function ConfigStepFour({
     selectedRail,
     selectedBillingPeriodCode,
     selectedPlanCode,
+    normalizedDiscountCode,
     billingAddressLine1,
     billingAddressLine2,
     billingCity,
@@ -4535,7 +4562,7 @@ export function ConfigStepFour({
 
     const redirectConfig = resolveApprovedRedirectConfig(
       guildId,
-      Boolean(accountPlan?.lastPaymentGuildId)
+      hasAccountLastPaymentGuild,
     );
 
     const timeoutId = window.setTimeout(() => {
@@ -4546,7 +4573,13 @@ export function ConfigStepFour({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [guildId, paymentStatus, resolvedOrderNumber, shouldShowStatusResultPanel]);
+  }, [
+    guildId,
+    hasAccountLastPaymentGuild,
+    paymentStatus,
+    resolvedOrderNumber,
+    shouldShowStatusResultPanel,
+  ]);
 
   const triggerPixFormValidationError = useCallback((message: string) => {
     setPixFormError(message);
@@ -4624,12 +4657,12 @@ export function ConfigStepFour({
 
       return resolveApprovedRedirectConfig(
         guildId,
-        Boolean(accountPlan?.lastPaymentGuildId)
+        hasAccountLastPaymentGuild,
       ).targetUrl || "/servers/plans";
     })();
 
     window.location.assign(fallbackUrl);
-  }, [guildId, phase]);
+  }, [guildId, hasAccountLastPaymentGuild, phase]);
 
   const handleSelectPlan = useCallback(
     (nextPlanCode: PlanCode) => {
@@ -4868,8 +4901,7 @@ export function ConfigStepFour({
           ...(guildId ? { guildId } : {}),
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
-          couponCode,
-          giftCardCode,
+          ...manualDiscountPayload,
           renew,
           returnTarget,
           returnGuildId,
@@ -4943,11 +4975,10 @@ export function ConfigStepFour({
       }
     }
   }, [
-    couponCode,
-    giftCardCode,
     guildId,
     handleActiveLicenseCheckoutBlock,
     isSubmittingCard,
+    manualDiscountPayload,
     pixOrder?.method,
     pixOrder?.status,
     selectedBillingPeriodCode,
@@ -5045,8 +5076,7 @@ export function ConfigStepFour({
       const payloadBody: Record<string, unknown> = {
         planCode: selectedPlanCode,
         billingPeriodCode: selectedBillingPeriodCode,
-        couponCode,
-        giftCardCode,
+        ...manualDiscountPayload,
         forceNew: forceNewCheckoutRef.current,
       };
       if (guildId) {
@@ -5129,10 +5159,9 @@ export function ConfigStepFour({
       pixAutoRefreshInFlightRef.current = false;
     }
   }, [
-    couponCode,
-    giftCardCode,
     guildId,
     handleActiveLicenseCheckoutBlock,
+    manualDiscountPayload,
     payerDocument,
     payerName,
     selectedBillingPeriodCode,
@@ -5219,7 +5248,7 @@ export function ConfigStepFour({
 
       const redirectConfig = resolveApprovedRedirectConfig(
         guildId,
-        Boolean(accountPlan?.lastPaymentGuildId)
+        hasAccountLastPaymentGuild,
       );
       trialActivationRedirectTimeoutRef.current = window.setTimeout(() => {
         window.location.assign(redirectConfig.targetUrl);
@@ -5234,6 +5263,7 @@ export function ConfigStepFour({
     }
   }, [
     guildId,
+    hasAccountLastPaymentGuild,
     isSubmittingTrial,
     selectedBillingPeriodCode,
     selectedPlanCode,
@@ -5332,8 +5362,7 @@ export function ConfigStepFour({
           ...(guildId ? { guildId } : {}),
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
-          couponCode,
-          giftCardCode,
+          ...manualDiscountPayload,
           forceNew: forceNewCheckoutRef.current,
         }),
       });
@@ -5374,10 +5403,9 @@ export function ConfigStepFour({
     }
   }, [
     activeDiscountPreview.totalAmount,
-    couponCode,
-    giftCardCode,
     guildId,
     isSubmittingTrial,
+    manualDiscountPayload,
     selectedBillingPeriodCode,
     selectedPlanCode,
     onApproved,
@@ -5476,8 +5504,7 @@ export function ConfigStepFour({
           ...(guildId ? { guildId } : {}),
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
-          couponCode,
-          giftCardCode,
+          ...manualDiscountPayload,
           payerDocument: documentDigits,
           payerName: normalizedName,
           forceNew: forceNewCheckoutRef.current,
@@ -5551,14 +5578,13 @@ export function ConfigStepFour({
       setIsSubmittingPix(false);
     }
   }, [
-    couponCode,
     documentDigits,
-    giftCardCode,
     guildId,
     handleActiveLicenseCheckoutBlock,
     isLoadingOrder,
     isPreparingBaseOrder,
     isSubmittingPix,
+    manualDiscountPayload,
     payerName,
     pixDocumentStatus,
     pixNameStatus,
@@ -6230,7 +6256,7 @@ export function ConfigStepFour({
       ? `+ ${formatMoney(flowPointsGrantAmount, activeDiscountPreview.currency)}`
       : formatMoney(0, activeDiscountPreview.currency);
   const showCartDiscountEditor =
-    isDiscountEditorOpen || Boolean(couponCode.trim()) || Boolean(giftCardCode.trim());
+    isDiscountEditorOpen || hasManualDiscountCode;
   const approvedRedirectConfig = shouldShowApprovedConfirmationPanel
     ? resolveApprovedRedirectConfig(guildId, Boolean(accountPlan?.lastPaymentGuildId))
     : null;
@@ -6780,7 +6806,9 @@ export function ConfigStepFour({
                             type="text"
                             value={couponCode}
                             onChange={(event) =>
-                              setCouponCode(event.currentTarget.value.toUpperCase().slice(0, 64))
+                              setCouponCode(
+                                sanitizeDiscountCodeInput(event.currentTarget.value),
+                              )
                             }
                             placeholder="Cupom ou vale-presente"
                             className="h-[52px] w-full rounded-[16px] border border-[#242424] bg-[#121212] px-[16px] text-[14px] text-[#F5F5F5] outline-none placeholder:text-[#5B5B5B]"

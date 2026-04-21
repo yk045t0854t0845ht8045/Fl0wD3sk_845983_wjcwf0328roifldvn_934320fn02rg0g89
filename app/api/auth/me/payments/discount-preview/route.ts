@@ -7,6 +7,10 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import { resolveDiscountPricing } from "@/lib/payments/discountPricing";
 import {
+  normalizeDiscountCodeRequestBody,
+  resolveDiscountCodeValidationMessage,
+} from "@/lib/payments/discountCodeInput";
+import {
   applyFlowPointsToAmount,
   getUserPlanFlowPointsBalance,
   resolveFlowPointsBalanceAmount,
@@ -177,7 +181,9 @@ export async function POST(request: Request) {
     };
     try {
       payload = parseFlowSecureDto(
-        await request.json().catch(() => ({})),
+        normalizeDiscountCodeRequestBody(
+          await request.json().catch(() => ({})),
+        ),
         {
           guildId: flowSecureDto.optional(
             flowSecureDto.nullable(flowSecureDto.discordSnowflake()),
@@ -242,7 +248,9 @@ export async function POST(request: Request) {
           ok: false,
           message:
             error instanceof FlowSecureDtoError
-              ? error.issues[0] || error.message
+              ? resolveDiscountCodeValidationMessage(
+                  error.issues[0] || error.message,
+                )
               : "Payload JSON invalido.",
         },
         { status: 400 },

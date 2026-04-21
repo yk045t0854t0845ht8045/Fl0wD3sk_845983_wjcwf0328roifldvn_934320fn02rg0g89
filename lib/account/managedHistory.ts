@@ -2,8 +2,10 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   buildSavedMethods,
   extractCardSnapshot,
+  type SavedMethod,
 } from "@/lib/payments/savedMethods";
 import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
+import { readOrderPlanTransitionPayload } from "@/lib/plans/change";
 import {
   mergeSavedMethodsWithStored,
   toSavedMethodFromStoredRecord,
@@ -23,7 +25,7 @@ export type PaymentOrderStatus =
   | "expired"
   | "failed";
 
-export type PaymentMethod = "pix" | "card";
+export type PaymentMethod = "pix" | "card" | "trial";
 
 export type PaymentOrderRecord = {
   id: number;
@@ -67,11 +69,23 @@ export type HistoryOrder = {
   createdAt: string;
   updatedAt: string;
   technicalLabels: string[];
+  financialSummary: {
+    coveredByInternalCredits: boolean;
+    currentPlanCreditAmount: number;
+    creditAppliedToTargetAmount: number;
+    surplusCreditGrantedAmount: number;
+    flowPointsAppliedAmount: number;
+    flowPointsGrantedAmount: number;
+    couponDiscountAmount: number;
+    giftCardDiscountAmount: number;
+    targetTotalAmount: number;
+    payableBeforeDiscountsAmount: number;
+  } | null;
 };
 
 export type ManagedHistory = {
   orders: HistoryOrder[];
-  methods: any[];
+  methods: SavedMethod[];
 };
 
 const PAYMENT_HISTORY_SELECT_COLUMNS =
@@ -86,11 +100,69 @@ function toFiniteAmount(value: string | number) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function roundMoney(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 100) / 100;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseProviderPricingSummary(providerPayload: unknown) {
+  if (!isRecord(providerPayload)) {
+    return {
+      couponDiscountAmount: 0,
+      giftCardDiscountAmount: 0,
+    };
+  }
+
+  const pricing = isRecord(providerPayload.pricing) ? providerPayload.pricing : null;
+  const coupon = pricing && isRecord(pricing.coupon) ? pricing.coupon : null;
+  const giftCard = pricing && isRecord(pricing.giftCard) ? pricing.giftCard : null;
+
+  return {
+    couponDiscountAmount: roundMoney(toFiniteAmount(coupon?.amount as string | number)),
+    giftCardDiscountAmount: roundMoney(toFiniteAmount(giftCard?.amount as string | number)),
+  };
+}
+
+function buildFinancialHistorySummary(order: PaymentOrderRecord) {
+  const transition = readOrderPlanTransitionPayload(order.provider_payload);
+  const pricing = parseProviderPricingSummary(order.provider_payload);
+  const coveredByInternalCredits =
+    order.provider_status_detail === "covered_by_internal_credits";
+
+  if (!transition && !coveredByInternalCredits) {
+    return null;
+  }
+
+  return {
+    coveredByInternalCredits,
+    currentPlanCreditAmount: roundMoney(transition?.currentCreditAmount || 0),
+    creditAppliedToTargetAmount: roundMoney(
+      transition?.creditAppliedToTargetAmount || 0,
+    ),
+    surplusCreditGrantedAmount: roundMoney(
+      transition?.surplusCreditAmount || 0,
+    ),
+    flowPointsAppliedAmount: roundMoney(transition?.flowPointsApplied || 0),
+    flowPointsGrantedAmount: roundMoney(transition?.flowPointsGranted || 0),
+    couponDiscountAmount: pricing.couponDiscountAmount,
+    giftCardDiscountAmount: pricing.giftCardDiscountAmount,
+    targetTotalAmount: roundMoney(transition?.targetTotalAmount || 0),
+    payableBeforeDiscountsAmount: roundMoney(
+      transition?.payableBeforeDiscountsAmount || 0,
+    ),
+  };
+}
+
 function buildTechnicalHistoryLabels(
   order: PaymentOrderRecord,
   events: PaymentOrderEventRecord[],
 ) {
   const labels: string[] = [];
+  const transition = readOrderPlanTransitionPayload(order.provider_payload);
 
   const hasApprovedReturnReconciliation = events.some(
     (event) =>
@@ -124,6 +196,22 @@ function buildTechnicalHistoryLabels(
     labels.push("Estorno automatico de seguranca");
   }
 
+  if (order.provider_status_detail === "covered_by_internal_credits") {
+    labels.push("Gratuidade por credito interno");
+  }
+
+  if ((transition?.currentCreditAmount || 0) > 0) {
+    labels.push("Credito proporcional do plano aplicado");
+  }
+
+  if ((transition?.flowPointsApplied || 0) > 0) {
+    labels.push("FlowPoints usados");
+  }
+
+  if ((transition?.flowPointsGranted || 0) > 0) {
+    labels.push("FlowPoints creditados");
+  }
+
   return labels;
 }
 
@@ -149,6 +237,7 @@ function toHistoryOrder(
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     technicalLabels: buildTechnicalHistoryLabels(order, events),
+    financialSummary: buildFinancialHistorySummary(order),
   };
 }
 
@@ -264,22 +353,31 @@ async function fetchHistoryFresh(userId: number): Promise<ManagedHistory> {
 
   // 4. Build final objects
   const orders = rawOrders
-    .filter((order) => {
-      if (order.status !== "pending") return true;
-      if (order.provider_payment_id) return true;
-      const payload = order.provider_payload as any;
-      return !(payload && payload.precreated === true);
-    })
+      .filter((order) => {
+        if (order.status !== "pending") return true;
+        if (order.provider_payment_id) return true;
+        const payload = isRecord(order.provider_payload)
+          ? order.provider_payload
+          : null;
+        return !(payload && payload.precreated === true);
+      })
     .map((order) =>
       toHistoryOrder(order, paymentEventsByOrderId.get(order.id) || []),
     );
 
   const allMethods = buildSavedMethods(
-    rawOrders.map((order) => ({
-      payment_method: order.payment_method,
-      provider_payload: order.provider_payload,
-      created_at: order.created_at,
-    })),
+    rawOrders
+      .filter(
+        (
+          order,
+        ): order is PaymentOrderRecord & { payment_method: "pix" | "card" } =>
+          order.payment_method === "pix" || order.payment_method === "card",
+      )
+      .map((order) => ({
+        payment_method: order.payment_method,
+        provider_payload: order.provider_payload,
+        created_at: order.created_at,
+      })),
   );
 
   const hiddenMethodSet = new Set(

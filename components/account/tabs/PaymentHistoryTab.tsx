@@ -20,6 +20,18 @@ type Order = {
   expiresAt?: string | null;
   providerStatus?: string | null;
   technicalLabels?: string[];
+  financialSummary?: {
+    coveredByInternalCredits: boolean;
+    currentPlanCreditAmount: number;
+    creditAppliedToTargetAmount: number;
+    surplusCreditGrantedAmount: number;
+    flowPointsAppliedAmount: number;
+    flowPointsGrantedAmount: number;
+    couponDiscountAmount: number;
+    giftCardDiscountAmount: number;
+    targetTotalAmount: number;
+    payableBeforeDiscountsAmount: number;
+  } | null;
 };
 
 function formatDate(iso: string) {
@@ -49,6 +61,21 @@ function resolveStatusDisplay(status: OrderStatus): { label: string; color: stri
   return { label: "Falhou", color: "text-[#DB4646] bg-[rgba(219,70,70,0.10)]", icon: XCircle };
 }
 
+function buildFinancialRows(order: Order) {
+  const summary = order.financialSummary;
+  if (!summary) return [];
+
+  return [
+    { label: "Total do novo ciclo", amount: summary.targetTotalAmount },
+    { label: "Credito do plano usado", amount: -summary.creditAppliedToTargetAmount },
+    { label: "Cupom", amount: -summary.couponDiscountAmount },
+    { label: "Vale-presente", amount: -summary.giftCardDiscountAmount },
+    { label: "FlowPoints usados", amount: -summary.flowPointsAppliedAmount },
+    { label: "FlowPoints creditados", amount: summary.flowPointsGrantedAmount },
+    { label: "Valor cobravel antes das promos", amount: summary.payableBeforeDiscountsAmount },
+  ].filter((row) => Math.abs(row.amount) > 0);
+}
+
 function groupOrdersByMonth(orders: Order[]) {
   const groups = new Map<string, Order[]>();
   for (const order of orders) {
@@ -66,7 +93,8 @@ function groupOrdersByMonth(orders: Order[]) {
   }));
 }
 
-export function PaymentHistoryTab({ onNavigateTickets }: { onNavigateTickets?: () => void }) {
+export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { onNavigateTickets?: () => void }) {
+  void _onNavigateTickets;
   const { orders, loading } = usePaymentHistory();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "failed">("all");
@@ -209,6 +237,33 @@ export function PaymentHistoryTab({ onNavigateTickets }: { onNavigateTickets?: (
 
                       {isExpanded && (
                         <div className="border-t border-[#161616] bg-[rgba(255,255,255,0.01)] p-[24px] animate-in slide-in-from-top-2">
+                          {order.technicalLabels && order.technicalLabels.length > 0 ? (
+                            <div className="mb-[18px] flex flex-wrap gap-[8px]">
+                              {order.technicalLabels.map((label) => (
+                                <span
+                                  key={label}
+                                  className="rounded-full border border-[#202020] bg-[#111111] px-[10px] py-[6px] text-[11px] font-semibold text-[#B8B8B8]"
+                                >
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          {order.financialSummary?.coveredByInternalCredits ? (
+                            <div className="mb-[18px] rounded-[16px] border border-[rgba(52,168,83,0.22)] bg-[rgba(52,168,83,0.07)] px-[16px] py-[14px]">
+                              <p className="text-[14px] font-semibold text-[#EAF7EE]">
+                                Gratuidade registrada por credito interno
+                              </p>
+                              <p className="mt-[6px] text-[13px] leading-[1.6] text-[#B9DCC2]">
+                                Esse pedido ficou em {formatCurrency(0, order.currency)} porque o credito proporcional do plano anterior cobriu o novo ciclo.
+                                {order.financialSummary.surplusCreditGrantedAmount > 0
+                                  ? ` A sobra de ${formatCurrency(order.financialSummary.surplusCreditGrantedAmount, order.currency)} foi creditada na carteira FlowPoints.`
+                                  : ""}
+                              </p>
+                            </div>
+                          ) : null}
+
                           <div className="grid gap-[24px] md:grid-cols-2 lg:grid-cols-3">
                             <div className="space-y-[16px]">
                               <div>
@@ -252,9 +307,39 @@ export function PaymentHistoryTab({ onNavigateTickets }: { onNavigateTickets?: (
                                >
                                  <MessageSquare className="h-[18px] w-[18px] text-[#A0A0A0]" />
                                  Problemas com o pedido?
-                               </a>
+                              </a>
                             </div>
                           </div>
+
+                          {buildFinancialRows(order).length > 0 ? (
+                            <div className="mt-[22px] rounded-[16px] border border-[#171717] bg-[#0A0A0A] p-[16px]">
+                              <p className="text-[11px] font-bold uppercase tracking-widest text-[#444]">
+                                Composicao financeira
+                              </p>
+                              <div className="mt-[14px] space-y-[10px]">
+                                {buildFinancialRows(order).map((row) => {
+                                  const isPositive = row.amount > 0;
+                                  return (
+                                    <div
+                                      key={row.label}
+                                      className="flex items-center justify-between gap-[14px] text-[14px]"
+                                    >
+                                      <span className="text-[#BEBEBE]">{row.label}</span>
+                                      <span
+                                        className={
+                                          isPositive
+                                            ? "font-semibold text-[#81B8FF]"
+                                            : "font-semibold text-[#0ECF9C]"
+                                        }
+                                      >
+                                        {`${isPositive ? "+ " : "- "}${formatCurrency(Math.abs(row.amount), order.currency)}`}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       )}
                     </div>

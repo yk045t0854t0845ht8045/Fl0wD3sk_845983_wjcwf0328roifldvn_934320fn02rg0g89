@@ -21,6 +21,10 @@ import {
   type MercadoPagoPaymentResponse,
 } from "@/lib/payments/mercadoPago";
 import {
+  normalizeDiscountCodeRequestBody,
+  resolveDiscountCodeValidationMessage,
+} from "@/lib/payments/discountCodeInput";
+import {
   createStablePaymentIdempotencyKey,
   extractMercadoPagoPaymentIdentifiers,
   resolveNextPaymentOrderStatus,
@@ -1273,6 +1277,12 @@ async function finalizeCreditCoveredCheckoutOrder(input: {
     {
       providerStatus: "approved",
       providerStatusDetail: "covered_by_internal_credits",
+      coveredByInternalCredits: true,
+      currentPlanCreditAmount: input.planChange.currentCreditAmount,
+      creditAppliedToTargetAmount: input.planChange.creditAppliedToTargetAmount,
+      surplusCreditAmount: input.planChange.surplusCreditAmount,
+      targetTotalAmount: input.planChange.targetTotalAmount,
+      payableBeforeDiscountsAmount: input.planChange.immediateSubtotalAmount,
       flowPointsApplied: input.flowPointsApplied,
       flowPointsGranted: input.flowPointsGranted,
     },
@@ -1612,7 +1622,9 @@ export async function POST(request: Request) {
     let body: CreatePixPaymentBody = {};
     try {
       body = parseFlowSecureDto<CreatePixPaymentBody>(
-        await request.json(),
+        normalizeDiscountCodeRequestBody(
+          await request.json().catch(() => ({})),
+        ),
         {
           guildId: flowSecureDto.optional(
             flowSecureDto.string({
@@ -1636,16 +1648,20 @@ export async function POST(request: Request) {
             }),
           ),
           couponCode: flowSecureDto.optional(
-            flowSecureDto.string({
-              maxLength: 80,
-              normalizeWhitespace: true,
-            }),
+            flowSecureDto.nullable(
+              flowSecureDto.string({
+                maxLength: 64,
+                pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+              }),
+            ),
           ),
           giftCardCode: flowSecureDto.optional(
-            flowSecureDto.string({
-              maxLength: 80,
-              normalizeWhitespace: true,
-            }),
+            flowSecureDto.nullable(
+              flowSecureDto.string({
+                maxLength: 64,
+                pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+              }),
+            ),
           ),
           forceNew: flowSecureDto.optional(flowSecureDto.unknown()),
         },
@@ -1656,7 +1672,9 @@ export async function POST(request: Request) {
     } catch (error) {
       const message =
         error instanceof FlowSecureDtoError
-          ? error.issues[0] || error.message
+          ? resolveDiscountCodeValidationMessage(
+              error.issues[0] || error.message,
+            )
           : "Payload JSON invalido.";
       return respond(
         { ok: false, message },

@@ -1,4 +1,8 @@
 import {
+  resolveActivePlanCyclePricing,
+  resolvePlanBillingPeriodCodeFromCycleDays,
+} from "@/lib/plans/activePlanPricing";
+import {
   DEFAULT_PLAN_BILLING_PERIOD_CODE,
   DEFAULT_PLAN_CODE,
   buildPlanSnapshot,
@@ -658,6 +662,11 @@ async function persistApprovedOrderTransitionEffects(input: {
         kind: transition.kind,
         execution: transition.execution,
         currentPlanCode: transition.currentPlanCode,
+        currentCreditAmount: transition.currentCreditAmount,
+        creditAppliedToTargetAmount: transition.creditAppliedToTargetAmount,
+        surplusCreditAmount: transition.surplusCreditAmount,
+        targetTotalAmount: transition.targetTotalAmount,
+        payableBeforeDiscountsAmount: transition.payableBeforeDiscountsAmount,
       },
     });
   }
@@ -674,6 +683,11 @@ async function persistApprovedOrderTransitionEffects(input: {
         kind: transition.kind,
         execution: transition.execution,
         currentPlanCode: transition.currentPlanCode,
+        currentCreditAmount: transition.currentCreditAmount,
+        creditAppliedToTargetAmount: transition.creditAppliedToTargetAmount,
+        surplusCreditAmount: transition.surplusCreditAmount,
+        targetTotalAmount: transition.targetTotalAmount,
+        payableBeforeDiscountsAmount: transition.payableBeforeDiscountsAmount,
       },
     });
   }
@@ -818,12 +832,22 @@ export async function getUserPlanState(userId: number) {
       planCode: resolvedPlanCode,
       fallbackPlanCode: resolvedPlanCode,
     });
+  const expectedPricing = resolveActivePlanCyclePricing({
+    planCode: resolvedPlanCode,
+    billingCycleDays: resolvedBillingCycleDays,
+    metadata: currentPlanState?.metadata || null,
+    fallbackPlanCode: resolvedPlanCode,
+  });
+  const expectedAmount = roundMoney(expectedPricing.totalAmount);
+  const expectedCompareAmount = roundMoney(expectedPricing.compareTotalAmount);
 
   const shouldResyncPlanState =
     !currentPlanState ||
     currentPlanState.last_payment_order_id !== latestApprovedOrder.id ||
     currentPlanState.plan_code !== resolvedPlanCode ||
     currentPlanState.billing_cycle_days !== resolvedBillingCycleDays ||
+    roundMoney(parseNumeric(currentPlanState.amount, expectedAmount)) !== expectedAmount ||
+    roundMoney(parseNumeric(currentPlanState.compare_amount, expectedCompareAmount)) !== expectedCompareAmount ||
     currentPlanState.activated_at !== expectedActivatedAt ||
     currentPlanState.expires_at !== expectedExpiresAt;
 
@@ -1056,14 +1080,9 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
   });
   const resolvedBillingPeriodMonths =
     resolveBillingPeriodMonthsFromCycleDays(resolvedBillingCycleDays);
-  const resolvedBillingPeriodCode =
-    resolvedBillingPeriodMonths && resolvedBillingPeriodMonths >= 12
-      ? ("annual" as const)
-      : resolvedBillingPeriodMonths && resolvedBillingPeriodMonths >= 6
-        ? ("semiannual" as const)
-        : resolvedBillingPeriodMonths && resolvedBillingPeriodMonths >= 3
-          ? ("quarterly" as const)
-          : ("monthly" as const);
+  const resolvedBillingPeriodCode = resolvePlanBillingPeriodCodeFromCycleDays(
+    resolvedBillingCycleDays,
+  );
   const [currentPlanStateResult, approvedOrderBenefits, expirationResolution] = await Promise.all([
     supabase
       .from("auth_user_plan_state")
@@ -1131,14 +1150,23 @@ export async function syncUserPlanStateFromOrder(order: PaymentOrderPlanRecord) 
     nextMetadata.trial = nextTrialMetadata;
   }
 
+  const resolvedCyclePricing = resolveActivePlanCyclePricing({
+    planCode: resolvedPlanCode,
+    billingCycleDays: resolvedBillingCycleDays,
+    metadata: nextMetadata,
+    fallbackPlanCode: resolvedPlanCode,
+  });
+
   const payload = {
     user_id: order.user_id,
     plan_code: resolvedPlanCode,
     plan_name: order.plan_name || plan.name,
     status: resolveActivePlanStateStatus(resolvedPlanCode, expiresAt),
-    amount: parseNumeric(order.amount, plan.price),
-    compare_amount: plan.comparePrice,
-    currency: (order.currency || plan.currency || "BRL").trim() || "BRL",
+    amount: roundMoney(resolvedCyclePricing.totalAmount),
+    compare_amount: roundMoney(resolvedCyclePricing.compareTotalAmount),
+    currency:
+      (resolvedCyclePricing.currency || order.currency || plan.currency || "BRL").trim() ||
+      "BRL",
     billing_cycle_days: resolvedBillingCycleDays,
     max_licensed_servers: Math.max(
       order.plan_max_licensed_servers || plan.entitlements.maxLicensedServers,

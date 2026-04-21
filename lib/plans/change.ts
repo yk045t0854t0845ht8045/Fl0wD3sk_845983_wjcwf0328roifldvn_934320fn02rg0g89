@@ -4,11 +4,11 @@ import {
   type PlanCode,
   type PlanPricingDefinition,
 } from "@/lib/plans/catalog";
+import { resolveActivePlanCyclePricing } from "@/lib/plans/activePlanPricing";
+import { resolvePlanCycleMetrics } from "@/lib/plans/cycleMetrics";
 import { resolveEffectivePlanBillingCycleDays } from "@/lib/plans/cycle";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import type { UserPlanStateRecord } from "@/lib/plans/state";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type UserPlanFlowPointsBalanceRecord = {
   user_id: number;
@@ -52,8 +52,14 @@ export type PlanChangePreview = {
   currentBillingCycleDays: number | null;
   currentExpiresAt: string | null;
   currentStatus: UserPlanStateRecord["status"] | null;
+  currentCycleAmount: number;
+  currentConsumedAmount: number;
   currentCreditAmount: number;
+  currentCycleTotalDaysExact: number;
+  currentCycleUsedDaysExact: number;
   remainingDaysExact: number;
+  creditAppliedToTargetAmount: number;
+  surplusCreditAmount: number;
   immediateSubtotalAmount: number;
   flowPointsBalance: number;
   flowPointsGrantPreview: number;
@@ -81,7 +87,15 @@ type OrderPlanTransitionPayload = {
   currentPlanCode?: PlanCode | null;
   currentBillingCycleDays?: number | null;
   currentExpiresAt?: string | null;
+  currentCycleAmount?: number | string | null;
+  currentConsumedAmount?: number | string | null;
   currentCreditAmount?: number | string | null;
+  currentCycleTotalDaysExact?: number | string | null;
+  currentCycleUsedDaysExact?: number | string | null;
+  creditAppliedToTargetAmount?: number | string | null;
+  surplusCreditAmount?: number | string | null;
+  targetTotalAmount?: number | string | null;
+  payableBeforeDiscountsAmount?: number | string | null;
   flowPointsApplied?: number | string | null;
   flowPointsGranted?: number | string | null;
   scheduledChangeId?: number | null;
@@ -197,6 +211,10 @@ export function resolveRemainingPlanCredit(input: {
   const userPlanState = input.userPlanState;
   if (!userPlanState || !isActivePlanState(userPlanState, nowMs)) {
     return {
+      currentCycleAmount: 0,
+      currentConsumedAmount: 0,
+      currentCycleTotalDaysExact: 0,
+      currentCycleUsedDaysExact: 0,
       remainingDaysExact: 0,
       creditAmount: 0,
     };
@@ -207,25 +225,54 @@ export function resolveRemainingPlanCredit(input: {
     : Number.NaN;
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
     return {
+      currentCycleAmount: 0,
+      currentConsumedAmount: 0,
+      currentCycleTotalDaysExact: 0,
+      currentCycleUsedDaysExact: 0,
       remainingDaysExact: 0,
       creditAmount: 0,
     };
   }
 
-  const remainingMs = expiresAtMs - nowMs;
-  const remainingDaysExact = Math.max(0, remainingMs / DAY_MS);
-  const billingCycleDays = resolveEffectivePlanBillingCycleDays({
+  const cycleMetrics = resolvePlanCycleMetrics({
+    activatedAt: userPlanState.activated_at,
+    expiresAt: userPlanState.expires_at,
+    nowMs,
     billingCycleDays: userPlanState.billing_cycle_days,
     planCode: userPlanState.plan_code,
     fallbackPlanCode: userPlanState.plan_code,
   });
-  const currentAmount = Math.max(0, parseNumeric(userPlanState.amount, 0));
-  const dailyRate =
-    billingCycleDays > 0 ? currentAmount / billingCycleDays : 0;
+  if (!cycleMetrics || cycleMetrics.remainingMs <= 0 || cycleMetrics.totalCycleMs <= 0) {
+    return {
+      currentCycleAmount: 0,
+      currentConsumedAmount: 0,
+      currentCycleTotalDaysExact: 0,
+      currentCycleUsedDaysExact: 0,
+      remainingDaysExact: 0,
+      creditAmount: 0,
+    };
+  }
+
+  const resolvedCurrentPlanPricing = resolveActivePlanCyclePricing({
+    planCode: userPlanState.plan_code,
+    billingCycleDays: userPlanState.billing_cycle_days,
+    metadata: userPlanState.metadata,
+    fallbackPlanCode: userPlanState.plan_code,
+  });
+  const currentAmount = Math.max(
+    0,
+    resolvedCurrentPlanPricing.totalAmount || parseNumeric(userPlanState.amount, 0),
+  );
+  const creditAmount =
+    currentAmount * (cycleMetrics.remainingMs / cycleMetrics.totalCycleMs);
 
   return {
-    remainingDaysExact,
-    creditAmount: roundMoney(dailyRate * remainingDaysExact),
+    currentCycleAmount: roundMoney(currentAmount),
+    currentConsumedAmount: roundMoney(Math.max(0, currentAmount - creditAmount)),
+    currentCycleTotalDaysExact: roundMoney(cycleMetrics.totalDaysExact),
+    currentCycleUsedDaysExact: roundMoney(cycleMetrics.elapsedDaysExact),
+    remainingDaysExact: cycleMetrics.remainingDaysExact,
+    creditAmount: roundMoney(creditAmount),
   };
 }
 
@@ -465,18 +512,34 @@ export function resolvePlanChangePreview(input: {
           nowMs,
         })
       : {
+          currentCycleAmount: 0,
+          currentConsumedAmount: 0,
+          currentCycleTotalDaysExact: 0,
+          currentCycleUsedDaysExact: 0,
           remainingDaysExact: 0,
           creditAmount: 0,
         };
   const currentCreditAmount = remainingPlanCredit.creditAmount;
+  const currentCycleAmount = roundMoney(remainingPlanCredit.currentCycleAmount);
+  const currentConsumedAmount = roundMoney(remainingPlanCredit.currentConsumedAmount);
+  const currentCycleTotalDaysExact = roundMoney(
+    remainingPlanCredit.currentCycleTotalDaysExact,
+  );
+  const currentCycleUsedDaysExact = roundMoney(
+    remainingPlanCredit.currentCycleUsedDaysExact,
+  );
+  const creditAppliedToTargetAmount = roundMoney(
+    Math.min(currentCreditAmount, roundMoney(targetPlan.totalAmount)),
+  );
+  const surplusCreditAmount = roundMoney(
+    Math.max(0, currentCreditAmount - roundMoney(targetPlan.totalAmount)),
+  );
   const immediateSubtotalAmount =
     kind === "upgrade" || kind === "new"
       ? roundMoney(Math.max(0, targetPlan.totalAmount - currentCreditAmount))
       : 0;
   const flowPointsGrantPreview =
-    kind === "upgrade"
-      ? roundMoney(Math.max(0, currentCreditAmount - targetPlan.totalAmount))
-      : 0;
+    kind === "upgrade" ? surplusCreditAmount : 0;
   const scheduledChangeMatchesTarget = Boolean(
     scheduledChange &&
       scheduledChange.target_plan_code === targetPlan.code &&
@@ -507,8 +570,14 @@ export function resolvePlanChangePreview(input: {
     currentBillingCycleDays,
     currentExpiresAt: normalizeIsoOrNull(userPlanState?.expires_at),
     currentStatus: userPlanState?.status || null,
+    currentCycleAmount,
+    currentConsumedAmount,
     currentCreditAmount,
+    currentCycleTotalDaysExact,
+    currentCycleUsedDaysExact,
     remainingDaysExact: roundMoney(remainingPlanCredit.remainingDaysExact),
+    creditAppliedToTargetAmount,
+    surplusCreditAmount,
     immediateSubtotalAmount,
     flowPointsBalance,
     flowPointsGrantPreview,
@@ -541,7 +610,15 @@ export function buildPlanTransitionPayload(input: {
     currentPlanCode: input.preview.currentPlanCode,
     currentBillingCycleDays: input.preview.currentBillingCycleDays,
     currentExpiresAt: input.preview.currentExpiresAt,
+    currentCycleAmount: roundMoney(input.preview.currentCycleAmount),
+    currentConsumedAmount: roundMoney(input.preview.currentConsumedAmount),
     currentCreditAmount: roundMoney(input.preview.currentCreditAmount),
+    currentCycleTotalDaysExact: roundMoney(input.preview.currentCycleTotalDaysExact),
+    currentCycleUsedDaysExact: roundMoney(input.preview.currentCycleUsedDaysExact),
+    creditAppliedToTargetAmount: roundMoney(input.preview.creditAppliedToTargetAmount),
+    surplusCreditAmount: roundMoney(input.preview.surplusCreditAmount),
+    targetTotalAmount: roundMoney(input.preview.targetTotalAmount),
+    payableBeforeDiscountsAmount: roundMoney(input.preview.immediateSubtotalAmount),
     flowPointsApplied: roundMoney(input.flowPointsApplied),
     flowPointsGranted: roundMoney(
       typeof input.flowPointsGranted === "number"
@@ -593,7 +670,25 @@ export function readOrderPlanTransitionPayload(providerPayload: unknown) {
         ? transition.currentExpiresAt
         : null,
     ),
+    currentCycleAmount: roundMoney(parseUnknownNumeric(transition.currentCycleAmount, 0)),
+    currentConsumedAmount: roundMoney(parseUnknownNumeric(transition.currentConsumedAmount, 0)),
     currentCreditAmount: roundMoney(parseUnknownNumeric(transition.currentCreditAmount, 0)),
+    currentCycleTotalDaysExact: roundMoney(
+      parseUnknownNumeric(transition.currentCycleTotalDaysExact, 0),
+    ),
+    currentCycleUsedDaysExact: roundMoney(
+      parseUnknownNumeric(transition.currentCycleUsedDaysExact, 0),
+    ),
+    creditAppliedToTargetAmount: roundMoney(
+      parseUnknownNumeric(transition.creditAppliedToTargetAmount, 0),
+    ),
+    surplusCreditAmount: roundMoney(
+      parseUnknownNumeric(transition.surplusCreditAmount, 0),
+    ),
+    targetTotalAmount: roundMoney(parseUnknownNumeric(transition.targetTotalAmount, 0)),
+    payableBeforeDiscountsAmount: roundMoney(
+      parseUnknownNumeric(transition.payableBeforeDiscountsAmount, 0),
+    ),
     flowPointsApplied: roundMoney(parseUnknownNumeric(transition.flowPointsApplied, 0)),
     flowPointsGranted: roundMoney(parseUnknownNumeric(transition.flowPointsGranted, 0)),
     scheduledChangeId: Number.isFinite(Number(transition.scheduledChangeId))
