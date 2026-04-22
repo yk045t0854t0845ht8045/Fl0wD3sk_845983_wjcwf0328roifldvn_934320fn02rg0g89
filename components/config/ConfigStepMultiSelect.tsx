@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { configStepTwoScale } from "@/components/config/configStepTwoScale";
+import { resolveConfigStepDropdownRect } from "@/components/config/configStepDropdownPosition";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 
 type SelectOption = {
@@ -39,6 +40,8 @@ export function ConfigStepMultiSelect({
     top: number;
     left: number;
     width: number;
+    maxHeight: number;
+    placement: "top" | "bottom";
   } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -47,6 +50,11 @@ export function ConfigStepMultiSelect({
   const isDropdownOpen = isOpen && !isBlocked;
   const isImmersive = variant === "immersive";
   const shouldRenderLabel = Boolean(String(label || "").trim()) && !isImmersive;
+  const visibleRows = Math.min(
+    Math.max(options.length, 1),
+    configStepTwoScale.maxVisibleOptions,
+  );
+  const dropdownHeight = visibleRows * configStepTwoScale.optionHeight;
 
   useEffect(() => {
     if (!isDropdownOpen) return;
@@ -74,11 +82,12 @@ export function ConfigStepMultiSelect({
       const rect = triggerRef.current?.getBoundingClientRect();
       if (!rect) return;
 
-      setDropdownRect({
-        top: rect.bottom + 8,
-        left: rect.left,
-        width: rect.width,
-      });
+      setDropdownRect(
+        resolveConfigStepDropdownRect({
+          triggerRect: rect,
+          desiredHeight: dropdownHeight,
+        }),
+      );
     }
 
     syncDropdownRect();
@@ -89,7 +98,7 @@ export function ConfigStepMultiSelect({
       window.removeEventListener("resize", syncDropdownRect);
       window.removeEventListener("scroll", syncDropdownRect, true);
     };
-  }, [isDropdownOpen]);
+  }, [dropdownHeight, isDropdownOpen]);
 
   const selectedNames = useMemo(() => {
     const selectedSet = new Set(values);
@@ -103,12 +112,6 @@ export function ConfigStepMultiSelect({
     if (selectedNames.length === 1) return selectedNames[0];
     return `${selectedNames.length} cargos selecionados`;
   }, [placeholder, selectedNames]);
-
-  const visibleRows = Math.min(
-    Math.max(options.length, 1),
-    configStepTwoScale.maxVisibleOptions,
-  );
-  const dropdownHeight = visibleRows * configStepTwoScale.optionHeight;
   const labelClassName = isImmersive
     ? "mb-[12px] text-[11px] font-medium tracking-[0.18em] uppercase text-[#6E6E6E]"
     : "mb-[10px] font-medium tracking-[-0.02em] text-[#A7A7A7]";
@@ -227,9 +230,11 @@ export function ConfigStepMultiSelect({
                 top: `${dropdownRect.top}px`,
                 left: `${dropdownRect.left}px`,
                 width: `${dropdownRect.width}px`,
-                height: `${dropdownHeight}px`,
+                maxHeight: `${dropdownRect.maxHeight}px`,
                 opacity: 1,
                 transform: "translateY(0)",
+                transformOrigin:
+                  dropdownRect.placement === "top" ? "bottom center" : "top center",
                 borderColor: isImmersive ? "#1A1A1A" : "#141414",
                 borderRadius: `${triggerRadius}px`,
               }}

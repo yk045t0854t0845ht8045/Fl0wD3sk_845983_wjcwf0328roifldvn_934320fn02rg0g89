@@ -24,10 +24,13 @@ type RateLimitSignatureKind =
 
 type RateLimitResponseMode = "html" | "json";
 
+type RateLimitBlockScope = "ip" | "scope" | "route" | "signature";
+
 type RateLimitThresholds = {
   windowSeconds: number;
   penaltySeconds: number;
   duplicateThreshold: number;
+  routeThreshold: number;
   scopeThreshold: number;
   siteThreshold: number;
   maxBodyBytes: number;
@@ -79,6 +82,8 @@ type LocalHit = {
 type LocalBlock = {
   blockedUntilMs: number;
   reason: string;
+  blockScope: RateLimitBlockScope;
+  blockKey: string;
   counts: RateLimitCounts;
 };
 
@@ -104,7 +109,7 @@ const LOCAL_MAX_HITS_PER_IP = 240;
 const LOCAL_MAX_IP_BUCKETS = 2_500;
 
 const localHitsByIp = new Map<string, LocalHit[]>();
-const localBlocksByIp = new Map<string, LocalBlock>();
+const localBlocksByIp = new Map<string, LocalBlock[]>();
 
 function isExplicitlyEnabled(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
@@ -119,6 +124,33 @@ function resolveIntegerEnv(name: string, fallback: number) {
 
   const parsed = Number(rawValue);
   return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : fallback;
+}
+
+function resolveRouteThreshold(
+  scope: RateLimitTrafficScope,
+  duplicateThreshold: number,
+) {
+  if (scope === "page") {
+    return duplicateThreshold;
+  }
+
+  if (scope === "api_mutation") {
+    return Math.max(24, duplicateThreshold * 2);
+  }
+
+  if (scope === "api_read") {
+    return Math.max(60, duplicateThreshold * 4);
+  }
+
+  if (scope === "auth") {
+    return Math.max(12, duplicateThreshold + 2);
+  }
+
+  return Math.max(40, duplicateThreshold * 3);
+}
+
+function shouldApplyScopeBurst(scope: RateLimitTrafficScope) {
+  return scope === "auth" || scope === "other";
 }
 
 function isStaticPublicAssetPath(pathname: string) {
@@ -177,6 +209,11 @@ function shouldBypassRateLimit(request: NextRequest) {
 }
 
 function resolveThresholds(scope: RateLimitTrafficScope): RateLimitThresholds {
+  const duplicateThreshold = resolveIntegerEnv(
+    "FLOWSECURE_RATE_LIMIT_DUPLICATE_MAX",
+    10,
+  );
+
   return {
     windowSeconds: resolveIntegerEnv(
       "FLOWSECURE_RATE_LIMIT_WINDOW_SECONDS",
@@ -186,10 +223,8 @@ function resolveThresholds(scope: RateLimitTrafficScope): RateLimitThresholds {
       "FLOWSECURE_RATE_LIMIT_PENALTY_SECONDS",
       60,
     ),
-    duplicateThreshold: resolveIntegerEnv(
-      "FLOWSECURE_RATE_LIMIT_DUPLICATE_MAX",
-      10,
-    ),
+    duplicateThreshold,
+    routeThreshold: resolveRouteThreshold(scope, duplicateThreshold),
     scopeThreshold:
       scope === "page"
         ? resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_PAGE_SCOPE_MAX", 40)
@@ -209,6 +244,62 @@ function resolveThresholds(scope: RateLimitTrafficScope): RateLimitThresholds {
       24_576,
     ),
   };
+}
+
+function resolveBlockTarget(
+  inspection: RateLimitInspection,
+  reason: string,
+): {
+  blockScope: RateLimitBlockScope;
+  blockKey: string;
+} {
+  if (reason === "duplicate_signature") {
+    return {
+      blockScope: "signature",
+      blockKey: inspection.signatureHash,
+    };
+  }
+
+  if (reason === "page_reload_burst" || reason === "route_burst") {
+    return {
+      blockScope: "route",
+      blockKey: inspection.routeKey,
+    };
+  }
+
+  if (reason === "scope_burst") {
+    return {
+      blockScope: "scope",
+      blockKey: inspection.trafficScope,
+    };
+  }
+
+  return {
+    blockScope: "ip",
+    blockKey: "__ip__",
+  };
+}
+
+function doesBlockMatchInspection(
+  inspection: RateLimitInspection,
+  block: {
+    blockScope: RateLimitBlockScope;
+    blockKey: string;
+  },
+) {
+  if (block.blockScope === "ip") {
+    return true;
+  }
+
+  if (block.blockScope === "scope") {
+    return block.blockKey === inspection.trafficScope;
+  }
+
+  if (block.blockScope === "route") {
+    return block.blockKey === inspection.routeKey;
+  }
+
+  return block.blockKey === inspection.signatureHash;
 }
 
 function extractClientIp(request: Request) {
@@ -489,10 +580,14 @@ async function inspectRequest(
 }
 
 function cleanupLocalState(nowMs: number) {
-  for (const [ipFingerprint, block] of localBlocksByIp.entries()) {
-    if (block.blockedUntilMs <= nowMs) {
+  for (const [ipFingerprint, blocks] of localBlocksByIp.entries()) {
+    const retainedBlocks = blocks.filter((block) => block.blockedUntilMs > nowMs);
+    if (retainedBlocks.length === 0) {
       localBlocksByIp.delete(ipFingerprint);
+      continue;
     }
+
+    localBlocksByIp.set(ipFingerprint, retainedBlocks);
   }
 
   for (const [ipFingerprint, hits] of localHitsByIp.entries()) {
@@ -527,8 +622,11 @@ function applyLocalFallbackRateLimit(
   const nowMs = Date.now();
   cleanupLocalState(nowMs);
 
-  const activeBlock = localBlocksByIp.get(inspection.ipFingerprint);
-  if (activeBlock && activeBlock.blockedUntilMs > nowMs) {
+  const activeBlock = (localBlocksByIp.get(inspection.ipFingerprint) || []).find(
+    (block) =>
+      block.blockedUntilMs > nowMs && doesBlockMatchInspection(inspection, block),
+  );
+  if (activeBlock) {
     return {
       blocked: true,
       retryAfterSeconds: Math.max(
@@ -571,7 +669,12 @@ function applyLocalFallbackRateLimit(
     counts.routeHits >= thresholds.duplicateThreshold
   ) {
     reason = "page_reload_burst";
-  } else if (counts.scopeHits >= thresholds.scopeThreshold) {
+  } else if (counts.routeHits >= thresholds.routeThreshold) {
+    reason = "route_burst";
+  } else if (
+    shouldApplyScopeBurst(inspection.trafficScope) &&
+    counts.scopeHits >= thresholds.scopeThreshold
+  ) {
     reason = "scope_burst";
   } else if (counts.siteHits >= thresholds.siteThreshold) {
     reason = "site_burst";
@@ -586,12 +689,24 @@ function applyLocalFallbackRateLimit(
     return null;
   }
 
+  const blockTarget = resolveBlockTarget(inspection, reason);
   const blockedUntilMs = nowMs + thresholds.penaltySeconds * 1000;
-  localBlocksByIp.set(inspection.ipFingerprint, {
-    blockedUntilMs,
-    reason,
-    counts,
-  });
+  const nextBlocks = (localBlocksByIp.get(inspection.ipFingerprint) || [])
+    .filter(
+      (block) =>
+        !(
+          block.blockScope === blockTarget.blockScope &&
+          block.blockKey === blockTarget.blockKey
+        ),
+    )
+    .concat({
+      blockedUntilMs,
+      reason,
+      blockScope: blockTarget.blockScope,
+      blockKey: blockTarget.blockKey,
+      counts,
+    });
+  localBlocksByIp.set(inspection.ipFingerprint, nextBlocks);
 
   return {
     blocked: true,
@@ -779,6 +894,10 @@ function resolveBlockedHeadline(reason: string) {
 
   if (reason === "duplicate_signature") {
     return "A mesma requisicao foi repetida muitas vezes em pouco tempo.";
+  }
+
+  if (reason === "route_burst") {
+    return "Muitas acoes repetidas foram detectadas nesta mesma tela.";
   }
 
   if (reason === "scope_burst") {
@@ -1053,8 +1172,9 @@ function buildRateLimitHtml(
           </p>
           <p class="reason">${escapeHtml(headline)}</p>
           <p class="helper">
-            Recarregar a mesma pagina 10 vezes ou repetir a mesma requisicao 10 vezes em menos de
-            1 minuto ativa essa protecao. O link de consulta sera adicionado em breve.
+            Repetir a mesma pagina, rota ou requisicao em excesso ativa essa protecao. Quando o
+            acesso muda de tela ou de operacao, o FlowSecure tenta manter a navegacao normal. O
+            link de consulta sera adicionado em breve.
           </p>
         </div>
 

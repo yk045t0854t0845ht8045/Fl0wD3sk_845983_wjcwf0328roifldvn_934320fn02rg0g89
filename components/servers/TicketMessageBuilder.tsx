@@ -85,6 +85,7 @@ type DragState =
   | { kind: "root"; componentId: string }
   | { kind: "child"; parentId: string; componentId: string }
   | null;
+type DropSlot = { parentId: string | null; index: number };
 
 type ActionComponent = Extract<TicketPanelContainerChild | TicketPanelComponent, { type: "button" | "link_button" | "select" }>;
 
@@ -569,6 +570,25 @@ function reorderById<T extends { id: string }>(items: T[], sourceId: string, tar
   return next;
 }
 
+function reorderByIndex<T extends { id: string }>(items: T[], sourceId: string, targetIndex: number) {
+  const sourceIndex = items.findIndex((item) => item.id === sourceId);
+  if (sourceIndex === -1) return items;
+
+  const boundedIndex = Math.max(0, Math.min(targetIndex, items.length));
+  const next = [...items];
+  const [moved] = next.splice(sourceIndex, 1);
+  const adjustedIndex = sourceIndex < boundedIndex ? boundedIndex - 1 : boundedIndex;
+  next.splice(adjustedIndex, 0, moved);
+  return next;
+}
+
+function isSameDropSlot(left: DropSlot | null, right: DropSlot | null) {
+  return (
+    left?.parentId === right?.parentId &&
+    left?.index === right?.index
+  );
+}
+
 function Menu<T extends string>({ items, onSelect, align = "left", anchor }: { items: MenuItem<T>[]; onSelect: (value: T) => void; align?: "left" | "right"; anchor: MenuAnchor | null }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<{ top: number; left: number; placement: "top" | "bottom" } | null>(null);
@@ -893,6 +913,7 @@ function TicketMessageBuilder({
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
   const [dragState, setDragState] = useState<DragState>(null);
+  const [activeDropSlot, setActiveDropSlot] = useState<DropSlot | null>(null);
   const [customAccentContainerId, setCustomAccentContainerId] = useState<string | null>(null);
   const [customAccentDrafts, setCustomAccentDrafts] = useState<Record<string, string>>({});
   const [pendingPreviewLink, setPendingPreviewLink] = useState<{ url: string; label: string } | null>(null);
@@ -1071,6 +1092,12 @@ function TicketMessageBuilder({
     setEmojiHighlightIndex(0);
   }, [emojiAutocomplete?.query, emojiAutocomplete?.scope.parentId, emojiAutocomplete?.scope.componentId]);
 
+  useEffect(() => {
+    if (!dragState) {
+      setActiveDropSlot(null);
+    }
+  }, [dragState]);
+
   const syncEmojiAutocomplete = useCallback((scope: Scope, element: HTMLTextAreaElement, currentValue: string) => {
     const cursor = element.selectionStart ?? currentValue.length;
     const match = getEmojiAutocompleteMatch(currentValue, cursor);
@@ -1154,12 +1181,78 @@ function TicketMessageBuilder({
     commit(moveById(layout, scope.componentId, direction));
   }, [commit, layout, updateContainerChildren]);
 
-  const onDropAt = useCallback((scope: Scope) => {
+  const canDropAtSlot = useCallback((slot: DropSlot) => {
+    if (!dragState || disabled) return false;
+    if (dragState.kind === "root") {
+      return slot.parentId === null;
+    }
+    return slot.parentId === dragState.parentId;
+  }, [disabled, dragState]);
+
+  const getCardDropSlot = useCallback((scope: Scope, index: number, clientY: number, rect: DOMRect): DropSlot => ({
+    parentId: scope.parentId,
+    index: clientY < rect.top + rect.height / 2 ? index : index + 1,
+  }), []);
+
+  const applyDropSlot = useCallback((slot: DropSlot) => {
     if (!dragState) return;
-    if (dragState.kind === "root" && !scope.parentId) commit(reorderById(layout, dragState.componentId, scope.componentId));
-    if (dragState.kind === "child" && scope.parentId && dragState.parentId === scope.parentId) updateContainerChildren(scope.parentId, (children) => reorderById(children, dragState.componentId, scope.componentId));
+    if (dragState.kind === "root" && slot.parentId === null) {
+      commit(reorderByIndex(layout, dragState.componentId, slot.index));
+    }
+    if (dragState.kind === "child" && slot.parentId && dragState.parentId === slot.parentId) {
+      updateContainerChildren(slot.parentId, (children) => reorderByIndex(children, dragState.componentId, slot.index));
+    }
+    setActiveDropSlot(null);
     setDragState(null);
   }, [commit, dragState, layout, updateContainerChildren]);
+
+  const renderDropSlot = (
+    slot: DropSlot,
+    key: string,
+    {
+      gapPx,
+      insetPx,
+      dragOnly = false,
+    }: { gapPx: number; insetPx: number; dragOnly?: boolean },
+  ) => {
+    const canDrop = canDropAtSlot(slot);
+    const isActive = isSameDropSlot(activeDropSlot, slot);
+    const reservedHeight = dragOnly ? (canDrop ? gapPx : 0) : gapPx;
+
+    return (
+      <div
+        key={key}
+        onDragOver={(event) => {
+          if (!canDrop) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setActiveDropSlot((current) => (isSameDropSlot(current, slot) ? current : slot));
+        }}
+        onDrop={(event) => {
+          if (!canDrop) return;
+          event.preventDefault();
+          applyDropSlot(slot);
+        }}
+        className="relative overflow-visible transition-[height] duration-150 ease-out"
+        style={{ height: reservedHeight }}
+      >
+        <div
+          className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2"
+          style={{ paddingLeft: insetPx, paddingRight: insetPx }}
+        >
+          <div
+            className={cn(
+              "rounded-full bg-white transition-all duration-150 ease-out",
+              isActive
+                ? "opacity-100 shadow-[0_0_12px_rgba(255,255,255,0.34)]"
+                : "opacity-0",
+            )}
+            style={{ height: isActive ? 2 : 1 }}
+          />
+        </div>
+      </div>
+    );
+  };
 
   const groupedPreview = (items: Array<TicketPanelComponent | TicketPanelContainerChild>) => {
     const groups: Array<{ kind: "actions"; items: ActionComponent[] } | { kind: "component"; item: TicketPanelComponent | TicketPanelContainerChild }> = [];
@@ -1237,24 +1330,48 @@ function TicketMessageBuilder({
     return <div className="space-y-[12px]"><Field value={component.placeholder} onChange={(next) => scope.parentId ? updateChild(scope.parentId, scope.componentId, (current) => current.type === "select" ? { ...current, placeholder: next.slice(0, 100) } : current) : updateRoot(scope.componentId, (current) => current.type === "select" ? { ...current, placeholder: next.slice(0, 100) } : current)} placeholder="Placeholder do menu" disabled={disabled} />{renderSelectOptions(component, scope)}</div>;
   };
 
-  const cardShell = (component: TicketPanelComponent | TicketPanelContainerChild, scope: Scope, body: React.ReactNode, nested = false) => {
-    const canDrop = dragState && ((dragState.kind === "root" && !scope.parentId) || (dragState.kind === "child" && scope.parentId && dragState.parentId === scope.parentId));
+  const cardShell = (
+    component: TicketPanelComponent | TicketPanelContainerChild,
+    scope: Scope,
+    body: React.ReactNode,
+    index: number,
+    nested = false,
+  ) => {
+    const canDrop =
+      dragState &&
+      ((dragState.kind === "root" && !scope.parentId) ||
+        (dragState.kind === "child" && scope.parentId && dragState.parentId === scope.parentId));
     return (
       <div
         key={scopeKey(scope)}
         onDragOver={(event) => {
           if (!canDrop || disabled) return;
           event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          const slot = getCardDropSlot(
+            scope,
+            index,
+            event.clientY,
+            event.currentTarget.getBoundingClientRect(),
+          );
+          if (!canDropAtSlot(slot)) return;
+          setActiveDropSlot((current) => (isSameDropSlot(current, slot) ? current : slot));
         }}
         onDrop={(event) => {
           if (!canDrop || disabled) return;
           event.preventDefault();
-          onDropAt(scope);
+          const slot = getCardDropSlot(
+            scope,
+            index,
+            event.clientY,
+            event.currentTarget.getBoundingClientRect(),
+          );
+          if (!canDropAtSlot(slot)) return;
+          applyDropSlot(slot);
         }}
         className={cn(
           "overflow-visible rounded-[24px] border border-[#141414] bg-[#090909] p-[18px] shadow-[0_20px_60px_rgba(0,0,0,0.28)] transition-colors duration-200",
           nested && "rounded-[20px] bg-[#0B0B0B] p-[16px]",
-          canDrop && dragState && "border-[#2C2C2C]",
         )}
       >
         <div className="flex items-start justify-between gap-[14px]">
@@ -1329,7 +1446,7 @@ function TicketMessageBuilder({
     );
   };
 
-  const renderContainer = (container: TicketPanelContainerComponent) => {
+  const renderContainer = (container: TicketPanelContainerComponent, index: number) => {
     const isCustomAccentOpen = customAccentContainerId === container.id;
     const customAccentDraft =
       customAccentDrafts[container.id] ??
@@ -1456,18 +1573,38 @@ function TicketMessageBuilder({
         </div>
 
         {container.children.length ? (
-          <div className="space-y-[14px] rounded-[22px] border border-[#171717] bg-[#070707] p-[14px]">
-            {container.children.map((child) =>
-              cardShell(
-                child,
-                { parentId: container.id, componentId: child.id },
-                renderLeafEditor(
+          <div className="overflow-visible rounded-[22px] border border-[#171717] bg-[#070707] p-[14px]">
+            {renderDropSlot(
+              { parentId: container.id, index: 0 },
+              `child-slot-start-${container.id}`,
+              { gapPx: 14, insetPx: 6, dragOnly: true },
+            )}
+            {container.children.map((child, childIndex) => (
+              <div key={child.id}>
+                {childIndex > 0
+                  ? renderDropSlot(
+                      { parentId: container.id, index: childIndex },
+                      `child-slot-${container.id}-${child.id}`,
+                      { gapPx: 14, insetPx: 6 },
+                    )
+                  : null}
+                {cardShell(
                   child,
                   { parentId: container.id, componentId: child.id },
+                  renderLeafEditor(
+                    child,
+                    { parentId: container.id, componentId: child.id },
+                    true,
+                  ),
+                  childIndex,
                   true,
-                ),
-                true,
-              ),
+                )}
+              </div>
+            ))}
+            {renderDropSlot(
+              { parentId: container.id, index: container.children.length },
+              `child-slot-end-${container.id}`,
+              { gapPx: 14, insetPx: 6, dragOnly: true },
             )}
           </div>
         ) : (
@@ -1511,6 +1648,7 @@ function TicketMessageBuilder({
           ) : null}
         </div>
       </div>,
+      index,
     );
   };
 
@@ -1605,20 +1743,40 @@ function TicketMessageBuilder({
       ) : null}
 
       <div className="relative isolate overflow-visible grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_436px]">
-        <div className="relative z-[30] space-y-[16px] overflow-visible">
+        <div className="relative z-[30] overflow-visible">
           {layout.length ? (
             <>
-              {layout.map((component) =>
-                component.type === "container"
-                  ? renderContainer(component)
-                  : cardShell(
-                      component,
-                      { parentId: null, componentId: component.id },
-                      renderLeafEditor(component, { parentId: null, componentId: component.id }),
-                    ),
+              {renderDropSlot(
+                { parentId: null, index: 0 },
+                "root-slot-start",
+                { gapPx: 16, insetPx: 18, dragOnly: true },
+              )}
+              {layout.map((component, index) => (
+                <div key={component.id}>
+                  {index > 0
+                    ? renderDropSlot(
+                        { parentId: null, index },
+                        `root-slot-${component.id}`,
+                        { gapPx: 16, insetPx: 18 },
+                      )
+                    : null}
+                  {component.type === "container"
+                    ? renderContainer(component, index)
+                    : cardShell(
+                        component,
+                        { parentId: null, componentId: component.id },
+                        renderLeafEditor(component, { parentId: null, componentId: component.id }),
+                        index,
+                      )}
+                </div>
+              ))}
+              {renderDropSlot(
+                { parentId: null, index: layout.length },
+                "root-slot-end",
+                { gapPx: 16, insetPx: 18, dragOnly: true },
               )}
 
-              <div className="relative z-[40] inline-flex" data-ticket-menu="true">
+              <div className="relative z-[40] mt-[16px] inline-flex" data-ticket-menu="true">
                 <ActionButton
                   disabled={disabled}
                   onClick={(event) => {

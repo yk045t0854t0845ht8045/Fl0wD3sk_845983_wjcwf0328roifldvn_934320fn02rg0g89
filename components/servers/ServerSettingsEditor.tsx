@@ -6190,33 +6190,25 @@ export function ServerSettingsEditor({
                                   </p>
                                 </div>
                               ) : (
-                                autoRoleConsoleEntries.map((entry) => {
-                                  const statusMeta = getAutoRoleConsoleStatusMeta(entry.status);
-                                  const avatarFallbackLetter =
-                                    entry.displayName.trim().charAt(0).toUpperCase() || "?";
+                                <div className="overflow-hidden rounded-[18px] border border-[#111111] bg-[linear-gradient(180deg,#0A0A0A_0%,#080808_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+                                  {autoRoleConsoleEntries.map((entry, index) => {
+                                    const statusMeta = getAutoRoleConsoleStatusMeta(entry.status);
+                                    const avatarFallbackLetter =
+                                      entry.displayName.trim().charAt(0).toUpperCase() || "?";
 
-                                  return (
-                                    <div
-                                      key={entry.queueId}
-                                      className="rounded-[18px] border border-[#111111] bg-[linear-gradient(180deg,#0A0A0A_0%,#080808_100%)] px-[14px] py-[12px] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
-                                    >
-                                      <div className="flex flex-wrap items-start justify-between gap-[10px]">
-                                        <div className="flex min-w-0 flex-1 items-start gap-[10px]">
+                                    return (
+                                      <div
+                                        key={entry.queueId}
+                                        className={`px-[14px] py-[12px] ${
+                                          index > 0 ? "border-t border-[#111111]" : ""
+                                        }`}
+                                      >
+                                        <div className="flex min-w-0 items-start gap-[10px]">
                                           <span
-                                            className={`mt-[4px] h-[8px] w-[8px] shrink-0 rounded-full ${statusMeta.dotClassName}`}
+                                            className={`mt-[5px] h-[8px] w-[8px] shrink-0 rounded-full ${statusMeta.dotClassName}`}
                                           />
                                           <div className="min-w-0 flex-1">
                                             <div className="flex flex-wrap items-center gap-[8px]">
-                                              <span
-                                                className={`inline-flex items-center rounded-full border px-[10px] py-[5px] text-[10px] font-semibold uppercase tracking-[0.14em] ${statusMeta.accentClassName}`}
-                                              >
-                                                {statusMeta.label}
-                                              </span>
-                                              <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-[#666666]">
-                                                {formatDateTime(entry.occurredAt)}
-                                              </span>
-                                            </div>
-                                            <div className="mt-[10px] flex flex-wrap items-center gap-[8px]">
                                               <span className="font-mono text-[13px] text-[#C8C8C8]">
                                                 {statusMeta.actionText}
                                               </span>
@@ -6240,16 +6232,16 @@ export function ServerSettingsEditor({
                                               </span>
                                             </div>
                                             {entry.detail ? (
-                                              <p className="mt-[10px] text-[12px] leading-[1.6] text-[#9E7B7B]">
+                                              <p className="mt-[10px] pl-[18px] text-[12px] leading-[1.6] text-[#9E7B7B]">
                                                 {entry.detail}
                                               </p>
                                             ) : null}
                                           </div>
                                         </div>
                                       </div>
-                                    </div>
-                                  );
-                                })
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
                           </div>
