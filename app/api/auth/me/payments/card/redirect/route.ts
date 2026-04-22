@@ -77,6 +77,21 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const CARD_REDIRECT_ROUTE_COALESCE_TTL_MS = 1500;
 
+function normalizeExpectedCheckoutAmount(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.round(value * 100) / 100;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.round(parsed * 100) / 100;
+    }
+  }
+
+  return null;
+}
+
 function normalizeReturnTarget(value: unknown) {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
@@ -150,6 +165,7 @@ export async function POST(request: Request) {
       billingPeriodCode?: string | null;
       couponCode?: string | null;
       giftCardCode?: string | null;
+      expectedTotalAmount?: number | null;
       renew?: boolean;
       returnTarget?: "servers" | null;
       returnGuildId?: string | null;
@@ -197,6 +213,14 @@ export async function POST(request: Request) {
               }),
             ),
           ),
+          expectedTotalAmount: flowSecureDto.optional(
+            flowSecureDto.nullable(
+              flowSecureDto.number({
+                min: 0,
+                max: 1_000_000,
+              }),
+            ),
+          ),
           renew: flowSecureDto.optional(flowSecureDto.looseBoolean()),
           returnTarget: flowSecureDto.optional(
             flowSecureDto.nullable(flowSecureDto.enum(["servers"] as const)),
@@ -231,6 +255,9 @@ export async function POST(request: Request) {
     }
 
     const guildId = normalizeGuildId(payload.guildId);
+    const expectedTotalAmount = normalizeExpectedCheckoutAmount(
+      payload.expectedTotalAmount,
+    );
     const forceNew = parseForceNewFlag(payload.forceNew);
     const renew = parseForceNewFlag(payload.renew);
     const returnTarget = normalizeReturnTarget(payload.returnTarget);
@@ -260,6 +287,7 @@ export async function POST(request: Request) {
           payload.billingPeriodCode || "",
           payload.couponCode || "",
           payload.giftCardCode || "",
+          expectedTotalAmount ?? "__auto__",
           renew,
           returnTarget || "__none__",
           returnGuildId || "__none__",
@@ -271,6 +299,7 @@ export async function POST(request: Request) {
     return await runCoalescedRouteResponse({
       key: mutationKey,
       ttlMs: CARD_REDIRECT_ROUTE_COALESCE_TTL_MS,
+      shouldCache: () => false,
       producer: async () => {
         const rateLimit = await enforceRequestRateLimit({
           action: "payment_card_redirect_post",
