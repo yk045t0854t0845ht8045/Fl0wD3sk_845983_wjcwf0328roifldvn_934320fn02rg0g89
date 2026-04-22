@@ -74,7 +74,7 @@ const PRELOADABLE_ACCOUNT_TABS = Object.keys(
   ACCOUNT_TAB_IMPORTERS,
 ) as Array<Exclude<AccountTab, "overview">>;
 
-function AccountTabLoadingState() {
+export function AccountTabLoadingState() {
   return (
     <div className="space-y-[16px]">
       <div className="flowdesk-shimmer h-[68px] rounded-[20px] border border-[#141414] bg-[#0A0A0A]" />

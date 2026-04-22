@@ -1,22 +1,8 @@
 import type { PlanCode } from "@/lib/plans/catalog";
 import { resolveEffectivePlanBillingCycleDays } from "@/lib/plans/cycle";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function parseTimestampMs(value: unknown) {
-  if (typeof value !== "string" && !(value instanceof Date) && typeof value !== "number") {
-    return Number.NaN;
-  }
-
-  const timestamp =
-    value instanceof Date
-      ? value.getTime()
-      : typeof value === "number"
-        ? value
-        : Date.parse(value);
-
-  return Number.isFinite(timestamp) ? timestamp : Number.NaN;
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -41,8 +27,8 @@ export function resolvePlanCycleMetrics(input: {
   fallbackPlanCode?: PlanCode;
 }) {
   const nowMs = typeof input.nowMs === "number" ? input.nowMs : Date.now();
-  const activatedAtMs = parseTimestampMs(input.activatedAt);
-  const expiresAtMs = parseTimestampMs(input.expiresAt);
+  const activatedAtMs = parseUtcTimestampMs(input.activatedAt);
+  const expiresAtMs = parseUtcTimestampMs(input.expiresAt);
   const billingCycleDays = resolveEffectivePlanBillingCycleDays({
     billingCycleDays: input.billingCycleDays,
     planCode: input.planCode,

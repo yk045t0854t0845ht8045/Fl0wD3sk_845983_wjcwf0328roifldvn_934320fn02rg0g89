@@ -79,6 +79,7 @@ import {
   scheduleWarmBrowserRoutes,
   warmBrowserRoute,
 } from "@/lib/routing/browserWarmup";
+import { useLatchedPendingKey } from "@/lib/ui/useLatchedPendingKey";
 
 type ServersWorkspaceProps = {
   displayName: string;
@@ -510,6 +511,18 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   return fallback;
+}
+
+function buildWorkspacePaneKey(
+  guildId: string | null,
+  tab: ServerEditorTab,
+  settingsSection: ServerSettingsSection,
+) {
+  if (!guildId) {
+    return "overview";
+  }
+
+  return `${guildId}:${tab}:${settingsSection}`;
 }
 
 function normalizeComparablePath(value: string) {
@@ -1383,6 +1396,7 @@ export function ServersWorkspace({
   const [isEntryExitSidebarOpen, setIsEntryExitSidebarOpen] = useState(false);
   const [isSecuritySidebarOpen, setIsSecuritySidebarOpen] = useState(false);
   const [currentDashboardPermissions, setCurrentDashboardPermissions] = useState<string[] | "full">([]);
+  const [pendingWorkspacePaneKey, setPendingWorkspacePaneKey] = useState<string | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
   const desktopTeamMenuRef = useRef<HTMLDivElement | null>(null);
   const mobileTeamMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1405,6 +1419,23 @@ export function ServersWorkspace({
 
   const routeState = useMemo(() => parseWorkspaceRoute(pathname), [pathname]);
   const routeGuildId = routeState.guildId;
+  const resolvedWorkspacePaneKey = useMemo(
+    () =>
+      buildWorkspacePaneKey(
+        selectedGuildIdForConfig,
+        selectedEditorTabForConfig,
+        selectedSettingsSectionForConfig,
+      ),
+    [
+      selectedEditorTabForConfig,
+      selectedGuildIdForConfig,
+      selectedSettingsSectionForConfig,
+    ],
+  );
+  const latchedPendingWorkspacePaneKey = useLatchedPendingKey({
+    pendingKey: pendingWorkspacePaneKey,
+    resolvedKey: resolvedWorkspacePaneKey,
+  });
 
   const requestServersReload = useCallback((options?: { silent?: boolean }) => {
     setErrorMessage(null);
@@ -1688,6 +1719,20 @@ export function ServersWorkspace({
     setSelectedEditorTabForConfig(routeState.tab);
     setSelectedSettingsSectionForConfig(routeState.settingsSection);
   }, [routeGuildId, routeState.settingsSection, routeState.tab]);
+
+  useEffect(() => {
+    if (!pendingWorkspacePaneKey || pendingWorkspacePaneKey !== resolvedWorkspacePaneKey) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setPendingWorkspacePaneKey(null);
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [pendingWorkspacePaneKey, resolvedWorkspacePaneKey]);
 
   useEffect(() => {
     const previousRouteGuildId = previousRouteGuildIdRef.current;
@@ -2325,6 +2370,7 @@ export function ServersWorkspace({
   }, []);
 
   const openProjectsOverview = useCallback((mode: "push" | "replace" = "push") => {
+    setPendingWorkspacePaneKey(buildWorkspacePaneKey(null, "settings", "overview"));
     navigateToUrl("/servers/", mode);
     startOpenServerTransition(() => {
       applySelectedServerRouteState(null, "settings", "overview");
@@ -2401,6 +2447,9 @@ export function ServersWorkspace({
       }
 
       prefetchWorkspaceSections(input.guildId);
+      setPendingWorkspacePaneKey(
+        buildWorkspacePaneKey(input.guildId, input.tab, input.settingsSection),
+      );
       navigateToUrl(
         buildServerConfigUrl(
           input.guildId,
@@ -2721,6 +2770,9 @@ export function ServersWorkspace({
     }
 
     prefetchWorkspaceSections(guildId);
+    setPendingWorkspacePaneKey(
+      buildWorkspacePaneKey(guildId, tab, nextSettingsSection),
+    );
     navigateToUrl(
       buildServerConfigUrl(guildId, tab, nextSettingsSection),
       "push",
@@ -2817,6 +2869,9 @@ export function ServersWorkspace({
     Boolean(errorMessage || servers.length > 0);
   const shouldShowEditorHeaderSkeleton =
     Boolean(selectedGuildIdForConfig) && !selectedServer;
+  const shouldShowWorkspacePaneSkeleton = Boolean(latchedPendingWorkspacePaneKey);
+  const shouldShowOverviewPaneSkeleton =
+    latchedPendingWorkspacePaneKey === "overview";
 
   useNotificationEffect(teamsErrorMessage, {
     tone: "error",
@@ -3756,7 +3811,45 @@ export function ServersWorkspace({
               </div>
             </LandingReveal>
             <div className="relative z-[10] mt-[22px]">
-              {selectedServer ? (
+              {shouldShowWorkspacePaneSkeleton ? (
+                <LandingReveal delay={52} duration={240}>
+                  {shouldShowOverviewPaneSkeleton ? (
+                    viewMode === "overview" ? (
+                      <div className={workspacePaneRevealClass}>
+                        <div className="grid gap-[14px] xl:grid-cols-2">
+                          {Array.from({ length: 4 }, (_, index) => (
+                            <div
+                              key={index}
+                              className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"
+                            >
+                              <div className="flowdesk-shimmer h-[210px] rounded-[18px] bg-[#111111]" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={`${shellClass} ${workspacePaneRevealClass} overflow-visible`}>
+                        <div className="px-[18px] py-[24px]">
+                          <div className="space-y-[12px]">
+                            {Array.from({ length: 5 }, (_, index) => (
+                              <div
+                                key={index}
+                                className="overflow-hidden rounded-[24px] border border-[#141414] bg-[#0A0A0A] px-[18px] py-[20px]"
+                              >
+                                <div className="flowdesk-shimmer h-[82px] rounded-[18px] bg-[#111111]" />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <div className={editorPanelRevealClass}>
+                      <ServerSettingsEditorSkeleton standalone />
+                    </div>
+                  )}
+                </LandingReveal>
+              ) : selectedServer ? (
                 <LandingReveal delay={52} duration={240}>
                   <div className={editorPanelRevealClass}>
                     <ServerSettingsEditor

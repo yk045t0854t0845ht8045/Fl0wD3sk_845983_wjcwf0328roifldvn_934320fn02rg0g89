@@ -41,6 +41,7 @@ import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useAccountStatus } from "@/hooks/useAccountData";
+import { AccountTabLoadingState } from "@/components/account/TabRegistry";
 
 import {
   ACCOUNT_RETURN_QUERY_PARAM,
@@ -56,6 +57,7 @@ import {
   scheduleWarmBrowserRoutes,
   warmBrowserRoute,
 } from "@/lib/routing/browserWarmup";
+import { useLatchedPendingKey } from "@/lib/ui/useLatchedPendingKey";
 export { validateTab };
 export type { AccountTab };
 
@@ -302,7 +304,12 @@ export function AccountWorkspace({
   const activeTab: AccountTab = (lastSegment && lastSegment !== "account") 
     ? validateTab(lastSegment) 
     : "overview";
+  const latchedPendingTab = useLatchedPendingKey({
+    pendingKey: pendingTab,
+    resolvedKey: activeTab,
+  });
   const highlightedTab = pendingTab ?? activeTab;
+  const displayedTab = (latchedPendingTab as AccountTab | null) ?? highlightedTab;
 
   const buildTabHref = useCallback((tab: AccountTab) => {
     return tab === "overview" ? "/account" : `/account/${tab}`;
@@ -349,8 +356,18 @@ export function AccountWorkspace({
   }, [buildTabHref, navigateToHref]);
 
   useEffect(() => {
-    setPendingTab(null);
-  }, [pathname]);
+    if (!pendingTab || pendingTab !== activeTab) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setPendingTab(null);
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeTab, pendingTab]);
 
   useEffect(() => {
     return scheduleWarmBrowserRoutes(
@@ -605,7 +622,8 @@ export function AccountWorkspace({
     },
   };
 
-  const meta = PAGE_META[activeTab];
+  const meta = PAGE_META[displayedTab];
+  const shouldShowAccountContentLoading = Boolean(latchedPendingTab);
   const returnLabel = getAccountReturnLabel(returnPath);
 
   const sidebarShellClass =
@@ -980,7 +998,7 @@ export function AccountWorkspace({
                     </div>
                   </div>
                 )}
-                {children}
+                {shouldShowAccountContentLoading ? <AccountTabLoadingState /> : children}
               </div>
             </LandingReveal>
           </section>

@@ -9,6 +9,7 @@ import {
 import type { UserPlanScheduledChangeRecord } from "@/lib/plans/change";
 import type { UserPlanStateRecord } from "@/lib/plans/state";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 export type UserPlanDowngradeEnforcementStatus =
   | "selection_required"
@@ -62,10 +63,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeIsoOrNull(value: string | null | undefined) {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return null;
-  return new Date(parsed).toISOString();
+  return normalizeUtcTimestampIso(value);
 }
 
 function normalizeGuildId(value: unknown) {
@@ -110,7 +108,7 @@ function isCurrentlyActivePlanState(
   }
 
   const expiresAtMs = userPlanState.expires_at
-    ? Date.parse(userPlanState.expires_at)
+    ? parseUtcTimestampMs(userPlanState.expires_at)
     : Number.NaN;
   return !Number.isFinite(expiresAtMs) || nowMs <= expiresAtMs;
 }
@@ -273,7 +271,7 @@ export async function ensureDowngradeEnforcementForUser(input: {
     return null;
   }
 
-  const effectiveAtMs = Date.parse(scheduledChange.effective_at);
+  const effectiveAtMs = parseUtcTimestampMs(scheduledChange.effective_at);
   if (!Number.isFinite(effectiveAtMs) || effectiveAtMs > nowMs) {
     return null;
   }

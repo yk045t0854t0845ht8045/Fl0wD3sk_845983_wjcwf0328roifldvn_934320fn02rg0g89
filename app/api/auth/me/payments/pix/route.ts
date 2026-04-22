@@ -103,6 +103,7 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import { runCoalescedPaymentRequest } from "@/lib/payments/requestCoalescing";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
@@ -333,7 +334,7 @@ function isRecentOrderTimestamp(
 
 function parseTimestampMs(value: string | null | undefined) {
   if (!value) return null;
-  const timestamp = Date.parse(value);
+  const timestamp = parseUtcTimestampMs(value);
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
@@ -894,7 +895,7 @@ async function reconcilePixOrderFromProvider(
         )
       : null;
 
-    const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
+    const paymentTimestampMs = paidAt ? parseUtcTimestampMs(paidAt) : Date.now();
     const canBypassRenewalWindow = orderTransitionAllowsImmediateApproval(
       order.provider_payload,
     );

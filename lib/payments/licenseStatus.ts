@@ -1,5 +1,6 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { resolvePlanLicenseExpiresAtIso } from "@/lib/plans/cycle";
+import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 export type GuildLicenseStatus = "paid" | "expired" | "off" | "not_paid";
 
@@ -173,20 +174,17 @@ function cloneApprovedOrders<TOrder extends LicenseApprovedOrderRecord>(
 }
 
 export function resolveLicenseBaseTimestamp(order: ApprovedOrderRecord) {
-  const paidAtMs = order.paid_at ? Date.parse(order.paid_at) : Number.NaN;
+  const paidAtMs = order.paid_at ? parseUtcTimestampMs(order.paid_at) : Number.NaN;
   if (Number.isFinite(paidAtMs)) return paidAtMs;
 
-  const createdAtMs = Date.parse(order.created_at);
+  const createdAtMs = parseUtcTimestampMs(order.created_at);
   if (Number.isFinite(createdAtMs)) return createdAtMs;
 
   return Date.now();
 }
 
 function normalizeIsoOrNull(value: string | null | undefined) {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return null;
-  return new Date(parsed).toISOString();
+  return normalizeUtcTimestampIso(value);
 }
 
 function resolvePlanStateCoverage(
@@ -205,7 +203,7 @@ function resolvePlanStateCoverage(
 
   const activatedAt = normalizeIsoOrNull(planState.activated_at);
   const expiresAt = normalizeIsoOrNull(planState.expires_at);
-  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  const expiresAtMs = expiresAt ? parseUtcTimestampMs(expiresAt) : Number.NaN;
 
   if (!Number.isFinite(expiresAtMs)) {
     const fallbackStatus =
@@ -414,7 +412,7 @@ function resolveLicenseExpiresAtMs(
     billingCycleDays: order.plan_billing_cycle_days,
     planCode: order.plan_code,
   });
-  const expiresAtMs = expiresAtIso ? Date.parse(expiresAtIso) : Number.NaN;
+  const expiresAtMs = expiresAtIso ? parseUtcTimestampMs(expiresAtIso) : Number.NaN;
   return Number.isFinite(expiresAtMs) ? expiresAtMs : licenseStartsAtMs;
 }
 
@@ -426,8 +424,8 @@ export function resolveLicenseCoverageForApprovedOrders<
       resolveLicenseBaseTimestamp(left) - resolveLicenseBaseTimestamp(right);
     if (timestampDiff !== 0) return timestampDiff;
 
-    const leftCreatedAt = Date.parse(left.created_at);
-    const rightCreatedAt = Date.parse(right.created_at);
+    const leftCreatedAt = parseUtcTimestampMs(left.created_at);
+    const rightCreatedAt = parseUtcTimestampMs(right.created_at);
     if (Number.isFinite(leftCreatedAt) && Number.isFinite(rightCreatedAt)) {
       return leftCreatedAt - rightCreatedAt;
     }
@@ -443,8 +441,8 @@ export function resolveLicenseCoverageForApprovedOrders<
     let licenseStartsAtMs = paidTimestampMs;
 
     if (previousCoverage) {
-      const previousLicenseExpiresAtMs = Date.parse(previousCoverage.licenseExpiresAt);
-      const previousGraceExpiresAtMs = Date.parse(previousCoverage.graceExpiresAt);
+      const previousLicenseExpiresAtMs = parseUtcTimestampMs(previousCoverage.licenseExpiresAt);
+      const previousGraceExpiresAtMs = parseUtcTimestampMs(previousCoverage.graceExpiresAt);
 
       if (
         Number.isFinite(previousLicenseExpiresAtMs) &&
@@ -573,11 +571,11 @@ export function resolveRenewalPaymentDecision<
     };
   }
 
-  const renewalWindowStartsAtMs = Date.parse(
+  const renewalWindowStartsAtMs = parseUtcTimestampMs(
     currentCoverage.renewalWindowStartsAt,
   );
-  const licenseExpiresAtMs = Date.parse(currentCoverage.licenseExpiresAt);
-  const graceExpiresAtMs = Date.parse(currentCoverage.graceExpiresAt);
+  const licenseExpiresAtMs = parseUtcTimestampMs(currentCoverage.licenseExpiresAt);
+  const graceExpiresAtMs = parseUtcTimestampMs(currentCoverage.graceExpiresAt);
 
   if (
     Number.isFinite(renewalWindowStartsAtMs) &&

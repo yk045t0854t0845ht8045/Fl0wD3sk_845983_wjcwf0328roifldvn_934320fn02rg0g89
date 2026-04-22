@@ -1,6 +1,7 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import type { PlanCode } from "@/lib/plans/catalog";
 import type { UserPlanStateRecord } from "@/lib/plans/state";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import {
   EXPIRED_GRACE_MS,
   getLockedGuildLicenseByGuildId,
@@ -51,8 +52,7 @@ type PlanGuildOwnershipRecord = {
 };
 
 function parseIsoToMs(value: string | null | undefined) {
-  if (!value) return Number.NaN;
-  return Date.parse(value);
+  return parseUtcTimestampMs(value);
 }
 
 function resolveCoverageFromPlanState(

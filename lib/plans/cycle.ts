@@ -3,6 +3,7 @@ import {
   resolvePlanDefinition,
   type PlanCode,
 } from "@/lib/plans/catalog";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -94,7 +95,7 @@ export function resolvePlanCycleExpirationMs(input: {
       ? input.baseTimestamp.getTime()
       : typeof input.baseTimestamp === "number"
         ? input.baseTimestamp
-        : Date.parse(input.baseTimestamp);
+        : parseUtcTimestampMs(input.baseTimestamp);
 
   if (!Number.isFinite(baseTimestampMs)) return null;
 
