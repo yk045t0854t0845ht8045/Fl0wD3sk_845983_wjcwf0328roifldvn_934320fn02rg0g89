@@ -5,12 +5,14 @@ type AccountPaymentCheckoutProps = {
   displayName: string;
   initialPlanCode: PlanCode;
   initialBillingPeriodCode: PlanBillingPeriodCode;
+  forceFreshCheckout?: boolean;
 };
 
 export function AccountPaymentCheckout({
   displayName,
   initialPlanCode,
   initialBillingPeriodCode,
+  forceFreshCheckout = false,
 }: AccountPaymentCheckoutProps) {
   return (
     <ConfigStepFour
@@ -19,6 +21,7 @@ export function AccountPaymentCheckout({
       initialPlanCode={initialPlanCode}
       initialBillingPeriodCode={initialBillingPeriodCode}
       hasExplicitInitialPlan
+      forceFreshCheckout={forceFreshCheckout}
     />
   );
 }

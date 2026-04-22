@@ -636,6 +636,7 @@ const CHECKOUT_STATUS_QUERY_KEYS = [
   "processing_mode",
   "merchant_account_id",
 ] as const;
+const ONE_TIME_CHECKOUT_QUERY_KEYS = ["fresh"] as const;
 
 const EMPTY_STEP_FOUR_DRAFT: StepFourDraft = {
   visited: false,
@@ -1003,6 +1004,22 @@ function buildActiveLicenseMessage(licenseExpiresAt: string | null | undefined) 
   return "Assinatura da conta ativa. Novos pagamentos ficam bloqueados ate o fim do periodo.";
 }
 
+function isCoveredByInternalCreditsApprovedOrder(order: PixOrder | null | undefined) {
+  if (!order || order.status !== "approved") return false;
+  if (order.amount > 0) return false;
+  return (
+    (order.providerStatusDetail || "").trim().toLowerCase() ===
+    "covered_by_internal_credits"
+  );
+}
+
+function isTrustedApprovedPaymentOrder(order: PixOrder | null | undefined) {
+  if (!order || order.status !== "approved") return false;
+  if (order.method === "trial") return true;
+  if (isCoveredByInternalCreditsApprovedOrder(order)) return true;
+  return Boolean(order.providerPaymentId && order.paidAt);
+}
+
 function roundMoney(amount: number) {
   if (!Number.isFinite(amount)) return 0;
   return Math.round(amount * 100) / 100;
@@ -1322,6 +1339,9 @@ function setCheckoutStatusQuery(input: {
   }
   url.searchParams.delete("payment_id");
   url.searchParams.delete("collection_id");
+  for (const key of ONE_TIME_CHECKOUT_QUERY_KEYS) {
+    url.searchParams.delete(key);
+  }
 
   window.history.replaceState(
     null,
@@ -1378,12 +1398,20 @@ function clearCheckoutStatusQuery() {
   const hadAnyKey = CHECKOUT_STATUS_QUERY_KEYS.some((key) =>
     url.searchParams.has(key),
   );
+  let removedOneTimeKey = false;
 
   if (isPaymentCheckoutPathname(url.pathname)) {
     url.pathname = buildPaymentBasePathFromCurrentPathname(url.pathname);
   }
 
-  if (!hadAnyKey && url.pathname === window.location.pathname) return;
+  for (const key of ONE_TIME_CHECKOUT_QUERY_KEYS) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      removedOneTimeKey = true;
+    }
+  }
+
+  if (!hadAnyKey && !removedOneTimeKey && url.pathname === window.location.pathname) return;
 
   for (const key of CHECKOUT_STATUS_QUERY_KEYS) {
     url.searchParams.delete(key);
@@ -3147,8 +3175,20 @@ export function ConfigStepFour({
   useEffect(() => {
     if (forceFreshCheckout) {
       forceNewCheckoutRef.current = true;
+      paymentPollingInFlightRef.current = false;
+      orderBootstrapInFlightRef.current = false;
+      paymentOrderLookupInFlightRef.current = false;
+      removeCachedOrderByGuild(guildId);
+      clearCheckoutStatusQuery();
+      setPixOrder(null);
+      setLastKnownOrderNumber(null);
+      setPhase("checkout");
+      setSelectedRail(null);
+      setCopied(false);
+      setMethodMessage(null);
+      setView("methods");
     }
-  }, [forceFreshCheckout]);
+  }, [forceFreshCheckout, guildId]);
 
   useEffect(() => {
     lastKnownOrderNumberRef.current = lastKnownOrderNumber;
@@ -3764,6 +3804,25 @@ export function ConfigStepFour({
           return;
         }
 
+        if (
+          remoteOrder &&
+          remoteOrder.status === "approved" &&
+          !isTrustedApprovedPaymentOrder(remoteOrder)
+        ) {
+          removeCachedOrderByGuild(activeGuildId);
+          forceNewCheckoutRef.current = true;
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setPhase("checkout");
+          setView("methods");
+          setMethodMessage(
+            "Encontramos um retorno inconsistente do pagamento e preparamos uma nova base segura. Gere novamente a cobranca.",
+          );
+          clearCheckoutStatusQuery();
+          setPaymentBootstrapRequestKey((current) => current + 1);
+          return;
+        }
+
         if (remoteOrder && remoteOrder.status === "approved") {
           const hasTrackedApprovalContext =
             shouldLoadOrderByCode ||
@@ -4221,6 +4280,23 @@ export function ConfigStepFour({
         setLastKnownOrderNumber(payload.order.orderNumber);
         writeCachedOrderByGuild(activeGuildId, payload.order);
 
+        if (
+          payload.order.status === "approved" &&
+          !isTrustedApprovedPaymentOrder(payload.order)
+        ) {
+          removeCachedOrderByGuild(activeGuildId);
+          forceNewCheckoutRef.current = true;
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setView("methods");
+          setMethodMessage(
+            "Detectamos um retorno de pagamento inconsistente e geramos uma nova base segura. Gere novamente a cobranca.",
+          );
+          clearCheckoutStatusQuery();
+          setPaymentBootstrapRequestKey((current) => current + 1);
+          return;
+        }
+
         if (payload.order.status && payload.order.status !== "pending") {
           removeCachedOrderByGuild(activeGuildId);
           if (payload.order.method === "pix" && payload.order.status === "expired") {
@@ -4511,6 +4587,7 @@ export function ConfigStepFour({
         };
   const currentPaymentStatusLabel = paymentStatusLabel(pixOrder);
   const orderDiagnostic = resolveOrderDiagnostic(pixOrder);
+  const hasTrustedApprovedPayment = isTrustedApprovedPaymentOrder(pixOrder);
   const isHostedCardApprovalAwaitingConfirmation = Boolean(
     pixOrder &&
       pixOrder.method === "card" &&
@@ -4534,8 +4611,7 @@ export function ConfigStepFour({
   const shouldShowApprovedConfirmationPanel = Boolean(
     phase === "checkout" &&
       shouldShowStatusResultPanel &&
-      pixOrder &&
-      paymentStatus === "approved",
+      hasTrustedApprovedPayment,
   );
   const canManuallyCancelPendingCard = Boolean(
     guildId &&
@@ -4591,7 +4667,7 @@ export function ConfigStepFour({
 
   useEffect(() => {
     if (!shouldShowStatusResultPanel) return;
-    if (paymentStatus !== "approved") return;
+    if (!hasTrustedApprovedPayment) return;
     if (!resolvedOrderNumber) return;
 
     if (hasApprovedOrderBeenAutoRedirected(resolvedOrderNumber)) {
@@ -4614,6 +4690,7 @@ export function ConfigStepFour({
   }, [
     guildId,
     hasAccountLastPaymentGuild,
+    hasTrustedApprovedPayment,
     paymentStatus,
     resolvedOrderNumber,
     shouldShowStatusResultPanel,
@@ -5213,6 +5290,20 @@ export function ConfigStepFour({
       setSelectedRail("pix");
 
       if (payload.order.status === "approved") {
+        if (!isTrustedApprovedPaymentOrder(payload.order)) {
+          removeCachedOrderByGuild(guildId);
+          forceNewCheckoutRef.current = true;
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setView("methods");
+          setMethodMessage(
+            "Encontramos uma confirmacao inconsistente no PIX e preparamos uma nova base segura. Gere novamente a cobranca.",
+          );
+          clearCheckoutStatusQuery();
+          setPaymentBootstrapRequestKey((current) => current + 1);
+          return;
+        }
+
         setView("methods");
         setMethodMessage(
           payload.licenseActive
@@ -5483,6 +5574,20 @@ export function ConfigStepFour({
           ? buildActiveLicenseMessage(payload.licenseExpiresAt)
           : "Troca aplicada com sucesso usando o credito disponivel da conta.",
       );
+
+      if (!isTrustedApprovedPaymentOrder(payload.order)) {
+        removeCachedOrderByGuild(guildId);
+        forceNewCheckoutRef.current = true;
+        setPixOrder(null);
+        setLastKnownOrderNumber(null);
+        setMethodMessage(
+          "Encontramos uma confirmacao inconsistente no checkout e preparamos uma nova base segura. Tente novamente.",
+        );
+        clearCheckoutStatusQuery();
+        setPaymentBootstrapRequestKey((current) => current + 1);
+        return;
+      }
+
       setCheckoutStatusQuery({ order: payload.order, guildId });
       if (onApproved) {
         onApproved(payload.order);
@@ -5629,6 +5734,21 @@ export function ConfigStepFour({
       forceNewCheckoutRef.current = false;
 
       if (payload.order.status === "approved") {
+        if (!isTrustedApprovedPaymentOrder(payload.order)) {
+          removeCachedOrderByGuild(guildId);
+          forceNewCheckoutRef.current = true;
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setPhase("checkout");
+          setView("methods");
+          setMethodMessage(
+            "Encontramos uma confirmacao inconsistente no PIX e geramos uma nova base segura. Gere novamente o pagamento.",
+          );
+          clearCheckoutStatusQuery();
+          setPaymentBootstrapRequestKey((current) => current + 1);
+          return;
+        }
+
         setView("methods");
         setPhase("checkout");
         setMethodMessage(
@@ -5884,6 +6004,20 @@ export function ConfigStepFour({
       }
 
       if (payload.order.status === "approved") {
+        if (!isTrustedApprovedPaymentOrder(payload.order)) {
+          removeCachedOrderByGuild(guildId);
+          forceNewCheckoutRef.current = true;
+          setPixOrder(null);
+          setLastKnownOrderNumber(null);
+          setView("methods");
+          setMethodMessage(
+            "Encontramos uma confirmacao inconsistente no checkout com cartao e preparamos uma nova base segura.",
+          );
+          clearCheckoutStatusQuery();
+          setPaymentBootstrapRequestKey((current) => current + 1);
+          return;
+        }
+
         setMethodMessage(
           payload.licenseActive
             ? buildActiveLicenseMessage(payload.licenseExpiresAt)

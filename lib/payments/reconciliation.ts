@@ -27,6 +27,7 @@ import {
   resolveRenewalPaymentDecision,
 } from "@/lib/payments/licenseStatus";
 import { invalidatePaymentOrderQueryCaches } from "@/lib/payments/orderQueryCache";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export type ReconcilablePaymentStatus =
@@ -398,7 +399,7 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       order.guild_id,
       order.id,
     );
-    const paymentTimestampMs = paidAt ? Date.parse(paidAt) : Date.now();
+    const paymentTimestampMs = paidAt ? parseUtcTimestampMs(paidAt) : Date.now();
     const canBypassRenewalWindow = orderTransitionAllowsImmediateApproval(
       order.provider_payload,
     );

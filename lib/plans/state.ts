@@ -37,6 +37,11 @@ import {
 } from "@/lib/plans/change";
 import { finalizeDowngradeEnforcementAfterApprovedOrder } from "@/lib/plans/downgradeEnforcement";
 import { licenseGuildForUser } from "@/lib/plans/planGuilds";
+import {
+  filterTrustedApprovedPaymentRecords,
+  isTrustedApprovedPaymentRecord,
+  withApprovedPaymentTrustSelectColumns,
+} from "@/lib/payments/checkoutConsistency";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
@@ -277,7 +282,7 @@ async function listApprovedOrdersForBasicPlanRules(
   const supabase = getSupabaseAdminClientOrThrow();
   let query = supabase
     .from("payment_orders")
-    .select(BASIC_PLAN_ELIGIBILITY_SELECT_COLUMNS)
+    .select(withApprovedPaymentTrustSelectColumns(BASIC_PLAN_ELIGIBILITY_SELECT_COLUMNS))
     .eq("user_id", userId)
     .eq("status", "approved")
     .order("paid_at", { ascending: true, nullsFirst: false })
@@ -295,7 +300,9 @@ async function listApprovedOrdersForBasicPlanRules(
     );
   }
 
-  return (result.data || []) as ApprovedOrderEligibilityRecord[];
+  return filterTrustedApprovedPaymentRecords(
+    ((result.data || []) as unknown) as ApprovedOrderEligibilityRecord[],
+  );
 }
 
 export async function getBasicPlanAvailability(
@@ -785,7 +792,11 @@ export async function getUserPlanState(userId: number) {
       .maybeSingle<UserPlanStateRecord>(),
     supabase
       .from("payment_orders")
-      .select(LATEST_APPROVED_ORDER_FOR_PLAN_STATE_SELECT_COLUMNS)
+      .select(
+        withApprovedPaymentTrustSelectColumns(
+          LATEST_APPROVED_ORDER_FOR_PLAN_STATE_SELECT_COLUMNS,
+        ),
+      )
       .eq("user_id", userId)
       .eq("status", "approved")
       .order("paid_at", { ascending: false, nullsFirst: false })
@@ -805,7 +816,11 @@ export async function getUserPlanState(userId: number) {
   }
 
   const currentPlanState = planStateResult.data || null;
-  const latestApprovedOrder = latestApprovedOrderResult.data || null;
+  const latestApprovedOrder =
+    latestApprovedOrderResult.data &&
+    isTrustedApprovedPaymentRecord(latestApprovedOrderResult.data)
+      ? latestApprovedOrderResult.data
+      : null;
 
   if (!latestApprovedOrder) {
     return currentPlanState;

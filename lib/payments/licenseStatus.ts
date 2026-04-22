@@ -1,6 +1,10 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { resolvePlanLicenseExpiresAtIso } from "@/lib/plans/cycle";
 import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
+import {
+  filterTrustedApprovedPaymentRecords,
+  withApprovedPaymentTrustSelectColumns,
+} from "@/lib/payments/checkoutConsistency";
 
 export type GuildLicenseStatus = "paid" | "expired" | "off" | "not_paid";
 
@@ -613,11 +617,12 @@ export function resolveRenewalPaymentDecision<
 export async function getApprovedOrdersForGuild<
   TOrder extends LicenseApprovedOrderRecord,
 >(guildId: string | null, selectColumns: string, limit = 120) {
+  const trustedSelectColumns = withApprovedPaymentTrustSelectColumns(selectColumns);
   const normalizedGuildId =
     typeof guildId === "string" && guildId.trim().length > 0
       ? guildId.trim()
       : "__null__";
-  const cacheKey = `${normalizedGuildId}::${limit}::${selectColumns}`;
+  const cacheKey = `${normalizedGuildId}::${limit}::${trustedSelectColumns}`;
   const cached = readCacheEntry(
     approvedOrdersByGuildCache,
     cacheKey,
@@ -635,7 +640,7 @@ export async function getApprovedOrdersForGuild<
     const supabase = getSupabaseAdminClientOrThrow();
     const result = await supabase
       .from("payment_orders")
-      .select(selectColumns)
+      .select(trustedSelectColumns)
       .eq("guild_id", guildId)
       .eq("status", "approved")
       .order("paid_at", { ascending: false, nullsFirst: false })
@@ -647,7 +652,7 @@ export async function getApprovedOrdersForGuild<
       throw new Error(result.error.message);
     }
 
-    const data = result.data || [];
+    const data = filterTrustedApprovedPaymentRecords(result.data || []);
     writeCacheEntry(
       approvedOrdersByGuildCache,
       cacheKey,
@@ -691,6 +696,7 @@ export async function getOrderCoverageForGuild<
 export async function getApprovedOrdersForGuilds<
   TOrder extends LicenseApprovedOrderRecord & { guild_id: string },
 >(guildIds: string[], selectColumns: string) {
+  const trustedSelectColumns = withApprovedPaymentTrustSelectColumns(selectColumns);
   const normalizedGuildIds = Array.from(
     new Set(
       guildIds.filter(
@@ -708,7 +714,7 @@ export async function getApprovedOrdersForGuilds<
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
     .from("payment_orders")
-    .select(selectColumns)
+    .select(trustedSelectColumns)
     .in("guild_id", normalizedGuildIds)
     .eq("status", "approved")
     .order("paid_at", { ascending: false, nullsFirst: false })
@@ -719,7 +725,7 @@ export async function getApprovedOrdersForGuilds<
     throw new Error(result.error.message);
   }
 
-  for (const order of result.data || []) {
+  for (const order of filterTrustedApprovedPaymentRecords(result.data || [])) {
     const guildId = order.guild_id;
     const current = ordersByGuild.get(guildId) || [];
     current.push(order);

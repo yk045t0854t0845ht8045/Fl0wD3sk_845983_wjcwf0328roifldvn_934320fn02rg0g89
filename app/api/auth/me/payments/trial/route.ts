@@ -10,6 +10,10 @@ import {
   PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS,
 } from "@/lib/payments/checkoutLinkSecurity";
 import {
+  isTrustedApprovedPaymentRecord,
+  withApprovedPaymentTrustSelectColumns,
+} from "@/lib/payments/checkoutConsistency";
+import {
   getApprovedOrdersForGuild,
   resolveLatestLicenseCoverageFromApprovedOrders,
   resolveRenewalPaymentDecision,
@@ -63,6 +67,7 @@ type PaymentOrderRecord = {
   plan_max_active_tickets: number;
   plan_max_automations: number;
   plan_max_monthly_actions: number;
+  provider_payment_id: string | null;
   provider_status: string | null;
   provider_status_detail: string | null;
   paid_at: string | null;
@@ -75,7 +80,7 @@ type PaymentOrderRecord = {
 };
 
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  `id, order_number, guild_id, user_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, provider_status, provider_status_detail, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, guild_id, user_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, provider_payment_id, provider_status, provider_status_detail, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 const TRIAL_ROUTE_COALESCE_TTL_MS = 2_500;
 
 function parseAmount(amount: string | number) {
@@ -202,7 +207,7 @@ async function getLatestUserOrderForGuild(userId: number, guildId: string | null
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
     .from("payment_orders")
-    .select(PAYMENT_ORDER_SELECT_COLUMNS)
+    .select(withApprovedPaymentTrustSelectColumns(PAYMENT_ORDER_SELECT_COLUMNS))
     .eq("user_id", userId)
     .filter("guild_id", guildId === null ? "is" : "eq", guildId)
     .order("created_at", { ascending: false })
@@ -423,7 +428,7 @@ export async function POST(request: Request) {
         const latestUserOrder = await getLatestUserOrderForGuild(user.id, guildId);
         if (
           latestUserOrder &&
-          latestUserOrder.status === "approved" &&
+          isTrustedApprovedPaymentRecord(latestUserOrder) &&
           latestUserOrder.plan_code === checkoutPlan.plan.code
         ) {
           const securedExistingOrder = await ensureCheckoutAccessTokenForOrder({

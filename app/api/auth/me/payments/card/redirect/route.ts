@@ -6,6 +6,11 @@ import {
   resolveMercadoPagoHostedCheckoutUrl,
 } from "@/lib/payments/mercadoPago";
 import {
+  CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
+  hasCheckoutAmountMismatch,
+  normalizeExpectedCheckoutAmount,
+} from "@/lib/payments/checkoutConsistency";
+import {
   normalizeDiscountCodeRequestBody,
   resolveDiscountCodeValidationMessage,
 } from "@/lib/payments/discountCodeInput";
@@ -76,21 +81,6 @@ import {
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const CARD_REDIRECT_ROUTE_COALESCE_TTL_MS = 1500;
-
-function normalizeExpectedCheckoutAmount(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return Math.round(value * 100) / 100;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      return Math.round(parsed * 100) / 100;
-    }
-  }
-
-  return null;
-}
 
 function normalizeReturnTarget(value: unknown) {
   if (typeof value !== "string") return null;
@@ -445,6 +435,31 @@ export async function POST(request: Request) {
           flowPointsGranted,
           scheduledChangeId: checkoutPlan.scheduledChange?.id || null,
         });
+
+        if (
+          hasCheckoutAmountMismatch({
+            expectedAmount: expectedTotalAmount,
+            actualAmount: amount,
+          })
+        ) {
+          await logSecurityAuditEventSafe(auditContext, {
+            action: "payment_card_redirect_post",
+            outcome: "blocked",
+            metadata: {
+              reason: "checkout_amount_mismatch",
+              expectedTotalAmount,
+              actualAmount: amount,
+            },
+          });
+
+          return respond(
+            {
+              ok: false,
+              message: CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
+            },
+            { status: 409 },
+          );
+        }
 
         if (amount <= 0) {
           return respond(

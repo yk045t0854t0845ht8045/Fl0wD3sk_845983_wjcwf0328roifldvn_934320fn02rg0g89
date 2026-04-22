@@ -4,6 +4,7 @@ import {
   type ConfigDraft,
 } from "@/lib/auth/configContext";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 export const UNPAID_SETUP_TIMEOUT_MINUTES = 30;
 export const UNPAID_SETUP_TIMEOUT_MS = UNPAID_SETUP_TIMEOUT_MINUTES * 60 * 1000;
@@ -117,9 +118,12 @@ export function resolveUnpaidSetupExpiresAt(
   baseDate: number | string | Date = Date.now(),
 ) {
   const baseTimestamp =
-    typeof baseDate === "number" ? baseDate : new Date(baseDate).getTime();
+    typeof baseDate === "number" ? baseDate : parseUtcTimestampMs(baseDate);
 
-  return new Date(baseTimestamp + UNPAID_SETUP_TIMEOUT_MS).toISOString();
+  return new Date(
+    (Number.isFinite(baseTimestamp) ? baseTimestamp : Date.now()) +
+      UNPAID_SETUP_TIMEOUT_MS,
+  ).toISOString();
 }
 
 export function resolveUnpaidSetupEffectiveExpiresAt(input: {
@@ -131,8 +135,8 @@ export function resolveUnpaidSetupEffectiveExpiresAt(input: {
     return setupExpiresAt;
   }
 
-  const providerExpiresAtMs = Date.parse(input.providerExpiresAt);
-  const setupExpiresAtMs = Date.parse(setupExpiresAt);
+  const providerExpiresAtMs = parseUtcTimestampMs(input.providerExpiresAt);
+  const setupExpiresAtMs = parseUtcTimestampMs(setupExpiresAt);
   if (!Number.isFinite(providerExpiresAtMs)) {
     return setupExpiresAt;
   }
@@ -196,7 +200,7 @@ function registerLatestGuildActivity(
     return;
   }
 
-  const activityAtMs = Date.parse(activityAt);
+  const activityAtMs = parseUtcTimestampMs(activityAt);
   if (!Number.isFinite(activityAtMs)) {
     return;
   }

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createStablePaymentIdempotencyKey } from "@/lib/payments/paymentIntegrity";
+import { normalizeUtcTimestampIso } from "@/lib/time/utcTimestamp";
 
 type MercadoPagoPayerIdentification = {
   type: "CPF" | "CNPJ";
@@ -278,10 +279,7 @@ export function invalidateMercadoPagoPaymentLookupCache(input?: {
 }
 
 function normalizeMercadoPagoIsoDate(value: string | null | undefined) {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return null;
-  return new Date(timestamp).toISOString();
+  return normalizeUtcTimestampIso(value);
 }
 
 function normalizeMercadoPagoEnvValue(value: string | undefined) {

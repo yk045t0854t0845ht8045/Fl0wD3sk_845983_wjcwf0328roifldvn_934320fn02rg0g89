@@ -93,6 +93,10 @@ function parseBoolean(value: unknown) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function normalizeCurrencyCode(value: string | null | undefined) {
+  return String(value || "").trim().toUpperCase();
+}
+
 export async function resolveDiscountPricing(input: {
   baseAmount: number;
   currency: string;
@@ -153,6 +157,7 @@ export async function resolveDiscountPricing(input: {
           message = coupon.message;
         } else if (
           giftCardRecord.status !== "active" ||
+          normalizeCurrencyCode(giftCardRecord.currency) !== currency ||
           !isDateActive(null, giftCardRecord.expires_at) ||
           parseNumeric(giftCardRecord.remaining_amount) <= 0
         ) {
@@ -161,7 +166,10 @@ export async function resolveDiscountPricing(input: {
             label: giftCardRecord.label,
             amount: 0,
             valid: false,
-            message: "Gift card indisponivel ou sem saldo.",
+            message:
+              normalizeCurrencyCode(giftCardRecord.currency) !== currency
+                ? "Gift card indisponivel para a moeda desta cobranca."
+                : "Gift card indisponivel ou sem saldo.",
           };
           message = giftCard.message;
         } else {
@@ -296,15 +304,19 @@ export async function resolveDiscountPricing(input: {
       }
 
       if (!coupon) {
+        const normalizedDiscountValue = Math.max(
+          0,
+          parseNumeric(couponRecord.discount_value),
+        );
         couponAmount = isBetaProgramCoupon
           ? 0
           : couponRecord.discount_type === "percent"
             ? Math.min(
                 baseAmount,
-                Math.round(baseAmount * parseNumeric(couponRecord.discount_value)) /
+                Math.round(baseAmount * normalizedDiscountValue) /
                   100,
               )
-            : Math.min(baseAmount, parseNumeric(couponRecord.discount_value));
+            : Math.min(baseAmount, normalizedDiscountValue);
 
         couponAmount = Math.round(couponAmount * 100) / 100;
         coupon = {
@@ -344,6 +356,7 @@ export async function resolveDiscountPricing(input: {
       message = giftCard.message;
     } else if (
       giftCardRecord.status !== "active" ||
+      normalizeCurrencyCode(giftCardRecord.currency) !== currency ||
       !isDateActive(null, giftCardRecord.expires_at) ||
       parseNumeric(giftCardRecord.remaining_amount) <= 0
     ) {
@@ -352,7 +365,10 @@ export async function resolveDiscountPricing(input: {
         label: giftCardRecord.label,
         amount: 0,
         valid: false,
-        message: "Gift card indisponivel ou sem saldo.",
+        message:
+          normalizeCurrencyCode(giftCardRecord.currency) !== currency
+            ? "Gift card indisponivel para a moeda desta cobranca."
+            : "Gift card indisponivel ou sem saldo.",
       };
       message = giftCard.message;
     } else {

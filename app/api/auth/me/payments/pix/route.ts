@@ -31,6 +31,13 @@ import {
   resolveTrustedMercadoPagoPaymentTimestamps,
 } from "@/lib/payments/paymentIntegrity";
 import {
+  CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
+  hasCheckoutAmountMismatch,
+  isTrustedApprovedPaymentRecord,
+  normalizeExpectedCheckoutAmount,
+  roundPaymentCurrencyAmount,
+} from "@/lib/payments/checkoutConsistency";
+import {
   encryptPaymentSensitiveValue,
   resolvePaymentDocumentLast4,
 } from "@/lib/payments/paymentPii";
@@ -291,25 +298,7 @@ function parseAmount(amount: string | number) {
 }
 
 function roundCurrencyAmount(amount: number) {
-  if (!Number.isFinite(amount)) return 0;
-  return Math.round(amount * 100) / 100;
-}
-
-function normalizeExpectedCheckoutAmount(value: unknown) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) && value >= 0
-      ? roundCurrencyAmount(value)
-      : null;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0
-      ? roundCurrencyAmount(parsed)
-      : null;
-  }
-
-  return null;
+  return roundPaymentCurrencyAmount(amount);
 }
 
 export function resolveFlowPointsGrantedFromSubtotal(input: {
@@ -1397,10 +1386,9 @@ export async function GET(request: Request) {
         forceRotate: false,
         invalidateOtherOrders: false,
       });
-      const orderCoverage =
-        securedOrder.order.status === "approved"
-          ? await getCoverageForApprovedOrder(securedOrder.order)
-          : null;
+      const orderCoverage = isTrustedApprovedPaymentRecord(securedOrder.order)
+        ? await getCoverageForApprovedOrder(securedOrder.order)
+        : null;
 
       return respond({
         ok: true,
@@ -1909,6 +1897,31 @@ export async function POST(request: Request) {
       flowPointsGranted,
       scheduledChangeId: checkoutPlan.scheduledChange?.id || null,
     });
+
+    if (
+      hasCheckoutAmountMismatch({
+        expectedAmount: expectedTotalAmount,
+        actualAmount: amount,
+      })
+    ) {
+      await logSecurityAuditEventSafe(auditContext, {
+        action: "payment_pix_post",
+        outcome: "blocked",
+        metadata: {
+          reason: "checkout_amount_mismatch",
+          expectedTotalAmount,
+          actualAmount: amount,
+        },
+      });
+
+      return respond(
+        {
+          ok: false,
+          message: CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
+        },
+        { status: 409 },
+      );
+    }
 
     if (amount > 0 && !payerName) {
       return respond(

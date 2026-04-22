@@ -33,6 +33,13 @@ type PaymentPlanBillingPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+function isTruthyQueryFlag(value: string | string[] | undefined) {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (typeof candidate !== "string") return false;
+  const normalized = candidate.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 export default async function PaymentPlanBillingPage({
   params,
   searchParams,
@@ -64,6 +71,7 @@ export default async function PaymentPlanBillingPage({
   });
   const canonicalPathname = canonicalHref.split("?")[0] || canonicalHref;
   const currentPathname = `/payment/${routeParams.planSlug}/${routeParams.billingSlug}`;
+  const forceFreshCheckout = isTruthyQueryFlag(query.fresh);
   const sessionResult = await getCurrentUserFromSessionCookieSafe({
     fullContext: true,
   });
@@ -95,6 +103,7 @@ export default async function PaymentPlanBillingPage({
       displayName={user.display_name}
       initialPlanCode={resolvedPricing.code}
       initialBillingPeriodCode={resolvedPricing.billingPeriodCode}
+      forceFreshCheckout={forceFreshCheckout}
     />
   );
 }

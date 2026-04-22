@@ -18,6 +18,7 @@ import {
   resolveCheckoutLinkFailureMessage,
   verifyCheckoutAccessToken,
 } from "@/lib/payments/checkoutLinkSecurity";
+import { isTrustedApprovedPaymentRecord } from "@/lib/payments/checkoutConsistency";
 import {
   reconcilePaymentOrderRecord,
   reconcilePaymentOrderWithProviderPayment,
@@ -815,10 +816,9 @@ export async function GET(request: Request) {
       forceRotate: false,
       invalidateOtherOrders: false,
     });
-    const orderCoverage =
-      securedOrder.order.status === "approved"
-        ? await getCoverageForApprovedOrder(securedOrder.order)
-        : null;
+    const orderCoverage = isTrustedApprovedPaymentRecord(securedOrder.order)
+      ? await getCoverageForApprovedOrder(securedOrder.order)
+      : null;
 
     return respond({
       ok: true,

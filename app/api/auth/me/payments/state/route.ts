@@ -9,6 +9,7 @@ import {
   ensureCheckoutAccessTokenForOrder,
   PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS,
 } from "@/lib/payments/checkoutLinkSecurity";
+import { isTrustedApprovedPaymentRecord } from "@/lib/payments/checkoutConsistency";
 import {
   resolvePaymentStatus,
   searchMercadoPagoPaymentsByExternalReference,
@@ -42,6 +43,7 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type PaymentOrderStateRecord = {
@@ -104,7 +106,7 @@ function isStaleHostedCardPendingOrder(order: PaymentOrderStateRecord) {
   if (order.status !== "pending") return false;
   if (order.provider_payment_id) return false;
 
-  const createdAtMs = Date.parse(order.created_at);
+  const createdAtMs = parseUtcTimestampMs(order.created_at);
   if (!Number.isFinite(createdAtMs)) return false;
 
   return Date.now() - createdAtMs >= STALE_CARD_REDIRECT_PENDING_MS;
@@ -422,6 +424,14 @@ export async function GET(request: Request) {
       getLatestApprovedLicenseCoverageForGuild(guildId),
       getLatestUserOrderForGuild(user.id, guildId),
     ]);
+
+    if (
+      latestUserOrder &&
+      latestUserOrder.status === "approved" &&
+      !isTrustedApprovedPaymentRecord(latestUserOrder)
+    ) {
+      latestUserOrder = null;
+    }
 
     if (latestUserOrder && isStaleHostedCardPendingOrder(latestUserOrder)) {
       try {

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { MercadoPagoPaymentResponse } from "@/lib/payments/mercadoPago";
+import { normalizeUtcTimestampIso } from "@/lib/time/utcTimestamp";
 
 export type PaymentOrderStatus =
   | "pending"
@@ -27,10 +28,7 @@ function normalizeStringValue(value: unknown) {
 }
 
 function normalizeIsoTimestamp(value: string | null | undefined) {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return null;
-  return new Date(timestamp).toISOString();
+  return normalizeUtcTimestampIso(value);
 }
 
 function secureStringEquals(expected: string, received: string) {
