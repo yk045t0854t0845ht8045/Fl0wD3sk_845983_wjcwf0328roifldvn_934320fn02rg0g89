@@ -115,6 +115,7 @@ type CreatePixPaymentBody = {
   payerDocument?: unknown;
   couponCode?: unknown;
   giftCardCode?: unknown;
+  expectedTotalAmount?: unknown;
   forceNew?: unknown;
 };
 
@@ -292,6 +293,23 @@ function parseAmount(amount: string | number) {
 function roundCurrencyAmount(amount: number) {
   if (!Number.isFinite(amount)) return 0;
   return Math.round(amount * 100) / 100;
+}
+
+function normalizeExpectedCheckoutAmount(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0
+      ? roundCurrencyAmount(value)
+      : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0
+      ? roundCurrencyAmount(parsed)
+      : null;
+  }
+
+  return null;
 }
 
 export function resolveFlowPointsGrantedFromSubtotal(input: {
@@ -1189,7 +1207,9 @@ export async function reuseDraftOrderForCheckout(input: {
             },
             ...(input.providerPayload || {}),
           },
-          expires_at: resolveUnpaidSetupExpiresAt(input.order.created_at),
+          // Ao reaproveitar um rascunho, renovamos a janela do checkout para
+          // evitar que o primeiro PIX herde uma expiracao antiga demais.
+          expires_at: resolveUnpaidSetupExpiresAt(),
         })
         .eq("id", input.order.id)
         .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -1664,6 +1684,14 @@ export async function POST(request: Request) {
               }),
             ),
           ),
+          expectedTotalAmount: flowSecureDto.optional(
+            flowSecureDto.nullable(
+              flowSecureDto.number({
+                min: 0,
+                max: 1_000_000,
+              }),
+            ),
+          ),
           forceNew: flowSecureDto.optional(flowSecureDto.unknown()),
         },
         {
@@ -1686,6 +1714,9 @@ export async function POST(request: Request) {
     const guildId = normalizeGuildId(body.guildId);
     const requestedPayerName = normalizePayerName(body.payerName);
     const requestedPayerDocument = normalizePayerDocument(body.payerDocument);
+    const expectedTotalAmount = normalizeExpectedCheckoutAmount(
+      body.expectedTotalAmount,
+    );
     const forceNew = parseForceNewFlag(body.forceNew);
 
     const access = await ensureGuildAccess(guildId);
@@ -1711,6 +1742,7 @@ export async function POST(request: Request) {
         requestedPayerDocument?.normalized || "",
         typeof body.couponCode === "string" ? body.couponCode : "",
         typeof body.giftCardCode === "string" ? body.giftCardCode : "",
+        expectedTotalAmount ?? "__auto__",
         forceNew,
       ],
     });
@@ -1718,6 +1750,7 @@ export async function POST(request: Request) {
     return await runCoalescedRouteResponse({
       key: mutationKey,
       ttlMs: PAYMENT_ROUTE_COALESCE_TTL_MS,
+      shouldCache: () => false,
       producer: async () => {
 
         const rateLimit = await enforceRequestRateLimit({
@@ -1990,7 +2023,9 @@ export async function POST(request: Request) {
               },
             },
           },
-          expires_at: resolveUnpaidSetupExpiresAt(draftOrderToReuse.created_at),
+          // Reutilizar o rascunho nao deve carregar a expiracao original do
+          // pedido-base, senao o primeiro PIX pode nascer quase vencido.
+          expires_at: resolveUnpaidSetupExpiresAt(),
         })
         .eq("id", draftOrderToReuse.id)
         .select(PAYMENT_ORDER_SELECT_COLUMNS)
@@ -2161,7 +2196,9 @@ export async function POST(request: Request) {
               }
             : {}),
         },
-        dateOfExpiration: resolveUnpaidSetupExpiresAt(createdOrder.created_at),
+        dateOfExpiration:
+          createdOrder.expires_at ||
+          resolveUnpaidSetupExpiresAt(createdOrder.created_at),
         idempotencyKey: pixCreationIdempotencyKey,
       });
       createdProviderPayment = mercadoPagoPayment;

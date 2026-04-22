@@ -177,10 +177,13 @@ type MethodSelectorPanelProps = {
   className: string;
   onChoosePix: () => void;
   onStartPixFlow: () => void;
+  onRetryPrepareOrder: () => void;
   onTogglePixTerms: (checked: boolean) => void;
   onSelectHostedRail: (rail: Exclude<CheckoutRail, "pix">) => void;
   methodMessage: string | null;
   canInteract: boolean;
+  isOrderLoading: boolean;
+  hasOrderReady: boolean;
   cardEnabled: boolean;
   selectedRail: CheckoutRail | null;
   pixTermsAccepted: boolean;
@@ -1020,6 +1023,11 @@ function formatDecimalValue(value: number, maximumFractionDigits = 1) {
   }).format(roundMoney(Math.max(0, value)));
 }
 
+function formatRoundedDayCountLabel(value: number) {
+  const roundedDays = Math.max(0, Math.round(value));
+  return `${roundedDays} ${roundedDays === 1 ? "dia" : "dias"}`;
+}
+
 function buildFallbackDiscountPreview(input: {
   baseAmount: number;
   currency: string;
@@ -1565,6 +1573,13 @@ function normalizePaymentUiMessage(message: string | null | undefined) {
   }
 
   return normalized;
+}
+
+const PIX_EXPIRATION_AUTO_RECOVERY_MESSAGE =
+  "A tentativa anterior expirou. O sistema vai preparar uma nova cobranca segura.";
+
+function shouldAutoRecoverExpiredPixMessage(message: string | null | undefined) {
+  return normalizePaymentUiMessage(message) === PIX_EXPIRATION_AUTO_RECOVERY_MESSAGE;
 }
 
 function parseUnknownErrorMessage(error: unknown) {
@@ -2408,9 +2423,12 @@ function MethodSelectorPanel(props: MethodSelectorPanelProps) {
     className,
     onChoosePix,
     onStartPixFlow,
+    onRetryPrepareOrder,
     onTogglePixTerms,
     methodMessage,
     canInteract,
+    isOrderLoading,
+    hasOrderReady,
     selectedRail,
     pixTermsAccepted,
     view,
@@ -2544,10 +2562,25 @@ function MethodSelectorPanel(props: MethodSelectorPanelProps) {
         </div>
       </div>
 
-      {!canInteract ? (
+      {!canInteract && isOrderLoading ? (
         <div className="mt-[14px] flex items-center justify-center gap-2 text-[12px] text-[#C2C2C2]">
           <ButtonLoader size={14} colorClassName="text-[#C2C2C2]" />
           <span>Aguardando carregamento do pedido</span>
+        </div>
+      ) : null}
+
+      {!canInteract && !isOrderLoading && !hasOrderReady ? (
+        <div className="mt-[14px] rounded-[18px] border border-[#1E1E1E] bg-[#0D0D0D] px-[14px] py-[14px] text-center">
+          <p className="text-[12px] leading-[1.7] text-[#C2C2C2]">
+            Nao conseguimos deixar o pedido pronto agora. Tente preparar uma nova cobranca segura.
+          </p>
+          <button
+            type="button"
+            onClick={onRetryPrepareOrder}
+            className="mt-[12px] inline-flex h-[40px] items-center justify-center rounded-[12px] border border-[#272727] bg-[#121212] px-[14px] text-[13px] font-medium text-[#E1E1E1] transition-colors hover:border-[#323232] hover:bg-[#171717]"
+          >
+            Tentar novamente
+          </button>
         </div>
       ) : null}
 
@@ -3024,6 +3057,7 @@ export function ConfigStepFour({
   const [isPlanLoading, setIsPlanLoading] = useState(true);
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
   const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
+  const [paymentBootstrapRequestKey, setPaymentBootstrapRequestKey] = useState(0);
   const [pixTermsAccepted, setPixTermsAccepted] = useState(false);
   const [couponCode, setCouponCode] = useState(
     sanitizeDiscountCodeInput(
@@ -3921,6 +3955,9 @@ export function ConfigStepFour({
             }
           } else {
             setView("methods");
+            setMethodMessage(
+              "Nao foi possivel preparar o pedido agora. Tente novamente para gerar uma nova cobranca segura.",
+            );
           }
         }
       } finally {
@@ -3946,6 +3983,7 @@ export function ConfigStepFour({
     initialBillingPeriodCode,
     initialPlanCode,
     isPlanLoading,
+    paymentBootstrapRequestKey,
     selectedPlanChange.execution,
     selectedPlanChange.immediateSubtotalAmount,
     selectedBillingPeriodCode,
@@ -4479,10 +4517,11 @@ export function ConfigStepFour({
       pixOrder.status === "pending" &&
       activeCheckoutQuery.status === "approved",
   );
+  const hasPaymentOrderReady = Boolean(resolvedOrderNumber);
+  const isPaymentOrderBusy = isLoadingOrder || isPreparingBaseOrder;
   const canChoosePaymentMethod = Boolean(
-    !isLoadingOrder &&
-      !isPreparingBaseOrder &&
-      !!resolvedOrderNumber &&
+    !isPaymentOrderBusy &&
+      hasPaymentOrderReady &&
       !isSubmittingCard &&
       !isCancellingPendingCard &&
       !isHostedCardApprovalAwaitingConfirmation,
@@ -4903,6 +4942,7 @@ export function ConfigStepFour({
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
           ...manualDiscountPayload,
+          expectedTotalAmount: activeDiscountPreview.totalAmount,
           renew,
           returnTarget,
           returnGuildId,
@@ -4976,6 +5016,7 @@ export function ConfigStepFour({
       }
     }
   }, [
+    activeDiscountPreview.totalAmount,
     guildId,
     handleActiveLicenseCheckoutBlock,
     isSubmittingCard,
@@ -5002,9 +5043,42 @@ export function ConfigStepFour({
     void startCardRedirectCheckout();
   }, [cardPaymentsEnabled, cardRedirectRequestKey, startCardRedirectCheckout, view]);
 
+  const handleRetryPreparePaymentOrder = useCallback(() => {
+    if (paymentOrderLookupInFlightRef.current || orderBootstrapInFlightRef.current) {
+      setMethodMessage("Ainda estamos preparando seu pedido. Aguarde alguns segundos.");
+      return;
+    }
+
+    if (guildId) {
+      clearPendingCardRedirectState(guildId);
+      removeCachedOrderByGuild(guildId);
+      paymentPollingInFlightRef.current = false;
+    }
+
+    forceNewCheckoutRef.current = true;
+    lastHandledCardRedirectKeyRef.current = 0;
+    lastAutoResolvedPendingCardOrderRef.current = null;
+    clearCheckoutStatusQuery();
+    setPhase("checkout");
+    setView("methods");
+    setSelectedRail(null);
+    setPixOrder(null);
+    setLastKnownOrderNumber(null);
+    setCopied(false);
+    setIsLoadingOrder(false);
+    setIsPreparingBaseOrder(false);
+    setMethodMessage("Preparando um novo pedido seguro...");
+    setPaymentBootstrapRequestKey((current) => current + 1);
+  }, [guildId]);
+
   const handleChooseMethod = useCallback((method: PaymentMethod) => {
-    if (!canChoosePaymentMethod) {
-      setMethodMessage("Aguardando o pedido ficar pronto para pagamento.");
+    if (isPaymentOrderBusy) {
+      setMethodMessage("Ainda estamos preparando o pedido. Aguarde alguns segundos.");
+      return;
+    }
+
+    if (!hasPaymentOrderReady) {
+      handleRetryPreparePaymentOrder();
       return;
     }
 
@@ -5046,11 +5120,24 @@ export function ConfigStepFour({
     setView("card_form");
     setMethodMessage("Preparando checkout seguro do cartao.");
     setCardRedirectRequestKey((current) => current + 1);
-  }, [canChoosePaymentMethod, cardPaymentsEnabled, guildId, selectedRail, view]);
+  }, [
+    cardPaymentsEnabled,
+    guildId,
+    handleRetryPreparePaymentOrder,
+    hasPaymentOrderReady,
+    isPaymentOrderBusy,
+    selectedRail,
+    view,
+  ]);
 
   const handleStartPixFlow = useCallback(() => {
-    if (!canChoosePaymentMethod) {
-      setMethodMessage("Aguardando o pedido ficar pronto para pagamento.");
+    if (isPaymentOrderBusy) {
+      setMethodMessage("Ainda estamos preparando o pedido. Aguarde alguns segundos.");
+      return;
+    }
+
+    if (!hasPaymentOrderReady) {
+      handleRetryPreparePaymentOrder();
       return;
     }
 
@@ -5060,7 +5147,7 @@ export function ConfigStepFour({
     setMethodMessage(null);
     setPixFormHasInputError(false);
     setPixFormError(null);
-  }, [canChoosePaymentMethod]);
+  }, [handleRetryPreparePaymentOrder, hasPaymentOrderReady, isPaymentOrderBusy]);
 
   const handleRefreshExpiredPixPayment = useCallback(async () => {
     if (pixAutoRefreshInFlightRef.current) {
@@ -5068,7 +5155,7 @@ export function ConfigStepFour({
     }
 
     pixAutoRefreshInFlightRef.current = true;
-    setMethodMessage("O PIX anterior venceu. Gerando uma nova tentativa segura...");
+    setMethodMessage("Validando a tentativa anterior e gerando um novo PIX seguro...");
     setCopied(false);
     setPixFormHasInputError(false);
     setPixFormError(null);
@@ -5078,6 +5165,7 @@ export function ConfigStepFour({
         planCode: selectedPlanCode,
         billingPeriodCode: selectedBillingPeriodCode,
         ...manualDiscountPayload,
+        expectedTotalAmount: activeDiscountPreview.totalAmount,
         forceNew: forceNewCheckoutRef.current,
       };
       if (guildId) {
@@ -5151,10 +5239,13 @@ export function ConfigStepFour({
     } catch (error) {
       removeCachedOrderByGuild(guildId);
       setView("pix_form");
-      setMethodMessage(
+      const fallbackMessage =
         parseUnknownErrorMessage(error) ||
-          "Nao foi possivel renovar o PIX automaticamente. Confirme os dados para gerar uma nova tentativa.",
-      );
+        "Nao foi possivel renovar o PIX automaticamente. Confirme os dados para gerar uma nova tentativa.";
+      setMethodMessage(fallbackMessage);
+      setPixFormHasInputError(false);
+      setPixFormError(fallbackMessage);
+      setPixFormErrorAnimationTick((current) => current + 1);
       clearCheckoutStatusQuery();
     } finally {
       pixAutoRefreshInFlightRef.current = false;
@@ -5162,6 +5253,7 @@ export function ConfigStepFour({
   }, [
     guildId,
     handleActiveLicenseCheckoutBlock,
+    activeDiscountPreview.totalAmount,
     manualDiscountPayload,
     payerDocument,
     payerName,
@@ -5364,6 +5456,7 @@ export function ConfigStepFour({
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
           ...manualDiscountPayload,
+          expectedTotalAmount: activeDiscountPreview.totalAmount,
           forceNew: forceNewCheckoutRef.current,
         }),
       });
@@ -5508,6 +5601,7 @@ export function ConfigStepFour({
           ...manualDiscountPayload,
           payerDocument: documentDigits,
           payerName: normalizedName,
+          expectedTotalAmount: activeDiscountPreview.totalAmount,
           forceNew: forceNewCheckoutRef.current,
         }),
       });
@@ -5551,11 +5645,10 @@ export function ConfigStepFour({
         setMethodMessage("QR Code PIX gerado. Finalize o pagamento no card principal.");
         setCheckoutStatusQuery({ order: payload.order, guildId });
       } else if (payload.order.status === "expired") {
-        setView("pix_form");
-        setMethodMessage(
-          "A tentativa anterior venceu. Preencha novamente os dados para gerar um novo PIX.",
-        );
         clearCheckoutStatusQuery();
+        forceNewCheckoutRef.current = true;
+        await handleRefreshExpiredPixPayment();
+        return;
       } else {
         setView("pix_form");
         setMethodMessage(
@@ -5570,6 +5663,10 @@ export function ConfigStepFour({
 
       if (shouldFlagInputError) {
         triggerPixFormValidationError("CPF/CNPJ invalido. Verifique os digitos e tente novamente.");
+      } else if (shouldAutoRecoverExpiredPixMessage(message)) {
+        clearCheckoutStatusQuery();
+        forceNewCheckoutRef.current = true;
+        await handleRefreshExpiredPixPayment();
       } else {
         setPixFormHasInputError(false);
         setPixFormError(message);
@@ -5585,6 +5682,7 @@ export function ConfigStepFour({
     isLoadingOrder,
     isPreparingBaseOrder,
     isSubmittingPix,
+    activeDiscountPreview.totalAmount,
     manualDiscountPayload,
     payerName,
     pixDocumentStatus,
@@ -5593,6 +5691,7 @@ export function ConfigStepFour({
     pixOrder?.orderNumber,
     selectedBillingPeriodCode,
     selectedPlanCode,
+    handleRefreshExpiredPixPayment,
     triggerPixFormValidationError,
     onApproved,
   ]);
@@ -6297,15 +6396,15 @@ export function ConfigStepFour({
           activeDiscountPreview.currency,
         )}`
       : formatMoney(0, activeDiscountPreview.currency);
-  const currentCycleUsedDaysLabel = `${formatDecimalValue(
+  const currentCycleUsedDaysLabel = formatRoundedDayCountLabel(
     selectedPlanChange.currentCycleUsedDaysExact,
-  )} dias`;
-  const currentCycleRemainingDaysLabel = `${formatDecimalValue(
+  );
+  const currentCycleRemainingDaysLabel = formatRoundedDayCountLabel(
     selectedPlanChange.remainingDaysExact,
-  )} dias`;
-  const currentCycleTotalDaysLabel = `${formatDecimalValue(
+  );
+  const currentCycleTotalDaysLabel = formatRoundedDayCountLabel(
     selectedPlanChange.currentCycleTotalDaysExact,
-  )} dias`;
+  );
   const shouldShowCoveredByCreditNotice =
     shouldShowUpgradeCreditReview && activeDiscountPreview.totalAmount <= 0;
   const showCartDiscountEditor =
@@ -6632,12 +6731,15 @@ export function ConfigStepFour({
                           className=""
                           onChoosePix={() => handleChooseMethod("pix")}
                           onStartPixFlow={handleStartPixFlow}
+                          onRetryPrepareOrder={handleRetryPreparePaymentOrder}
                           onTogglePixTerms={(checked) => {
                             setPixTermsAccepted(checked);
                           }}
                           onSelectHostedRail={handleHostedRailSelection}
                           methodMessage={checkoutStatusLabel}
                           canInteract={canChoosePaymentMethod}
+                          isOrderLoading={isPaymentOrderBusy}
+                          hasOrderReady={hasPaymentOrderReady}
                           cardEnabled={cardPaymentsEnabled}
                           selectedRail={selectedRail}
                           pixTermsAccepted={pixTermsAccepted}
