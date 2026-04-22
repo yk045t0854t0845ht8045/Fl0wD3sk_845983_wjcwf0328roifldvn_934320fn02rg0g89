@@ -24,7 +24,7 @@ type CurrentPlanSnapshot = {
 type Props = {
   currentPlan: CurrentPlanSnapshot | null;
   preferredGuildId: string | null;
-  showServerLimitBanner?: boolean;
+  bannerReason?: "server-limit" | "att-plan" | null;
   basicPlanAvailable?: boolean;
 };
 
@@ -672,7 +672,7 @@ function PlanComparisonTable({ plans }: { plans: PlanPricingDefinition[] }) {
 export function ServersPlansUpgradePage({
   currentPlan,
   preferredGuildId: _preferredGuildId,
-  showServerLimitBanner = false,
+  bannerReason = null,
   basicPlanAvailable = true,
 }: Props) {
   const [selectedBillingPeriodCode, setSelectedBillingPeriodCode] =
@@ -704,15 +704,21 @@ export function ServersPlansUpgradePage({
     () => resolveRecommendedPlanCode(currentPlan),
     [currentPlan],
   );
+  const bannerText =
+    bannerReason === "att-plan"
+      ? "Atualize seu plano para liberar o acesso ao FlowAI"
+      : bannerReason === "server-limit"
+        ? "Atualize seu plano para adicionar mais servidores"
+        : null;
 
   return (
       <div className="relative min-h-screen bg-[#050505] text-white">
-      {showServerLimitBanner ? (
+      {bannerText ? (
         <div className="relative z-[20] w-full border-b border-[rgba(255,255,255,0.14)] bg-[#0062FF]">
           <div className="mx-auto flex min-h-[44px] w-full max-w-[1582px] items-center justify-center px-[16px] sm:min-h-[46px] sm:px-[24px]">
             <div className="flex items-center justify-center gap-[8px] text-center text-[13px] font-semibold tracking-[-0.01em] text-white sm:text-[14px]">
                 <DiamondIcon />
-                <span>Atualize seu plano para adicionar mais servidores</span>
+                <span>{bannerText}</span>
               </div>
             </div>
           </div>
@@ -720,7 +726,7 @@ export function ServersPlansUpgradePage({
 
       <div
         className={`relative z-10 mx-auto w-full max-w-[1582px] px-0 pb-[120px] ${
-          showServerLimitBanner
+          bannerText
             ? "pt-[22px] min-[1580px]:pt-[28px]"
             : "pt-[46px] min-[1580px]:pt-[54px]"
         }`}

@@ -28,8 +28,9 @@ export default async function ServersPlansPage({
   }
 
   const query = searchParams ? await searchParams : {};
-  const shouldShowServerLimitBanner =
-    takeFirstQueryValue(query.reason) === "server-limit";
+  const reason = takeFirstQueryValue(query.reason);
+  const bannerReason =
+    reason === "server-limit" || reason === "att-plan" ? reason : null;
   const user = session.user;
   const [userPlanState, basicPlanAvailability, licensedPlanGuilds] = await Promise.all([
     getUserPlanState(user.id),
@@ -64,7 +65,7 @@ export default async function ServersPlansPage({
           : null
       }
       preferredGuildId={preferredGuildId}
-      showServerLimitBanner={shouldShowServerLimitBanner}
+      bannerReason={bannerReason}
       basicPlanAvailable={basicPlanAvailability.isAvailable}
     />
   );

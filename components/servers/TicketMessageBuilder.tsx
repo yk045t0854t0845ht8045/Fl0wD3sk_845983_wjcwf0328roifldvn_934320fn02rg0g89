@@ -582,6 +582,92 @@ function reorderByIndex<T extends { id: string }>(items: T[], sourceId: string, 
   return next;
 }
 
+function isContainerChildComponent(
+  component: TicketPanelComponent | TicketPanelContainerChild,
+): component is TicketPanelContainerChild {
+  return component.type !== "container";
+}
+
+function insertAtIndex<T>(items: T[], index: number, item: T) {
+  const boundedIndex = Math.max(0, Math.min(index, items.length));
+  const next = [...items];
+  next.splice(boundedIndex, 0, item);
+  return next;
+}
+
+function extractRootComponent(layout: TicketPanelLayout, componentId: string) {
+  const sourceIndex = layout.findIndex((component) => component.id === componentId);
+  if (sourceIndex === -1) {
+    return { layout, moved: null as TicketPanelComponent | null };
+  }
+
+  return {
+    layout: layout.filter((component) => component.id !== componentId),
+    moved: layout[sourceIndex] ?? null,
+  };
+}
+
+function extractContainerChild(
+  layout: TicketPanelLayout,
+  parentId: string,
+  componentId: string,
+) {
+  let moved: TicketPanelContainerChild | null = null;
+
+  return {
+    layout: layout.map((component) => {
+      if (component.type !== "container" || component.id !== parentId) {
+        return component;
+      }
+
+      const nextChildren = component.children.filter((child) => {
+        if (child.id !== componentId) {
+          return true;
+        }
+        moved = child;
+        return false;
+      });
+
+      return {
+        ...component,
+        children: nextChildren,
+      };
+    }),
+    moved,
+  };
+}
+
+function insertRootComponent(
+  layout: TicketPanelLayout,
+  index: number,
+  component: TicketPanelComponent,
+) {
+  return insertAtIndex(layout, index, component);
+}
+
+function insertContainerChild(
+  layout: TicketPanelLayout,
+  parentId: string,
+  index: number,
+  component: TicketPanelContainerChild,
+) {
+  let hasInserted = false;
+
+  const nextLayout = layout.map((item) => {
+    if (item.type !== "container" || item.id !== parentId) {
+      return item;
+    }
+
+    hasInserted = true;
+    return {
+      ...item,
+      children: insertAtIndex(item.children, index, component),
+    };
+  });
+
+  return hasInserted ? nextLayout : layout;
+}
+
 function isSameDropSlot(left: DropSlot | null, right: DropSlot | null) {
   return (
     left?.parentId === right?.parentId &&
@@ -923,6 +1009,21 @@ function TicketMessageBuilder({
   const [emojiHighlightIndex, setEmojiHighlightIndex] = useState(0);
   const contentTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const functionalButtonCount = useMemo(() => countTicketPanelFunctionButtons(layout), [layout]);
+  const draggedComponent = useMemo(() => {
+    if (!dragState) {
+      return null;
+    }
+
+    if (dragState.kind === "root") {
+      return layout.find((component) => component.id === dragState.componentId) ?? null;
+    }
+
+    const parent = layout.find(
+      (component): component is TicketPanelContainerComponent =>
+        component.type === "container" && component.id === dragState.parentId,
+    );
+    return parent?.children.find((child) => child.id === dragState.componentId) ?? null;
+  }, [dragState, layout]);
   const hasFunctionalButton = functionalButtonCount > 0;
   const rootItems = useMemo(
     () => (hasFunctionalButton ? ROOT_ITEMS.filter((item) => item.value !== "button") : ROOT_ITEMS),
@@ -1182,12 +1283,20 @@ function TicketMessageBuilder({
   }, [commit, layout, updateContainerChildren]);
 
   const canDropAtSlot = useCallback((slot: DropSlot) => {
-    if (!dragState || disabled) return false;
-    if (dragState.kind === "root") {
-      return slot.parentId === null;
+    if (!dragState || disabled || !draggedComponent) return false;
+    if (slot.parentId === null) {
+      return true;
     }
-    return slot.parentId === dragState.parentId;
-  }, [disabled, dragState]);
+
+    const destinationContainer = layout.find(
+      (component) => component.type === "container" && component.id === slot.parentId,
+    );
+    if (!destinationContainer) {
+      return false;
+    }
+
+    return isContainerChildComponent(draggedComponent);
+  }, [disabled, dragState, draggedComponent, layout]);
 
   const getCardDropSlot = useCallback((scope: Scope, index: number, clientY: number, rect: DOMRect): DropSlot => ({
     parentId: scope.parentId,
@@ -1196,15 +1305,74 @@ function TicketMessageBuilder({
 
   const applyDropSlot = useCallback((slot: DropSlot) => {
     if (!dragState) return;
-    if (dragState.kind === "root" && slot.parentId === null) {
-      commit(reorderByIndex(layout, dragState.componentId, slot.index));
+    if (!canDropAtSlot(slot)) {
+      return;
     }
-    if (dragState.kind === "child" && slot.parentId && dragState.parentId === slot.parentId) {
-      updateContainerChildren(slot.parentId, (children) => reorderByIndex(children, dragState.componentId, slot.index));
+
+    let nextLayout = layout;
+
+    if (dragState.kind === "root") {
+      if (slot.parentId === null) {
+        nextLayout = reorderByIndex(layout, dragState.componentId, slot.index);
+      } else {
+        const extracted = extractRootComponent(layout, dragState.componentId);
+        if (!extracted.moved || !isContainerChildComponent(extracted.moved)) {
+          return;
+        }
+        nextLayout = insertContainerChild(
+          extracted.layout,
+          slot.parentId,
+          slot.index,
+          extracted.moved,
+        );
+      }
+    } else if (slot.parentId === dragState.parentId) {
+      if (!slot.parentId) {
+        return;
+      }
+      nextLayout = layout.map((component) =>
+        component.type === "container" && component.id === slot.parentId
+          ? {
+              ...component,
+              children: reorderByIndex(
+                component.children,
+                dragState.componentId,
+                slot.index,
+              ),
+            }
+          : component,
+      );
+    } else if (slot.parentId === null) {
+      const extracted = extractContainerChild(
+        layout,
+        dragState.parentId,
+        dragState.componentId,
+      );
+      if (!extracted.moved) {
+        return;
+      }
+      nextLayout = insertRootComponent(extracted.layout, slot.index, extracted.moved);
+    } else {
+      const extracted = extractContainerChild(
+        layout,
+        dragState.parentId,
+        dragState.componentId,
+      );
+      if (!extracted.moved) {
+        return;
+      }
+      nextLayout = insertContainerChild(
+        extracted.layout,
+        slot.parentId,
+        slot.index,
+        extracted.moved,
+      );
     }
+
+    commit(nextLayout);
     setActiveDropSlot(null);
     setDragState(null);
-  }, [commit, dragState, layout, updateContainerChildren]);
+  }, [canDropAtSlot, commit, dragState, layout]);
 
   const renderDropSlot = (
     slot: DropSlot,
@@ -1337,10 +1505,7 @@ function TicketMessageBuilder({
     index: number,
     nested = false,
   ) => {
-    const canDrop =
-      dragState &&
-      ((dragState.kind === "root" && !scope.parentId) ||
-        (dragState.kind === "child" && scope.parentId && dragState.parentId === scope.parentId));
+    const canDrop = Boolean(dragState);
     return (
       <div
         key={scopeKey(scope)}
@@ -1453,6 +1618,9 @@ function TicketMessageBuilder({
       (container.accentColor && !PRESET_ACCENT_COLORS.includes(container.accentColor)
         ? container.accentColor
         : "");
+    const emptyContainerDropSlot: DropSlot = { parentId: container.id, index: 0 };
+    const canDropIntoEmptyContainer = canDropAtSlot(emptyContainerDropSlot);
+    const isEmptyContainerDropActive = isSameDropSlot(activeDropSlot, emptyContainerDropSlot);
 
     return cardShell(
       container,
@@ -1608,11 +1776,44 @@ function TicketMessageBuilder({
             )}
           </div>
         ) : (
-          <div className="rounded-[22px] border border-dashed border-[#1E1E1E] bg-[#070707] px-[18px] py-[24px] text-center">
+          <div
+            onDragOver={(event) => {
+              if (!canDropIntoEmptyContainer) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              setActiveDropSlot((current) =>
+                isSameDropSlot(current, emptyContainerDropSlot)
+                  ? current
+                  : emptyContainerDropSlot,
+              );
+            }}
+            onDrop={(event) => {
+              if (!canDropIntoEmptyContainer) return;
+              event.preventDefault();
+              applyDropSlot(emptyContainerDropSlot);
+            }}
+            className={cn(
+              "rounded-[22px] border border-dashed bg-[#070707] px-[18px] py-[24px] text-center transition-colors duration-150",
+              isEmptyContainerDropActive
+                ? "border-[rgba(255,255,255,0.4)] bg-[#0A0A0A]"
+                : "border-[#1E1E1E]",
+            )}
+          >
             <p className="text-[14px] font-medium text-[#DADADA]">Container vazio</p>
             <p className="mt-[8px] text-[13px] leading-[1.55] text-[#717171]">
               Adicione conteudos, botoes, separadores ou menus dentro deste bloco para montar o embed.
             </p>
+            <div className="pointer-events-none mt-[14px] px-[12px]">
+              <div
+                className={cn(
+                  "rounded-full bg-white transition-all duration-150 ease-out",
+                  isEmptyContainerDropActive
+                    ? "opacity-100 shadow-[0_0_12px_rgba(255,255,255,0.34)]"
+                    : "opacity-0",
+                )}
+                style={{ height: isEmptyContainerDropActive ? 2 : 1 }}
+              />
+            </div>
           </div>
         )}
 

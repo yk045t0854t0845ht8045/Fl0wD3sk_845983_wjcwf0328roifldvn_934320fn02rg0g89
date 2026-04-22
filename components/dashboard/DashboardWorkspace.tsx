@@ -31,6 +31,7 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
+import { DashboardContentSkeleton } from "@/components/workspace/WorkspaceRouteLoading";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
@@ -53,6 +54,7 @@ import {
   storeCachedTeamsSnapshot,
 } from "@/lib/servers/serversWorkspaceClientCache";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
+import { useLatchedPendingKey } from "@/lib/ui/useLatchedPendingKey";
 import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 
 type DashboardWorkspaceProps = {
@@ -538,8 +540,22 @@ export function DashboardWorkspace({
     () => resolveDashboardViewFromPathname(pathname) ?? getDashboardViewById("home"),
     [pathname],
   );
+  const latchedPendingViewId = useLatchedPendingKey({
+    pendingKey: pendingViewId,
+    resolvedKey: currentView.id,
+  });
+  const displayView = useMemo(
+    () =>
+      latchedPendingViewId
+        ? getDashboardViewById(latchedPendingViewId as DashboardViewId)
+        : currentView,
+    [currentView, latchedPendingViewId],
+  );
   const highlightedViewId = pendingViewId ?? currentView.id;
   const hasWorkspaceAlert = Boolean(workspaceAlertMessage);
+  const hasResolvedContent = children !== null && children !== undefined;
+  const shouldShowDashboardLoading =
+    Boolean(latchedPendingViewId) || !hasResolvedContent;
 
   useNotificationEffect(teamsErrorMessage, {
     tone: "error",
@@ -670,8 +686,18 @@ export function DashboardWorkspace({
   }, [isBillingActive, isDomainsActive]);
 
   useEffect(() => {
-    setPendingViewId(null);
-  }, [pathname]);
+    if (!pendingViewId || pendingViewId !== currentView.id) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setPendingViewId(null);
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [currentView.id, pendingViewId]);
 
   const applyTeamsSnapshot = useCallback(
     (payload: TeamsApiResponse, preferredTeamId: number | null = null) => {
@@ -1651,7 +1677,8 @@ export function DashboardWorkspace({
     </div>
   );
 
-  const showPlaceholder = !currentView.isEmptyHome;
+  const showPlaceholder = !displayView.isEmptyHome;
+  const shouldShowDashboardPlaceholder = showPlaceholder && hasResolvedContent;
 
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
@@ -1730,17 +1757,21 @@ export function DashboardWorkspace({
                       Dashboard
                     </LandingGlowTag>
                     <h1 className="mt-[18px] bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-[1.02] font-normal tracking-[-0.05em] text-transparent md:text-[42px]">
-                      {currentView.title}
+                      {displayView.title}
                     </h1>
                     <p className="mt-[14px] max-w-[760px] text-[14px] leading-[1.55] text-[#7D7D7D] md:text-[15px]">
-                      {currentView.description}
+                      {displayView.description}
                     </p>
                   </div>
                 </div>
               </div>
             </LandingReveal>
 
-            {showPlaceholder ? (
+            {shouldShowDashboardLoading ? (
+              <LandingReveal delay={52} duration={240}>
+                <DashboardContentSkeleton />
+              </LandingReveal>
+            ) : shouldShowDashboardPlaceholder ? (
               <LandingReveal delay={52} duration={240}>
                 <div className={`mt-[22px] ${shellClass} px-[22px] py-[24px]`}>
                   <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[22px] py-[26px]">

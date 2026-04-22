@@ -3021,7 +3021,7 @@ export function ConfigStepFour({
   const [knownFlowPointsBalance, setKnownFlowPointsBalance] = useState(0);
   const [scheduledPlanChange, setScheduledPlanChange] =
     useState<ScheduledPlanChangeSummary | null>(null);
-  const [isPlanLoading, setIsPlanLoading] = useState(false);
+  const [isPlanLoading, setIsPlanLoading] = useState(true);
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
   const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
   const [pixTermsAccepted, setPixTermsAccepted] = useState(false);
@@ -3165,38 +3165,17 @@ export function ConfigStepFour({
     () => getAvailableBillingPeriodsForPlan(selectedPlanCode),
     [selectedPlanCode],
   );
-  const activeOrderPlanCode =
-    pixOrder?.planCode && isPlanCode(pixOrder.planCode) ? pixOrder.planCode : null;
-  const activeOrderBillingCycleDays =
-    typeof pixOrder?.planBillingCycleDays === "number" &&
-    Number.isFinite(pixOrder.planBillingCycleDays)
-      ? pixOrder.planBillingCycleDays
-      : null;
-  const doesActiveOrderMatchSelectedPlan =
-    activeOrderPlanCode !== null &&
-    activeOrderPlanCode === selectedPlanCode &&
-    activeOrderBillingCycleDays === resolvedPlan.billingCycleDays;
   const cardCooldownMessage = useMemo(
     () => formatCooldownMessage(cardClientCooldownRemainingSeconds),
     [cardClientCooldownRemainingSeconds],
   );
   const baseCheckoutAmount = useMemo(
-    () =>
-      doesActiveOrderMatchSelectedPlan && typeof pixOrder?.amount === "number"
-        ? pixOrder.amount
-        : selectedPlanChange.immediateSubtotalAmount,
-    [
-      doesActiveOrderMatchSelectedPlan,
-      pixOrder?.amount,
-      selectedPlanChange.immediateSubtotalAmount,
-    ],
+    () => selectedPlanChange.immediateSubtotalAmount,
+    [selectedPlanChange.immediateSubtotalAmount],
   );
   const checkoutCurrency = useMemo(
-    () =>
-      doesActiveOrderMatchSelectedPlan && pixOrder?.currency
-        ? pixOrder.currency
-        : resolvedPlan.currency || "BRL",
-    [doesActiveOrderMatchSelectedPlan, pixOrder?.currency, resolvedPlan.currency],
+    () => resolvedPlan.currency || "BRL",
+    [resolvedPlan.currency],
   );
   const activeDiscountPreview =
     discountPreview ||
@@ -4695,6 +4674,7 @@ export function ConfigStepFour({
         return;
       }
 
+      setIsPlanLoading(true);
       const nextBillingPeriodOptions = getAvailableBillingPeriodsForPlan(nextPlanCode);
       const nextBillingPeriodCode = nextBillingPeriodOptions.some(
         (period) => period.code === selectedBillingPeriodCode,
@@ -4770,6 +4750,7 @@ export function ConfigStepFour({
         return;
       }
 
+      setIsPlanLoading(true);
       const allowedBillingPeriods = getAvailableBillingPeriodsForPlan(selectedPlanCode);
       if (!allowedBillingPeriods.some((period) => period.code === nextBillingPeriodCode)) {
         return;
@@ -6776,84 +6757,73 @@ export function ConfigStepFour({
                     </div>
 
                     {shouldShowUpgradeCreditReview ? (
-                      <div className="rounded-[18px] border border-[rgba(99,165,255,0.22)] bg-[rgba(9,24,48,0.62)] px-[14px] py-[14px]">
-                        <div className="flex flex-col gap-[14px]">
-                          <div className="flex flex-wrap items-start justify-between gap-[10px]">
-                            <div>
-                              <p className="text-[14px] font-semibold text-[#EAF3FF]">
-                                Credito proporcional do plano atual
-                              </p>
-                              <p className="mt-[4px] text-[12px] leading-[1.55] text-[#AAC0DF]">
-                                A troca imediata usa so o saldo proporcional ainda disponivel no ciclo atual,
-                                sem inventar desconto fora da sua licenca.
-                              </p>
-                            </div>
-                            <span className="inline-flex min-h-[28px] items-center rounded-full bg-[rgba(99,165,255,0.14)] px-[12px] text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9BC5FF]">
-                              {shouldShowCoveredByCreditNotice ? "Troca coberta" : "Troca imediata"}
-                            </span>
-                          </div>
-
-                          <div className="grid gap-[8px] sm:grid-cols-3">
-                            <div className="rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] px-[12px] py-[10px]">
-                              <p className="text-[11px] uppercase tracking-[0.12em] text-[#7E96B7]">
-                                Dias usados
-                              </p>
-                              <p className="mt-[4px] text-[14px] font-semibold text-[#F5F5F5]">
-                                {currentCycleUsedDaysLabel}
-                              </p>
-                            </div>
-                            <div className="rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] px-[12px] py-[10px]">
-                              <p className="text-[11px] uppercase tracking-[0.12em] text-[#7E96B7]">
-                                Dias restantes
-                              </p>
-                              <p className="mt-[4px] text-[14px] font-semibold text-[#F5F5F5]">
-                                {currentCycleRemainingDaysLabel}
-                              </p>
-                            </div>
-                            <div className="rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.03)] px-[12px] py-[10px]">
-                              <p className="text-[11px] uppercase tracking-[0.12em] text-[#7E96B7]">
-                                Ciclo total
-                              </p>
-                              <p className="mt-[4px] text-[14px] font-semibold text-[#F5F5F5]">
-                                {currentCycleTotalDaysLabel}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="space-y-[10px]">
-                            <div className="flex items-center justify-between gap-[14px]">
-                              <span className="text-[#D6E4F8]">Plano atual no ciclo</span>
-                              <span className="font-medium text-[#F5F5F5]">{currentCycleAmountLabel}</span>
-                            </div>
-                            <div className="flex items-center justify-between gap-[14px]">
-                              <span className="text-[#D6E4F8]">Ja consumido neste ciclo</span>
-                              <span className="font-medium text-[#F5F5F5]">{currentConsumedAmountLabel}</span>
-                            </div>
-                            <div className="flex items-center justify-between gap-[14px]">
-                              <span className="text-[#D6E4F8]">Credito do plano atual</span>
-                              <span className="font-medium text-[#0ECF9C]">
-                                - {currentCreditAmountLabel}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between gap-[14px]">
-                              <span className="text-[#D6E4F8]">Cobertura do novo ciclo</span>
-                              <span className="font-medium text-[#0ECF9C]">{creditAppliedToTargetLabel}</span>
-                            </div>
-                            {selectedPlanChange.surplusCreditAmount > 0 ? (
-                              <div className="flex items-center justify-between gap-[14px]">
-                                <span className="text-[#D6E4F8]">Sobra que vai para FlowPoints</span>
-                                <span className="font-medium text-[#81B8FF]">{surplusCreditLabel}</span>
-                              </div>
-                            ) : null}
-                          </div>
-
-                          <p className="text-[12px] leading-[1.55] text-[#9DB4D4]">
-                            {shouldShowCoveredByCreditNotice
-                              ? "Essa troca fica com total em R$ 0,00 porque o credito proporcional cobriu o novo ciclo inteiro. Se sobrar valor, ele vai para a carteira FlowPoints."
-                              : "Depois desse credito proporcional, promocoes, vales e FlowPoints da carteira ainda podem reduzir mais o total final."}
+                      <>
+                        <div className="pt-[6px]">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#737373]">
+                            Credito proporcional do plano atual
+                          </p>
+                          <p className="mt-[6px] text-[12px] leading-[1.55] text-[#8D8D8D]">
+                            A troca imediata usa so o saldo proporcional ainda disponivel no ciclo atual, sem inventar desconto fora da sua licenca.
                           </p>
                         </div>
-                      </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Modo da troca</span>
+                          <span className="font-medium text-[#F5F5F5]">
+                            {shouldShowCoveredByCreditNotice ? "Troca coberta" : "Troca imediata"}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Dias usados</span>
+                          <span className="font-medium text-[#F5F5F5]">{currentCycleUsedDaysLabel}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Dias restantes</span>
+                          <span className="font-medium text-[#F5F5F5]">{currentCycleRemainingDaysLabel}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Ciclo total</span>
+                          <span className="font-medium text-[#F5F5F5]">{currentCycleTotalDaysLabel}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Plano atual no ciclo</span>
+                          <span className="font-medium text-[#F5F5F5]">{currentCycleAmountLabel}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Ja consumido neste ciclo</span>
+                          <span className="font-medium text-[#F5F5F5]">{currentConsumedAmountLabel}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Credito do plano atual</span>
+                          <span className="font-medium text-[#0ECF9C]">
+                            - {currentCreditAmountLabel}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-[14px]">
+                          <span className="text-[#DDDDDD]">Cobertura do novo ciclo</span>
+                          <span className="font-medium text-[#0ECF9C]">{creditAppliedToTargetLabel}</span>
+                        </div>
+
+                        {selectedPlanChange.surplusCreditAmount > 0 ? (
+                          <div className="flex items-center justify-between gap-[14px]">
+                            <span className="text-[#DDDDDD]">Sobra que vai para FlowPoints</span>
+                            <span className="font-medium text-[#81B8FF]">{surplusCreditLabel}</span>
+                          </div>
+                        ) : null}
+
+                        <p className="text-[12px] leading-[1.55] text-[#8D8D8D]">
+                          {shouldShowCoveredByCreditNotice
+                            ? "Essa troca fica com total em R$ 0,00 porque o credito proporcional cobriu o novo ciclo inteiro. Se sobrar valor, ele vai para a carteira FlowPoints."
+                            : "Depois desse credito proporcional, promocoes, vales e FlowPoints da carteira ainda podem reduzir mais o total final."}
+                        </p>
+                      </>
                     ) : null}
 
                     {activeDiscountPreview.coupon && activeDiscountPreview.coupon.amount > 0 ? (

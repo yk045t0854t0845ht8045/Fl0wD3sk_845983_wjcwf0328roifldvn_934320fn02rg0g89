@@ -63,6 +63,7 @@ import {
   CARD_PAYMENTS_DISABLED_MESSAGE,
   CARD_RECURRING_DISABLED_MESSAGE,
 } from "@/lib/payments/cardAvailability";
+import { isPlanCode, type PlanCode } from "@/lib/plans/catalog";
 import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 
 type ManagedServerStatus = "paid" | "expired" | "off" | "pending_payment";
@@ -327,7 +328,7 @@ declare global {
 }
 
 type PlanSettings = {
-  planCode: "pro";
+  planCode: PlanCode;
   monthlyAmount: number;
   currency: string;
   recurringEnabled: boolean;
@@ -367,6 +368,31 @@ type ServerSettingsEditorProps = {
   onClose: () => void;
   standalone?: boolean;
 };
+
+function normalizePlanCodeFromApi(value: unknown): PlanCode | null {
+  if (typeof value !== "string") return null;
+  const normalizedValue = value.trim().toLowerCase();
+  return isPlanCode(normalizedValue) ? normalizedValue : null;
+}
+
+function isFlowAiEligiblePlanCode(planCode: PlanCode | null) {
+  return planCode === "ultra" || planCode === "master";
+}
+
+function formatFlowAiPlanLabel(planCode: PlanCode | null) {
+  switch (planCode) {
+    case "basic":
+      return "Flow Basic";
+    case "pro":
+      return "Flow Pro";
+    case "ultra":
+      return "Flow Ultra";
+    case "master":
+      return "Flow Master";
+    default:
+      return "plano atual";
+  }
+}
 
 const TAB_INDEX: Record<EditorTab, number> = {
   settings: 0,
@@ -1863,6 +1889,10 @@ export function ServerSettingsEditor({
   const [aiTone, setAiTone] = useState("formal");
   const [aiEnabled, setAiEnabled] = useState(false);
   const [isAiRulesModalOpen, setIsAiRulesModalOpen] = useState(false);
+  const [isFlowAiUpgradeModalOpen, setIsFlowAiUpgradeModalOpen] = useState(false);
+  const [flowAiPlanCode, setFlowAiPlanCode] = useState<PlanCode | null>(null);
+  const [isFlowAiPlanLoading, setIsFlowAiPlanLoading] = useState(true);
+  const [hasFlowAiPlanCheckError, setHasFlowAiPlanCheckError] = useState(false);
   const [aiRulesDraft, setAiRulesDraft] = useState("");
   const [panelLayout, setPanelLayout] = useState<TicketPanelLayout>(
     createDefaultTicketPanelLayout(),
@@ -2050,6 +2080,7 @@ export function ServerSettingsEditor({
       isAddMethodModalOpen ||
       isWelcomeActivationModalOpen ||
       isAntiLinkActivationModalOpen ||
+      isFlowAiUpgradeModalOpen ||
       Boolean(activeSecurityLogModalEvent),
   );
 
@@ -2985,6 +3016,48 @@ export function ServerSettingsEditor({
     };
   }, [guildId, isViewerOnly, showServerFinancialPanels]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadFlowAiPlan() {
+      setIsFlowAiPlanLoading(true);
+      setHasFlowAiPlanCheckError(false);
+
+      try {
+        const response = await fetch(
+          `/api/auth/me/servers/plans?guildId=${guildId}&includePaymentMethods=0`,
+          { cache: "no-store" },
+        );
+        const payload = (await response.json()) as PlanApiResponse;
+
+        if (!mounted) return;
+
+        const nextPlanCode = normalizePlanCodeFromApi(payload.plan?.planCode);
+        if (!response.ok || !payload.ok || !nextPlanCode) {
+          throw new Error(
+            payload.message || "Falha ao verificar o plano deste servidor.",
+          );
+        }
+
+        setFlowAiPlanCode(nextPlanCode);
+      } catch {
+        if (!mounted) return;
+        setFlowAiPlanCode(null);
+        setHasFlowAiPlanCheckError(true);
+      } finally {
+        if (mounted) {
+          setIsFlowAiPlanLoading(false);
+        }
+      }
+    }
+
+    void loadFlowAiPlan();
+
+    return () => {
+      mounted = false;
+    };
+  }, [guildId]);
+
   const serverMap = useMemo(() => {
     const map = new Map<string, { guildName: string; iconUrl: string | null }>();
     for (const server of allServers) {
@@ -3392,6 +3465,7 @@ export function ServerSettingsEditor({
   const flowAiHeaderDescription = aiEnabled
     ? `${flowAiCompletedCount}/${flowAiChecklist.length} pontos principais configurados.`
     : "Ative o modulo para configurar identidade, tom e diretrizes.";
+  const flowAiPlanLabel = formatFlowAiPlanLabel(flowAiPlanCode);
 
   const canSaveWelcome = Boolean(
     !settingsReadOnly &&
@@ -5550,7 +5624,31 @@ export function ServerSettingsEditor({
                                 checked={aiEnabled}
                                 onChange={() => {
                                   if (isSaving || settingsReadOnly) return;
-                                  setAiEnabled((current) => !current);
+                                  if (aiEnabled) {
+                                    setAiEnabled(false);
+                                    return;
+                                  }
+
+                                  if (isFlowAiPlanLoading) {
+                                    setErrorMessage(
+                                      "Aguarde alguns instantes enquanto verificamos o plano deste servidor.",
+                                    );
+                                    return;
+                                  }
+
+                                  if (hasFlowAiPlanCheckError || !flowAiPlanCode) {
+                                    setErrorMessage(
+                                      "Nao foi possivel verificar o plano agora. Tente novamente em alguns instantes.",
+                                    );
+                                    return;
+                                  }
+
+                                  if (!isFlowAiEligiblePlanCode(flowAiPlanCode)) {
+                                    setIsFlowAiUpgradeModalOpen(true);
+                                    return;
+                                  }
+
+                                  setAiEnabled(true);
                                 }}
                                 disabled={isSaving || settingsReadOnly}
                                 ariaLabel="Ativar ou desativar modulo FlowAI"
@@ -7985,6 +8083,99 @@ export function ServerSettingsEditor({
                       />
                       <span className={`relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-white ${aiControlsDisabled ? "opacity-70" : ""}`}>
                         Concluir e Salvar
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {isPortalMounted && isFlowAiUpgradeModalOpen ? createPortal(
+        <div className="fixed inset-y-0 left-0 right-0 z-[2600] isolate overflow-y-auto overscroll-contain xl:left-[318px]">
+          <button
+            type="button"
+            aria-label="Fechar modal do FlowAI"
+            className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[7px]"
+            onClick={() => setIsFlowAiUpgradeModalOpen(false)}
+          />
+
+          <div className="relative z-[10] min-h-full px-[20px] py-[32px] md:px-6 lg:px-8 xl:pl-[40px] xl:pr-[42px]">
+            <div className="mx-auto flex min-h-[calc(100vh-64px)] w-full max-w-[1220px] items-center justify-center">
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Atualizar plano para liberar o FlowAI"
+                className="flowdesk-stage-fade relative w-full max-w-[720px] overflow-hidden rounded-[32px] bg-transparent px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
+              >
+                <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[32px] border border-[#0E0E0E]" />
+                <span aria-hidden="true" className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[32px]" />
+                <span aria-hidden="true" className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[32px]" />
+                <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+
+                <div className="relative z-10">
+                  <div className="flex flex-col gap-[14px] sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <LandingGlowTag className="px-[18px]">
+                        FlowAI Premium
+                      </LandingGlowTag>
+
+                      <div className="mt-[18px]">
+                        <h2 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[30px] leading-[0.98] font-normal tracking-[-0.05em] text-transparent sm:text-[36px]">
+                          Atualize para liberar o FlowAI
+                        </h2>
+                        <p className="mt-[14px] max-w-[560px] text-[14px] leading-[1.62] text-[#787878]">
+                          O modulo FlowAI fica disponivel apenas nos planos Flow Ultra e Flow Master. Para ativar este recurso no servidor, atualize o plano vinculado a esta conta.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsFlowAiUpgradeModalOpen(false)}
+                      className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+                      aria-label="Fechar modal"
+                    >
+                      <span className="text-[18px] leading-none">x</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-[28px] rounded-[24px] border border-[#161616] bg-[#090909] px-[18px] py-[18px]">
+                    <p className="text-[12px] uppercase tracking-[0.16em] text-[#5F5F5F]">
+                      Plano detectado
+                    </p>
+                    <p className="mt-[8px] text-[18px] font-medium tracking-[-0.03em] text-[#D1D1D1]">
+                      {flowAiPlanLabel}
+                    </p>
+                    <p className="mt-[10px] text-[13px] leading-[1.6] text-[#6F6F6F]">
+                      Se sua conta estiver no {flowAiPlanLabel}, sera necessario atualizar para Flow Ultra ou Flow Master antes de ligar o FlowAI neste servidor.
+                    </p>
+                  </div>
+
+                  <div className="mt-[32px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setIsFlowAiUpgradeModalOpen(false)}
+                      className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1]"
+                    >
+                      Agora nao
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.location.assign("/servers/plans?reason=att-plan");
+                      }}
+                      className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="absolute inset-0 rounded-[12px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+                      />
+                      <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+                        Atualizar plano
                       </span>
                     </button>
                   </div>

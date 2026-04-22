@@ -185,6 +185,40 @@ function WorkspaceSidebarSkeleton() {
   );
 }
 
+export function DashboardContentSkeleton() {
+  return (
+    <div className="mt-[22px] rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] px-[22px] py-[24px] shadow-[0_24px_80px_rgba(0,0,0,0.38)]">
+      <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[22px] py-[26px]">
+        <SkeletonBar width={82} height={12} className="rounded-full" />
+        <SkeletonBar width="42%" height={24} className="mt-[14px] max-w-full rounded-[14px]" />
+        <SkeletonBar width="62%" height={14} className="mt-[12px] max-w-full rounded-full" />
+      </div>
+
+      <div className="mt-[18px] grid gap-[12px] md:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 3 }, (_, index) => (
+          <div
+            key={index}
+            className="rounded-[22px] border border-[#141414] bg-[#090909] p-[18px]"
+          >
+            <SkeletonBar width={42} height={42} className="rounded-[14px]" />
+            <SkeletonBar width="58%" height={16} className="mt-[18px] max-w-full rounded-full" />
+            <SkeletonBar width="78%" height={12} className="mt-[10px] max-w-full rounded-full" />
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-[18px] rounded-[22px] border border-[#141414] bg-[#090909] px-[20px] py-[20px]">
+        <div className="space-y-[12px]">
+          <SkeletonBar width="34%" height={16} className="max-w-full rounded-full" />
+          <SkeletonBar width="100%" height={54} className="rounded-[16px]" />
+          <SkeletonBar width="100%" height={54} className="rounded-[16px]" />
+          <SkeletonBar width="76%" height={14} className="max-w-full rounded-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashboardMainSkeleton() {
   return (
     <section className="min-w-0">
@@ -197,35 +231,7 @@ function DashboardMainSkeleton() {
         </div>
       </div>
 
-      <div className="mt-[22px] rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] px-[22px] py-[24px] shadow-[0_24px_80px_rgba(0,0,0,0.38)]">
-        <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[22px] py-[26px]">
-          <SkeletonBar width={82} height={12} className="rounded-full" />
-          <SkeletonBar width="42%" height={24} className="mt-[14px] max-w-full rounded-[14px]" />
-          <SkeletonBar width="62%" height={14} className="mt-[12px] max-w-full rounded-full" />
-        </div>
-
-        <div className="mt-[18px] grid gap-[12px] md:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }, (_, index) => (
-            <div
-              key={index}
-              className="rounded-[22px] border border-[#141414] bg-[#090909] p-[18px]"
-            >
-              <SkeletonBar width={42} height={42} className="rounded-[14px]" />
-              <SkeletonBar width="58%" height={16} className="mt-[18px] max-w-full rounded-full" />
-              <SkeletonBar width="78%" height={12} className="mt-[10px] max-w-full rounded-full" />
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-[18px] rounded-[22px] border border-[#141414] bg-[#090909] px-[20px] py-[20px]">
-          <div className="space-y-[12px]">
-            <SkeletonBar width="34%" height={16} className="max-w-full rounded-full" />
-            <SkeletonBar width="100%" height={54} className="rounded-[16px]" />
-            <SkeletonBar width="100%" height={54} className="rounded-[16px]" />
-            <SkeletonBar width="76%" height={14} className="max-w-full rounded-full" />
-          </div>
-        </div>
-      </div>
+      <DashboardContentSkeleton />
     </section>
   );
 }
