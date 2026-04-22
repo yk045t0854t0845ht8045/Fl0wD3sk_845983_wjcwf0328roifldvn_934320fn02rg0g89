@@ -38,6 +38,7 @@ import {
 import { finalizeDowngradeEnforcementAfterApprovedOrder } from "@/lib/plans/downgradeEnforcement";
 import { licenseGuildForUser } from "@/lib/plans/planGuilds";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 export type GuildPlanSettingsRecord = {
   plan_code: PlanCode;
@@ -249,7 +250,7 @@ function isCurrentlyActivePlanState(userPlanState: UserPlanStateRecord | null) {
   }
 
   const expiresAtMs = userPlanState.expires_at
-    ? Date.parse(userPlanState.expires_at)
+    ? parseUtcTimestampMs(userPlanState.expires_at)
     : Number.NaN;
   return !Number.isFinite(expiresAtMs) || Date.now() <= expiresAtMs;
 }
@@ -723,7 +724,7 @@ function resolveActivePlanStateStatus(planCode: PlanCode, expiresAt: string | nu
     return planCode === "basic" ? "trial" : "active";
   }
 
-  const expiresAtMs = Date.parse(expiresAt);
+  const expiresAtMs = parseUtcTimestampMs(expiresAt);
   if (!Number.isFinite(expiresAtMs)) {
     return planCode === "basic" ? "trial" : "active";
   }
@@ -753,10 +754,7 @@ async function createPaymentOrderEventSafe(
 }
 
 function normalizeValidIso(value: string | null | undefined) {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return null;
-  return new Date(parsed).toISOString();
+  return normalizeUtcTimestampIso(value);
 }
 
 export async function getGuildPlanSettingsRecord(userId: number, guildId: string) {
@@ -1022,7 +1020,7 @@ export async function resolveEffectivePlanSelection(input: {
       ? userPlanState.plan_code
       : null;
   const scheduledChangeEffectiveAtMs = scheduledChange?.effective_at
-    ? Date.parse(scheduledChange.effective_at)
+    ? parseUtcTimestampMs(scheduledChange.effective_at)
     : Number.NaN;
   const shouldPreferScheduledChange =
     !!scheduledChange &&

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { invalidatePaymentOrderQueryCaches } from "@/lib/payments/orderQueryCache";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 export type PaymentOrderCheckoutLinkRecord = {
   id: number;
@@ -100,7 +101,7 @@ function safeTimingEqual(left: string, right: string) {
 
 function isCheckoutLinkExpired(value: string | null | undefined) {
   if (!value) return true;
-  const timestamp = Date.parse(value);
+  const timestamp = parseUtcTimestampMs(value);
   if (!Number.isFinite(timestamp)) return true;
   return Date.now() > timestamp;
 }

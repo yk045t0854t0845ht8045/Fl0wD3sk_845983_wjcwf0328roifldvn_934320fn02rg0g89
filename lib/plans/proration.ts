@@ -1,6 +1,7 @@
 import { PLAN_ORDER, type PlanCode, type PlanPricingDefinition } from "@/lib/plans/catalog";
 import { resolveEffectivePlanBillingCycleDays } from "@/lib/plans/cycle";
 import type { UserPlanStateRecord } from "@/lib/plans/state";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -47,7 +48,7 @@ export function resolvePlanUpgradeProration(input: {
     return null;
   }
 
-  const currentExpiresAtMs = Date.parse(input.userPlanState.expires_at || "");
+  const currentExpiresAtMs = parseUtcTimestampMs(input.userPlanState.expires_at || "");
   if (!Number.isFinite(currentExpiresAtMs)) {
     return null;
   }

@@ -3,6 +3,7 @@ import {
   BETA_COUPON_CODE,
   canApplyBetaProgramToSelection,
 } from "@/lib/payments/betaProgram";
+import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
 type PaymentCouponRecord = {
   id: number;
@@ -61,14 +62,14 @@ function isDateActive(startsAt: string | null, expiresAt: string | null) {
   const now = Date.now();
 
   if (startsAt) {
-    const startsAtMs = Date.parse(startsAt);
+    const startsAtMs = parseUtcTimestampMs(startsAt);
     if (Number.isFinite(startsAtMs) && startsAtMs > now) {
       return false;
     }
   }
 
   if (expiresAt) {
-    const expiresAtMs = Date.parse(expiresAt);
+    const expiresAtMs = parseUtcTimestampMs(expiresAt);
     if (Number.isFinite(expiresAtMs) && expiresAtMs <= now) {
       return false;
     }

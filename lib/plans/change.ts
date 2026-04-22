@@ -8,6 +8,7 @@ import { resolveActivePlanCyclePricing } from "@/lib/plans/activePlanPricing";
 import { resolvePlanCycleMetrics } from "@/lib/plans/cycleMetrics";
 import { resolveEffectivePlanBillingCycleDays } from "@/lib/plans/cycle";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import type { UserPlanStateRecord } from "@/lib/plans/state";
 
 export type UserPlanFlowPointsBalanceRecord = {
@@ -127,9 +128,7 @@ function parseUnknownNumeric(value: unknown, fallback = 0) {
 }
 
 function normalizeIsoOrNull(value: string | null | undefined) {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+  return normalizeUtcTimestampIso(value);
 }
 
 function planTierIndex(planCode: PlanCode) {
@@ -144,7 +143,7 @@ function isActivePlanState(userPlanState: UserPlanStateRecord | null, nowMs = Da
   }
 
   const expiresAtMs = userPlanState.expires_at
-    ? Date.parse(userPlanState.expires_at)
+    ? parseUtcTimestampMs(userPlanState.expires_at)
     : Number.NaN;
   return !Number.isFinite(expiresAtMs) || nowMs <= expiresAtMs;
 }
@@ -221,7 +220,7 @@ export function resolveRemainingPlanCredit(input: {
   }
 
   const expiresAtMs = userPlanState.expires_at
-    ? Date.parse(userPlanState.expires_at)
+    ? parseUtcTimestampMs(userPlanState.expires_at)
     : Number.NaN;
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
     return {
