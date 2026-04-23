@@ -126,10 +126,12 @@ type ServersApiResponse = {
 
 type TeamsApiResponse = {
   ok: boolean;
+  conflict?: boolean;
   message?: string;
   teams?: UserTeam[];
   pendingInvites?: PendingTeamInvite[];
   createdTeamId?: number;
+  conflictingGuildIds?: string[];
 };
 
 type SavedPanelAccount = {
@@ -2103,8 +2105,18 @@ export function ServersWorkspace({
     [servers],
   );
   const availableTeamServerOptions = useMemo(
-    () => teamServerOptions.filter((server) => !linkedGuildIdsInTeams.has(server.guildId)),
+    () =>
+      teamServerOptions.filter(
+        (server) =>
+          server.canManage &&
+          !server.isLinkedToTeam &&
+          !linkedGuildIdsInTeams.has(server.guildId),
+      ),
     [linkedGuildIdsInTeams, teamServerOptions],
+  );
+  const availableTeamServerIdSet = useMemo(
+    () => new Set(availableTeamServerOptions.map((server) => server.guildId)),
+    [availableTeamServerOptions],
   );
   const visibleServers = useMemo(() => {
     if (!selectedTeam) return servers;
@@ -2296,7 +2308,6 @@ export function ServersWorkspace({
       [
         "/dashboard",
         "/account",
-        "/discord/link",
         "/servers",
         "/servers/plans",
       ],
@@ -2639,6 +2650,13 @@ export function ServersWorkspace({
     setIsCreateTeamModalOpen(true);
   }, [resetCreateTeamForm]);
 
+  useEffect(() => {
+    setCreateTeamServerIds((current) => {
+      const next = current.filter((guildId) => availableTeamServerIdSet.has(guildId));
+      return next.length === current.length ? current : next;
+    });
+  }, [availableTeamServerIdSet]);
+
   const handleToggleCreateTeamServer = useCallback((guildId: string) => {
     setCreateTeamServerIds((current) =>
       current.includes(guildId)
@@ -2695,6 +2713,25 @@ export function ServersWorkspace({
 
   const handleCreateTeam = useCallback(async () => {
     if (isCreatingTeam) return;
+    const validSelectedGuildIds = createTeamServerIds.filter((guildId) =>
+      availableTeamServerIdSet.has(guildId),
+    );
+
+    if (!validSelectedGuildIds.length) {
+      setTeamActionError(
+        "Os servidores escolhidos nao estao mais disponiveis para nova equipe. Revise a selecao.",
+      );
+      return;
+    }
+
+    if (validSelectedGuildIds.length !== createTeamServerIds.length) {
+      setCreateTeamServerIds(validSelectedGuildIds);
+      setTeamActionError(
+        "Alguns servidores selecionados ficaram indisponiveis. Revise a lista antes de criar a equipe.",
+      );
+      return;
+    }
+
     setIsCreatingTeam(true);
     setTeamActionError(null);
     setTeamActionMessage(null);
@@ -2708,7 +2745,7 @@ export function ServersWorkspace({
         body: JSON.stringify({
           name: createTeamName,
           iconKey: createTeamIconKey,
-          guildIds: createTeamServerIds,
+          guildIds: validSelectedGuildIds,
           memberDiscordIds: createTeamMemberIds,
         }),
       });
@@ -2716,6 +2753,21 @@ export function ServersWorkspace({
       const payload = (await response.json()) as TeamsApiResponse;
 
       if (!response.ok || !payload.ok) {
+        if (payload.teams || payload.pendingInvites) {
+          applyTeamsSnapshot(payload);
+        }
+
+        if (Array.isArray(payload.conflictingGuildIds) && payload.conflictingGuildIds.length) {
+          const conflictingGuildIdSet = new Set(payload.conflictingGuildIds);
+          setCreateTeamServerIds((current) =>
+            current.filter((guildId) => !conflictingGuildIdSet.has(guildId)),
+          );
+        }
+
+        if (payload.conflict || (Array.isArray(payload.conflictingGuildIds) && payload.conflictingGuildIds.length)) {
+          void requestServersReload({ silent: true });
+        }
+
         throw new Error(payload.message || "Nao foi possivel criar a equipe.");
       }
 
@@ -2745,8 +2797,10 @@ export function ServersWorkspace({
     createTeamIconKey,
     createTeamMemberIds,
     createTeamServerIds,
+    availableTeamServerIdSet,
     isCreatingTeam,
     resetCreateTeamForm,
+    requestServersReload,
   ]);
 
   const handleAcceptTeamInvite = useCallback(

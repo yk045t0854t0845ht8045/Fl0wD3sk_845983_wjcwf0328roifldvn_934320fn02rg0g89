@@ -386,7 +386,6 @@ export function AccountWorkspace({
         ),
         "/servers",
         "/dashboard",
-        "/discord/link",
       ],
       {
         router,

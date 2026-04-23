@@ -98,10 +98,12 @@ type CreateTeamStep = "name" | "servers" | "members";
 
 type TeamsApiResponse = {
   ok: boolean;
+  conflict?: boolean;
   message?: string;
   teams?: UserTeam[];
   pendingInvites?: PendingTeamInvite[];
   createdTeamId?: number;
+  conflictingGuildIds?: string[];
 };
 
 const sidebarShellClass =
@@ -610,8 +612,18 @@ export function DashboardWorkspace({
     [servers],
   );
   const availableTeamServerOptions = useMemo(
-    () => teamServerOptions.filter((server) => !linkedGuildIdsInTeams.has(server.guildId)),
+    () =>
+      teamServerOptions.filter(
+        (server) =>
+          server.canManage &&
+          !server.isLinkedToTeam &&
+          !linkedGuildIdsInTeams.has(server.guildId),
+      ),
     [linkedGuildIdsInTeams, teamServerOptions],
+  );
+  const availableTeamServerIdSet = useMemo(
+    () => new Set(availableTeamServerOptions.map((server) => server.guildId)),
+    [availableTeamServerOptions],
   );
   const filteredPrimaryItems = PRIMARY_ITEMS.filter((item) =>
     !normalizedSidebarSearch || normalizeSearchText(item.label).includes(normalizedSidebarSearch),
@@ -771,6 +783,13 @@ export function DashboardWorkspace({
   }, [initialServers, workspaceCacheKey]);
 
   useEffect(() => {
+    setCreateTeamServerIds((current) => {
+      const next = current.filter((guildId) => availableTeamServerIdSet.has(guildId));
+      return next.length === current.length ? current : next;
+    });
+  }, [availableTeamServerIdSet]);
+
+  useEffect(() => {
     if (initialTeams !== null) {
       return;
     }
@@ -824,7 +843,6 @@ export function DashboardWorkspace({
         "/servers",
         "/servers/plans",
         "/account",
-        "/discord/link",
       ],
       {
         router,
@@ -1037,6 +1055,25 @@ export function DashboardWorkspace({
 
   const handleCreateTeam = useCallback(async () => {
     if (isCreatingTeam) return;
+    const validSelectedGuildIds = createTeamServerIds.filter((guildId) =>
+      availableTeamServerIdSet.has(guildId),
+    );
+
+    if (!validSelectedGuildIds.length) {
+      setTeamActionError(
+        "Os servidores escolhidos nao estao mais disponiveis para nova equipe. Revise a selecao.",
+      );
+      return;
+    }
+
+    if (validSelectedGuildIds.length !== createTeamServerIds.length) {
+      setCreateTeamServerIds(validSelectedGuildIds);
+      setTeamActionError(
+        "Alguns servidores selecionados ficaram indisponiveis. Revise a lista antes de criar a equipe.",
+      );
+      return;
+    }
+
     setIsCreatingTeam(true);
     setTeamActionError(null);
     setTeamActionMessage(null);
@@ -1050,7 +1087,7 @@ export function DashboardWorkspace({
         body: JSON.stringify({
           name: createTeamName,
           iconKey: createTeamIconKey,
-          guildIds: createTeamServerIds,
+          guildIds: validSelectedGuildIds,
           memberDiscordIds: createTeamMemberIds,
         }),
       });
@@ -1058,6 +1095,41 @@ export function DashboardWorkspace({
       const payload = (await response.json()) as TeamsApiResponse;
 
       if (!response.ok || !payload.ok) {
+        if (payload.teams || payload.pendingInvites) {
+          applyTeamsSnapshot(payload);
+        }
+
+        if (Array.isArray(payload.conflictingGuildIds) && payload.conflictingGuildIds.length) {
+          const conflictingGuildIdSet = new Set(payload.conflictingGuildIds);
+          setCreateTeamServerIds((current) =>
+            current.filter((guildId) => !conflictingGuildIdSet.has(guildId)),
+          );
+        }
+
+        if (payload.conflict || (Array.isArray(payload.conflictingGuildIds) && payload.conflictingGuildIds.length)) {
+          void (async () => {
+            try {
+              const refreshResponse = await fetch("/api/auth/me/servers", {
+                cache: "no-store",
+              });
+              const refreshPayload = (await refreshResponse.json()) as {
+                ok?: boolean;
+                servers?: ManagedServer[];
+              };
+
+              if (!refreshResponse.ok || !refreshPayload.ok) {
+                return;
+              }
+
+              const nextServers = refreshPayload.servers || [];
+              storeCachedManagedServers(workspaceCacheKey, nextServers);
+              setServers(nextServers);
+            } catch {
+              // noop
+            }
+          })();
+        }
+
         throw new Error(payload.message || "Nao foi possivel criar a equipe.");
       }
 
@@ -1087,8 +1159,10 @@ export function DashboardWorkspace({
     createTeamMemberIds,
     createTeamName,
     createTeamServerIds,
+    availableTeamServerIdSet,
     isCreatingTeam,
     resetCreateTeamForm,
+    workspaceCacheKey,
   ]);
 
   const handleAcceptTeamInvite = useCallback(

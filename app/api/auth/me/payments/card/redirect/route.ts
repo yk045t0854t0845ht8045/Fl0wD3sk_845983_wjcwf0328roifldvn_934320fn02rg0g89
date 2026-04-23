@@ -6,7 +6,6 @@ import {
   resolveMercadoPagoHostedCheckoutUrl,
 } from "@/lib/payments/mercadoPago";
 import {
-  CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
   hasCheckoutAmountMismatch,
   normalizeExpectedCheckoutAmount,
 } from "@/lib/payments/checkoutConsistency";
@@ -20,6 +19,7 @@ import {
 } from "@/lib/payments/checkoutLinkSecurity";
 import {
   getLatestApprovedLicenseCoverageForGuild,
+  buildCheckoutAmountMismatchBody,
   getLatestOrderForUserAndGuild,
   createDraftOrderForCheckout,
   reuseDraftOrderForCheckout,
@@ -453,10 +453,14 @@ export async function POST(request: Request) {
           });
 
           return respond(
-            {
-              ok: false,
-              message: CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
-            },
+            buildCheckoutAmountMismatchBody({
+              expectedTotalAmount,
+              actualAmount: amount,
+              pricing,
+              flowPointsApplied: flowPointsPreview.appliedAmount,
+              flowPointsBalance: checkoutPlan.flowPointsBalance,
+              flowPointsBalanceAfter: flowPointsPreview.nextBalanceAmount,
+            }),
             { status: 409 },
           );
         }

@@ -42,7 +42,10 @@ import {
   encryptPaymentSensitiveValue,
   resolvePaymentDocumentLast4,
 } from "@/lib/payments/paymentPii";
-import { resolveDiscountPricing } from "@/lib/payments/discountPricing";
+import {
+  resolveDiscountPricing,
+  type DiscountPricingPreview,
+} from "@/lib/payments/discountPricing";
 import {
   ensureCheckoutAccessTokenForOrder,
   PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS,
@@ -572,6 +575,46 @@ export function buildCheckoutTransitionProviderPayload(input: {
       flowPointsGranted: input.flowPointsGranted,
       scheduledChangeId: input.scheduledChangeId,
     }),
+  };
+}
+
+export function buildCheckoutAmountMismatchBody(input: {
+  expectedTotalAmount: number | null;
+  actualAmount: number;
+  pricing: DiscountPricingPreview;
+  flowPointsApplied: number;
+  flowPointsBalance: number;
+  flowPointsBalanceAfter: number;
+}) {
+  return {
+    ok: false as const,
+    checkoutAmountChanged: true as const,
+    message: CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
+    expectedTotalAmount: input.expectedTotalAmount,
+    actualTotalAmount: roundPaymentCurrencyAmount(input.actualAmount),
+    checkoutPreview: {
+      baseAmount: roundPaymentCurrencyAmount(input.pricing.baseAmount),
+      currency: input.pricing.currency,
+      coupon: input.pricing.coupon
+        ? {
+            ...input.pricing.coupon,
+            amount: roundPaymentCurrencyAmount(input.pricing.coupon.amount),
+          }
+        : null,
+      giftCard: input.pricing.giftCard
+        ? {
+            ...input.pricing.giftCard,
+            amount: roundPaymentCurrencyAmount(input.pricing.giftCard.amount),
+          }
+        : null,
+      subtotalAmount: roundPaymentCurrencyAmount(input.pricing.subtotalAmount),
+      totalAmount: roundPaymentCurrencyAmount(input.actualAmount),
+      flowPoints: {
+        appliedAmount: roundPaymentCurrencyAmount(input.flowPointsApplied),
+        balanceBefore: roundPaymentCurrencyAmount(input.flowPointsBalance),
+        balanceAfter: roundPaymentCurrencyAmount(input.flowPointsBalanceAfter),
+      },
+    },
   };
 }
 
@@ -1917,10 +1960,14 @@ export async function POST(request: Request) {
       });
 
       return respond(
-        {
-          ok: false,
-          message: CHECKOUT_AMOUNT_MISMATCH_MESSAGE,
-        },
+        buildCheckoutAmountMismatchBody({
+          expectedTotalAmount,
+          actualAmount: amount,
+          pricing,
+          flowPointsApplied: flowPointsPreview.appliedAmount,
+          flowPointsBalance: checkoutPlan.flowPointsBalance,
+          flowPointsBalanceAfter: flowPointsPreview.nextBalanceAmount,
+        }),
         { status: 409 },
       );
     }

@@ -87,6 +87,35 @@ function buildCreatedTeamFallback(input: {
   } satisfies UserTeam;
 }
 
+async function buildTeamConflictResponse(input: {
+  authUserId: number;
+  discordUserId: string | null;
+  message: string;
+  conflictingGuildIds?: string[];
+}) {
+  const payload = await getUserTeamsSnapshotForUser({
+    authUserId: input.authUserId,
+    discordUserId: input.discordUserId,
+  }).catch(() => ({
+    teams: [],
+    pendingInvites: [],
+  }));
+
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      {
+        ok: false,
+        conflict: true,
+        message: input.message,
+        teams: payload.teams || [],
+        pendingInvites: payload.pendingInvites || [],
+        conflictingGuildIds: input.conflictingGuildIds || [],
+      },
+      { status: 200 },
+    ),
+  );
+}
+
 export async function GET() {
   try {
     const authSession = await getCurrentAuthSessionFromCookie();
@@ -192,11 +221,14 @@ export async function POST(request: Request) {
     const guildIds = normalizeStringArray(body.guildIds);
     const memberDiscordIds = normalizeStringArray(body.memberDiscordIds);
     const allowedGuildIds = new Set<string>();
+    let validatedGuildIds: string[] = [];
+    let selectedManagedServersLoaded = false;
 
     try {
       const managedServers = await getManagedServersForCurrentSession();
+      selectedManagedServersLoaded = true;
       managedServers
-        .filter((server) => server.canManage)
+        .filter((server) => server.canManage && !server.isLinkedToTeam)
         .forEach((server) => allowedGuildIds.add(server.guildId));
     } catch {
       // Fallback DB-only para nao matar a criacao da equipe se a sync ao vivo falhar.
@@ -214,19 +246,29 @@ export async function POST(request: Request) {
       }
     }
 
-    const validatedGuildIds = guildIds.filter((guildId) => allowedGuildIds.has(guildId));
+    validatedGuildIds = guildIds.filter((guildId) => allowedGuildIds.has(guildId));
+    const conflictingGuildIds = guildIds.filter(
+      (guildId) => !allowedGuildIds.has(guildId),
+    );
+
+    if (selectedManagedServersLoaded && conflictingGuildIds.length) {
+      return await buildTeamConflictResponse({
+        authUserId: authSession.user.id,
+        discordUserId: authSession.user.discord_user_id,
+        message:
+          "Um ou mais servidores escolhidos nao podem mais ser vinculados a uma nova equipe. Revise a lista e tente novamente.",
+        conflictingGuildIds,
+      });
+    }
 
     if (!validatedGuildIds.length) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          {
-            ok: false,
-            message:
-              "Os servidores selecionados nao estao mais disponiveis para esta equipe. Atualize a lista e tente novamente.",
-          },
-          { status: 409 },
-        ),
-      );
+      return await buildTeamConflictResponse({
+        authUserId: authSession.user.id,
+        discordUserId: authSession.user.discord_user_id,
+        message:
+          "Os servidores selecionados nao estao mais disponiveis para esta equipe. Atualize a lista e tente novamente.",
+        conflictingGuildIds,
+      });
     }
 
     const createdTeamId = await createUserTeamForUser({
@@ -268,6 +310,18 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     if (error instanceof UserTeamActionError) {
+      if (error.statusCode === 409) {
+        const authSession = await getCurrentAuthSessionFromCookie();
+
+        if (authSession) {
+          return await buildTeamConflictResponse({
+            authUserId: authSession.user.id,
+            discordUserId: authSession.user.discord_user_id,
+            message: error.message,
+          });
+        }
+      }
+
       return applyNoStoreHeaders(
         NextResponse.json(
           {

@@ -28,7 +28,7 @@ function isFresh(timestamp: number) {
 }
 
 function getServersStorageKey(accountKey: string) {
-  return `flowdesk_servers_workspace_cache_v2:${accountKey}`;
+  return `flowdesk_servers_workspace_cache_v3:${accountKey}`;
 }
 
 function getTeamsStorageKey(accountKey: string) {

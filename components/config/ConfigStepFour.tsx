@@ -117,6 +117,10 @@ type PixPaymentApiResponse = {
   licenseActive?: boolean;
   licenseExpiresAt?: string | null;
   fromOrderCode?: boolean;
+  checkoutAmountChanged?: boolean;
+  expectedTotalAmount?: number | null;
+  actualTotalAmount?: number | null;
+  checkoutPreview?: NonNullable<DiscountPreviewApiResponse["preview"]> | null;
   order?: PixOrder | null;
 };
 
@@ -128,6 +132,10 @@ type CardRedirectApiResponse = {
   blockedByActiveLicense?: boolean;
   licenseActive?: boolean;
   licenseExpiresAt?: string | null;
+  checkoutAmountChanged?: boolean;
+  expectedTotalAmount?: number | null;
+  actualTotalAmount?: number | null;
+  checkoutPreview?: NonNullable<DiscountPreviewApiResponse["preview"]> | null;
   orderNumber?: number | null;
   redirectUrl?: string | null;
 };
@@ -279,6 +287,8 @@ type DiscountPreviewApiResponse = {
     } | null;
   };
 };
+
+type CheckoutAmountPreview = NonNullable<DiscountPreviewApiResponse["preview"]>;
 
 type PlanSummary = PlanPricingDefinition & {
   isAvailable: boolean;
@@ -1037,13 +1047,6 @@ function formatMoney(amount: number, currency = "BRL") {
   }).format(roundMoney(amount));
 }
 
-function formatDecimalValue(value: number, maximumFractionDigits = 1) {
-  return new Intl.NumberFormat("pt-BR", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits,
-  }).format(roundMoney(Math.max(0, value)));
-}
-
 function formatRoundedDayCountLabel(value: number) {
   const roundedDays = Math.max(0, Math.round(value));
   return `${roundedDays} ${roundedDays === 1 ? "dia" : "dias"}`;
@@ -1053,7 +1056,7 @@ function buildFallbackDiscountPreview(input: {
   baseAmount: number;
   currency: string;
   flowPointsBalance?: number;
-}): NonNullable<DiscountPreviewApiResponse["preview"]> {
+}): CheckoutAmountPreview {
   const normalizedBaseAmount = roundMoney(Math.max(0, input.baseAmount));
   const normalizedFlowPointsBalance = roundMoney(
     Math.max(0, input.flowPointsBalance || 0),
@@ -1078,6 +1081,28 @@ function buildFallbackDiscountPreview(input: {
       balanceAfter: flowPointsNextBalance,
     },
   };
+}
+
+function buildCheckoutAmountValidationKey(input: {
+  guildId: string | null;
+  planCode: PlanCode;
+  billingPeriodCode: PlanBillingPeriodCode;
+  baseAmount: number;
+  currency: string;
+  couponCode?: string | null;
+  giftCardCode?: string | null;
+  flowPointsBalance: number;
+}) {
+  return [
+    input.guildId || "account",
+    input.planCode,
+    input.billingPeriodCode,
+    roundMoney(input.baseAmount).toFixed(2),
+    input.currency,
+    input.couponCode || "",
+    input.giftCardCode || "",
+    roundMoney(input.flowPointsBalance).toFixed(2),
+  ].join("|");
 }
 
 function resolveCheckoutRailLabel(rail: CheckoutRail | null) {
@@ -3102,6 +3127,8 @@ export function ConfigStepFour({
   const [selectedPlanChange, setSelectedPlanChange] = useState<PlanChangeSummary>(
     () => buildFallbackPlanChangeSummary(initialResolvedPlan),
   );
+  const [checkoutBaseAmountOverride, setCheckoutBaseAmountOverride] =
+    useState<number | null>(null);
   const [knownFlowPointsBalance, setKnownFlowPointsBalance] = useState(0);
   const [scheduledPlanChange, setScheduledPlanChange] =
     useState<ScheduledPlanChangeSummary | null>(null);
@@ -3269,8 +3296,11 @@ export function ConfigStepFour({
     [cardClientCooldownRemainingSeconds],
   );
   const baseCheckoutAmount = useMemo(
-    () => selectedPlanChange.immediateSubtotalAmount,
-    [selectedPlanChange.immediateSubtotalAmount],
+    () =>
+      roundMoney(
+        checkoutBaseAmountOverride ?? selectedPlanChange.immediateSubtotalAmount,
+      ),
+    [checkoutBaseAmountOverride, selectedPlanChange.immediateSubtotalAmount],
   );
   const checkoutCurrency = useMemo(
     () => resolvedPlan.currency || "BRL",
@@ -3295,16 +3325,16 @@ export function ConfigStepFour({
   );
   const checkoutAmountValidationKey = useMemo(
     () =>
-      [
-        guildId || "account",
-        selectedPlanCode,
-        selectedBillingPeriodCode,
-        roundMoney(baseCheckoutAmount).toFixed(2),
-        checkoutCurrency,
-        manualDiscountPayload.couponCode || "",
-        manualDiscountPayload.giftCardCode || "",
-        roundMoney(knownFlowPointsBalance).toFixed(2),
-      ].join("|"),
+      buildCheckoutAmountValidationKey({
+        guildId,
+        planCode: selectedPlanCode,
+        billingPeriodCode: selectedBillingPeriodCode,
+        baseAmount: baseCheckoutAmount,
+        currency: checkoutCurrency,
+        couponCode: manualDiscountPayload.couponCode || "",
+        giftCardCode: manualDiscountPayload.giftCardCode || "",
+        flowPointsBalance: knownFlowPointsBalance,
+      }),
     [
       baseCheckoutAmount,
       checkoutCurrency,
@@ -3337,6 +3367,10 @@ export function ConfigStepFour({
       window.clearInterval(intervalId);
     };
   }, [promoTargetTimestamp]);
+
+  useEffect(() => {
+    setCheckoutBaseAmountOverride(null);
+  }, [guildId, selectedBillingPeriodCode, selectedPlanCode]);
 
   useEffect(() => {
     return () => {
@@ -4609,6 +4643,118 @@ export function ConfigStepFour({
       : !isCheckoutAmountReady
         ? CHECKOUT_AMOUNT_VALIDATION_FAILED_MESSAGE
         : null;
+  const syncCheckoutAmountPreview = useCallback(
+    (preview: CheckoutAmountPreview | null | undefined) => {
+      if (!preview) return null;
+
+      const normalizedPreview: CheckoutAmountPreview = {
+        baseAmount: roundMoney(Math.max(0, preview.baseAmount)),
+        currency: preview.currency || checkoutCurrency,
+        coupon: preview.coupon
+          ? {
+              ...preview.coupon,
+              amount: roundMoney(Math.max(0, preview.coupon.amount)),
+            }
+          : null,
+        giftCard: preview.giftCard
+          ? {
+              ...preview.giftCard,
+              amount: roundMoney(Math.max(0, preview.giftCard.amount)),
+            }
+          : null,
+        subtotalAmount: roundMoney(Math.max(0, preview.subtotalAmount)),
+        totalAmount: roundMoney(Math.max(0, preview.totalAmount)),
+        flowPoints: preview.flowPoints
+          ? {
+              appliedAmount: roundMoney(
+                Math.max(0, preview.flowPoints.appliedAmount),
+              ),
+              balanceBefore: roundMoney(
+                Math.max(0, preview.flowPoints.balanceBefore),
+              ),
+              balanceAfter: roundMoney(
+                Math.max(0, preview.flowPoints.balanceAfter),
+              ),
+            }
+          : null,
+      };
+      const nextFlowPointsBalance = roundMoney(
+        Math.max(0, normalizedPreview.flowPoints?.balanceBefore || 0),
+      );
+      const nextValidationKey = buildCheckoutAmountValidationKey({
+        guildId,
+        planCode: selectedPlanCode,
+        billingPeriodCode: selectedBillingPeriodCode,
+        baseAmount: normalizedPreview.baseAmount,
+        currency: normalizedPreview.currency,
+        couponCode: manualDiscountPayload.couponCode || "",
+        giftCardCode: manualDiscountPayload.giftCardCode || "",
+        flowPointsBalance: nextFlowPointsBalance,
+      });
+
+      setCheckoutBaseAmountOverride(normalizedPreview.baseAmount);
+      setDiscountPreview(normalizedPreview);
+      setKnownFlowPointsBalance(nextFlowPointsBalance);
+      setLastSuccessfulCheckoutAmountValidationKey(nextValidationKey);
+      setDiscountMessage(
+        normalizedPreview.giftCard?.message ||
+          normalizedPreview.coupon?.message ||
+          null,
+      );
+      setIsDiscountLoading(false);
+      return normalizedPreview;
+    },
+    [
+      checkoutCurrency,
+      guildId,
+      manualDiscountPayload.couponCode,
+      manualDiscountPayload.giftCardCode,
+      selectedBillingPeriodCode,
+      selectedPlanCode,
+    ],
+  );
+  const handleCheckoutAmountMismatchRecovery = useCallback(
+    (input: {
+      preview?: CheckoutAmountPreview | null;
+      selectedRail?: CheckoutRail | null;
+      fallbackMessage?: string;
+    }) => {
+      const syncedPreview = syncCheckoutAmountPreview(input.preview);
+      const recoveryMessage = syncedPreview
+        ? `Atualizamos o total final para ${formatMoney(
+            syncedPreview.totalAmount,
+            syncedPreview.currency,
+          )}. Revise o valor e continue novamente.`
+        : input.fallbackMessage ||
+          "Atualizamos o valor final do checkout com seguranca. Revise o total e continue novamente.";
+
+      if (guildId) {
+        clearPendingCardRedirectState(guildId);
+        removeCachedOrderByGuild(guildId);
+      }
+
+      paymentPollingInFlightRef.current = false;
+      orderBootstrapInFlightRef.current = false;
+      paymentOrderLookupInFlightRef.current = false;
+      forceNewCheckoutRef.current = true;
+      setPixOrder(null);
+      setLastKnownOrderNumber(null);
+      setCopied(false);
+      setIsLoadingOrder(false);
+      setIsPreparingBaseOrder(false);
+      setPhase("checkout");
+      setSelectedRail(input.selectedRail ?? null);
+      setView("methods");
+      setMethodMessage(recoveryMessage);
+      setPixFormHasInputError(false);
+      setPixFormError(null);
+      setCardFormHasInputError(false);
+      setCardFormError(null);
+      clearCheckoutStatusQuery();
+      setPaymentBootstrapRequestKey((current) => current + 1);
+    },
+    [guildId, syncCheckoutAmountPreview],
+  );
 
   const canSubmitPix = useMemo(() => {
     return Boolean(
@@ -5150,6 +5296,14 @@ export function ConfigStepFour({
         return;
       }
 
+      if (response.status === 409 && payload.checkoutAmountChanged) {
+        handleCheckoutAmountMismatchRecovery({
+          preview: payload.checkoutPreview,
+          selectedRail,
+        });
+        return;
+      }
+
       if (!response.ok || !payload.ok || !payload.redirectUrl) {
         throw new Error(
           withSupportRequestId(
@@ -5184,12 +5338,9 @@ export function ConfigStepFour({
         "Falha ao preparar checkout com cartao.";
 
       if (isCheckoutAmountMismatchMessage(message)) {
-        forceNewCheckoutRef.current = true;
-        setView("methods");
-        setMethodMessage(
-          "Atualizamos o valor final do checkout com seguranca. Revise o total e continue novamente.",
-        );
-        setPaymentBootstrapRequestKey((current) => current + 1);
+        handleCheckoutAmountMismatchRecovery({
+          selectedRail,
+        });
         return;
       }
 
@@ -5210,11 +5361,13 @@ export function ConfigStepFour({
     checkoutAmountValidationMessage,
     guildId,
     handleActiveLicenseCheckoutBlock,
+    handleCheckoutAmountMismatchRecovery,
     isCheckoutAmountReady,
     isSubmittingCard,
     manualDiscountPayload,
     pixOrder?.method,
     pixOrder?.status,
+    selectedRail,
     selectedBillingPeriodCode,
     selectedPlanCode,
   ]);
@@ -5410,6 +5563,16 @@ export function ConfigStepFour({
         return;
       }
 
+      if (response.status === 409 && payload.checkoutAmountChanged) {
+        handleCheckoutAmountMismatchRecovery({
+          preview: payload.checkoutPreview,
+          selectedRail: "pix",
+          fallbackMessage:
+            "Atualizamos o valor final do checkout e preparamos uma nova tentativa segura de PIX.",
+        });
+        return;
+      }
+
       if (!response.ok || !payload.ok || !payload.order) {
         throw new Error(
           withSupportRequestId(
@@ -5481,6 +5644,7 @@ export function ConfigStepFour({
   }, [
     guildId,
     handleActiveLicenseCheckoutBlock,
+    handleCheckoutAmountMismatchRecovery,
     activeDiscountPreview.totalAmount,
     manualDiscountPayload,
     payerDocument,
@@ -5691,6 +5855,15 @@ export function ConfigStepFour({
       const requestId = resolveResponseRequestId(response);
       const payload = (await response.json()) as PixPaymentApiResponse;
 
+      if (response.status === 409 && payload.checkoutAmountChanged) {
+        handleCheckoutAmountMismatchRecovery({
+          preview: payload.checkoutPreview,
+          fallbackMessage:
+            "O total mudou e esta troca precisa ser revisada antes de continuar.",
+        });
+        return;
+      }
+
       if (!response.ok || !payload.ok || !payload.order) {
         throw new Error(
           withSupportRequestId(
@@ -5740,6 +5913,7 @@ export function ConfigStepFour({
   }, [
     activeDiscountPreview.totalAmount,
     guildId,
+    handleCheckoutAmountMismatchRecovery,
     isSubmittingTrial,
     manualDiscountPayload,
     selectedBillingPeriodCode,
@@ -5874,6 +6048,14 @@ export function ConfigStepFour({
         return;
       }
 
+      if (response.status === 409 && payload.checkoutAmountChanged) {
+        handleCheckoutAmountMismatchRecovery({
+          preview: payload.checkoutPreview,
+          selectedRail: "pix",
+        });
+        return;
+      }
+
       if (!response.ok || !payload.ok || !payload.order) {
         throw new Error(
           withSupportRequestId(
@@ -5943,15 +6125,9 @@ export function ConfigStepFour({
         forceNewCheckoutRef.current = true;
         await handleRefreshExpiredPixPayment();
       } else if (isCheckoutAmountMismatchMessage(message)) {
-        setPixFormHasInputError(false);
-        setPixFormError(null);
-        setSelectedRail("pix");
-        setView("methods");
-        setMethodMessage(
-          "Atualizamos o valor final do checkout com seguranca. Revise o total e continue novamente.",
-        );
-        forceNewCheckoutRef.current = true;
-        setPaymentBootstrapRequestKey((current) => current + 1);
+        handleCheckoutAmountMismatchRecovery({
+          selectedRail: "pix",
+        });
       } else {
         setPixFormHasInputError(false);
         setPixFormError(message);
@@ -5964,6 +6140,7 @@ export function ConfigStepFour({
     documentDigits,
     guildId,
     handleActiveLicenseCheckoutBlock,
+    handleCheckoutAmountMismatchRecovery,
     isLoadingOrder,
     isCheckoutAmountReady,
     isPreparingBaseOrder,

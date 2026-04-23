@@ -1894,6 +1894,8 @@ export function ServerSettingsEditor({
   const [flowAiPlanCode, setFlowAiPlanCode] = useState<PlanCode | null>(null);
   const [isFlowAiPlanLoading, setIsFlowAiPlanLoading] = useState(true);
   const [hasFlowAiPlanCheckError, setHasFlowAiPlanCheckError] = useState(false);
+  const [hasPendingFlowAiActivationRequest, setHasPendingFlowAiActivationRequest] =
+    useState(false);
   const [aiRulesDraft, setAiRulesDraft] = useState("");
   const [panelLayout, setPanelLayout] = useState<TicketPanelLayout>(
     createDefaultTicketPanelLayout(),
@@ -1996,6 +1998,8 @@ export function ServerSettingsEditor({
     useState<AntiLinkSettingsDraft | null>(null);
   const [savedAutoRoleSettingsDraft, setSavedAutoRoleSettingsDraft] =
     useState<AutoRoleSettingsDraft | null>(null);
+  const currentTicketDraftRef = useRef<ServerSettingsDraft | null>(null);
+  const savedTicketDraftRef = useRef<ServerSettingsDraft | null>(null);
   const [isStaffCardCollapsed, setIsStaffCardCollapsed] = useState(true);
   const [welcomeMessageTab, setWelcomeMessageTab] = useState<"entry" | "exit">(
     "entry",
@@ -2146,6 +2150,13 @@ export function ServerSettingsEditor({
 
   const applyDashboardSettingsPayload = useCallback(
     (payload: ServerDashboardSettingsPayload) => {
+      const shouldPreserveLocalTicketDraft =
+        currentTicketDraftRef.current !== null &&
+        savedTicketDraftRef.current !== null &&
+        !areServerSettingsDraftsEqual(
+          currentTicketDraftRef.current,
+          savedTicketDraftRef.current,
+        );
       const text = payload.channels.text.map((channel) => ({
         id: channel.id,
         name: `# ${channel.name}`,
@@ -2464,17 +2475,23 @@ export function ServerSettingsEditor({
           : createDefaultSecurityLogsSettingsDraft(),
       );
 
-      setMenuChannelId(nextMenuChannelId);
-      setTicketsCategoryId(nextTicketsCategoryId);
-      setLogsCreatedChannelId(nextLogsCreatedChannelId);
-      setLogsClosedChannelId(nextLogsClosedChannelId);
-      setPanelLayout(nextPanelLayout);
-      setTicketEnabled(nextTicketEnabled);
-      setAiRules(nextAiRules);
-      setAiCompanyName(nextAiCompanyName);
-      setAiCompanyBio(nextAiCompanyBio);
-      setAiTone(nextAiTone);
-      setAiEnabled(nextAiEnabled);
+      if (!shouldPreserveLocalTicketDraft) {
+        setMenuChannelId(nextMenuChannelId);
+        setTicketsCategoryId(nextTicketsCategoryId);
+        setLogsCreatedChannelId(nextLogsCreatedChannelId);
+        setLogsClosedChannelId(nextLogsClosedChannelId);
+        setPanelLayout(nextPanelLayout);
+        setTicketEnabled(nextTicketEnabled);
+        setAiRules(nextAiRules);
+        setAiCompanyName(nextAiCompanyName);
+        setAiCompanyBio(nextAiCompanyBio);
+        setAiTone(nextAiTone);
+        setAiEnabled(nextAiEnabled);
+        setAdminRoleId(nextAdminRoleId);
+        setClaimRoleIds(nextClaimRoleIds);
+        setCloseRoleIds(nextCloseRoleIds);
+        setNotifyRoleIds(nextNotifyRoleIds);
+      }
       setWelcomeEnabled(nextWelcomeEnabled);
       setEntryPublicChannelId(nextEntryPublicChannelId);
       setEntryLogChannelId(nextEntryLogChannelId);
@@ -2507,10 +2524,6 @@ export function ServerSettingsEditor({
       setAutoRoleSyncCompletedAt(nextAutoRoleSyncCompletedAt);
       setAutoRoleSyncError(nextAutoRoleSyncError);
       setSecurityLogsDraft(nextSecurityLogsDraft);
-      setAdminRoleId(nextAdminRoleId);
-      setClaimRoleIds(nextClaimRoleIds);
-      setCloseRoleIds(nextCloseRoleIds);
-      setNotifyRoleIds(nextNotifyRoleIds);
       setSavedSettingsDraft(
         normalizeServerSettingsDraft({
           enabled: nextTicketEnabled,
@@ -3018,9 +3031,18 @@ export function ServerSettingsEditor({
   }, [guildId, isViewerOnly, showServerFinancialPanels]);
 
   useEffect(() => {
+    const nextPlanCode = normalizePlanCodeFromApi(planSettings?.planCode);
+    if (nextPlanCode) {
+      setFlowAiPlanCode(nextPlanCode);
+      setIsFlowAiPlanLoading(false);
+      setHasFlowAiPlanCheckError(false);
+      return;
+    }
+
     let mounted = true;
 
     async function loadFlowAiPlan() {
+      setFlowAiPlanCode(null);
       setIsFlowAiPlanLoading(true);
       setHasFlowAiPlanCheckError(false);
 
@@ -3057,6 +3079,11 @@ export function ServerSettingsEditor({
     return () => {
       mounted = false;
     };
+  }, [guildId, planSettings?.planCode]);
+
+  useEffect(() => {
+    setHasPendingFlowAiActivationRequest(false);
+    setIsFlowAiUpgradeModalOpen(false);
   }, [guildId]);
 
   const serverMap = useMemo(() => {
@@ -3466,7 +3493,48 @@ export function ServerSettingsEditor({
   const flowAiHeaderDescription = aiEnabled
     ? `${flowAiCompletedCount}/${flowAiChecklist.length} pontos principais configurados.`
     : "Ative o modulo para configurar identidade, tom e diretrizes.";
-  const flowAiPlanLabel = formatFlowAiPlanLabel(flowAiPlanCode);
+  const resolvedFlowAiPlanCode =
+    normalizePlanCodeFromApi(planSettings?.planCode) ?? flowAiPlanCode;
+  const flowAiPlanLabel = formatFlowAiPlanLabel(resolvedFlowAiPlanCode);
+
+  useEffect(() => {
+    if (!hasPendingFlowAiActivationRequest) return;
+
+    if (aiEnabled || isSaving || settingsReadOnly) {
+      setHasPendingFlowAiActivationRequest(false);
+      return;
+    }
+
+    if (resolvedFlowAiPlanCode) {
+      setHasPendingFlowAiActivationRequest(false);
+
+      if (!isFlowAiEligiblePlanCode(resolvedFlowAiPlanCode)) {
+        setIsFlowAiUpgradeModalOpen(true);
+        return;
+      }
+
+      setAiEnabled(true);
+      return;
+    }
+
+    if (isFlowAiPlanLoading) return;
+
+    setHasPendingFlowAiActivationRequest(false);
+
+    if (hasFlowAiPlanCheckError || !resolvedFlowAiPlanCode) {
+      setErrorMessage(
+        "Nao foi possivel verificar o plano agora. Tente novamente em alguns instantes.",
+      );
+    }
+  }, [
+    aiEnabled,
+    hasFlowAiPlanCheckError,
+    hasPendingFlowAiActivationRequest,
+    isFlowAiPlanLoading,
+    isSaving,
+    resolvedFlowAiPlanCode,
+    settingsReadOnly,
+  ]);
 
   const canSaveWelcome = Boolean(
     !settingsReadOnly &&
@@ -3574,6 +3642,8 @@ export function ServerSettingsEditor({
       aiEnabled,
     ],
   );
+  currentTicketDraftRef.current = currentSettingsDraft;
+  savedTicketDraftRef.current = savedSettingsDraft;
 
   const currentWelcomeDraft = useMemo(
     () =>
@@ -5629,32 +5699,39 @@ export function ServerSettingsEditor({
                                 onChange={() => {
                                   if (isSaving || settingsReadOnly) return;
                                   if (aiEnabled) {
+                                    setHasPendingFlowAiActivationRequest(false);
                                     setAiEnabled(false);
                                     return;
                                   }
 
-                                  if (isFlowAiPlanLoading) {
-                                    setErrorMessage(
-                                      "Aguarde alguns instantes enquanto verificamos o plano deste servidor.",
-                                    );
+                                  setErrorMessage(null);
+
+                                  if (resolvedFlowAiPlanCode) {
+                                    setHasPendingFlowAiActivationRequest(false);
+
+                                    if (!isFlowAiEligiblePlanCode(resolvedFlowAiPlanCode)) {
+                                      setIsFlowAiUpgradeModalOpen(true);
+                                      return;
+                                    }
+
+                                    setAiEnabled(true);
                                     return;
                                   }
 
-                                  if (hasFlowAiPlanCheckError || !flowAiPlanCode) {
+                                  if (!isFlowAiPlanLoading && hasFlowAiPlanCheckError) {
                                     setErrorMessage(
                                       "Nao foi possivel verificar o plano agora. Tente novamente em alguns instantes.",
                                     );
                                     return;
                                   }
 
-                                  if (!isFlowAiEligiblePlanCode(flowAiPlanCode)) {
-                                    setIsFlowAiUpgradeModalOpen(true);
-                                    return;
-                                  }
-
-                                  setAiEnabled(true);
+                                  setHasPendingFlowAiActivationRequest(true);
                                 }}
-                                disabled={isSaving || settingsReadOnly}
+                                disabled={
+                                  isSaving ||
+                                  settingsReadOnly ||
+                                  hasPendingFlowAiActivationRequest
+                                }
                                 ariaLabel="Ativar ou desativar modulo FlowAI"
                               />
                             </div>

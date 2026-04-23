@@ -1,6 +1,9 @@
 "use client";
 
-import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
+import {
+  buildBrowserRoutingTargetFromInternalPath,
+  isCanonicalPublicPath,
+} from "@/lib/routing/subdomains";
 
 type RouterPrefetchLike = {
   prefetch: (href: string) => void | Promise<void>;
@@ -112,6 +115,8 @@ export function warmBrowserRoute(
   options?: WarmBrowserRouteOptions,
 ) {
   const target = buildBrowserRoutingTargetFromInternalPath(href);
+  const targetPathname = target.path.split("?")[0]?.split("#")[0] || target.path;
+  const isPublicCanonicalTarget = isCanonicalPublicPath(targetPathname);
 
   if (!canUseBrowserWarmup()) {
     return target;
@@ -124,7 +129,8 @@ export function warmBrowserRoute(
   const shouldWarmDocument =
     options?.prefetchDocument !== false &&
     !options?.router &&
-    target.sameOrigin;
+    target.sameOrigin &&
+    !isPublicCanonicalTarget;
 
   if (shouldWarmDocument) {
     warmDocument(target.href, !target.sameOrigin);
@@ -132,6 +138,7 @@ export function warmBrowserRoute(
 
   if (
     target.sameOrigin &&
+    !isPublicCanonicalTarget &&
     options?.router &&
     !isWarmEntryActive(warmedSameOriginPaths, target.path)
   ) {

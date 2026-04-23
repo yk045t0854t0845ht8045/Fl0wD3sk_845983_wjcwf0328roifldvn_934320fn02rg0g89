@@ -19,7 +19,7 @@ export default async function HomePage() {
 }
 
 export const metadata: Metadata = buildFlowCwvMetadata({
-  title: "Hospedagem, VPS, dominios e bot Discord com IA",
+  title: "Flowdesk - Hospedagem, Hospedagem VPS, Domínios e Infraestrutura para Developers",
   description:
     "Flowdesk entrega tecnologia para quem precisa de hospedagem, VPS, maquinas virtuais, dominios, infraestrutura, bot Discord com IA e ferramentas para developers em uma operacao web mais rapida e segura.",
   pathname: "/",
