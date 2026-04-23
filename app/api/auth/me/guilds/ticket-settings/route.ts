@@ -48,6 +48,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import { sendServerSettingsSavedEmailSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_CATEGORY = 4;
@@ -951,6 +952,12 @@ export async function POST(request: Request) {
         httpStatus: 200,
         detail: "Modulo de ticket desligado sem configuracao persistente anterior.",
       });
+      void sendServerSettingsSavedEmailSafe({
+        user: access.context.sessionData.authSession.user,
+        guildId,
+        moduleLabel: "Tickets",
+        detail: "Modulo desativado",
+      });
 
       return applyNoStoreHeaders(
         NextResponse.json({
@@ -1123,6 +1130,12 @@ export async function POST(request: Request) {
       meta: {
         channelCount: rawChannels?.length || 0,
       },
+    });
+    void sendServerSettingsSavedEmailSafe({
+      user: access.context.sessionData.authSession.user,
+      guildId,
+      moduleLabel: "Tickets",
+      detail: enabled ? "Modulo ativo" : "Modulo desativado",
     });
 
     return applyNoStoreHeaders(

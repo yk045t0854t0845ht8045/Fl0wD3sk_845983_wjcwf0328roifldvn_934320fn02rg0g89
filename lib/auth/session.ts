@@ -24,6 +24,10 @@ import {
   encryptFlowSecureValue,
   hashFlowSecureValue,
 } from "@/lib/security/flowSecure";
+import {
+  sendAccountCreatedEmailSafe,
+  sendLoginNotificationEmailSafe,
+} from "@/lib/mail/transactional";
 import { isDatabaseAvailabilityError } from "@/lib/security/databaseAvailability";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
@@ -524,6 +528,7 @@ async function insertAuthUserWithResolvedUsername(
       .single<AuthUserRecord>();
 
     if (!result.error) {
+      void sendAccountCreatedEmailSafe(result.data);
       return result.data;
     }
 
@@ -599,6 +604,8 @@ export async function createEmailAuthUser(input: {
 
     throw new Error(`Erro ao criar usuario por email: ${result.error.message}`);
   }
+
+  void sendAccountCreatedEmailSafe(result.data);
 
   return result.data;
 }
@@ -808,6 +815,13 @@ async function createSession(
   }
 
   await touchAuthUserLastLogin(userId, authMethod);
+  void sendLoginNotificationEmailSafe({
+    userId,
+    authMethod,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+    locationLabel: context.ipAddress,
+  });
 
   return {
     sessionToken,

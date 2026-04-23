@@ -6,6 +6,7 @@ export type ManagedServer = {
   iconUrl: string | null;
   status: ManagedServerStatus;
   accessMode: "owner" | "viewer";
+  isPanelVisible: boolean;
   canManage: boolean;
   canLinkToTeam: boolean;
   isLinkedToTeam: boolean;

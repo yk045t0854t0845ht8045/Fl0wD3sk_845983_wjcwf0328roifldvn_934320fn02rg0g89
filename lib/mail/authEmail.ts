@@ -784,3 +784,232 @@ export async function sendLoginOtpEmail(input: {
     throw normalizeSmtpRuntimeError(error, config);
   }
 }
+
+export type FlowdeskTransactionalEmailSection = {
+  label: string;
+  value: string | number | null | undefined;
+};
+
+export type FlowdeskTransactionalEmailAction = {
+  label: string;
+  href: string;
+};
+
+function renderTransactionalSections(
+  sections: FlowdeskTransactionalEmailSection[] | null | undefined,
+) {
+  const visibleSections = (sections || []).filter(
+    (section) => section.value !== null && section.value !== undefined && String(section.value).trim(),
+  );
+
+  if (!visibleSections.length) return "";
+
+  return `
+    <table
+      role="presentation"
+      cellpadding="0"
+      cellspacing="0"
+      border="0"
+      width="100%"
+      style="width:100%;border-collapse:separate;border:1px solid #E2E8F0;border-radius:20px;background-color:#F8FAFC;margin-top:22px;"
+    >
+      ${visibleSections
+        .map(
+          (section, index) => `
+            <tr>
+              <td style="padding:15px 18px;${index > 0 ? "border-top:1px solid #EDF2F7;" : ""}">
+                <div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:16px;letter-spacing:0.08em;text-transform:uppercase;color:#64748B;">
+                  ${escapeHtml(section.label)}
+                </div>
+                <div style="margin-top:6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;font-weight:700;color:#0F172A;">
+                  ${escapeHtml(String(section.value))}
+                </div>
+              </td>
+            </tr>
+          `,
+        )
+        .join("")}
+    </table>
+  `;
+}
+
+function renderTransactionalAction(
+  action: FlowdeskTransactionalEmailAction | null | undefined,
+) {
+  if (!action?.href || !action.label) return "";
+
+  return `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
+      <tr>
+        <td
+          bgcolor="#0F172A"
+          style="border-radius:16px;background-color:#0F172A;"
+        >
+          <a
+            href="${escapeHtml(action.href)}"
+            target="_blank"
+            rel="noopener noreferrer"
+            style="display:inline-block;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:700;color:#FFFFFF;text-decoration:none;border-radius:16px;"
+          >
+            ${escapeHtml(action.label)}
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+}
+
+function buildTransactionalEmailHtml(input: {
+  preheader: string;
+  badgeLabel?: string | null;
+  title: string;
+  intro: string;
+  sections?: FlowdeskTransactionalEmailSection[];
+  action?: FlowdeskTransactionalEmailAction | null;
+  footer?: string | null;
+}) {
+  const safePreheader = escapeHtml(input.preheader);
+  const safeBadgeLabel = escapeHtml(input.badgeLabel || "Flowdesk");
+  const safeTitle = escapeHtml(input.title);
+  const safeIntro = escapeHtml(input.intro);
+  const safeFooter = escapeHtml(
+    input.footer ||
+      "Este email foi enviado automaticamente para manter sua conta Flowdesk informada.",
+  );
+
+  return `
+    <!doctype html>
+    <html lang="pt-BR">
+      <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="color-scheme" content="light only" />
+        <meta name="supported-color-schemes" content="light only" />
+        <title>Flowdesk</title>
+      </head>
+      <body style="margin:0;padding:0;background-color:#EEF3F8;">
+        <div style="display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#EEF3F8;">
+          ${safePreheader}
+        </div>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#EEF3F8;">
+          <tr>
+            <td align="center" style="padding:32px 16px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:640px;border-collapse:separate;">
+                <tr>
+                  <td style="padding:0 8px 16px 8px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+                      <tr>
+                        <td style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:#111827;">
+                          Flowdesk
+                        </td>
+                        <td align="right" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#5B6472;">
+                          ${safeBadgeLabel}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color:#FFFFFF;border:1px solid #D8E1EC;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(15,23,42,0.08);">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+                      <tr>
+                        <td style="padding:36px 40px 34px 40px;">
+                          <h1 style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:32px;line-height:1.15;font-weight:700;color:#0F172A;">
+                            ${safeTitle}
+                          </h1>
+                          <p style="margin:14px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.75;color:#475569;">
+                            ${safeIntro}
+                          </p>
+                          ${renderTransactionalSections(input.sections)}
+                          ${renderTransactionalAction(input.action)}
+                          <p style="margin:24px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.8;color:#64748B;">
+                            ${safeFooter}
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:16px 20px 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.7;color:#6B7280;">
+                    Flowdesk
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
+export async function sendFlowdeskTransactionalEmail(input: {
+  toEmail: string;
+  subject: string;
+  preheader: string;
+  badgeLabel?: string | null;
+  title: string;
+  intro: string;
+  sections?: FlowdeskTransactionalEmailSection[];
+  action?: FlowdeskTransactionalEmailAction | null;
+  footer?: string | null;
+  type: string;
+}) {
+  const { transporter, config } = getTransporter();
+  await ensureSmtpHostResolvable(config.host);
+  await warnAboutRecommendedDnsRecords(config.fromEmail);
+
+  const from = config.fromName
+    ? `"${config.fromName.replace(/"/g, "")}" <${config.fromEmail}>`
+    : config.fromEmail;
+  const sentAt = new Date();
+  const messageId = buildAuthMessageId(
+    extractEmailDomain(config.envelopeFrom) || extractEmailDomain(config.fromEmail),
+  );
+  const visibleSections = (input.sections || []).filter(
+    (section) => section.value !== null && section.value !== undefined && String(section.value).trim(),
+  );
+  const textLines = [
+    "Flowdesk",
+    "",
+    input.title,
+    "",
+    input.intro,
+    "",
+    ...visibleSections.flatMap((section) => [
+      `${section.label}: ${String(section.value)}`,
+    ]),
+    ...(input.action?.href
+      ? ["", `${input.action.label}: ${input.action.href}`]
+      : []),
+    "",
+    input.footer ||
+      "Este email foi enviado automaticamente para manter sua conta Flowdesk informada.",
+  ];
+
+  try {
+    await transporter.sendMail({
+      from,
+      to: input.toEmail,
+      replyTo: config.replyTo || undefined,
+      envelope: {
+        from: config.envelopeFrom,
+        to: input.toEmail,
+      },
+      messageId,
+      date: sentAt,
+      subject: input.subject,
+      headers: {
+        "Auto-Submitted": "auto-generated",
+        "X-Auto-Response-Suppress": "All",
+        "X-Flowdesk-Email-Type": input.type,
+        "Feedback-ID": `flowdesk:${input.type.replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}`,
+      },
+      text: textLines.join("\n"),
+      html: buildTransactionalEmailHtml(input),
+    });
+  } catch (error) {
+    throw normalizeSmtpRuntimeError(error, config);
+  }
+}

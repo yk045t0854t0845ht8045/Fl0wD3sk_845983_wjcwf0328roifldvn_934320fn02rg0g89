@@ -35,6 +35,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import { sendServerSettingsSavedEmailSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_TEXT = 0;
@@ -713,6 +714,12 @@ export async function POST(request: Request) {
         timeoutMinutes,
         ignoredRoleCount: ignoredRoleIds.length,
       },
+    });
+    void sendServerSettingsSavedEmailSafe({
+      user: access.context.sessionData.authSession.user,
+      guildId,
+      moduleLabel: "Anti-link",
+      detail: enabled ? "Modulo ativo" : "Modulo desativado",
     });
 
     return applyNoStoreHeaders(

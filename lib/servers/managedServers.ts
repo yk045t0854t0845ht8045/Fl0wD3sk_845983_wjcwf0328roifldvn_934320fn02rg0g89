@@ -182,6 +182,29 @@ export async function getManagedServersForCurrentSession(): Promise<ManagedServe
   return snapshot.servers;
 }
 
+export function filterPanelVisibleManagedServers(servers: ManagedServer[]) {
+  return servers.filter((server) => server.isPanelVisible);
+}
+
+export function filterTeamCatalogManagedServers(servers: ManagedServer[]) {
+  return servers.filter(
+    (server) => server.canLinkToTeam || server.isLinkedToTeam,
+  );
+}
+
+export async function getPanelManagedServersSnapshotForCurrentSession(): Promise<ManagedServersSnapshot> {
+  const snapshot = await getManagedServersSnapshotForCurrentSession();
+  return {
+    ...snapshot,
+    servers: filterPanelVisibleManagedServers(snapshot.servers),
+  };
+}
+
+export async function getPanelManagedServersForCurrentSession(): Promise<ManagedServer[]> {
+  const snapshot = await getPanelManagedServersSnapshotForCurrentSession();
+  return snapshot.servers;
+}
+
 async function fetchManagedServersFresh(
   sessionData: Awaited<ReturnType<typeof resolveSessionAccessToken>>,
 ): Promise<ManagedServersSnapshot> {
@@ -361,6 +384,11 @@ async function fetchManagedServersFresh(
       const accessMode: ManagedServer["accessMode"] =
         ownedPlanGuildIds.has(guild.id) || guild.owner ? "owner" : "viewer";
       const isLinkedToTeam = globalTeamLinkedGuildIds.has(guild.id);
+      const isPanelVisible = Boolean(
+        acceptedTeamGuildIds.has(guild.id) ||
+          ownedPlanGuildIds.has(guild.id) ||
+          lockedRecord,
+      );
       const canLinkToTeam = Boolean(
         !currentLicenseBelongsToViewer &&
           (
@@ -421,11 +449,15 @@ async function fetchManagedServersFresh(
         iconUrl: buildGuildIconUrl(guild.id, guild.icon),
         status,
         accessMode,
+        isPanelVisible,
         isLinkedToTeam,
         canManage:
-          ownedPlanGuildIds.has(guild.id) ||
-          acceptedTeamGuildIds.has(guild.id) ||
-          (!isLinkedToTeam && (guild.owner || false)),
+          !currentLicenseBelongsToViewer &&
+          (
+            ownedPlanGuildIds.has(guild.id) ||
+            acceptedTeamGuildIds.has(guild.id) ||
+            (!isLinkedToTeam && (guild.owner || false))
+          ),
         canLinkToTeam,
         blockedByPlanLimit: isOwnedPlanGuildInactive || isPendingDowngradePayment,
         pendingDowngradePayment: isPendingDowngradePayment,

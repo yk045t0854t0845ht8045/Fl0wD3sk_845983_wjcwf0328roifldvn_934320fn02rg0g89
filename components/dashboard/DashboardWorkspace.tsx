@@ -520,6 +520,10 @@ export function DashboardWorkspace({
   const [sidebarSearchText, setSidebarSearchText] = useState("");
   const [pendingViewId, setPendingViewId] = useState<DashboardViewId | null>(null);
   const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [teamServers, setTeamServers] = useState<ManagedServer[]>([]);
+  const [isTeamServersLoading, setIsTeamServersLoading] = useState(
+    Boolean(currentAccount.discordUserId),
+  );
   const [isDomainsOpen, setIsDomainsOpen] = useState(false);
   const [isBillingOpen, setIsBillingOpen] = useState(false);
   const [teams, setTeams] = useState<UserTeam[]>(initialTeamsSnapshot?.teams ?? []);
@@ -604,12 +608,23 @@ export function DashboardWorkspace({
     () => new Set(teams.flatMap((team) => team.linkedGuildIds)),
     [teams],
   );
+  const teamCatalogSnapshotKey = useMemo(
+    () =>
+      teams
+        .map(
+          (team) =>
+            `${team.id}:${[...team.linkedGuildIds].sort((left, right) => left.localeCompare(right)).join(",")}`,
+        )
+        .sort((left, right) => left.localeCompare(right))
+        .join("|"),
+    [teams],
+  );
   const teamServerOptions = useMemo(
     () =>
-      [...servers].sort((a, b) =>
+      [...teamServers].sort((a, b) =>
         a.guildName.localeCompare(b.guildName, "pt-BR"),
       ),
-    [servers],
+    [teamServers],
   );
   const availableTeamServerOptions = useMemo(
     () =>
@@ -752,6 +767,36 @@ export function DashboardWorkspace({
     [workspaceCacheKey],
   );
 
+  const loadTeamServerCatalog = useCallback(async () => {
+    if (!currentAccount.discordUserId) {
+      setTeamServers([]);
+      setIsTeamServersLoading(false);
+      return;
+    }
+
+    setIsTeamServersLoading(true);
+
+    try {
+      const response = await fetch("/api/auth/me/servers/team-catalog", {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        servers?: ManagedServer[];
+      };
+
+      if (!response.ok || !payload.ok) {
+        return;
+      }
+
+      setTeamServers(payload.servers || []);
+    } catch {
+      // noop
+    } finally {
+      setIsTeamServersLoading(false);
+    }
+  }, [currentAccount.discordUserId]);
+
   useEffect(() => {
     if (initialServers !== null) {
       return;
@@ -781,6 +826,10 @@ export function DashboardWorkspace({
       isMounted = false;
     };
   }, [initialServers, workspaceCacheKey]);
+
+  useEffect(() => {
+    void loadTeamServerCatalog();
+  }, [loadTeamServerCatalog, teamCatalogSnapshotKey]);
 
   useEffect(() => {
     setCreateTeamServerIds((current) => {
@@ -1109,21 +1158,26 @@ export function DashboardWorkspace({
         if (payload.conflict || (Array.isArray(payload.conflictingGuildIds) && payload.conflictingGuildIds.length)) {
           void (async () => {
             try {
-              const refreshResponse = await fetch("/api/auth/me/servers", {
-                cache: "no-store",
-              });
-              const refreshPayload = (await refreshResponse.json()) as {
-                ok?: boolean;
-                servers?: ManagedServer[];
-              };
+              await Promise.all([
+                (async () => {
+                  const refreshResponse = await fetch("/api/auth/me/servers", {
+                    cache: "no-store",
+                  });
+                  const refreshPayload = (await refreshResponse.json()) as {
+                    ok?: boolean;
+                    servers?: ManagedServer[];
+                  };
 
-              if (!refreshResponse.ok || !refreshPayload.ok) {
-                return;
-              }
+                  if (!refreshResponse.ok || !refreshPayload.ok) {
+                    return;
+                  }
 
-              const nextServers = refreshPayload.servers || [];
-              storeCachedManagedServers(workspaceCacheKey, nextServers);
-              setServers(nextServers);
+                  const nextServers = refreshPayload.servers || [];
+                  storeCachedManagedServers(workspaceCacheKey, nextServers);
+                  setServers(nextServers);
+                })(),
+                loadTeamServerCatalog(),
+              ]);
             } catch {
               // noop
             }
@@ -1161,6 +1215,7 @@ export function DashboardWorkspace({
     createTeamServerIds,
     availableTeamServerIdSet,
     isCreatingTeam,
+    loadTeamServerCatalog,
     resetCreateTeamForm,
     workspaceCacheKey,
   ]);
@@ -2012,7 +2067,7 @@ export function DashboardWorkspace({
                             {createTeamServerIds.length} selecionado(s)
                           </span>
                         </div>
-                        {!availableTeamServerOptions.length && teamServerOptions.length ? (
+                        {!isTeamServersLoading && !availableTeamServerOptions.length && teamServerOptions.length ? (
                           <p className="mb-[10px] text-[12px] leading-[1.5] text-[#676767]">
                             Todos os servidores disponiveis no painel ja estao vinculados a outra equipe.
                           </p>
@@ -2071,7 +2126,9 @@ export function DashboardWorkspace({
                             );
                           }) : (
                             <div className="rounded-[16px] border border-[#141414] bg-[#0A0A0A] px-[14px] py-[14px] text-[13px] leading-[1.5] text-[#6E6E6E]">
-                              Nenhum servidor disponivel no painel para vincular a uma equipe agora.
+                              {isTeamServersLoading
+                                ? "Carregando servidores disponiveis..."
+                                : "Nenhum servidor disponivel no painel para vincular a uma equipe agora."}
                             </div>
                           )}
                         </div>

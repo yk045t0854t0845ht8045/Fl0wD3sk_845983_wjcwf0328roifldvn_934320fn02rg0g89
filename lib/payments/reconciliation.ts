@@ -3,6 +3,7 @@ import {
   refundMercadoPagoCardPayment,
   refundMercadoPagoPixPayment,
   resolvePaymentStatus,
+  searchMercadoPagoPaymentsByExternalReference,
   type MercadoPagoPaymentResponse,
 } from "@/lib/payments/mercadoPago";
 import {
@@ -11,6 +12,7 @@ import {
   resolveTrustedMercadoPagoPaymentTimestamps,
 } from "@/lib/payments/paymentIntegrity";
 import { resolvePaymentDiagnostic } from "@/lib/payments/paymentDiagnostics";
+import { isTrustedApprovedPaymentRecord } from "@/lib/payments/checkoutConsistency";
 import {
   isLockedByUnpaidSetupTimeout,
   UNPAID_SETUP_TIMEOUT_REFUND_STATUS_DETAIL,
@@ -117,6 +119,11 @@ type ReconcileBatchSummary = {
   }>;
 };
 
+type UserPlanStateReconciliationRecord = {
+  user_id: number;
+  last_payment_order_id: number | null;
+};
+
 const DEFAULT_RECONCILE_LIMIT = 25;
 const DEFAULT_RECONCILE_STATUSES: ReconcilablePaymentStatus[] = [
   "pending",
@@ -220,6 +227,66 @@ function normalizeNullableString(value: string | null | undefined) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function pickBestProviderPaymentFromSearchResults(
+  payments: MercadoPagoPaymentResponse[],
+) {
+  return (
+    payments.find((payment) => resolvePaymentStatus(payment.status) === "approved") ||
+    payments.find((payment) => resolvePaymentStatus(payment.status) === "pending") ||
+    payments[0] ||
+    null
+  );
+}
+
+async function filterApprovedOrdersNeedingSettlement(
+  orders: PaymentOrderReconciliationRecord[],
+  options?: {
+    guildId?: string | null;
+    userId?: number | null;
+  },
+) {
+  const scopedOrders = orders.filter(
+    (order) =>
+      (!options?.guildId || order.guild_id === options.guildId) &&
+      (typeof options?.userId !== "number" || order.user_id === options.userId) &&
+      isTrustedApprovedPaymentRecord(order),
+  );
+  const latestApprovedOrderByUserId = new Map<number, PaymentOrderReconciliationRecord>();
+
+  for (const order of scopedOrders) {
+    if (!latestApprovedOrderByUserId.has(order.user_id)) {
+      latestApprovedOrderByUserId.set(order.user_id, order);
+    }
+  }
+
+  const latestOrders = [...latestApprovedOrderByUserId.values()];
+  const userIds = latestOrders.map((order) => order.user_id);
+  if (!userIds.length) return [];
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const planStatesResult = await supabase
+    .from("auth_user_plan_state")
+    .select("user_id, last_payment_order_id")
+    .in("user_id", userIds)
+    .returns<UserPlanStateReconciliationRecord[]>();
+
+  if (planStatesResult.error) {
+    throw new Error(
+      `Erro ao validar entrega de planos aprovados: ${planStatesResult.error.message}`,
+    );
+  }
+
+  const planStateByUserId = new Map(
+    (planStatesResult.data || []).map((state) => [state.user_id, state]),
+  );
+
+  return latestOrders.filter((order) => {
+    if (hasApprovedPaymentPendingSettlement(order)) return true;
+    const planState = planStateByUserId.get(order.user_id) || null;
+    return !planState || planState.last_payment_order_id !== order.id;
+  });
 }
 
 function hasOrderCoreChanges(
@@ -601,6 +668,7 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
     providerLastUpdatedAt: trustedTimestamps.lastUpdatedAt,
   });
 
+  let finalOrder = updatedOrderResult.data;
   if (updatedOrderResult.data.status === "approved") {
     const settlement = await settleApprovedPaymentOrder({
       order: updatedOrderResult.data,
@@ -609,6 +677,7 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       allowAutoRefundOnFailure: true,
       providerPayment,
     });
+    finalOrder = settlement.order;
     if (settlement.autoRefunded) {
       return {
         order: settlement.order,
@@ -621,18 +690,18 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
   }
 
   invalidatePaymentOrderQueryCaches({
-    userId: updatedOrderResult.data.user_id,
-    guildId: updatedOrderResult.data.guild_id,
-    orderId: updatedOrderResult.data.id,
-    orderNumber: updatedOrderResult.data.order_number,
+    userId: finalOrder.user_id,
+    guildId: finalOrder.guild_id,
+    orderId: finalOrder.id,
+    orderNumber: finalOrder.order_number,
   });
   invalidateGuildLicenseCaches();
   return {
-    order: updatedOrderResult.data,
+    order: finalOrder,
     changed: true,
     action: "updated",
-    providerStatus,
-    providerStatusDetail,
+    providerStatus: finalOrder.provider_status ?? providerStatus,
+    providerStatusDetail: finalOrder.provider_status_detail ?? providerStatusDetail,
   };
 }
 
@@ -655,6 +724,67 @@ export async function reconcilePaymentOrderRecord(
   const source = options?.source || "background_reconcile";
   const providerPaymentId = normalizeNullableString(order.provider_payment_id);
   if (!providerPaymentId) {
+    const externalReference = normalizeNullableString(order.provider_external_reference);
+    if (externalReference) {
+      let providerPayments: MercadoPagoPaymentResponse[] = [];
+      try {
+        providerPayments = await searchMercadoPagoPaymentsByExternalReference(
+          externalReference,
+          {
+            useCardToken: order.payment_method === "card",
+            forceFresh: true,
+          },
+        );
+      } catch (error) {
+        await createPaymentOrderEventSafe(order.id, "provider_payment_reconcile_failed", {
+          source,
+          externalReference,
+          message: error instanceof Error ? error.message : "provider_search_unreachable",
+        });
+
+        return {
+          order,
+          changed: false,
+          action: "provider_unreachable",
+          providerStatus: order.provider_status ?? null,
+          providerStatusDetail:
+            error instanceof Error
+              ? error.message
+              : order.provider_status_detail ?? null,
+        };
+      }
+
+      const providerPayment = pickBestProviderPaymentFromSearchResults(providerPayments);
+      if (providerPayment) {
+        await createPaymentOrderEventSafe(order.id, "provider_payment_found_by_external_reference", {
+          source,
+          externalReference,
+          providerPaymentId: String(providerPayment.id),
+          providerStatus: providerPayment.status || null,
+        });
+        return reconcilePaymentOrderWithFetchedProviderPayment(order, providerPayment, {
+          source,
+        });
+      }
+    }
+
+    if (order.status === "approved") {
+      const settlement = await settleApprovedPaymentOrder({
+        order,
+        source,
+        selectColumns: PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS,
+        allowAutoRefundOnFailure: false,
+      });
+
+      return {
+        order: settlement.order,
+        changed: settlement.settled,
+        action: settlement.settled ? "updated" : "unchanged",
+        providerStatus: settlement.order.provider_status ?? null,
+        providerStatusDetail: settlement.order.provider_status_detail ?? null,
+      };
+    }
+
     return {
       order,
       changed: false,
@@ -707,7 +837,7 @@ export async function reconcileRecentPaymentOrders(
   let query = supabase
     .from("payment_orders")
     .select(PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS)
-    .not("provider_payment_id", "is", null)
+    .or("provider_payment_id.not.is.null,provider_external_reference.not.is.null")
     .in("status", statuses)
     .order("updated_at", { ascending: true })
     .limit(limit);
@@ -734,7 +864,8 @@ export async function reconcileRecentPaymentOrders(
     .from("payment_orders")
     .select(PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS)
     .eq("status", "approved")
-    .order("updated_at", { ascending: false })
+    .order("paid_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
     .limit(limit)
     .returns<PaymentOrderReconciliationRecord[]>();
 
@@ -744,11 +875,12 @@ export async function reconcileRecentPaymentOrders(
     );
   }
 
-  const approvedSettlementCandidates = (approvedSettlementCandidatesResult.data || []).filter(
-    (order) =>
-      hasApprovedPaymentPendingSettlement(order) &&
-      (!options?.guildId || order.guild_id === options.guildId) &&
-      (typeof options?.userId !== "number" || order.user_id === options.userId),
+  const approvedSettlementCandidates = await filterApprovedOrdersNeedingSettlement(
+    approvedSettlementCandidatesResult.data || [],
+    {
+      guildId: options?.guildId,
+      userId: options?.userId,
+    },
   );
   const mergedOrders = [
     ...orders,

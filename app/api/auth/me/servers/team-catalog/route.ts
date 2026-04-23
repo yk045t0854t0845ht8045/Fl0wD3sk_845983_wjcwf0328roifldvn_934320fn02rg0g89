@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import {
   DEFAULT_MANAGED_SERVERS_SYNC_STATE,
-  getPanelManagedServersSnapshotForCurrentSession,
+  filterTeamCatalogManagedServers,
+  getManagedServersSnapshotForCurrentSession,
 } from "@/lib/servers/managedServers";
 import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
       );
     }
 
-    const snapshot = await getPanelManagedServersSnapshotForCurrentSession();
+    const snapshot = await getManagedServersSnapshotForCurrentSession();
     const auditContext = extendSecurityRequestContext(requestContext, {
       sessionId: authSession.id,
       userId: authSession.user.id,
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
 
     if (snapshot.sync.degraded || snapshot.sync.requiresDiscordRelink) {
       await logSecurityAuditEventSafe(auditContext, {
-        action: "managed_servers_sync_state",
+        action: "managed_servers_team_catalog_sync_state",
         outcome: "succeeded",
         metadata: {
           degraded: snapshot.sync.degraded,
@@ -54,23 +55,26 @@ export async function GET(request: Request) {
 
     return respond({
       ok: true,
-      servers: snapshot.servers,
+      servers: filterTeamCatalogManagedServers(snapshot.servers),
       sync: snapshot.sync,
     });
   } catch (error) {
     await logSecurityAuditEventSafe(requestContext, {
-      action: "managed_servers_sync_state",
+      action: "managed_servers_team_catalog_sync_state",
       outcome: "failed",
       metadata: {
         diagnosticsFingerprint:
           DEFAULT_MANAGED_SERVERS_SYNC_STATE.diagnosticsFingerprint,
-        reason: extractAuditErrorMessage(error, "managed_servers_read_failed"),
+        reason: extractAuditErrorMessage(
+          error,
+          "managed_servers_team_catalog_read_failed",
+        ),
       },
     });
 
     const message = sanitizeErrorMessage(
       error,
-      "Erro ao carregar servidores gerenciados.",
+      "Erro ao carregar servidores da equipe.",
     );
     const status = message === "Nao autenticado." ? 401 : 500;
 

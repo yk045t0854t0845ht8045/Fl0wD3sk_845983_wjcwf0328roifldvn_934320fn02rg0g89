@@ -13,6 +13,7 @@ export function resolveServersWorkspaceAlertMessage(input: {
 
   const hasExpiredAccountServer = input.servers.some(
     (server) =>
+      server.isPanelVisible &&
       server.accessMode === "owner" &&
       (server.status === "expired" ||
         server.status === "off" ||
@@ -27,6 +28,7 @@ export function resolveServersWorkspaceAlertMessage(input: {
 export function resolveDashboardWorkspaceAlertMessage(servers: ManagedServer[]) {
   const hasExpiredAccountServer = servers.some(
     (server) =>
+      server.isPanelVisible &&
       server.accessMode === "owner" &&
       (server.status === "expired" ||
         server.status === "off" ||

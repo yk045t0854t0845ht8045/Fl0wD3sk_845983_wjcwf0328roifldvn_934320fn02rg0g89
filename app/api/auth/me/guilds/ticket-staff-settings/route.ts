@@ -37,6 +37,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import { sendServerSettingsSavedEmailSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const MAX_ROLE_SELECTIONS = 25;
@@ -589,6 +590,12 @@ export async function POST(request: Request) {
       meta: {
         roleCount: rawRoles.length,
       },
+    });
+    void sendServerSettingsSavedEmailSafe({
+      user: access.context.sessionData.authSession.user,
+      guildId,
+      moduleLabel: "Equipe de tickets",
+      detail: "Permissoes e cargos atualizados",
     });
 
     return applyNoStoreHeaders(

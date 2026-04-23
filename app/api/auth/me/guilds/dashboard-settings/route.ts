@@ -14,6 +14,7 @@ import {
   readDashboardSettingsCache,
   writeDashboardSettingsCache,
 } from "@/lib/servers/serverDashboardSettingsCache";
+import { getPanelManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import {
   readServerSettingsVaultSnapshots,
   type ServerSettingsVaultModule,
@@ -705,24 +706,33 @@ async function ensureGuildAccess(guildId: string) {
     };
   }
 
-  const { permissions: dashboardPerms, isTeamServer } =
-    await getEffectiveDashboardPermissions({
+  const [
+    { permissions: dashboardPerms, isTeamServer },
+    accessibleGuild,
+    managedServers,
+  ] = await Promise.all([
+    getEffectiveDashboardPermissions({
       authUserId: sessionData.authSession.user.id,
       guildId,
-    });
+    }),
+    assertUserAdminInGuildOrNull(
+      {
+        authSession: sessionData.authSession,
+        accessToken: sessionData.accessToken,
+      },
+      guildId,
+    ),
+    getPanelManagedServersForCurrentSession(),
+  ]);
 
-  const accessibleGuild = await assertUserAdminInGuildOrNull(
-    {
-      authSession: sessionData.authSession,
-      accessToken: sessionData.accessToken,
-    },
-    guildId,
-  );
-
-  const hasAccess =
+  const isPanelServer = managedServers.some((server) => server.guildId === guildId);
+  const hasTeamAccess =
     dashboardPerms === "full" ||
-    (dashboardPerms instanceof Set && dashboardPerms.size > 0) ||
-    (!isTeamServer && accessibleGuild);
+    (dashboardPerms instanceof Set && dashboardPerms.size > 0);
+  const hasOwnerAccess = Boolean(
+    !isTeamServer && isPanelServer && accessibleGuild && dashboardPerms === "full",
+  );
+  const hasAccess = isTeamServer ? hasTeamAccess : hasOwnerAccess;
 
   if (!hasAccess) {
     return {
@@ -739,7 +749,7 @@ async function ensureGuildAccess(guildId: string) {
     sessionData,
     accessibleGuild,
     dashboardPerms:
-      dashboardPerms instanceof Set && !isTeamServer && accessibleGuild
+      dashboardPerms instanceof Set && hasOwnerAccess
         ? "full"
         : dashboardPerms,
   };

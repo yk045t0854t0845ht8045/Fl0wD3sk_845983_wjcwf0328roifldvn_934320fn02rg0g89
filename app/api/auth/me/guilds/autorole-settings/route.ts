@@ -32,6 +32,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import { sendServerSettingsSavedEmailSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const MAX_AUTOROLE_ROLE_IDS = 20;
@@ -724,6 +725,12 @@ export async function POST(request: Request) {
         assignmentDelayMinutes,
         syncExistingMembers,
       },
+    });
+    void sendServerSettingsSavedEmailSafe({
+      user: access.context.sessionData.authSession.user,
+      guildId,
+      moduleLabel: "AutoRole",
+      detail: enabled ? "Modulo ativo" : "Modulo desativado",
     });
 
     return applyNoStoreHeaders(

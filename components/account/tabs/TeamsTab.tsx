@@ -152,7 +152,7 @@ export function TeamsTab() {
       if (!silent) setLoading(true);
       const [teamsResponse, serversResponse] = await Promise.all([
         fetch("/api/auth/me/teams", { cache: "no-store" }),
-        fetch("/api/auth/me/servers", { cache: "no-store" }),
+        fetch("/api/auth/me/servers/team-catalog", { cache: "no-store" }),
       ]);
       const [teamsPayload, serversPayload] = (await Promise.all([
         teamsResponse.json(),
@@ -724,6 +724,7 @@ export function TeamsTab() {
               iconUrl: null,
               status: "off" as const,
               accessMode: "viewer" as const,
+              isPanelVisible: true,
               canManage: false,
               canLinkToTeam: true,
               isLinkedToTeam: true,
