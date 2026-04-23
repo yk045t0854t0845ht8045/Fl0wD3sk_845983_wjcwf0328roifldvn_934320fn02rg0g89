@@ -15,6 +15,7 @@ import {
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import { getManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import { getPlanGuildsForUser } from "@/lib/plans/planGuilds";
+import { sendTeamCreatedEmailSafe } from "@/lib/mail/transactional";
 
 const TEAM_ICON_KEYS = [
   "aurora",
@@ -278,6 +279,12 @@ export async function POST(request: Request) {
       iconKey,
       guildIds: validatedGuildIds,
       memberDiscordIds,
+    });
+    void sendTeamCreatedEmailSafe({
+      user: authSession.user,
+      teamName: name,
+      guildCount: validatedGuildIds.length,
+      memberInviteCount: memberDiscordIds.length,
     });
 
     const payload = await getUserTeamsSnapshotForUser({

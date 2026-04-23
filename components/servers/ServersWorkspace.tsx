@@ -1343,6 +1343,10 @@ export function ServersWorkspace({
         }
       : readTeamsSnapshotMemoryCache(workspaceCacheKey);
   const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [teamServers, setTeamServers] = useState<ManagedServer[]>([]);
+  const [isTeamServersLoading, setIsTeamServersLoading] = useState(
+    Boolean(currentAccount.discordUserId),
+  );
   const [serversSync, setServersSync] = useState<ManagedServersSyncState>(
     initialServersSync ?? (
       currentAccount.discordUserId
@@ -1494,6 +1498,36 @@ export function ServersWorkspace({
     },
     [workspaceCacheKey],
   );
+
+  const loadTeamServerCatalog = useCallback(async () => {
+    if (!currentAccount.discordUserId) {
+      setTeamServers([]);
+      setIsTeamServersLoading(false);
+      return;
+    }
+
+    setIsTeamServersLoading(true);
+
+    try {
+      const response = await fetch("/api/auth/me/servers/team-catalog", {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        servers?: ManagedServer[];
+      };
+
+      if (!response.ok || !payload.ok) {
+        return;
+      }
+
+      setTeamServers(payload.servers || []);
+    } catch {
+      // noop
+    } finally {
+      setIsTeamServersLoading(false);
+    }
+  }, [currentAccount.discordUserId]);
 
   useEffect(() => {
     serversRef.current = servers;
@@ -2082,7 +2116,6 @@ export function ServersWorkspace({
     () => teams.find((team) => team.id === selectedTeamId) || null,
     [selectedTeamId, teams],
   );
-  const emptyStateSyncContent = servers.length === 0 ? serversSyncContent : null;
   useEffect(() => {
     if (isDiscordRelinkRequired) {
       setIsDiscordReconnectModalOpen(true);
@@ -2097,12 +2130,29 @@ export function ServersWorkspace({
     () => new Set(teams.flatMap((team) => team.linkedGuildIds)),
     [teams],
   );
+  const teamCatalogSnapshotKey = useMemo(
+    () =>
+      teams
+        .map(
+          (team) =>
+            `${team.id}:${[...team.linkedGuildIds].sort((left, right) => left.localeCompare(right)).join(",")}`,
+        )
+        .sort((left, right) => left.localeCompare(right))
+        .join("|"),
+    [teams],
+  );
+  const panelVisibleServers = useMemo(
+    () => servers.filter((server) => server.isPanelVisible),
+    [servers],
+  );
+  const emptyStateSyncContent =
+    panelVisibleServers.length === 0 ? serversSyncContent : null;
   const teamServerOptions = useMemo(
     () =>
-      [...servers].sort((a, b) =>
+      [...teamServers].sort((a, b) =>
         a.guildName.localeCompare(b.guildName, "pt-BR"),
       ),
-    [servers],
+    [teamServers],
   );
   const availableTeamServerOptions = useMemo(
     () =>
@@ -2118,11 +2168,14 @@ export function ServersWorkspace({
     () => new Set(availableTeamServerOptions.map((server) => server.guildId)),
     [availableTeamServerOptions],
   );
+  useEffect(() => {
+    void loadTeamServerCatalog();
+  }, [loadTeamServerCatalog, teamCatalogSnapshotKey]);
   const visibleServers = useMemo(() => {
-    if (!selectedTeam) return servers;
+    if (!selectedTeam) return panelVisibleServers;
     const allowedGuildIds = new Set(selectedTeam.linkedGuildIds);
-    return servers.filter((server) => allowedGuildIds.has(server.guildId));
-  }, [selectedTeam, servers]);
+    return panelVisibleServers.filter((server) => allowedGuildIds.has(server.guildId));
+  }, [panelVisibleServers, selectedTeam]);
 
   const filteredServers = useMemo(() => {
     const baseServers =
@@ -2766,6 +2819,7 @@ export function ServersWorkspace({
 
         if (payload.conflict || (Array.isArray(payload.conflictingGuildIds) && payload.conflictingGuildIds.length)) {
           void requestServersReload({ silent: true });
+          void loadTeamServerCatalog();
         }
 
         throw new Error(payload.message || "Nao foi possivel criar a equipe.");
@@ -2799,6 +2853,7 @@ export function ServersWorkspace({
     createTeamServerIds,
     availableTeamServerIdSet,
     isCreatingTeam,
+    loadTeamServerCatalog,
     resetCreateTeamForm,
     requestServersReload,
   ]);
@@ -2895,20 +2950,22 @@ export function ServersWorkspace({
   }, [prefetchWorkspaceSections, selectedGuildIdForConfig]);
 
   const selectedServer = useMemo(
-    () => servers.find((server) => server.guildId === selectedGuildIdForConfig) || null,
-    [selectedGuildIdForConfig, servers],
+    () =>
+      panelVisibleServers.find((server) => server.guildId === selectedGuildIdForConfig) ||
+      null,
+    [panelVisibleServers, selectedGuildIdForConfig],
   );
   const shouldShowServersSyncBanner = Boolean(
-    serversSyncContent && (servers.length > 0 || isDiscordRelinkRequired),
+    serversSyncContent && (panelVisibleServers.length > 0 || isDiscordRelinkRequired),
   );
   const workspaceAlertMessage = useMemo(
     () =>
       resolveServersWorkspaceAlertMessage({
         isEditingServer,
         selectedServer,
-        servers,
+        servers: panelVisibleServers,
       }),
-    [isEditingServer, selectedServer, servers],
+    [isEditingServer, panelVisibleServers, selectedServer],
   );
   const hasWorkspaceAlert = Boolean(workspaceAlertMessage);
   const isEditorViewerOnly = useMemo(() => {
@@ -3936,7 +3993,7 @@ export function ServersWorkspace({
                   <div className={editorPanelRevealClass}>
                     <ServerSettingsEditor
                       {...selectedServer}
-                      allServers={servers}
+                      allServers={panelVisibleServers}
                       initialTab={selectedEditorTabForConfig}
                       settingsSection={selectedSettingsSectionForConfig}
                       onTabChange={(tab) => {
@@ -4211,7 +4268,7 @@ export function ServersWorkspace({
                           {createTeamServerIds.length} selecionado(s)
                         </span>
                       </div>
-                      {!availableTeamServerOptions.length && teamServerOptions.length ? (
+                      {!isTeamServersLoading && !availableTeamServerOptions.length && teamServerOptions.length ? (
                         <p className="mb-[10px] text-[12px] leading-[1.5] text-[#676767]">
                           Todos os servidores disponiveis no painel ja estao vinculados a outra equipe.
                         </p>
@@ -4270,7 +4327,9 @@ export function ServersWorkspace({
                           );
                         }) : (
                           <div className="rounded-[16px] border border-[#141414] bg-[#0A0A0A] px-[14px] py-[14px] text-[13px] leading-[1.5] text-[#6E6E6E]">
-                            Nenhum servidor disponivel no painel para vincular a uma equipe agora.
+                            {isTeamServersLoading
+                              ? "Carregando servidores disponiveis..."
+                              : "Nenhum servidor disponivel no painel para vincular a uma equipe agora."}
                           </div>
                         )}
                       </div>

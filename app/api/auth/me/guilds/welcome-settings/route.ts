@@ -41,6 +41,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import { sendServerSettingsSavedEmailSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_TEXT = 0;
@@ -928,6 +929,12 @@ export async function POST(request: Request) {
       meta: {
         channelCount: rawChannels.length,
       },
+    });
+    void sendServerSettingsSavedEmailSafe({
+      user: access.context.sessionData.authSession.user,
+      guildId,
+      moduleLabel: "Entrada e saida",
+      detail: enabled ? "Modulo ativo" : "Modulo desativado",
     });
 
     return applyNoStoreHeaders(

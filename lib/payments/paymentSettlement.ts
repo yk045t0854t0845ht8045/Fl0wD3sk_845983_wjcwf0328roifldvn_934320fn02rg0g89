@@ -9,6 +9,7 @@ import { invalidatePaymentOrderQueryCaches } from "@/lib/payments/orderQueryCach
 import { clearPlanStateCacheForUser } from "@/lib/account/managedPlanState";
 import { syncUserPlanStateFromOrder } from "@/lib/plans/state";
 import { invalidateGuildLicenseCaches } from "@/lib/payments/licenseStatus";
+import { sendPaymentApprovedEmailForOrderSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 
@@ -223,7 +224,7 @@ function shouldAttemptSettlementRecovery(order: PaymentSettlementOrderRecord) {
     return true;
   }
 
-  return Date.now() - resolveSettlementReferenceMs(order) <= resolveSettlementRecoveryWindowMs();
+  return true;
 }
 
 function shouldTreatPlanStateAsSettled(
@@ -330,6 +331,7 @@ async function markSettlementAsSettled<TOrder extends PaymentSettlementOrderReco
         settledAt,
       },
     );
+    void sendPaymentApprovedEmailForOrderSafe(updatedOrder);
     return updatedOrder;
   } catch {
     await createPaymentOrderEventSafe(
@@ -341,6 +343,7 @@ async function markSettlementAsSettled<TOrder extends PaymentSettlementOrderReco
         payloadUpdateSkipped: true,
       },
     );
+    void sendPaymentApprovedEmailForOrderSafe(input.order);
     return input.order;
   }
 }

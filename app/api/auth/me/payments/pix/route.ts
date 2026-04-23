@@ -88,6 +88,10 @@ import {
   type PlanChangePreview,
 } from "@/lib/plans/change";
 import {
+  sendPaymentApprovedEmailForOrderSafe,
+  sendPaymentPendingEmailSafe,
+} from "@/lib/mail/transactional";
+import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
 } from "@/lib/security/errors";
@@ -1342,6 +1346,7 @@ async function finalizeCreditCoveredCheckoutOrder(input: {
   );
 
   await syncUserPlanStateFromOrder(updatedOrderResult.data);
+  void sendPaymentApprovedEmailForOrderSafe(updatedOrderResult.data);
   clearPlanStateCacheForUser(input.order.user_id);
   invalidatePaymentReadCachesForOrder(updatedOrderResult.data);
   invalidateLicenseReadCachesForOrder(updatedOrderResult.data);
@@ -2378,6 +2383,13 @@ export async function POST(request: Request) {
         forceRotate: true,
         invalidateOtherOrders: true,
       });
+      if (securedOrder.order.status === "pending") {
+        void sendPaymentPendingEmailSafe({
+          user,
+          order: securedOrder.order,
+          checkoutAccessToken: securedOrder.checkoutAccessToken,
+        });
+      }
 
       return respond({
         ok: true,

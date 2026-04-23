@@ -34,6 +34,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
+import { sendServerSettingsSavedEmailSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const GUILD_TEXT = 0;
@@ -811,6 +812,12 @@ export async function POST(request: Request) {
       outcome: "saved",
       httpStatus: 200,
       detail: "Configuracoes de logs de seguranca salvas com sucesso.",
+    });
+    void sendServerSettingsSavedEmailSafe({
+      user: access.context.sessionData.authSession.user,
+      guildId,
+      moduleLabel: "Logs de seguranca",
+      detail: settings.enabled ? "Modulo ativo" : "Modulo desativado",
     });
 
     return applyNoStoreHeaders(

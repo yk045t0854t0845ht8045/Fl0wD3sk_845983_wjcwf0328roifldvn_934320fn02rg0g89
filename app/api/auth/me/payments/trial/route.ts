@@ -21,6 +21,7 @@ import {
 import {
   cleanupExpiredUnpaidServerSetups,
 } from "@/lib/payments/setupCleanup";
+import { sendPaymentApprovedEmailForOrderSafe } from "@/lib/mail/transactional";
 import {
   getBasicPlanAvailability,
   resolveEffectivePlanSelection,
@@ -534,6 +535,7 @@ export async function POST(request: Request) {
         });
 
         await syncUserPlanStateFromOrder(securedOrder.order);
+        void sendPaymentApprovedEmailForOrderSafe(securedOrder.order);
         clearPlanStateCacheForUser(user.id);
 
         await logSecurityAuditEventSafe(auditContext, {

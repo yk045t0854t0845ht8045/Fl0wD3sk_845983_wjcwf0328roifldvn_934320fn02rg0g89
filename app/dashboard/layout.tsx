@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { DashboardWorkspace } from "@/components/dashboard/DashboardWorkspace";
 import { MaintenanceGate } from "@/components/common/MaintenanceGate";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
-import { getManagedServersForCurrentSession } from "@/lib/servers/managedServers";
+import { getPanelManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import { resolveDashboardWorkspaceAlertMessage } from "@/lib/servers/workspaceAlerts";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
 
@@ -28,7 +28,7 @@ async function DashboardLayoutContent({
 
   const [managedServers, teamsSnapshot] = await Promise.all([
     user.discord_user_id
-      ? getManagedServersForCurrentSession().catch(() => [])
+      ? getPanelManagedServersForCurrentSession().catch(() => [])
       : Promise.resolve([]),
     getUserTeamsSnapshotForUser({
       authUserId: user.id,

@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
 import {
   DEFAULT_MANAGED_SERVERS_SYNC_STATE,
-  getManagedServersSnapshotForCurrentSession,
+  getPanelManagedServersSnapshotForCurrentSession,
 } from "@/lib/servers/managedServers";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
 
@@ -23,7 +23,7 @@ export async function getServersWorkspaceBootstrap() {
   }
 
   const [serversSnapshot, teamsSnapshot] = await Promise.all([
-    getManagedServersSnapshotForCurrentSession().catch(() => ({
+    getPanelManagedServersSnapshotForCurrentSession().catch(() => ({
       servers: [],
       sync: !user.discord_user_id
         ? {

@@ -11,6 +11,27 @@ import {
   getViolationStatusForUser,
   syncDiscordViolationRoles,
 } from "@/lib/account/violations";
+import { sendAccountStatusChangedEmailSafe } from "@/lib/mail/transactional";
+import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+
+async function shouldSendStatusEmailToday(input: {
+  userId: number;
+  statusLevel: number;
+}) {
+  if (input.statusLevel <= 0) return false;
+
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("auth_security_events")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", input.userId)
+    .eq("action", "account_status_email_sent")
+    .gte("created_at", sinceIso);
+
+  if (result.error) return true;
+  return (result.count || 0) === 0;
+}
 
 // ─── Helper: resolve internal user ID + discord ID from session ───────────────
 async function resolveUserFromSession() {
@@ -98,6 +119,25 @@ export async function POST(request: Request) {
     if (user.discordUserId) {
       syncDiscordViolationRoles(user.discordUserId, violationStatus.level).catch((err) => {
         console.error("[AccountStatus POST] Discord role sync error:", err);
+      });
+    }
+
+    if (await shouldSendStatusEmailToday({
+      userId: user.internalUserId,
+      statusLevel: violationStatus.level,
+    })) {
+      void sendAccountStatusChangedEmailSafe({
+        user: user.authSession.user,
+        statusLabel: violationStatus.label,
+        detail: violationStatus.activeViolations[0]?.reason || null,
+      });
+      void logSecurityAuditEventSafe(auditContext, {
+        action: "account_status_email_sent",
+        outcome: "succeeded",
+        metadata: {
+          level: violationStatus.level,
+          label: violationStatus.label,
+        },
       });
     }
 

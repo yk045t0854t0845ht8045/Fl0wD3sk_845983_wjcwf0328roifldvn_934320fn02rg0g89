@@ -44,9 +44,12 @@ const AUTH_COOKIE_NAMES = [
   getOAuthModeCookieName("microsoft"),
 ] as const;
 
-const VERIFIED_AUTH_COOKIE_NAMES = [
+const SESSION_COOKIE_NAMES = [
   authConfig.sessionCookieName,
   getSharedAuthCookieProofName(authConfig.sessionCookieName),
+] as const;
+
+const TRUSTED_DEVICE_COOKIE_NAMES = [
   authConfig.rememberedDeviceCookieName,
   getSharedAuthCookieProofName(authConfig.rememberedDeviceCookieName),
 ] as const;
@@ -64,14 +67,25 @@ export async function POST(request: Request) {
 
     await revokeCurrentSessionFromCookie();
 
+    const logoutPayload = await request
+      .json()
+      .catch(() => ({})) as { forgetTrustedDevice?: unknown };
+    const forgetTrustedDevice = logoutPayload.forgetTrustedDevice === true;
+
     // Apagar todos os cookies de auth da resposta e do cookie store do servidor.
     const cookieStore = await cookies();
     const response = NextResponse.json({ ok: true });
-    for (const name of VERIFIED_AUTH_COOKIE_NAMES) {
+    for (const name of SESSION_COOKIE_NAMES) {
       try { cookieStore.delete(name); } catch { /* noop */ }
     }
     clearSharedSessionCookie(request, response);
-    clearSharedTrustedDeviceCookie(request, response);
+
+    if (forgetTrustedDevice) {
+      for (const name of TRUSTED_DEVICE_COOKIE_NAMES) {
+        try { cookieStore.delete(name); } catch { /* noop */ }
+      }
+      clearSharedTrustedDeviceCookie(request, response);
+    }
 
     for (const name of AUTH_COOKIE_NAMES) {
       // Remove do store do Next.js (server-side)

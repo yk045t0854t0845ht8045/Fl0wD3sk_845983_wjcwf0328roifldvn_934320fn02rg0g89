@@ -5,6 +5,7 @@ import {
   createFlowAiApiTokenForUser,
   listFlowAiApiTokensForUser,
 } from "@/lib/flowai/tokens";
+import { sendApiKeyCreatedEmailSafe } from "@/lib/mail/transactional";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,6 +59,10 @@ export async function POST(req: Request) {
         ...(body?.metadata && typeof body.metadata === "object" ? body.metadata : {}),
         reason: body?.reason,
       },
+    });
+    void sendApiKeyCreatedEmailSafe({
+      user: authSession.user,
+      keyName: created.record.name,
     });
 
     return applyNoStoreHeaders(

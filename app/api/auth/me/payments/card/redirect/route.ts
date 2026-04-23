@@ -50,6 +50,9 @@ import {
   applyFlowPointsToAmount,
 } from "@/lib/plans/change";
 import {
+  sendPaymentPendingEmailSafe,
+} from "@/lib/mail/transactional";
+import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
@@ -736,6 +739,12 @@ export async function POST(request: Request) {
             environment: resolveMercadoPagoCardEnvironment(),
           },
         );
+        void sendPaymentPendingEmailSafe({
+          user,
+          order: updatedOrderResult.data,
+          paymentUrl: redirectUrl,
+          checkoutAccessToken: securedOrder.checkoutAccessToken,
+        });
 
         await logSecurityAuditEventSafe(auditContext, {
           action: "payment_card_redirect_post",
