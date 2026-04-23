@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 import { LandingReveal } from "@/components/landing/LandingReveal";
+import { setWorkspaceShellReadyState } from "@/components/workspace/WorkspaceRouteAdaptiveLoading";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useAccountStatus } from "@/hooks/useAccountData";
@@ -280,6 +281,14 @@ export function AccountWorkspace({
   const { statusData } = useAccountStatus();
   const isSuspended = (statusData?.statusLevel ?? 0) >= 4;
   const isAtRisk = (statusData?.statusLevel ?? 0) >= 1;
+
+  useEffect(() => {
+    setWorkspaceShellReadyState("account", true);
+
+    return () => {
+      setWorkspaceShellReadyState("account", false);
+    };
+  }, []);
 
   const router = useRouter();
   const pathname = usePathname();

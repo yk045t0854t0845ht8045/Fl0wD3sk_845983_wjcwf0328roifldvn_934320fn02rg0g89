@@ -32,6 +32,7 @@ import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
 import { DashboardContentSkeleton } from "@/components/workspace/WorkspaceRouteLoading";
+import { setWorkspaceShellReadyState } from "@/components/workspace/WorkspaceRouteAdaptiveLoading";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
 import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
@@ -105,8 +106,6 @@ type TeamsApiResponse = {
 
 const sidebarShellClass =
   "relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
-const shellClass =
-  "rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] shadow-[0_24px_80px_rgba(0,0,0,0.38)]";
 const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
 
 const TEAM_ICON_OPTIONS = [
@@ -495,6 +494,14 @@ export function DashboardWorkspace({
   workspaceAlertMessage = null,
   children,
 }: DashboardWorkspaceProps) {
+  useEffect(() => {
+    setWorkspaceShellReadyState("dashboard", true);
+
+    return () => {
+      setWorkspaceShellReadyState("dashboard", false);
+    };
+  }, []);
+
   const router = useRouter();
   const pathname = usePathname();
   const [, startSidebarNavigationTransition] = useTransition();
