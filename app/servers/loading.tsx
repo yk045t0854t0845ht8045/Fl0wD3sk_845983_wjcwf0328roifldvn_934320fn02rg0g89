@@ -1,5 +1,5 @@
-import { WorkspaceRouteLoading } from "@/components/workspace/WorkspaceRouteLoading";
+import { WorkspaceRouteContentLoading } from "@/components/workspace/WorkspaceRouteLoading";
 
 export default function ServersLoading() {
-  return <WorkspaceRouteLoading variant="servers" />;
+  return <WorkspaceRouteContentLoading variant="servers" />;
 }

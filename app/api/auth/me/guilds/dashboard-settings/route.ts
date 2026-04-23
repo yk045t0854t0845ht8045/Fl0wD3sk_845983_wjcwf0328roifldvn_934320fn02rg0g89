@@ -9,18 +9,32 @@ import {
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
+import {
+  buildDashboardSettingsCacheKey,
+  readDashboardSettingsCache,
+  writeDashboardSettingsCache,
+} from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshots,
+  type ServerSettingsVaultModule,
+} from "@/lib/servers/serverSettingsVault";
 import { normalizeTicketPanelLayout } from "@/lib/servers/ticketPanelBuilder";
 import {
   createDefaultWelcomeEntryLayout,
   createDefaultWelcomeExitLayout,
   normalizeWelcomeLayout,
 } from "@/lib/servers/welcomeMessageBuilder";
-import { isMissingDedicatedTicketAiColumnsError, normalizeTicketAiSettings } from "@/lib/servers/ticketAiSettings";
+import {
+  isMissingDedicatedTicketAiColumnsError,
+  normalizeTicketAiSettings,
+} from "@/lib/servers/ticketAiSettings";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import { getEffectiveDashboardPermissions } from "@/lib/teams/userTeams";
 
 const GUILD_CATEGORY = 4;
 const GUILD_TEXT = 0;
 const GUILD_ANNOUNCEMENT = 5;
+const DASHBOARD_SETTINGS_CACHE_TTL_MS = 15_000;
 const TICKET_SETTINGS_SELECT_BASE =
   "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, ai_rules, updated_at";
 const TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI = `${TICKET_SETTINGS_SELECT_BASE}, ai_enabled, ai_company_name, ai_company_bio, ai_tone`;
@@ -39,13 +53,10 @@ type RoleOption = {
   position: number;
 };
 
-type DashboardSettingsCacheEntry = {
-  expiresAt: number;
-  value: unknown;
+type SecurityLogEventPayload = {
+  enabled: boolean;
+  channelId: string | null;
 };
-
-const DASHBOARD_SETTINGS_CACHE_TTL_MS = 15_000;
-const dashboardSettingsCache = new Map<string, DashboardSettingsCacheEntry>();
 
 function sortChannels(channels: ChannelOption[]) {
   return [...channels].sort((a, b) => {
@@ -58,39 +69,6 @@ function sortRoles(roles: RoleOption[]) {
   return [...roles].sort((a, b) => {
     if (a.position !== b.position) return b.position - a.position;
     return a.name.localeCompare(b.name, "pt-BR");
-  });
-}
-
-function cloneJsonValue<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function buildDashboardSettingsCacheKey(input: {
-  userId: number;
-  guildId: string;
-  dashboardPermissions: "full" | Set<string>;
-}) {
-  const permissionsKey =
-    input.dashboardPermissions === "full"
-      ? "full"
-      : Array.from(input.dashboardPermissions).sort().join(",");
-  return `${input.userId}:${input.guildId}:${permissionsKey}`;
-}
-
-function readDashboardSettingsCache(key: string) {
-  const cached = dashboardSettingsCache.get(key);
-  if (!cached) return null;
-  if (cached.expiresAt <= Date.now()) {
-    dashboardSettingsCache.delete(key);
-    return null;
-  }
-  return cloneJsonValue(cached.value);
-}
-
-function writeDashboardSettingsCache(key: string, value: unknown) {
-  dashboardSettingsCache.set(key, {
-    value: cloneJsonValue(value),
-    expiresAt: Date.now() + DASHBOARD_SETTINGS_CACHE_TTL_MS,
   });
 }
 
@@ -117,6 +95,12 @@ function normalizeAntiLinkTimeoutMinutes(value: unknown) {
       : Number.NaN;
   if (!Number.isFinite(parsed)) return 10;
   return Math.min(10080, Math.max(1, parsed));
+}
+
+function toRecordOrNull(value: unknown) {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function resolveSecurityLogEvent(data: Record<string, unknown>, input: {
@@ -169,9 +153,535 @@ async function loadGuildTicketSettings(
     .maybeSingle();
 }
 
-import { 
-  getEffectiveDashboardPermissions, 
-} from "@/lib/teams/userTeams";
+function buildTicketSettingsPayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  textSet: Set<string>;
+  categorySet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  const ticketAiSettings = normalizeTicketAiSettings(input.record);
+  const menuChannelId =
+    typeof input.snapshot?.menuChannelId === "string" &&
+    input.textSet.has(input.snapshot.menuChannelId)
+      ? input.snapshot.menuChannelId
+      : typeof input.record?.menu_channel_id === "string" &&
+          input.textSet.has(input.record.menu_channel_id)
+        ? input.record.menu_channel_id
+        : null;
+  const ticketsCategoryId =
+    typeof input.snapshot?.ticketsCategoryId === "string" &&
+    input.categorySet.has(input.snapshot.ticketsCategoryId)
+      ? input.snapshot.ticketsCategoryId
+      : typeof input.record?.tickets_category_id === "string" &&
+          input.categorySet.has(input.record.tickets_category_id)
+        ? input.record.tickets_category_id
+        : null;
+  const logsCreatedChannelId =
+    typeof input.snapshot?.logsCreatedChannelId === "string" &&
+    input.textSet.has(input.snapshot.logsCreatedChannelId)
+      ? input.snapshot.logsCreatedChannelId
+      : typeof input.record?.logs_created_channel_id === "string" &&
+          input.textSet.has(input.record.logs_created_channel_id)
+        ? input.record.logs_created_channel_id
+        : null;
+  const logsClosedChannelId =
+    typeof input.snapshot?.logsClosedChannelId === "string" &&
+    input.textSet.has(input.snapshot.logsClosedChannelId)
+      ? input.snapshot.logsClosedChannelId
+      : typeof input.record?.logs_closed_channel_id === "string" &&
+          input.textSet.has(input.record.logs_closed_channel_id)
+        ? input.record.logs_closed_channel_id
+        : null;
+  const panelTitle =
+    typeof input.snapshot?.panelTitle === "string"
+      ? input.snapshot.panelTitle
+      : typeof input.record?.panel_title === "string"
+        ? input.record.panel_title
+        : "";
+  const panelDescription =
+    typeof input.snapshot?.panelDescription === "string"
+      ? input.snapshot.panelDescription
+      : typeof input.record?.panel_description === "string"
+        ? input.record.panel_description
+        : "";
+  const panelButtonLabel =
+    typeof input.snapshot?.panelButtonLabel === "string"
+      ? input.snapshot.panelButtonLabel
+      : typeof input.record?.panel_button_label === "string"
+        ? input.record.panel_button_label
+        : "";
+
+  return {
+    enabled:
+      typeof input.snapshot?.enabled === "boolean"
+        ? input.snapshot.enabled
+        : input.record?.enabled === true,
+    menuChannelId,
+    ticketsCategoryId,
+    logsCreatedChannelId,
+    logsClosedChannelId,
+    panelLayout: normalizeTicketPanelLayout(
+      input.snapshot?.panelLayout ?? input.record?.panel_layout,
+      {
+        panelTitle,
+        panelDescription,
+        panelButtonLabel,
+      },
+    ),
+    panelTitle,
+    panelDescription,
+    panelButtonLabel,
+    aiRules:
+      typeof input.snapshot?.aiRules === "string"
+        ? input.snapshot.aiRules
+        : ticketAiSettings.aiRules,
+    aiEnabled:
+      typeof input.snapshot?.aiEnabled === "boolean"
+        ? input.snapshot.aiEnabled
+        : ticketAiSettings.aiEnabled,
+    aiCompanyName:
+      typeof input.snapshot?.aiCompanyName === "string"
+        ? input.snapshot.aiCompanyName
+        : ticketAiSettings.aiCompanyName,
+    aiCompanyBio:
+      typeof input.snapshot?.aiCompanyBio === "string"
+        ? input.snapshot.aiCompanyBio
+        : ticketAiSettings.aiCompanyBio,
+    aiTone:
+      typeof input.snapshot?.aiTone === "string"
+        ? input.snapshot.aiTone
+        : ticketAiSettings.aiTone,
+    updatedAt: input.updatedAt,
+  };
+}
+
+function buildTicketStaffPayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  roleSet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  const sanitizeRoleIds = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter(
+          (roleId): roleId is string =>
+            typeof roleId === "string" && input.roleSet.has(roleId),
+        )
+      : [];
+
+  return {
+    adminRoleId:
+      typeof input.snapshot?.adminRoleId === "string" &&
+      input.roleSet.has(input.snapshot.adminRoleId)
+        ? input.snapshot.adminRoleId
+        : typeof input.record?.admin_role_id === "string" &&
+            input.roleSet.has(input.record.admin_role_id)
+          ? input.record.admin_role_id
+          : null,
+    claimRoleIds: sanitizeRoleIds(
+      input.snapshot?.claimRoleIds ?? input.record?.claim_role_ids,
+    ),
+    closeRoleIds: sanitizeRoleIds(
+      input.snapshot?.closeRoleIds ?? input.record?.close_role_ids,
+    ),
+    notifyRoleIds: sanitizeRoleIds(
+      input.snapshot?.notifyRoleIds ?? input.record?.notify_role_ids,
+    ),
+    updatedAt: input.updatedAt,
+  };
+}
+
+function buildWelcomePayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  textSet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  const defaultEntryLayout = createDefaultWelcomeEntryLayout();
+  const defaultExitLayout = createDefaultWelcomeExitLayout();
+
+  return {
+    enabled:
+      typeof input.snapshot?.enabled === "boolean"
+        ? input.snapshot.enabled
+        : input.record?.enabled === true,
+    entryPublicChannelId:
+      typeof input.snapshot?.entryPublicChannelId === "string" &&
+      input.textSet.has(input.snapshot.entryPublicChannelId)
+        ? input.snapshot.entryPublicChannelId
+        : typeof input.record?.entry_public_channel_id === "string" &&
+            input.textSet.has(input.record.entry_public_channel_id)
+          ? input.record.entry_public_channel_id
+          : null,
+    entryLogChannelId:
+      typeof input.snapshot?.entryLogChannelId === "string" &&
+      input.textSet.has(input.snapshot.entryLogChannelId)
+        ? input.snapshot.entryLogChannelId
+        : typeof input.record?.entry_log_channel_id === "string" &&
+            input.textSet.has(input.record.entry_log_channel_id)
+          ? input.record.entry_log_channel_id
+          : null,
+    exitPublicChannelId:
+      typeof input.snapshot?.exitPublicChannelId === "string" &&
+      input.textSet.has(input.snapshot.exitPublicChannelId)
+        ? input.snapshot.exitPublicChannelId
+        : typeof input.record?.exit_public_channel_id === "string" &&
+            input.textSet.has(input.record.exit_public_channel_id)
+          ? input.record.exit_public_channel_id
+          : null,
+    exitLogChannelId:
+      typeof input.snapshot?.exitLogChannelId === "string" &&
+      input.textSet.has(input.snapshot.exitLogChannelId)
+        ? input.snapshot.exitLogChannelId
+        : typeof input.record?.exit_log_channel_id === "string" &&
+            input.textSet.has(input.record.exit_log_channel_id)
+          ? input.record.exit_log_channel_id
+          : null,
+    entryLayout: normalizeWelcomeLayout(
+      input.snapshot?.entryPublicLayout ?? input.snapshot?.entryLayout ?? input.record?.entry_layout,
+      defaultEntryLayout,
+    ),
+    exitLayout: normalizeWelcomeLayout(
+      input.snapshot?.exitPublicLayout ?? input.snapshot?.exitLayout ?? input.record?.exit_layout,
+      defaultExitLayout,
+    ),
+    entryPublicLayout: normalizeWelcomeLayout(
+      input.snapshot?.entryPublicLayout ?? input.snapshot?.entryLayout ?? input.record?.entry_layout,
+      defaultEntryLayout,
+    ),
+    entryLogLayout: normalizeWelcomeLayout(
+      input.snapshot?.entryLogLayout ?? input.snapshot?.entryLayout ?? input.record?.entry_layout,
+      defaultEntryLayout,
+    ),
+    exitPublicLayout: normalizeWelcomeLayout(
+      input.snapshot?.exitPublicLayout ?? input.snapshot?.exitLayout ?? input.record?.exit_layout,
+      defaultExitLayout,
+    ),
+    exitLogLayout: normalizeWelcomeLayout(
+      input.snapshot?.exitLogLayout ?? input.snapshot?.exitLayout ?? input.record?.exit_layout,
+      defaultExitLayout,
+    ),
+    entryThumbnailMode: normalizeWelcomeThumbnailMode(
+      input.snapshot?.entryPublicThumbnailMode ??
+        input.snapshot?.entryThumbnailMode ??
+        input.record?.entry_thumbnail_mode,
+    ),
+    exitThumbnailMode: normalizeWelcomeThumbnailMode(
+      input.snapshot?.exitPublicThumbnailMode ??
+        input.snapshot?.exitThumbnailMode ??
+        input.record?.exit_thumbnail_mode,
+    ),
+    entryPublicThumbnailMode: normalizeWelcomeThumbnailMode(
+      input.snapshot?.entryPublicThumbnailMode ??
+        input.snapshot?.entryThumbnailMode ??
+        input.record?.entry_thumbnail_mode,
+    ),
+    entryLogThumbnailMode: normalizeWelcomeThumbnailMode(
+      input.snapshot?.entryLogThumbnailMode ??
+        input.snapshot?.entryThumbnailMode ??
+        input.record?.entry_thumbnail_mode,
+    ),
+    exitPublicThumbnailMode: normalizeWelcomeThumbnailMode(
+      input.snapshot?.exitPublicThumbnailMode ??
+        input.snapshot?.exitThumbnailMode ??
+        input.record?.exit_thumbnail_mode,
+    ),
+    exitLogThumbnailMode: normalizeWelcomeThumbnailMode(
+      input.snapshot?.exitLogThumbnailMode ??
+        input.snapshot?.exitThumbnailMode ??
+        input.record?.exit_thumbnail_mode,
+    ),
+    updatedAt: input.updatedAt,
+  };
+}
+
+function buildAntiLinkPayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  textSet: Set<string>;
+  roleSet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  const ignoredRoleIdsSource =
+    input.snapshot?.ignoredRoleIds ?? input.record?.ignored_role_ids;
+  const ignoredChannelIdsSource =
+    input.snapshot?.ignoredChannelIds ?? input.record?.ignored_channel_ids;
+
+  return {
+    enabled:
+      typeof input.snapshot?.enabled === "boolean"
+        ? input.snapshot.enabled
+        : input.record?.enabled === true,
+    logChannelId:
+      typeof input.snapshot?.logChannelId === "string" &&
+      input.textSet.has(input.snapshot.logChannelId)
+        ? input.snapshot.logChannelId
+        : typeof input.record?.log_channel_id === "string" &&
+            input.textSet.has(input.record.log_channel_id)
+          ? input.record.log_channel_id
+          : null,
+    enforcementAction: normalizeAntiLinkAction(
+      input.snapshot?.enforcementAction ?? input.record?.enforcement_action,
+    ),
+    timeoutMinutes: normalizeAntiLinkTimeoutMinutes(
+      input.snapshot?.timeoutMinutes ?? input.record?.timeout_minutes,
+    ),
+    ignoredRoleIds: Array.isArray(ignoredRoleIdsSource)
+      ? ignoredRoleIdsSource.filter(
+          (roleId: unknown): roleId is string =>
+            typeof roleId === "string" && input.roleSet.has(roleId),
+        )
+      : [],
+    ignoredChannelIds: Array.isArray(ignoredChannelIdsSource)
+      ? ignoredChannelIdsSource.filter(
+          (channelId: unknown): channelId is string =>
+            typeof channelId === "string" && input.textSet.has(channelId),
+        )
+      : [],
+    blockExternalLinks:
+      input.snapshot?.blockExternalLinks !== false,
+    blockDiscordInvites:
+      input.snapshot?.blockDiscordInvites !== false,
+    blockObfuscatedLinks:
+      input.snapshot?.blockObfuscatedLinks !== false,
+    updatedAt: input.updatedAt,
+  };
+}
+
+function buildAutoRolePayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  roleSet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  const assignmentDelay =
+    input.snapshot?.assignmentDelayMinutes ?? input.record?.assignment_delay_minutes;
+  const syncStatus =
+    input.snapshot?.syncStatus ?? input.record?.existing_members_sync_status;
+  const roleIdsSource = input.snapshot?.roleIds ?? input.record?.role_ids;
+
+  return {
+    enabled:
+      typeof input.snapshot?.enabled === "boolean"
+        ? input.snapshot.enabled
+        : input.record?.enabled === true,
+    roleIds: Array.isArray(roleIdsSource)
+      ? roleIdsSource.filter(
+          (roleId: unknown): roleId is string =>
+            typeof roleId === "string" && input.roleSet.has(roleId),
+        )
+      : [],
+    assignmentDelayMinutes:
+      assignmentDelay === 10 || assignmentDelay === 20 || assignmentDelay === 30
+        ? assignmentDelay
+        : 0,
+    syncStatus:
+      syncStatus === "pending" ||
+      syncStatus === "processing" ||
+      syncStatus === "completed" ||
+      syncStatus === "failed"
+        ? syncStatus
+        : "idle",
+    syncRequestedAt:
+      typeof input.snapshot?.syncRequestedAt === "string"
+        ? input.snapshot.syncRequestedAt
+        : typeof input.record?.existing_members_sync_requested_at === "string"
+          ? input.record.existing_members_sync_requested_at
+          : null,
+    syncStartedAt:
+      typeof input.snapshot?.syncStartedAt === "string"
+        ? input.snapshot.syncStartedAt
+        : typeof input.record?.existing_members_sync_started_at === "string"
+          ? input.record.existing_members_sync_started_at
+          : null,
+    syncCompletedAt:
+      typeof input.snapshot?.syncCompletedAt === "string"
+        ? input.snapshot.syncCompletedAt
+        : typeof input.record?.existing_members_sync_completed_at === "string"
+          ? input.record.existing_members_sync_completed_at
+          : null,
+    syncError:
+      typeof input.snapshot?.syncError === "string"
+        ? input.snapshot.syncError
+        : typeof input.record?.existing_members_sync_error === "string"
+          ? input.record.existing_members_sync_error
+          : null,
+    updatedAt: input.updatedAt,
+  };
+}
+
+function resolveSnapshotSecurityLogEvent(
+  value: unknown,
+  textSet: Set<string>,
+): SecurityLogEventPayload {
+  const record = toRecordOrNull(value);
+  return {
+    enabled: record?.enabled === true,
+    channelId:
+      typeof record?.channelId === "string" && textSet.has(record.channelId)
+        ? record.channelId
+        : null,
+  };
+}
+
+function buildSecurityLogsPayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  textSet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  if (input.snapshot) {
+    const events = toRecordOrNull(input.snapshot.events);
+    return {
+      enabled: input.snapshot.enabled === true,
+      useDefaultChannel: input.snapshot.useDefaultChannel === true,
+      defaultChannelId:
+        typeof input.snapshot.defaultChannelId === "string" &&
+        input.textSet.has(input.snapshot.defaultChannelId)
+          ? input.snapshot.defaultChannelId
+          : null,
+      events: {
+        nicknameChange: resolveSnapshotSecurityLogEvent(
+          events?.nicknameChange,
+          input.textSet,
+        ),
+        avatarChange: resolveSnapshotSecurityLogEvent(
+          events?.avatarChange,
+          input.textSet,
+        ),
+        voiceJoin: resolveSnapshotSecurityLogEvent(
+          events?.voiceJoin,
+          input.textSet,
+        ),
+        voiceLeave: resolveSnapshotSecurityLogEvent(
+          events?.voiceLeave,
+          input.textSet,
+        ),
+        messageDelete: resolveSnapshotSecurityLogEvent(
+          events?.messageDelete,
+          input.textSet,
+        ),
+        messageEdit: resolveSnapshotSecurityLogEvent(
+          events?.messageEdit,
+          input.textSet,
+        ),
+        memberBan: resolveSnapshotSecurityLogEvent(
+          events?.memberBan,
+          input.textSet,
+        ),
+        memberUnban: resolveSnapshotSecurityLogEvent(
+          events?.memberUnban,
+          input.textSet,
+        ),
+        memberKick: resolveSnapshotSecurityLogEvent(
+          events?.memberKick,
+          input.textSet,
+        ),
+        memberTimeout: resolveSnapshotSecurityLogEvent(
+          events?.memberTimeout,
+          input.textSet,
+        ),
+        voiceMute: resolveSnapshotSecurityLogEvent(
+          events?.voiceMute,
+          input.textSet,
+        ),
+      },
+      updatedAt: input.updatedAt,
+    };
+  }
+
+  return {
+    enabled: input.record?.enabled === true,
+    useDefaultChannel: input.record?.use_default_channel === true,
+    defaultChannelId: resolveOptionalTextChannelId(
+      input.record?.default_channel_id,
+      input.textSet,
+    ),
+    events: {
+      nicknameChange: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "nickname_change_enabled",
+        channelColumn: "nickname_change_channel_id",
+        textSet: input.textSet,
+      }),
+      avatarChange: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "avatar_change_enabled",
+        channelColumn: "avatar_change_channel_id",
+        textSet: input.textSet,
+      }),
+      voiceJoin: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "voice_join_enabled",
+        channelColumn: "voice_join_channel_id",
+        textSet: input.textSet,
+      }),
+      voiceLeave: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "voice_leave_enabled",
+        channelColumn: "voice_leave_channel_id",
+        textSet: input.textSet,
+      }),
+      messageDelete: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "message_delete_enabled",
+        channelColumn: "message_delete_channel_id",
+        textSet: input.textSet,
+      }),
+      messageEdit: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "message_edit_enabled",
+        channelColumn: "message_edit_channel_id",
+        textSet: input.textSet,
+      }),
+      memberBan: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "member_ban_enabled",
+        channelColumn: "member_ban_channel_id",
+        textSet: input.textSet,
+      }),
+      memberUnban: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "member_unban_enabled",
+        channelColumn: "member_unban_channel_id",
+        textSet: input.textSet,
+      }),
+      memberKick: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "member_kick_enabled",
+        channelColumn: "member_kick_channel_id",
+        textSet: input.textSet,
+      }),
+      memberTimeout: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "member_timeout_enabled",
+        channelColumn: "member_timeout_channel_id",
+        textSet: input.textSet,
+      }),
+      voiceMute: resolveSecurityLogEvent(input.record!, {
+        enabledColumn: "voice_mute_enabled",
+        channelColumn: "voice_mute_channel_id",
+        textSet: input.textSet,
+      }),
+    },
+    updatedAt: input.updatedAt,
+  };
+}
 
 async function ensureGuildAccess(guildId: string) {
   const sessionData = await resolveSessionAccessToken();
@@ -195,10 +705,11 @@ async function ensureGuildAccess(guildId: string) {
     };
   }
 
-  const { permissions: dashboardPerms, isTeamServer } = await getEffectiveDashboardPermissions({
-    authUserId: sessionData.authSession.user.id,
-    guildId: guildId,
-  });
+  const { permissions: dashboardPerms, isTeamServer } =
+    await getEffectiveDashboardPermissions({
+      authUserId: sessionData.authSession.user.id,
+      guildId,
+    });
 
   const accessibleGuild = await assertUserAdminInGuildOrNull(
     {
@@ -208,13 +719,10 @@ async function ensureGuildAccess(guildId: string) {
     guildId,
   );
 
-  // If the user has Discord admin perms AND is the license owner (determined by getEffectiveDashboardPermissions returning "full"), they have full access.
-  // BUT the user said "acesso SOMENTE à conta da equipe, não nas contas pessoais"
-  // This means if it's a team server, Discord Admin role on Discord is NOT enough. They must have team permission.
-  
-  const hasAccess = dashboardPerms === "full" || 
-                    (dashboardPerms instanceof Set && dashboardPerms.size > 0) ||
-                    (!isTeamServer && accessibleGuild);
+  const hasAccess =
+    dashboardPerms === "full" ||
+    (dashboardPerms instanceof Set && dashboardPerms.size > 0) ||
+    (!isTeamServer && accessibleGuild);
 
   if (!hasAccess) {
     return {
@@ -230,7 +738,10 @@ async function ensureGuildAccess(guildId: string) {
     ok: true as const,
     sessionData,
     accessibleGuild,
-    dashboardPerms: (dashboardPerms instanceof Set && !isTeamServer && accessibleGuild) ? "full" : dashboardPerms,
+    dashboardPerms:
+      dashboardPerms instanceof Set && !isTeamServer && accessibleGuild
+        ? "full"
+        : dashboardPerms,
   };
 }
 
@@ -267,13 +778,24 @@ export async function GET(request: Request) {
           ? "full"
           : new Set(Array.from(access.dashboardPerms)),
     });
-    const cachedPayload = readDashboardSettingsCache(cacheKey);
+    const cachedPayload =
+      readDashboardSettingsCache<Record<string, unknown>>(cacheKey);
     if (cachedPayload) {
       return applyNoStoreHeaders(NextResponse.json(cachedPayload));
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const [rawChannels, rawRoles, ticketResult, staffResult, welcomeResult, antiLinkResult, autoRoleResult, securityLogsResult] = await Promise.all([
+    const [
+      rawChannels,
+      rawRoles,
+      ticketResult,
+      staffResult,
+      welcomeResult,
+      antiLinkResult,
+      autoRoleResult,
+      securityLogsResult,
+      secureSnapshots,
+    ] = await Promise.all([
       fetchGuildChannelsByBot(guildId),
       fetchGuildRolesByBot(guildId),
       loadGuildTicketSettings(supabase, guildId),
@@ -312,6 +834,17 @@ export async function GET(request: Request) {
         )
         .eq("guild_id", guildId)
         .maybeSingle(),
+      readServerSettingsVaultSnapshots({
+        guildId,
+        moduleKeys: [
+          "ticket_settings",
+          "ticket_staff_settings",
+          "welcome_settings",
+          "antilink_settings",
+          "autorole_settings",
+          "security_logs_settings",
+        ] satisfies ServerSettingsVaultModule[],
+      }),
     ]);
 
     if (!rawChannels) {
@@ -338,26 +871,11 @@ export async function GET(request: Request) {
       );
     }
 
-    if (ticketResult.error) {
-      throw new Error(ticketResult.error.message);
-    }
-
-    if (staffResult.error) {
-      throw new Error(staffResult.error.message);
-    }
-
-    if (welcomeResult.error) {
-      throw new Error(welcomeResult.error.message);
-    }
-
-    if (antiLinkResult.error) {
-      throw new Error(antiLinkResult.error.message);
-    }
-
-    if (autoRoleResult.error) {
-      throw new Error(autoRoleResult.error.message);
-    }
-
+    if (ticketResult.error) throw new Error(ticketResult.error.message);
+    if (staffResult.error) throw new Error(staffResult.error.message);
+    if (welcomeResult.error) throw new Error(welcomeResult.error.message);
+    if (antiLinkResult.error) throw new Error(antiLinkResult.error.message);
+    if (autoRoleResult.error) throw new Error(autoRoleResult.error.message);
     if (securityLogsResult.error) {
       throw new Error(securityLogsResult.error.message);
     }
@@ -399,15 +917,10 @@ export async function GET(request: Request) {
         })),
     );
     const roleSet = new Set(roles.map((role) => role.id));
-
-    const defaultEntryLayout = createDefaultWelcomeEntryLayout();
-    const defaultExitLayout = createDefaultWelcomeExitLayout();
-    const ticketAiSettings = normalizeTicketAiSettings(
-      ticketResult.data as Record<string, unknown> | null | undefined,
-    );
+    const categorySet = new Set(categories.map((channel) => channel.id));
 
     const payload = {
-      ok: true,
+      ok: true as const,
       guild: {
         id: access.accessibleGuild?.id || guildId,
         name: access.accessibleGuild?.name || "Servidor selecionado",
@@ -417,275 +930,87 @@ export async function GET(request: Request) {
         categories,
       },
       roles,
-      ticketSettings: ticketResult.data
-        ? {
-            enabled: Boolean(ticketResult.data.enabled),
-            menuChannelId: ticketResult.data.menu_channel_id,
-            ticketsCategoryId: ticketResult.data.tickets_category_id,
-            logsCreatedChannelId: ticketResult.data.logs_created_channel_id,
-            logsClosedChannelId: ticketResult.data.logs_closed_channel_id,
-            panelLayout: normalizeTicketPanelLayout(ticketResult.data.panel_layout, {
-              panelTitle: ticketResult.data.panel_title,
-              panelDescription: ticketResult.data.panel_description,
-              panelButtonLabel: ticketResult.data.panel_button_label,
-            }),
-            panelTitle: ticketResult.data.panel_title,
-            panelDescription: ticketResult.data.panel_description,
-            panelButtonLabel: ticketResult.data.panel_button_label,
-            aiRules: ticketAiSettings.aiRules,
-            aiEnabled: ticketAiSettings.aiEnabled,
-            aiCompanyName: ticketAiSettings.aiCompanyName,
-            aiCompanyBio: ticketAiSettings.aiCompanyBio,
-            aiTone: ticketAiSettings.aiTone,
-            updatedAt: ticketResult.data.updated_at,
-          }
-        : null,
-      staffSettings: staffResult.data
-        ? {
-            adminRoleId: staffResult.data.admin_role_id,
-            claimRoleIds: Array.isArray(staffResult.data.claim_role_ids)
-              ? staffResult.data.claim_role_ids.filter(
-                  (roleId): roleId is string => typeof roleId === "string",
-                )
-              : [],
-            closeRoleIds: Array.isArray(staffResult.data.close_role_ids)
-              ? staffResult.data.close_role_ids.filter(
-                  (roleId): roleId is string => typeof roleId === "string",
-                )
-              : [],
-            notifyRoleIds: Array.isArray(staffResult.data.notify_role_ids)
-              ? staffResult.data.notify_role_ids.filter(
-                  (roleId): roleId is string => typeof roleId === "string",
-                )
-              : [],
-            updatedAt: staffResult.data.updated_at,
-          }
-        : null,
-      welcomeSettings: welcomeResult.data
-        ? {
-            enabled: Boolean(welcomeResult.data.enabled),
-            entryPublicChannelId:
-              welcomeResult.data.entry_public_channel_id &&
-              textSet.has(welcomeResult.data.entry_public_channel_id)
-                ? welcomeResult.data.entry_public_channel_id
-                : null,
-            entryLogChannelId:
-              welcomeResult.data.entry_log_channel_id &&
-              textSet.has(welcomeResult.data.entry_log_channel_id)
-                ? welcomeResult.data.entry_log_channel_id
-                : null,
-            exitPublicChannelId:
-              welcomeResult.data.exit_public_channel_id &&
-              textSet.has(welcomeResult.data.exit_public_channel_id)
-                ? welcomeResult.data.exit_public_channel_id
-                : null,
-            exitLogChannelId:
-              welcomeResult.data.exit_log_channel_id &&
-              textSet.has(welcomeResult.data.exit_log_channel_id)
-                ? welcomeResult.data.exit_log_channel_id
-                : null,
-            entryLayout: normalizeWelcomeLayout(
-              welcomeResult.data.entry_layout,
-              defaultEntryLayout,
-            ),
-            exitLayout: normalizeWelcomeLayout(
-              welcomeResult.data.exit_layout,
-              defaultExitLayout,
-            ),
-            entryThumbnailMode: normalizeWelcomeThumbnailMode(
-              welcomeResult.data.entry_thumbnail_mode,
-            ),
-            exitThumbnailMode: normalizeWelcomeThumbnailMode(
-              welcomeResult.data.exit_thumbnail_mode,
-            ),
-            updatedAt: welcomeResult.data.updated_at,
-          }
-        : null,
-      antiLinkSettings: antiLinkResult.data
-        ? {
-            enabled: Boolean(antiLinkResult.data.enabled),
-            logChannelId:
-              antiLinkResult.data.log_channel_id &&
-              textSet.has(antiLinkResult.data.log_channel_id)
-                ? antiLinkResult.data.log_channel_id
-                : null,
-            enforcementAction: normalizeAntiLinkAction(
-              antiLinkResult.data.enforcement_action,
-            ),
-            timeoutMinutes: normalizeAntiLinkTimeoutMinutes(
-              antiLinkResult.data.timeout_minutes,
-            ),
-            ignoredRoleIds: Array.isArray(antiLinkResult.data.ignored_role_ids)
-              ? antiLinkResult.data.ignored_role_ids.filter(
-                  (roleId): roleId is string =>
-                    typeof roleId === "string" && roleSet.has(roleId),
-                )
-              : [],
-            ignoredChannelIds: Array.isArray(
-              antiLinkResult.data.ignored_channel_ids,
-            )
-              ? antiLinkResult.data.ignored_channel_ids.filter(
-                  (channelId): channelId is string =>
-                    typeof channelId === "string" && textSet.has(channelId),
-                )
-              : [],
-            blockExternalLinks: true,
-            blockDiscordInvites: true,
-            blockObfuscatedLinks: true,
-            updatedAt: antiLinkResult.data.updated_at,
-          }
-        : null,
-      autoRoleSettings: autoRoleResult.data
-        ? {
-            enabled: Boolean(autoRoleResult.data.enabled),
-            roleIds: Array.isArray(autoRoleResult.data.role_ids)
-              ? autoRoleResult.data.role_ids.filter(
-                  (roleId): roleId is string =>
-                    typeof roleId === "string" && roleSet.has(roleId),
-                )
-              : [],
-            assignmentDelayMinutes:
-              autoRoleResult.data.assignment_delay_minutes === 10 ||
-              autoRoleResult.data.assignment_delay_minutes === 20 ||
-              autoRoleResult.data.assignment_delay_minutes === 30
-                ? autoRoleResult.data.assignment_delay_minutes
-                : 0,
-            syncStatus:
-              autoRoleResult.data.existing_members_sync_status === "pending" ||
-              autoRoleResult.data.existing_members_sync_status === "processing" ||
-              autoRoleResult.data.existing_members_sync_status === "completed" ||
-              autoRoleResult.data.existing_members_sync_status === "failed"
-                ? autoRoleResult.data.existing_members_sync_status
-                : "idle",
-            syncRequestedAt:
-              autoRoleResult.data.existing_members_sync_requested_at,
-            syncStartedAt:
-              autoRoleResult.data.existing_members_sync_started_at,
-            syncCompletedAt:
-              autoRoleResult.data.existing_members_sync_completed_at,
-            syncError: autoRoleResult.data.existing_members_sync_error,
-            updatedAt: autoRoleResult.data.updated_at,
-          }
-        : null,
-      securityLogsSettings: securityLogsResult.data
-        ? {
-            enabled: Boolean(
-              (securityLogsResult.data as Record<string, unknown>).enabled,
-            ),
-            useDefaultChannel:
-              (securityLogsResult.data as Record<string, unknown>)
-                .use_default_channel === true,
-            defaultChannelId: resolveOptionalTextChannelId(
-              (securityLogsResult.data as Record<string, unknown>)
-                .default_channel_id,
-              textSet,
-            ),
-            events: {
-              nicknameChange: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "nickname_change_enabled",
-                  channelColumn: "nickname_change_channel_id",
-                  textSet,
-                },
-              ),
-              avatarChange: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "avatar_change_enabled",
-                  channelColumn: "avatar_change_channel_id",
-                  textSet,
-                },
-              ),
-              voiceJoin: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "voice_join_enabled",
-                  channelColumn: "voice_join_channel_id",
-                  textSet,
-                },
-              ),
-              voiceLeave: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "voice_leave_enabled",
-                  channelColumn: "voice_leave_channel_id",
-                  textSet,
-                },
-              ),
-              messageDelete: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "message_delete_enabled",
-                  channelColumn: "message_delete_channel_id",
-                  textSet,
-                },
-              ),
-              messageEdit: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "message_edit_enabled",
-                  channelColumn: "message_edit_channel_id",
-                  textSet,
-                },
-              ),
-              memberBan: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "member_ban_enabled",
-                  channelColumn: "member_ban_channel_id",
-                  textSet,
-                },
-              ),
-              memberUnban: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "member_unban_enabled",
-                  channelColumn: "member_unban_channel_id",
-                  textSet,
-                },
-              ),
-              memberKick: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "member_kick_enabled",
-                  channelColumn: "member_kick_channel_id",
-                  textSet,
-                },
-              ),
-              memberTimeout: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "member_timeout_enabled",
-                  channelColumn: "member_timeout_channel_id",
-                  textSet,
-                },
-              ),
-              voiceMute: resolveSecurityLogEvent(
-                securityLogsResult.data as Record<string, unknown>,
-                {
-                  enabledColumn: "voice_mute_enabled",
-                  channelColumn: "voice_mute_channel_id",
-                  textSet,
-                },
-              ),
-            },
-            updatedAt:
-              (securityLogsResult.data as Record<string, unknown>).updated_at
-                ? String(
-                    (securityLogsResult.data as Record<string, unknown>)
-                      .updated_at,
-                  )
-                : null,
-          }
-        : null,
+      ticketSettings: buildTicketSettingsPayload({
+        record: toRecordOrNull(ticketResult.data),
+        snapshot: toRecordOrNull(secureSnapshots.get("ticket_settings")?.payload),
+        textSet,
+        categorySet,
+        updatedAt:
+          secureSnapshots.get("ticket_settings")?.updatedAt ||
+          (typeof ticketResult.data?.updated_at === "string"
+            ? ticketResult.data.updated_at
+            : null),
+      }),
+      staffSettings: buildTicketStaffPayload({
+        record: toRecordOrNull(staffResult.data),
+        snapshot: toRecordOrNull(
+          secureSnapshots.get("ticket_staff_settings")?.payload,
+        ),
+        roleSet,
+        updatedAt:
+          secureSnapshots.get("ticket_staff_settings")?.updatedAt ||
+          (typeof staffResult.data?.updated_at === "string"
+            ? staffResult.data.updated_at
+            : null),
+      }),
+      welcomeSettings: buildWelcomePayload({
+        record: toRecordOrNull(welcomeResult.data),
+        snapshot: toRecordOrNull(secureSnapshots.get("welcome_settings")?.payload),
+        textSet,
+        updatedAt:
+          secureSnapshots.get("welcome_settings")?.updatedAt ||
+          (typeof welcomeResult.data?.updated_at === "string"
+            ? welcomeResult.data.updated_at
+            : null),
+      }),
+      antiLinkSettings: buildAntiLinkPayload({
+        record: toRecordOrNull(antiLinkResult.data),
+        snapshot: toRecordOrNull(
+          secureSnapshots.get("antilink_settings")?.payload,
+        ),
+        textSet,
+        roleSet,
+        updatedAt:
+          secureSnapshots.get("antilink_settings")?.updatedAt ||
+          (typeof antiLinkResult.data?.updated_at === "string"
+            ? antiLinkResult.data.updated_at
+            : null),
+      }),
+      autoRoleSettings: buildAutoRolePayload({
+        record: toRecordOrNull(autoRoleResult.data),
+        snapshot: toRecordOrNull(
+          secureSnapshots.get("autorole_settings")?.payload,
+        ),
+        roleSet,
+        updatedAt:
+          secureSnapshots.get("autorole_settings")?.updatedAt ||
+          (typeof autoRoleResult.data?.updated_at === "string"
+            ? autoRoleResult.data.updated_at
+            : null),
+      }),
+      securityLogsSettings: buildSecurityLogsPayload({
+        record: toRecordOrNull(securityLogsResult.data),
+        snapshot: toRecordOrNull(
+          secureSnapshots.get("security_logs_settings")?.payload,
+        ),
+        textSet,
+        updatedAt:
+          secureSnapshots.get("security_logs_settings")?.updatedAt ||
+          (typeof securityLogsResult.data?.updated_at === "string"
+            ? securityLogsResult.data.updated_at
+            : null),
+      }),
       dashboardPermissions:
         access.dashboardPerms === "full"
           ? "full"
           : Array.from(access.dashboardPerms),
     };
 
-    writeDashboardSettingsCache(cacheKey, payload);
+    writeDashboardSettingsCache(
+      cacheKey,
+      payload,
+      DASHBOARD_SETTINGS_CACHE_TTL_MS,
+    );
     return applyNoStoreHeaders(NextResponse.json(payload));
   } catch (error) {
     return applyNoStoreHeaders(

@@ -208,6 +208,15 @@ function storePayload(guildId: string, payload: ServerDashboardSettingsPayload) 
   writeStorageCache(cache);
 }
 
+export function invalidateCachedServerDashboardSettings(guildId: string) {
+  dashboardSettingsCache.delete(guildId);
+  const cache = readStorageCache();
+  if (cache[guildId]) {
+    delete cache[guildId];
+    writeStorageCache(cache);
+  }
+}
+
 async function requestServerDashboardSettings(
   guildId: string,
   signal?: AbortSignal,

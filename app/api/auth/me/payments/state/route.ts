@@ -18,6 +18,7 @@ import {
   reconcilePaymentOrderRecord,
   reconcilePaymentOrderWithProviderPayment,
 } from "@/lib/payments/reconciliation";
+import { settleApprovedPaymentOrder } from "@/lib/payments/paymentSettlement";
 import {
   getApprovedOrdersForGuild,
   resolveLatestLicenseCoverageFromApprovedOrders,
@@ -53,12 +54,21 @@ type PaymentOrderStateRecord = {
   guild_id: string;
   payment_method: "pix" | "card" | "trial";
   status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
+  amount: string | number;
+  currency: string;
+  plan_code: string;
+  plan_name: string;
   plan_billing_cycle_days: number | null;
+  plan_max_licensed_servers: number | null;
+  plan_max_active_tickets: number | null;
+  plan_max_automations: number | null;
+  plan_max_monthly_actions: number | null;
   provider_payment_id: string | null;
   provider_external_reference: string | null;
   provider_status: string | null;
   provider_status_detail: string | null;
   provider_qr_code: string | null;
+  provider_payload: unknown;
   paid_at: string | null;
   expires_at: string | null;
   checkout_link_nonce: string | null;
@@ -70,7 +80,7 @@ type PaymentOrderStateRecord = {
 
 const STALE_CARD_REDIRECT_PENDING_MS = 4 * 60 * 1000;
 const PAYMENT_STATE_SELECT_COLUMNS =
-  `id, order_number, user_id, guild_id, payment_method, status, plan_billing_cycle_days, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, user_id, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, provider_payment_id, provider_external_reference, provider_status, provider_status_detail, provider_qr_code, provider_payload, paid_at, expires_at, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 function normalizeGuildId(value: string | null) {
   if (!value) return null;
@@ -504,6 +514,25 @@ export async function GET(request: Request) {
         }
       } catch {
         // melhor esforco; nao quebrar a consulta de estado por falha na reconciliacao
+      }
+    }
+
+    if (
+      latestUserOrder &&
+      latestUserOrder.status === "approved" &&
+      isTrustedApprovedPaymentRecord(latestUserOrder)
+    ) {
+      try {
+        const settlement = await settleApprovedPaymentOrder({
+          order: latestUserOrder,
+          source: "auth_payment_state",
+          selectColumns: PAYMENT_STATE_SELECT_COLUMNS,
+          allowAutoRefundOnFailure: true,
+        });
+        latestUserOrder = settlement.order;
+        activeLicenseCoverage = await getLatestApprovedLicenseCoverageForGuild(guildId);
+      } catch {
+        // melhor esforco; a consulta nao deve cair por uma tentativa de settlement
       }
     }
 

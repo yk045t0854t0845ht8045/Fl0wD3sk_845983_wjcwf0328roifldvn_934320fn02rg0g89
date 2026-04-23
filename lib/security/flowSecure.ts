@@ -16,6 +16,7 @@ export type FlowSecurePurpose =
   | "diagnostic_fingerprint"
   | "payment_pii"
   | "rate_limit_ip"
+  | "server_settings_snapshot"
   | "sensitive_lookup"
   | "sensitive_fingerprint";
 

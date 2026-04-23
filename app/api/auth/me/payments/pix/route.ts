@@ -17,6 +17,7 @@ import {
   refundMercadoPagoPixPayment,
   resolveMercadoPagoPixPayerEmail,
   resolvePaymentStatus,
+  searchMercadoPagoPaymentsByExternalReference,
   toQrDataUri,
   type MercadoPagoPaymentResponse,
 } from "@/lib/payments/mercadoPago";
@@ -53,6 +54,7 @@ import {
   resolveUnpaidSetupEffectiveExpiresAt,
   resolveUnpaidSetupExpiresAt,
 } from "@/lib/payments/setupCleanup";
+import { settleApprovedPaymentOrder } from "@/lib/payments/paymentSettlement";
 import {
   getApprovedOrdersForGuild,
   invalidateGuildLicenseCaches,
@@ -2301,9 +2303,20 @@ export async function POST(request: Request) {
         providerLastUpdatedAt: trustedTimestamps.lastUpdatedAt,
       });
 
+      let responseOrder = updatedOrderResult.data;
+      let autoRefundedAfterFinalizationFailure = false;
       invalidatePaymentReadCachesForOrder(updatedOrderResult.data);
       if (updatedOrderResult.data.status === "approved") {
         invalidateLicenseReadCachesForOrder(updatedOrderResult.data);
+        const settlement = await settleApprovedPaymentOrder({
+          order: updatedOrderResult.data,
+          source: "payment_pix_post_create",
+          selectColumns: PAYMENT_ORDER_SELECT_COLUMNS,
+          allowAutoRefundOnFailure: true,
+          providerPayment: confirmedMercadoPagoPayment,
+        });
+        responseOrder = settlement.order;
+        autoRefundedAfterFinalizationFailure = settlement.autoRefunded;
       }
 
       await logSecurityAuditEventSafe(auditContext, {
@@ -2316,19 +2329,21 @@ export async function POST(request: Request) {
       });
 
       const securedOrder = await ensureCheckoutAccessTokenForOrder({
-        order: updatedOrderResult.data,
+        order: responseOrder,
         forceRotate: true,
         invalidateOtherOrders: true,
       });
 
-      if (updatedOrderResult.data.status === "approved") {
-        await syncUserPlanStateFromOrder(updatedOrderResult.data);
-        clearPlanStateCacheForUser(user.id);
-      }
-
       return respond({
         ok: true,
         reused: false,
+        ...(autoRefundedAfterFinalizationFailure
+          ? {
+              message:
+                "O pagamento foi recebido, mas a finalizacao interna falhou e o sistema iniciou um estorno de protecao automaticamente.",
+              autoRefunded: true,
+            }
+          : {}),
         order: toApiOrder(
           securedOrder.order,
           securedOrder.checkoutAccessToken,
@@ -2339,6 +2354,32 @@ export async function POST(request: Request) {
         providerError instanceof Error
           ? providerError.message
           : "Falha ao criar pagamento PIX.";
+
+      if (!createdProviderPayment) {
+        try {
+          const recoveredPayments = await searchMercadoPagoPaymentsByExternalReference(
+            externalReference,
+          );
+          const matchingPayments = recoveredPayments.filter((payment) => {
+            const providerExternalReference =
+              typeof payment.external_reference === "string"
+                ? payment.external_reference.trim()
+                : "";
+            return providerExternalReference === externalReference;
+          });
+          createdProviderPayment =
+            matchingPayments.find(
+              (payment) => resolvePaymentStatus(payment.status) === "approved",
+            ) ||
+            matchingPayments.find(
+              (payment) => resolvePaymentStatus(payment.status) === "pending",
+            ) ||
+            matchingPayments[0] ||
+            null;
+        } catch {
+          // melhor esforco; seguimos com a falha original se a busca tambem falhar
+        }
+      }
 
       const providerPaymentId = createdProviderPayment
         ? parsePaymentId(createdProviderPayment.id)
@@ -2450,18 +2491,32 @@ export async function POST(request: Request) {
         }
 
         if (recoveredOrder) {
+          let responseOrder = recoveredOrder;
+          let autoRefundedAfterFinalizationFailure = false;
+          if (recoveredOrder.status === "approved") {
+            const settlement = await settleApprovedPaymentOrder({
+              order: recoveredOrder,
+              source: "payment_pix_post_recovery",
+              selectColumns: PAYMENT_ORDER_SELECT_COLUMNS,
+              allowAutoRefundOnFailure: true,
+              providerPayment: createdProviderPayment,
+            });
+            responseOrder = settlement.order;
+            autoRefundedAfterFinalizationFailure = settlement.autoRefunded;
+          }
+
           await logSecurityAuditEventSafe(auditContext, {
             action: "payment_pix_post",
             outcome: "succeeded",
             metadata: {
-              orderNumber: recoveredOrder.order_number,
-              status: recoveredOrder.status,
+              orderNumber: responseOrder.order_number,
+              status: responseOrder.status,
               recoveredAfterFailure: true,
             },
           });
 
           const securedRecoveredOrder = await ensureCheckoutAccessTokenForOrder({
-            order: recoveredOrder,
+            order: responseOrder,
             forceRotate: true,
             invalidateOtherOrders: true,
           });
@@ -2470,6 +2525,13 @@ export async function POST(request: Request) {
             ok: true,
             reused: false,
             recovered: true,
+            ...(autoRefundedAfterFinalizationFailure
+              ? {
+                  message:
+                    "O pagamento foi recuperado com sucesso, mas a liberacao interna falhou e o sistema iniciou um estorno de protecao automaticamente.",
+                  autoRefunded: true,
+                }
+              : {}),
             order: toApiOrder(
               securedRecoveredOrder.order,
               securedRecoveredOrder.checkoutAccessToken,

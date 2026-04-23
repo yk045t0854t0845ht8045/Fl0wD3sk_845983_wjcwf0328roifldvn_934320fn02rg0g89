@@ -17,7 +17,6 @@ import {
 } from "@/lib/payments/setupCleanup";
 import {
   resolveApprovedOrderLicenseExpiresAt,
-  syncUserPlanStateFromOrder,
 } from "@/lib/plans/state";
 import { orderTransitionAllowsImmediateApproval } from "@/lib/plans/change";
 import {
@@ -27,6 +26,10 @@ import {
   resolveRenewalPaymentDecision,
 } from "@/lib/payments/licenseStatus";
 import { invalidatePaymentOrderQueryCaches } from "@/lib/payments/orderQueryCache";
+import {
+  hasApprovedPaymentPendingSettlement,
+  settleApprovedPaymentOrder,
+} from "@/lib/payments/paymentSettlement";
 import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
@@ -78,6 +81,7 @@ type ReconcileResult = {
     | "updated"
     | "refunded_duplicate"
     | "refunded_timeout"
+    | "refunded_finalization_failure"
     | "provider_unreachable";
   providerStatus: string | null;
   providerStatusDetail: string | null;
@@ -513,6 +517,33 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
   });
 
   if (!hasOrderCoreChanges(order, nextSnapshot)) {
+    if (resolvedStatus === "approved") {
+      const settlement = await settleApprovedPaymentOrder({
+        order,
+        source,
+        selectColumns: PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS,
+        allowAutoRefundOnFailure: true,
+        providerPayment,
+      });
+      if (settlement.autoRefunded) {
+        return {
+          order: settlement.order,
+          changed: true,
+          action: "refunded_finalization_failure",
+          providerStatus: settlement.order.provider_status ?? "refunded",
+          providerStatusDetail: settlement.order.provider_status_detail ?? null,
+        };
+      }
+      return {
+        order: settlement.order,
+        changed: false,
+        action: "unchanged",
+        providerStatus: settlement.order.provider_status ?? providerStatus,
+        providerStatusDetail:
+          settlement.order.provider_status_detail ?? providerStatusDetail,
+      };
+    }
+
     return {
       order,
       changed: false,
@@ -571,7 +602,22 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
   });
 
   if (updatedOrderResult.data.status === "approved") {
-    await syncUserPlanStateFromOrder(updatedOrderResult.data);
+    const settlement = await settleApprovedPaymentOrder({
+      order: updatedOrderResult.data,
+      source,
+      selectColumns: PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS,
+      allowAutoRefundOnFailure: true,
+      providerPayment,
+    });
+    if (settlement.autoRefunded) {
+      return {
+        order: settlement.order,
+        changed: true,
+        action: "refunded_finalization_failure",
+        providerStatus: settlement.order.provider_status ?? "refunded",
+        providerStatusDetail: settlement.order.provider_status_detail ?? null,
+      };
+    }
   }
 
   invalidatePaymentOrderQueryCaches({
@@ -683,8 +729,35 @@ export async function reconcileRecentPaymentOrders(
   }
 
   const orders = result.data || [];
+
+  const approvedSettlementCandidatesResult = await supabase
+    .from("payment_orders")
+    .select(PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS)
+    .eq("status", "approved")
+    .order("updated_at", { ascending: false })
+    .limit(limit)
+    .returns<PaymentOrderReconciliationRecord[]>();
+
+  if (approvedSettlementCandidatesResult.error) {
+    throw new Error(
+      `Erro ao carregar pagamentos aprovados para settlement: ${approvedSettlementCandidatesResult.error.message}`,
+    );
+  }
+
+  const approvedSettlementCandidates = (approvedSettlementCandidatesResult.data || []).filter(
+    (order) =>
+      hasApprovedPaymentPendingSettlement(order) &&
+      (!options?.guildId || order.guild_id === options.guildId) &&
+      (typeof options?.userId !== "number" || order.user_id === options.userId),
+  );
+  const mergedOrders = [
+    ...orders,
+    ...approvedSettlementCandidates.filter(
+      (candidate) => !orders.some((order) => order.id === candidate.id),
+    ),
+  ];
   const summary: ReconcileBatchSummary = {
-    scanned: orders.length,
+    scanned: mergedOrders.length,
     changed: 0,
     unchanged: 0,
     refunded: 0,
@@ -695,7 +768,7 @@ export async function reconcileRecentPaymentOrders(
   };
 
   const results = await Promise.all(
-    orders.map(async (order) => {
+    mergedOrders.map(async (order) => {
       try {
         const reconciled = await reconcilePaymentOrderRecord(order, { source });
         return { reconciled, error: null };
@@ -729,7 +802,8 @@ export async function reconcileRecentPaymentOrders(
 
     if (
       reconciled.action === "refunded_duplicate" ||
-      reconciled.action === "refunded_timeout"
+      reconciled.action === "refunded_timeout" ||
+      reconciled.action === "refunded_finalization_failure"
     ) {
       summary.changed += 1;
       summary.refunded += 1;

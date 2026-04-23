@@ -16,6 +16,11 @@ import {
   recordServerSaveDiagnostic,
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
+import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshot,
+  writeServerSettingsVaultSnapshot,
+} from "@/lib/servers/serverSettingsVault";
 import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
@@ -60,6 +65,102 @@ function resolveOptionalId(value: unknown) {
 
 function resolveThumbnailMode(value: unknown): WelcomeThumbnailMode {
   return value === "avatar" ? "avatar" : "custom";
+}
+
+type WelcomeSecureSnapshot = {
+  enabled: boolean;
+  entryPublicChannelId: string | null;
+  entryLogChannelId: string | null;
+  exitPublicChannelId: string | null;
+  exitLogChannelId: string | null;
+  entryPublicLayout: Record<string, unknown>[];
+  entryLogLayout: Record<string, unknown>[];
+  exitPublicLayout: Record<string, unknown>[];
+  exitLogLayout: Record<string, unknown>[];
+  entryPublicThumbnailMode: WelcomeThumbnailMode;
+  entryLogThumbnailMode: WelcomeThumbnailMode;
+  exitPublicThumbnailMode: WelcomeThumbnailMode;
+  exitLogThumbnailMode: WelcomeThumbnailMode;
+};
+
+function normalizeWelcomeSecureSnapshot(
+  value: unknown,
+): WelcomeSecureSnapshot | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const fallbackEntryLayout = normalizeWelcomeLayout(
+    record.entryLayout,
+    createDefaultWelcomeEntryLayout(),
+  );
+  const fallbackExitLayout = normalizeWelcomeLayout(
+    record.exitLayout,
+    createDefaultWelcomeExitLayout(),
+  );
+
+  return {
+    enabled: record.enabled === true,
+    entryPublicChannelId: resolveOptionalId(record.entryPublicChannelId),
+    entryLogChannelId: resolveOptionalId(record.entryLogChannelId),
+    exitPublicChannelId: resolveOptionalId(record.exitPublicChannelId),
+    exitLogChannelId: resolveOptionalId(record.exitLogChannelId),
+    entryPublicLayout: normalizeWelcomeLayout(
+      record.entryPublicLayout ?? record.entryLayout,
+      fallbackEntryLayout,
+    ),
+    entryLogLayout: normalizeWelcomeLayout(
+      record.entryLogLayout ?? record.entryLayout,
+      fallbackEntryLayout,
+    ),
+    exitPublicLayout: normalizeWelcomeLayout(
+      record.exitPublicLayout ?? record.exitLayout,
+      fallbackExitLayout,
+    ),
+    exitLogLayout: normalizeWelcomeLayout(
+      record.exitLogLayout ?? record.exitLayout,
+      fallbackExitLayout,
+    ),
+    entryPublicThumbnailMode: resolveThumbnailMode(
+      record.entryPublicThumbnailMode ?? record.entryThumbnailMode,
+    ),
+    entryLogThumbnailMode: resolveThumbnailMode(
+      record.entryLogThumbnailMode ?? record.entryThumbnailMode,
+    ),
+    exitPublicThumbnailMode: resolveThumbnailMode(
+      record.exitPublicThumbnailMode ?? record.exitThumbnailMode,
+    ),
+    exitLogThumbnailMode: resolveThumbnailMode(
+      record.exitLogThumbnailMode ?? record.exitThumbnailMode,
+    ),
+  };
+}
+
+function buildWelcomeResponseFromSecureSnapshot(input: {
+  snapshot: WelcomeSecureSnapshot;
+  updatedAt: string | null;
+}) {
+  return {
+    enabled: input.snapshot.enabled,
+    entryPublicChannelId: input.snapshot.entryPublicChannelId,
+    entryLogChannelId: input.snapshot.entryLogChannelId,
+    exitPublicChannelId: input.snapshot.exitPublicChannelId,
+    exitLogChannelId: input.snapshot.exitLogChannelId,
+    entryLayout: input.snapshot.entryPublicLayout,
+    exitLayout: input.snapshot.exitPublicLayout,
+    entryPublicLayout: input.snapshot.entryPublicLayout,
+    entryLogLayout: input.snapshot.entryLogLayout,
+    exitPublicLayout: input.snapshot.exitPublicLayout,
+    exitLogLayout: input.snapshot.exitLogLayout,
+    entryThumbnailMode: input.snapshot.entryPublicThumbnailMode,
+    exitThumbnailMode: input.snapshot.exitPublicThumbnailMode,
+    entryPublicThumbnailMode: input.snapshot.entryPublicThumbnailMode,
+    entryLogThumbnailMode: input.snapshot.entryLogThumbnailMode,
+    exitPublicThumbnailMode: input.snapshot.exitPublicThumbnailMode,
+    exitLogThumbnailMode: input.snapshot.exitLogThumbnailMode,
+    updatedAt: input.updatedAt,
+  };
 }
 
 function isValidTextChannelType(type?: number) {
@@ -215,16 +316,37 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("guild_welcome_settings")
-      .select(
-        "enabled, entry_public_channel_id, entry_log_channel_id, exit_public_channel_id, exit_log_channel_id, entry_layout, exit_layout, entry_thumbnail_mode, exit_thumbnail_mode, updated_at",
-      )
-      .eq("guild_id", guildId)
-      .maybeSingle();
+    const [result, secureSnapshotResult] = await Promise.all([
+      supabase
+        .from("guild_welcome_settings")
+        .select(
+          "enabled, entry_public_channel_id, entry_log_channel_id, exit_public_channel_id, exit_log_channel_id, entry_layout, exit_layout, entry_thumbnail_mode, exit_thumbnail_mode, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      readServerSettingsVaultSnapshot<WelcomeSecureSnapshot>({
+        guildId,
+        moduleKey: "welcome_settings",
+      }),
+    ]);
 
     if (result.error) {
       throw new Error(result.error.message);
+    }
+
+    const secureSnapshot = normalizeWelcomeSecureSnapshot(
+      secureSnapshotResult?.payload,
+    );
+    if (secureSnapshot) {
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          settings: buildWelcomeResponseFromSecureSnapshot({
+            snapshot: secureSnapshot,
+            updatedAt: secureSnapshotResult?.updatedAt || null,
+          }),
+        }),
+      );
     }
 
     if (!result.data) {
@@ -293,8 +415,16 @@ export async function POST(request: Request) {
       exitLogChannelId?: string | null;
       entryLayout?: Record<string, unknown>[];
       exitLayout?: Record<string, unknown>[];
+      entryPublicLayout?: Record<string, unknown>[];
+      entryLogLayout?: Record<string, unknown>[];
+      exitPublicLayout?: Record<string, unknown>[];
+      exitLogLayout?: Record<string, unknown>[];
       entryThumbnailMode?: WelcomeThumbnailMode;
       exitThumbnailMode?: WelcomeThumbnailMode;
+      entryPublicThumbnailMode?: WelcomeThumbnailMode;
+      entryLogThumbnailMode?: WelcomeThumbnailMode;
+      exitPublicThumbnailMode?: WelcomeThumbnailMode;
+      exitLogThumbnailMode?: WelcomeThumbnailMode;
     };
     try {
       body = parseFlowSecureDto(
@@ -320,10 +450,34 @@ export async function POST(request: Request) {
           exitLayout: flowSecureDto.optional(
             flowSecureDto.array(flowSecureDto.record()),
           ),
+          entryPublicLayout: flowSecureDto.optional(
+            flowSecureDto.array(flowSecureDto.record()),
+          ),
+          entryLogLayout: flowSecureDto.optional(
+            flowSecureDto.array(flowSecureDto.record()),
+          ),
+          exitPublicLayout: flowSecureDto.optional(
+            flowSecureDto.array(flowSecureDto.record()),
+          ),
+          exitLogLayout: flowSecureDto.optional(
+            flowSecureDto.array(flowSecureDto.record()),
+          ),
           entryThumbnailMode: flowSecureDto.optional(
             flowSecureDto.enum(["avatar", "custom"] as const),
           ),
           exitThumbnailMode: flowSecureDto.optional(
+            flowSecureDto.enum(["avatar", "custom"] as const),
+          ),
+          entryPublicThumbnailMode: flowSecureDto.optional(
+            flowSecureDto.enum(["avatar", "custom"] as const),
+          ),
+          entryLogThumbnailMode: flowSecureDto.optional(
+            flowSecureDto.enum(["avatar", "custom"] as const),
+          ),
+          exitPublicThumbnailMode: flowSecureDto.optional(
+            flowSecureDto.enum(["avatar", "custom"] as const),
+          ),
+          exitLogThumbnailMode: flowSecureDto.optional(
             flowSecureDto.enum(["avatar", "custom"] as const),
           ),
         },
@@ -355,16 +509,50 @@ export async function POST(request: Request) {
     const entryLogChannelId = resolveOptionalId(body.entryLogChannelId);
     const exitPublicChannelId = resolveOptionalId(body.exitPublicChannelId);
     const exitLogChannelId = resolveOptionalId(body.exitLogChannelId);
-    const entryLayout = normalizeWelcomeLayout(
+    const fallbackEntryLayout = normalizeWelcomeLayout(
       body.entryLayout,
       createDefaultWelcomeEntryLayout(),
     );
-    const exitLayout = normalizeWelcomeLayout(
+    const fallbackExitLayout = normalizeWelcomeLayout(
       body.exitLayout,
       createDefaultWelcomeExitLayout(),
     );
-    const entryThumbnailMode = resolveThumbnailMode(body.entryThumbnailMode);
-    const exitThumbnailMode = resolveThumbnailMode(body.exitThumbnailMode);
+    const entryPublicLayout = normalizeWelcomeLayout(
+      body.entryPublicLayout ?? body.entryLayout,
+      fallbackEntryLayout,
+    );
+    const entryLogLayout = normalizeWelcomeLayout(
+      body.entryLogLayout ?? body.entryLayout,
+      fallbackEntryLayout,
+    );
+    const exitPublicLayout = normalizeWelcomeLayout(
+      body.exitPublicLayout ?? body.exitLayout,
+      fallbackExitLayout,
+    );
+    const exitLogLayout = normalizeWelcomeLayout(
+      body.exitLogLayout ?? body.exitLayout,
+      fallbackExitLayout,
+    );
+    const entryPublicThumbnailMode = resolveThumbnailMode(
+      body.entryPublicThumbnailMode ?? body.entryThumbnailMode,
+    );
+    const entryLogThumbnailMode = resolveThumbnailMode(
+      body.entryLogThumbnailMode ?? body.entryThumbnailMode,
+    );
+    const exitPublicThumbnailMode = resolveThumbnailMode(
+      body.exitPublicThumbnailMode ?? body.exitThumbnailMode,
+    );
+    const exitLogThumbnailMode = resolveThumbnailMode(
+      body.exitLogThumbnailMode ?? body.exitThumbnailMode,
+    );
+    const entryLayout = entryPublicChannelId ? entryPublicLayout : entryLogLayout;
+    const exitLayout = exitPublicChannelId ? exitPublicLayout : exitLogLayout;
+    const entryThumbnailMode = entryPublicChannelId
+      ? entryPublicThumbnailMode
+      : entryLogThumbnailMode;
+    const exitThumbnailMode = exitPublicChannelId
+      ? exitPublicThumbnailMode
+      : exitLogThumbnailMode;
 
     diagnostic = createServerSaveDiagnosticContext("welcome_settings", guildId);
 
@@ -408,7 +596,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (enabled && entryChannelsProvided && !welcomeLayoutHasContent(entryLayout)) {
+    if (enabled && entryPublicChannelId && !welcomeLayoutHasContent(entryPublicLayout)) {
       recordServerSaveDiagnostic({
         context: diagnostic,
         outcome: "payload_invalid",
@@ -427,7 +615,26 @@ export async function POST(request: Request) {
       );
     }
 
-    if (enabled && exitChannelsProvided && !welcomeLayoutHasContent(exitLayout)) {
+    if (enabled && entryLogChannelId && !welcomeLayoutHasContent(entryLogLayout)) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Layout de log de entrada vazio.",
+      });
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Adicione pelo menos um bloco de conteudo na mensagem de log de entrada.",
+          },
+          { status: 400 },
+        ),
+      );
+    }
+
+    if (enabled && exitPublicChannelId && !welcomeLayoutHasContent(exitPublicLayout)) {
       recordServerSaveDiagnostic({
         context: diagnostic,
         outcome: "payload_invalid",
@@ -440,6 +647,25 @@ export async function POST(request: Request) {
             ok: false,
             message:
               "Adicione pelo menos um bloco de conteudo na mensagem de saida.",
+          },
+          { status: 400 },
+        ),
+      );
+    }
+
+    if (enabled && exitLogChannelId && !welcomeLayoutHasContent(exitLogLayout)) {
+      recordServerSaveDiagnostic({
+        context: diagnostic,
+        outcome: "payload_invalid",
+        httpStatus: 400,
+        detail: "Layout de log de saida vazio.",
+      });
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Adicione pelo menos um bloco de conteudo na mensagem de log de saida.",
           },
           { status: 400 },
         ),
@@ -669,6 +895,28 @@ export async function POST(request: Request) {
       configuredByUserId: authUserId,
     });
 
+    const secureUpdated = await writeServerSettingsVaultSnapshot({
+      guildId,
+      moduleKey: "welcome_settings",
+      configuredByUserId: authUserId,
+      payload: {
+        enabled,
+        entryPublicChannelId,
+        entryLogChannelId,
+        exitPublicChannelId,
+        exitLogChannelId,
+        entryPublicLayout,
+        entryLogLayout,
+        exitPublicLayout,
+        exitLogLayout,
+        entryPublicThumbnailMode,
+        entryLogThumbnailMode,
+        exitPublicThumbnailMode,
+        exitLogThumbnailMode,
+      } satisfies WelcomeSecureSnapshot,
+    });
+    invalidateDashboardSettingsCache({ guildId });
+
     recordServerSaveDiagnostic({
       context: diagnostic,
       authUserId,
@@ -685,24 +933,24 @@ export async function POST(request: Request) {
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        settings: {
-          enabled: Boolean(savedSettings.enabled),
-          entryPublicChannelId: savedSettings.entry_public_channel_id,
-          entryLogChannelId: savedSettings.entry_log_channel_id,
-          exitPublicChannelId: savedSettings.exit_public_channel_id,
-          exitLogChannelId: savedSettings.exit_log_channel_id,
-          entryLayout: normalizeWelcomeLayout(
-            savedSettings.entry_layout,
-            createDefaultWelcomeEntryLayout(),
-          ),
-          exitLayout: normalizeWelcomeLayout(
-            savedSettings.exit_layout,
-            createDefaultWelcomeExitLayout(),
-          ),
-          entryThumbnailMode: resolveThumbnailMode(savedSettings.entry_thumbnail_mode),
-          exitThumbnailMode: resolveThumbnailMode(savedSettings.exit_thumbnail_mode),
-          updatedAt: savedSettings.updated_at,
-        },
+        settings: buildWelcomeResponseFromSecureSnapshot({
+          snapshot: {
+            enabled,
+            entryPublicChannelId,
+            entryLogChannelId,
+            exitPublicChannelId,
+            exitLogChannelId,
+            entryPublicLayout,
+            entryLogLayout,
+            exitPublicLayout,
+            exitLogLayout,
+            entryPublicThumbnailMode,
+            entryLogThumbnailMode,
+            exitPublicThumbnailMode,
+            exitLogThumbnailMode,
+          },
+          updatedAt: secureUpdated?.updatedAt || savedSettings.updated_at,
+        }),
       }),
     );
   } catch (error) {

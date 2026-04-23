@@ -23,6 +23,7 @@ import {
   reconcilePaymentOrderRecord,
   reconcilePaymentOrderWithProviderPayment,
 } from "@/lib/payments/reconciliation";
+import { settleApprovedPaymentOrder } from "@/lib/payments/paymentSettlement";
 import {
   getApprovedOrdersForGuild,
   resolveCoverageForApprovedOrder,
@@ -71,6 +72,10 @@ type PaymentOrderRecord = {
   plan_code: string;
   plan_name: string;
   plan_billing_cycle_days: number;
+  plan_max_licensed_servers?: number | null;
+  plan_max_active_tickets?: number | null;
+  plan_max_automations?: number | null;
+  plan_max_monthly_actions?: number | null;
   payer_name: string | null;
   payer_document: string | null;
   payer_document_last4: string | null;
@@ -82,6 +87,7 @@ type PaymentOrderRecord = {
   provider_ticket_url: string | null;
   provider_status: string | null;
   provider_status_detail: string | null;
+  provider_payload?: unknown;
   paid_at: string | null;
   expires_at: string | null;
   user_id: number;
@@ -93,7 +99,7 @@ type PaymentOrderRecord = {
 };
 
 const PAYMENT_ORDER_SELECT_COLUMNS =
-  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, payer_name, payer_document, payer_document_last4, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
+  `id, order_number, guild_id, payment_method, status, amount, currency, plan_code, plan_name, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, payer_name, payer_document, payer_document_last4, payer_document_type, provider_payment_id, provider_external_reference, provider_qr_code, provider_qr_base64, provider_ticket_url, provider_status, provider_status_detail, provider_payload, paid_at, expires_at, user_id, created_at, updated_at, ${PAYMENT_ORDER_CHECKOUT_LINK_SELECT_COLUMNS}`;
 
 function normalizeNullableProviderQueryValue(value: string | null) {
   if (!value) return null;
@@ -808,6 +814,20 @@ export async function GET(request: Request) {
         }
       } catch {
         // manter o estado persistido mesmo se a reconciliacao oportunista falhar
+      }
+    }
+
+    if (order.status === "approved" && isTrustedApprovedPaymentRecord(order)) {
+      try {
+        const settlement = await settleApprovedPaymentOrder({
+          order,
+          source: "auth_payment_order_read",
+          selectColumns: PAYMENT_ORDER_SELECT_COLUMNS,
+          allowAutoRefundOnFailure: true,
+        });
+        order = settlement.order;
+      } catch {
+        // melhor esforco; se a finalizacao falhar agora, retornamos o estado persistido
       }
     }
 

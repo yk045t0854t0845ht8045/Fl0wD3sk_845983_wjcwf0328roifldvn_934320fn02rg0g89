@@ -19,6 +19,11 @@ import {
   recordServerSaveDiagnostic,
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
+import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshot,
+  writeServerSettingsVaultSnapshot,
+} from "@/lib/servers/serverSettingsVault";
 import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
@@ -194,16 +199,51 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("guild_ticket_staff_settings")
-      .select(
-        "admin_role_id, claim_role_ids, close_role_ids, notify_role_ids, updated_at",
-      )
-      .eq("guild_id", guildId)
-      .maybeSingle();
+    const [result, secureSnapshotResult] = await Promise.all([
+      supabase
+        .from("guild_ticket_staff_settings")
+        .select(
+          "admin_role_id, claim_role_ids, close_role_ids, notify_role_ids, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      readServerSettingsVaultSnapshot<Record<string, unknown>>({
+        guildId,
+        moduleKey: "ticket_staff_settings",
+      }),
+    ]);
 
     if (result.error) {
       throw new Error(result.error.message);
+    }
+
+    const secureSnapshot =
+      secureSnapshotResult?.payload &&
+      typeof secureSnapshotResult.payload === "object"
+        ? (secureSnapshotResult.payload as Record<string, unknown>)
+        : null;
+    if (secureSnapshot) {
+      return applyNoStoreHeaders(
+        NextResponse.json({
+        ok: true,
+        settings: {
+          adminRoleId:
+            typeof secureSnapshot.adminRoleId === "string"
+              ? secureSnapshot.adminRoleId
+              : null,
+          claimRoleIds: Array.isArray(secureSnapshot.claimRoleIds)
+            ? secureSnapshot.claimRoleIds.filter((roleId): roleId is string => typeof roleId === "string")
+            : [],
+          closeRoleIds: Array.isArray(secureSnapshot.closeRoleIds)
+            ? secureSnapshot.closeRoleIds.filter((roleId): roleId is string => typeof roleId === "string")
+            : [],
+          notifyRoleIds: Array.isArray(secureSnapshot.notifyRoleIds)
+            ? secureSnapshot.notifyRoleIds.filter((roleId): roleId is string => typeof roleId === "string")
+            : [],
+          updatedAt: secureSnapshotResult?.updatedAt || null,
+        },
+        }),
+      );
     }
 
     const data = result.data;
@@ -524,6 +564,19 @@ export async function POST(request: Request) {
       notifyRoleIds,
       configuredByUserId: authUserId,
     });
+    const secureUpdated = await writeServerSettingsVaultSnapshot({
+      guildId,
+      moduleKey: "ticket_staff_settings",
+      configuredByUserId: authUserId,
+      payload: {
+        guildId,
+        adminRoleId,
+        claimRoleIds,
+        closeRoleIds,
+        notifyRoleIds,
+      },
+    });
+    invalidateDashboardSettingsCache({ guildId });
 
     recordServerSaveDiagnostic({
       context: diagnostic,
@@ -542,12 +595,12 @@ export async function POST(request: Request) {
       NextResponse.json({
       ok: true,
       settings: {
-        guildId: savedSettings.guild_id,
-        adminRoleId: savedSettings.admin_role_id,
-        claimRoleIds: savedSettings.claim_role_ids,
-        closeRoleIds: savedSettings.close_role_ids,
-        notifyRoleIds: savedSettings.notify_role_ids,
-        updatedAt: savedSettings.updated_at,
+        guildId,
+        adminRoleId,
+        claimRoleIds,
+        closeRoleIds,
+        notifyRoleIds,
+        updatedAt: secureUpdated?.updatedAt || savedSettings.updated_at,
       },
       }),
     );

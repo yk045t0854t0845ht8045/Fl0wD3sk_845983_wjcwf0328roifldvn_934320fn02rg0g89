@@ -16,6 +16,11 @@ import {
   recordServerSaveDiagnostic,
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
+import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshot,
+  writeServerSettingsVaultSnapshot,
+} from "@/lib/servers/serverSettingsVault";
 import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
@@ -413,14 +418,59 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("guild_security_logs_settings")
-      .select(buildSelectColumns())
-      .eq("guild_id", guildId)
-      .maybeSingle();
+    const [result, secureSnapshotResult] = await Promise.all([
+      supabase
+        .from("guild_security_logs_settings")
+        .select(buildSelectColumns())
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      readServerSettingsVaultSnapshot<Record<string, unknown>>({
+        guildId,
+        moduleKey: "security_logs_settings",
+      }),
+    ]);
 
     if (result.error) {
       throw new Error(result.error.message);
+    }
+
+    const secureSnapshot =
+      secureSnapshotResult?.payload &&
+      typeof secureSnapshotResult.payload === "object"
+        ? (secureSnapshotResult.payload as Record<string, unknown>)
+        : null;
+    if (secureSnapshot) {
+      const mapped =
+        secureSnapshot.events && typeof secureSnapshot.events === "object"
+          ? (secureSnapshot.events as Record<string, unknown>)
+          : {};
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          settings: {
+            enabled: secureSnapshot.enabled === true,
+            useDefaultChannel: secureSnapshot.useDefaultChannel === true,
+            defaultChannelId:
+              typeof secureSnapshot.defaultChannelId === "string"
+                ? secureSnapshot.defaultChannelId
+                : null,
+            events: {
+              nicknameChange: normalizeSecurityLogEventsInput({ nicknameChange: mapped.nicknameChange }).nicknameChange,
+              avatarChange: normalizeSecurityLogEventsInput({ avatarChange: mapped.avatarChange }).avatarChange,
+              voiceJoin: normalizeSecurityLogEventsInput({ voiceJoin: mapped.voiceJoin }).voiceJoin,
+              voiceLeave: normalizeSecurityLogEventsInput({ voiceLeave: mapped.voiceLeave }).voiceLeave,
+              messageDelete: normalizeSecurityLogEventsInput({ messageDelete: mapped.messageDelete }).messageDelete,
+              messageEdit: normalizeSecurityLogEventsInput({ messageEdit: mapped.messageEdit }).messageEdit,
+              memberBan: normalizeSecurityLogEventsInput({ memberBan: mapped.memberBan }).memberBan,
+              memberUnban: normalizeSecurityLogEventsInput({ memberUnban: mapped.memberUnban }).memberUnban,
+              memberKick: normalizeSecurityLogEventsInput({ memberKick: mapped.memberKick }).memberKick,
+              memberTimeout: normalizeSecurityLogEventsInput({ memberTimeout: mapped.memberTimeout }).memberTimeout,
+              voiceMute: normalizeSecurityLogEventsInput({ voiceMute: mapped.voiceMute }).voiceMute,
+            },
+            updatedAt: secureSnapshotResult?.updatedAt || null,
+          },
+        }),
+      );
     }
 
     if (!result.data) {
@@ -733,6 +783,13 @@ export async function POST(request: Request) {
         settings,
         configuredByUserId: authUserId,
       });
+      await writeServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "security_logs_settings",
+        configuredByUserId: authUserId,
+        payload: settings,
+      });
+      invalidateDashboardSettingsCache({ guildId });
     } catch (error) {
       recordServerSaveDiagnostic({
         context: diagnostic,

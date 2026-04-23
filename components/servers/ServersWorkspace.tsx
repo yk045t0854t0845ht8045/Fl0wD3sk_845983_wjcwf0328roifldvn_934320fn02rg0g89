@@ -73,6 +73,10 @@ import {
   storeCachedTeamsSnapshot,
 } from "@/lib/servers/serversWorkspaceClientCache";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
+import {
+  readStoredSelectedTeamId,
+  writeStoredSelectedTeamId,
+} from "@/lib/teams/selectedTeamStorage";
 import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 import {
@@ -1477,8 +1481,14 @@ export function ServersWorkspace({
         if (current && nextTeams.some((team) => team.id === current)) {
           return current;
         }
+        const storedTeamId = readStoredSelectedTeamId(workspaceCacheKey);
+        if (storedTeamId && nextTeams.some((team) => team.id === storedTeamId)) {
+          return storedTeamId;
+        }
         return null;
       });
+      setTeamsErrorMessage(null);
+      setIsTeamsLoading(false);
     },
     [workspaceCacheKey],
   );
@@ -1571,6 +1581,24 @@ export function ServersWorkspace({
     setTeamsErrorMessage(null);
     setIsTeamsLoading(false);
   }, [initialPendingInvites, initialTeams, workspaceCacheKey]);
+
+  useEffect(() => {
+    if (!teams.length) {
+      setSelectedTeamId(null);
+      return;
+    }
+
+    const storedTeamId = readStoredSelectedTeamId(workspaceCacheKey);
+    if (!storedTeamId || !teams.some((team) => team.id === storedTeamId)) {
+      return;
+    }
+
+    setSelectedTeamId((current) => (current === storedTeamId ? current : storedTeamId));
+  }, [teams, workspaceCacheKey]);
+
+  useEffect(() => {
+    writeStoredSelectedTeamId(workspaceCacheKey, selectedTeamId);
+  }, [selectedTeamId, workspaceCacheKey]);
 
   useEffect(() => {
     let isMounted = true;

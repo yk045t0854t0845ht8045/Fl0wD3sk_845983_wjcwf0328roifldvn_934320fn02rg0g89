@@ -18,6 +18,11 @@ import {
   recordServerSaveDiagnostic,
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
+import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshot,
+  writeServerSettingsVaultSnapshot,
+} from "@/lib/servers/serverSettingsVault";
 import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
@@ -193,6 +198,73 @@ function buildTicketSettingsResponse(
     aiCompanyBio: ticketAiSettings.aiCompanyBio,
     aiTone: ticketAiSettings.aiTone,
     updatedAt: typeof record.updated_at === "string" ? record.updated_at : null,
+  };
+}
+
+function buildTicketSettingsResponseFromSnapshot(input: {
+  snapshot: Record<string, unknown>;
+  updatedAt: string | null;
+}) {
+  return {
+    guildId:
+      typeof input.snapshot.guildId === "string" ? input.snapshot.guildId : null,
+    enabled: input.snapshot.enabled === true,
+    menuChannelId:
+      typeof input.snapshot.menuChannelId === "string"
+        ? input.snapshot.menuChannelId
+        : null,
+    ticketsCategoryId:
+      typeof input.snapshot.ticketsCategoryId === "string"
+        ? input.snapshot.ticketsCategoryId
+        : null,
+    logsCreatedChannelId:
+      typeof input.snapshot.logsCreatedChannelId === "string"
+        ? input.snapshot.logsCreatedChannelId
+        : null,
+    logsClosedChannelId:
+      typeof input.snapshot.logsClosedChannelId === "string"
+        ? input.snapshot.logsClosedChannelId
+        : null,
+    panelLayout: normalizeTicketPanelLayout(input.snapshot.panelLayout, {
+      panelTitle:
+        typeof input.snapshot.panelTitle === "string"
+          ? input.snapshot.panelTitle
+          : "",
+      panelDescription:
+        typeof input.snapshot.panelDescription === "string"
+          ? input.snapshot.panelDescription
+          : "",
+      panelButtonLabel:
+        typeof input.snapshot.panelButtonLabel === "string"
+          ? input.snapshot.panelButtonLabel
+          : "",
+    }),
+    panelTitle:
+      typeof input.snapshot.panelTitle === "string"
+        ? input.snapshot.panelTitle
+        : "",
+    panelDescription:
+      typeof input.snapshot.panelDescription === "string"
+        ? input.snapshot.panelDescription
+        : "",
+    panelButtonLabel:
+      typeof input.snapshot.panelButtonLabel === "string"
+        ? input.snapshot.panelButtonLabel
+        : "",
+    aiRules:
+      typeof input.snapshot.aiRules === "string" ? input.snapshot.aiRules : "",
+    aiEnabled: input.snapshot.aiEnabled === true,
+    aiCompanyName:
+      typeof input.snapshot.aiCompanyName === "string"
+        ? input.snapshot.aiCompanyName
+        : "",
+    aiCompanyBio:
+      typeof input.snapshot.aiCompanyBio === "string"
+        ? input.snapshot.aiCompanyBio
+        : "",
+    aiTone:
+      typeof input.snapshot.aiTone === "string" ? input.snapshot.aiTone : "formal",
+    updatedAt: input.updatedAt,
   };
 }
 
@@ -385,7 +457,25 @@ export async function GET(request: Request) {
       source: "guild_ticket_settings_get",
     });
 
-    const result = await loadGuildTicketSettingsRecord(guildId);
+    const [result, secureSnapshotResult] = await Promise.all([
+      loadGuildTicketSettingsRecord(guildId),
+      readServerSettingsVaultSnapshot<Record<string, unknown>>({
+        guildId,
+        moduleKey: "ticket_settings",
+      }),
+    ]);
+
+    if (secureSnapshotResult?.payload) {
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          settings: buildTicketSettingsResponseFromSnapshot({
+            snapshot: secureSnapshotResult.payload,
+            updatedAt: secureSnapshotResult.updatedAt,
+          }),
+        }),
+      );
+    }
 
     if (!result) {
       return applyNoStoreHeaders(
@@ -815,6 +905,43 @@ export async function POST(request: Request) {
       });
 
     if (!enabled && !hasPersistableResolvedSettings) {
+      const fallbackSnapshot = {
+        guildId,
+        enabled: false,
+        menuChannelId:
+          typeof existingSettings?.menu_channel_id === "string"
+            ? existingSettings.menu_channel_id
+            : null,
+        ticketsCategoryId:
+          typeof existingSettings?.tickets_category_id === "string"
+            ? existingSettings.tickets_category_id
+            : null,
+        logsCreatedChannelId:
+          typeof existingSettings?.logs_created_channel_id === "string"
+            ? existingSettings.logs_created_channel_id
+            : null,
+        logsClosedChannelId:
+          typeof existingSettings?.logs_closed_channel_id === "string"
+            ? existingSettings.logs_closed_channel_id
+            : null,
+        panelLayout: resolvedPanelLayout,
+        panelTitle: resolvedPanelTitle,
+        panelDescription: resolvedPanelDescription,
+        panelButtonLabel: resolvedPanelButtonLabel,
+        aiRules: existingSettingsResponse?.aiRules || "",
+        aiEnabled: existingSettingsResponse?.aiEnabled || false,
+        aiCompanyName: existingSettingsResponse?.aiCompanyName || "",
+        aiCompanyBio: existingSettingsResponse?.aiCompanyBio || "",
+        aiTone: existingSettingsResponse?.aiTone || "formal",
+      };
+      const secureUpdated = await writeServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "ticket_settings",
+        configuredByUserId: authUserId,
+        payload: fallbackSnapshot,
+      });
+      invalidateDashboardSettingsCache({ guildId });
+
       recordServerSaveDiagnostic({
         context: diagnostic,
         authUserId,
@@ -828,38 +955,14 @@ export async function POST(request: Request) {
       return applyNoStoreHeaders(
         NextResponse.json({
           ok: true,
-          settings: {
-            enabled: false,
-            menuChannelId:
-              typeof existingSettings?.menu_channel_id === "string"
-                ? existingSettings.menu_channel_id
-                : null,
-            ticketsCategoryId:
-              typeof existingSettings?.tickets_category_id === "string"
-                ? existingSettings.tickets_category_id
-                : null,
-            logsCreatedChannelId:
-              typeof existingSettings?.logs_created_channel_id === "string"
-                ? existingSettings.logs_created_channel_id
-                : null,
-            logsClosedChannelId:
-              typeof existingSettings?.logs_closed_channel_id === "string"
-                ? existingSettings.logs_closed_channel_id
-                : null,
-            panelLayout: resolvedPanelLayout,
-            panelTitle: resolvedPanelTitle,
-            panelDescription: resolvedPanelDescription,
-            panelButtonLabel: resolvedPanelButtonLabel,
-            aiRules: existingSettingsResponse?.aiRules || "",
-            aiEnabled: existingSettingsResponse?.aiEnabled || false,
-            aiCompanyName: existingSettingsResponse?.aiCompanyName || "",
-            aiCompanyBio: existingSettingsResponse?.aiCompanyBio || "",
-            aiTone: existingSettingsResponse?.aiTone || "formal",
+          settings: buildTicketSettingsResponseFromSnapshot({
+            snapshot: fallbackSnapshot,
             updatedAt:
-              typeof existingSettings?.updated_at === "string"
+              secureUpdated?.updatedAt ||
+              (typeof existingSettings?.updated_at === "string"
                 ? existingSettings.updated_at
-                : null,
-          },
+                : null),
+          }),
         }),
       );
     }
@@ -985,6 +1088,29 @@ export async function POST(request: Request) {
       aiTone: aiTone,
       configuredByUserId: authUserId,
     });
+    const secureUpdated = await writeServerSettingsVaultSnapshot({
+      guildId,
+      moduleKey: "ticket_settings",
+      configuredByUserId: authUserId,
+      payload: {
+        guildId,
+        enabled,
+        menuChannelId: resolvedMenuChannelId,
+        ticketsCategoryId: resolvedTicketsCategoryId,
+        logsCreatedChannelId: resolvedLogsCreatedChannelId,
+        logsClosedChannelId: resolvedLogsClosedChannelId,
+        panelLayout: resolvedPanelLayout,
+        panelTitle: resolvedPanelTitle,
+        panelDescription: resolvedPanelDescription,
+        panelButtonLabel: resolvedPanelButtonLabel,
+        aiRules,
+        aiEnabled,
+        aiCompanyName,
+        aiCompanyBio,
+        aiTone,
+      },
+    });
+    invalidateDashboardSettingsCache({ guildId });
 
     recordServerSaveDiagnostic({
       context: diagnostic,
@@ -1002,9 +1128,26 @@ export async function POST(request: Request) {
     return applyNoStoreHeaders(
       NextResponse.json({
       ok: true,
-      settings: buildTicketSettingsResponse(
-        savedSettings as Record<string, unknown>,
-      ),
+      settings: buildTicketSettingsResponseFromSnapshot({
+        snapshot: {
+          guildId,
+          enabled,
+          menuChannelId: resolvedMenuChannelId,
+          ticketsCategoryId: resolvedTicketsCategoryId,
+          logsCreatedChannelId: resolvedLogsCreatedChannelId,
+          logsClosedChannelId: resolvedLogsClosedChannelId,
+          panelLayout: resolvedPanelLayout,
+          panelTitle: resolvedPanelTitle,
+          panelDescription: resolvedPanelDescription,
+          panelButtonLabel: resolvedPanelButtonLabel,
+          aiRules,
+          aiEnabled,
+          aiCompanyName,
+          aiCompanyBio,
+          aiTone,
+        },
+        updatedAt: secureUpdated?.updatedAt || savedSettings.updated_at || null,
+      }),
       }),
     );
   } catch (error) {

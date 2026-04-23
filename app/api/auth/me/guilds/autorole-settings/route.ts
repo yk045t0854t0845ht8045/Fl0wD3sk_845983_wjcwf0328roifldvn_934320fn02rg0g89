@@ -17,6 +17,11 @@ import {
   recordServerSaveDiagnostic,
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
+import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshot,
+  writeServerSettingsVaultSnapshot,
+} from "@/lib/servers/serverSettingsVault";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import {
   FlowSecureDtoError,
@@ -356,16 +361,58 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("guild_autorole_settings")
-      .select(
-        "enabled, role_ids, assignment_delay_minutes, existing_members_sync_requested_at, existing_members_sync_started_at, existing_members_sync_completed_at, existing_members_sync_status, existing_members_sync_error, updated_at",
-      )
-      .eq("guild_id", guildId)
-      .maybeSingle();
+    const [result, secureSnapshotResult] = await Promise.all([
+      supabase
+        .from("guild_autorole_settings")
+        .select(
+          "enabled, role_ids, assignment_delay_minutes, existing_members_sync_requested_at, existing_members_sync_started_at, existing_members_sync_completed_at, existing_members_sync_status, existing_members_sync_error, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      readServerSettingsVaultSnapshot<Record<string, unknown>>({
+        guildId,
+        moduleKey: "autorole_settings",
+      }),
+    ]);
 
     if (result.error) {
       throw new Error(result.error.message);
+    }
+
+    const secureSnapshot =
+      secureSnapshotResult?.payload &&
+      typeof secureSnapshotResult.payload === "object"
+        ? (secureSnapshotResult.payload as Record<string, unknown>)
+        : null;
+    if (secureSnapshot) {
+      const mergedRow: AutoRoleSettingsRow = {
+        enabled: secureSnapshot.enabled === true,
+        role_ids: Array.isArray(secureSnapshot.roleIds)
+          ? secureSnapshot.roleIds
+          : Array.isArray(result.data?.role_ids)
+            ? result.data.role_ids
+            : [],
+        assignment_delay_minutes: normalizeAssignmentDelayMinutes(
+          secureSnapshot.assignmentDelayMinutes,
+        ),
+        existing_members_sync_requested_at:
+          result.data?.existing_members_sync_requested_at || null,
+        existing_members_sync_started_at:
+          result.data?.existing_members_sync_started_at || null,
+        existing_members_sync_completed_at:
+          result.data?.existing_members_sync_completed_at || null,
+        existing_members_sync_status:
+          result.data?.existing_members_sync_status || null,
+        existing_members_sync_error:
+          result.data?.existing_members_sync_error || null,
+        updated_at: secureSnapshotResult?.updatedAt || result.data?.updated_at || null,
+      };
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          settings: await serializeAutoRoleSettings(guildId, mergedRow),
+        }),
+      );
     }
 
     if (!result.data) {
@@ -651,6 +698,17 @@ export async function POST(request: Request) {
       syncExistingMembers,
       configuredByUserId: authUserId,
     });
+    await writeServerSettingsVaultSnapshot({
+      guildId,
+      moduleKey: "autorole_settings",
+      configuredByUserId: authUserId,
+      payload: {
+        enabled,
+        roleIds,
+        assignmentDelayMinutes,
+      },
+    });
+    invalidateDashboardSettingsCache({ guildId });
 
     recordServerSaveDiagnostic({
       context: diagnostic,

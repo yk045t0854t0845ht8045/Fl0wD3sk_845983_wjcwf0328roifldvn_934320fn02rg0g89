@@ -54,6 +54,10 @@ import {
   storeCachedTeamsSnapshot,
 } from "@/lib/servers/serversWorkspaceClientCache";
 import type { PendingTeamInvite, UserTeam } from "@/lib/teams/userTeams";
+import {
+  readStoredSelectedTeamId,
+  writeStoredSelectedTeamId,
+} from "@/lib/teams/selectedTeamStorage";
 import { useLatchedPendingKey } from "@/lib/ui/useLatchedPendingKey";
 import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 
@@ -717,8 +721,14 @@ export function DashboardWorkspace({
         if (current && nextTeams.some((team) => team.id === current)) {
           return current;
         }
+        const storedTeamId = readStoredSelectedTeamId(workspaceCacheKey);
+        if (storedTeamId && nextTeams.some((team) => team.id === storedTeamId)) {
+          return storedTeamId;
+        }
         return null;
       });
+      setTeamsErrorMessage(null);
+      setIsTeamsLoading(false);
     },
     [workspaceCacheKey],
   );
@@ -838,6 +848,24 @@ export function DashboardWorkspace({
       ]);
     }
   }, [currentAccount]);
+
+  useEffect(() => {
+    if (!teams.length) {
+      setSelectedTeamId(null);
+      return;
+    }
+
+    const storedTeamId = readStoredSelectedTeamId(workspaceCacheKey);
+    if (!storedTeamId || !teams.some((team) => team.id === storedTeamId)) {
+      return;
+    }
+
+    setSelectedTeamId((current) => (current === storedTeamId ? current : storedTeamId));
+  }, [teams, workspaceCacheKey]);
+
+  useEffect(() => {
+    writeStoredSelectedTeamId(workspaceCacheKey, selectedTeamId);
+  }, [selectedTeamId, workspaceCacheKey]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -1677,9 +1705,6 @@ export function DashboardWorkspace({
     </div>
   );
 
-  const showPlaceholder = !displayView.isEmptyHome;
-  const shouldShowDashboardPlaceholder = showPlaceholder && hasResolvedContent;
-
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
       <div
@@ -1770,22 +1795,6 @@ export function DashboardWorkspace({
             {shouldShowDashboardLoading ? (
               <LandingReveal delay={52} duration={240}>
                 <DashboardContentSkeleton />
-              </LandingReveal>
-            ) : shouldShowDashboardPlaceholder ? (
-              <LandingReveal delay={52} duration={240}>
-                <div className={`mt-[22px] ${shellClass} px-[22px] py-[24px]`}>
-                  <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[22px] py-[26px]">
-                    <p className="text-[12px] uppercase tracking-[0.18em] text-[#666666]">
-                      Em breve
-                    </p>
-                    <h2 className="mt-[12px] text-[24px] leading-none font-medium tracking-[-0.04em] text-[#E5E5E5]">
-                      Esta area do dashboard esta sendo preparada
-                    </h2>
-                    <p className="mt-[12px] max-w-[720px] text-[14px] leading-[1.6] text-[#7D7D7D]">
-                      O shell da navegacao ja esta pronto. Agora podemos evoluir esta secao sem misturar o fluxo de servidores com o painel principal.
-                    </p>
-                  </div>
-                </div>
               </LandingReveal>
             ) : null}
 

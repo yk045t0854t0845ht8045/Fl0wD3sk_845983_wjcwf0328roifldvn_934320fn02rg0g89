@@ -187,34 +187,9 @@ function WorkspaceSidebarSkeleton() {
 
 export function DashboardContentSkeleton() {
   return (
-    <div className="mt-[22px] rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] px-[22px] py-[24px] shadow-[0_24px_80px_rgba(0,0,0,0.38)]">
-      <div className="rounded-[22px] border border-[#141414] bg-[#090909] px-[22px] py-[26px]">
-        <SkeletonBar width={82} height={12} className="rounded-full" />
-        <SkeletonBar width="42%" height={24} className="mt-[14px] max-w-full rounded-[14px]" />
-        <SkeletonBar width="62%" height={14} className="mt-[12px] max-w-full rounded-full" />
-      </div>
-
-      <div className="mt-[18px] grid gap-[12px] md:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 3 }, (_, index) => (
-          <div
-            key={index}
-            className="rounded-[22px] border border-[#141414] bg-[#090909] p-[18px]"
-          >
-            <SkeletonBar width={42} height={42} className="rounded-[14px]" />
-            <SkeletonBar width="58%" height={16} className="mt-[18px] max-w-full rounded-full" />
-            <SkeletonBar width="78%" height={12} className="mt-[10px] max-w-full rounded-full" />
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-[18px] rounded-[22px] border border-[#141414] bg-[#090909] px-[20px] py-[20px]">
-        <div className="space-y-[12px]">
-          <SkeletonBar width="34%" height={16} className="max-w-full rounded-full" />
-          <SkeletonBar width="100%" height={54} className="rounded-[16px]" />
-          <SkeletonBar width="100%" height={54} className="rounded-[16px]" />
-          <SkeletonBar width="76%" height={14} className="max-w-full rounded-full" />
-        </div>
-      </div>
+    <div className="mt-[24px] space-y-[10px]">
+      <SkeletonBar width="min(220px,48vw)" height={12} className="max-w-full rounded-full bg-[#111111]" />
+      <SkeletonBar width="min(340px,64vw)" height={12} className="max-w-full rounded-full bg-[#101010]" />
     </div>
   );
 }
@@ -370,6 +345,41 @@ function ServerSettingsMainSkeleton() {
   );
 }
 
+function resolveWorkspaceMainSkeleton(variant: WorkspaceRouteLoadingVariant) {
+  if (variant === "dashboard") {
+    return <DashboardMainSkeleton />;
+  }
+
+  if (variant === "account") {
+    return <AccountMainSkeleton />;
+  }
+
+  if (variant === "server-settings") {
+    return <ServerSettingsMainSkeleton />;
+  }
+
+  return <ServersOverviewMainSkeleton />;
+}
+
+export function WorkspaceRouteContentLoading({
+  variant,
+}: WorkspaceRouteLoadingProps) {
+  return (
+    <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05)_0%,rgba(255,255,255,0.012)_28%,transparent_68%)]"
+      />
+
+      <main className="relative px-[20px] pt-[32px] pb-[56px] md:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-[1220px]">
+          {resolveWorkspaceMainSkeleton(variant)}
+        </div>
+      </main>
+    </div>
+  );
+}
+
 export function WorkspaceRouteLoading({
   variant,
 }: WorkspaceRouteLoadingProps) {
@@ -383,16 +393,7 @@ export function WorkspaceRouteLoading({
     ? "relative px-[20px] pt-[32px] pb-[56px] md:px-6 lg:px-8 xl:min-h-screen xl:pl-[358px] xl:pr-[42px]"
     : "relative px-[20px] pt-[32px] pb-[56px] md:px-6 lg:min-h-screen lg:pl-[358px] lg:pr-[42px]";
 
-  let mainContent: React.ReactNode;
-  if (variant === "dashboard") {
-    mainContent = <DashboardMainSkeleton />;
-  } else if (variant === "account") {
-    mainContent = <AccountMainSkeleton />;
-  } else if (variant === "server-settings") {
-    mainContent = <ServerSettingsMainSkeleton />;
-  } else {
-    mainContent = <ServersOverviewMainSkeleton />;
-  }
+  const mainContent = resolveWorkspaceMainSkeleton(variant);
 
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">

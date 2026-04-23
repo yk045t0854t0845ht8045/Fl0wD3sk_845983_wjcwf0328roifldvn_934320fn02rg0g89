@@ -40,6 +40,10 @@ type ApprovedGuildRecord = {
   guild_id: string;
 };
 
+type ActivePlanGuildRecord = {
+  guild_id: string;
+};
+
 type ActiveSessionCleanupRecord = {
   id: string;
   active_guild_id: string | null;
@@ -59,6 +63,22 @@ type GuildActivityRecord = {
   updated_at: string;
 };
 
+function isMissingSecureSnapshotsRelationError(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message =
+    typeof error?.message === "string" ? error.message.toLowerCase() : "";
+
+  return (
+    code === "42P01" ||
+    message.includes("guild_settings_secure_snapshots") ||
+    message.includes("relation") ||
+    message.includes("does not exist")
+  );
+}
+
 type CleanupSummary = {
   cleanedGuildIds: string[];
   expiredPendingOrderIds: number[];
@@ -73,6 +93,7 @@ type CleanupCacheEntry = {
 };
 
 const CLEANUP_RESULT_CACHE_TTL_MS = 60_000;
+const CLEANUP_RESULT_MUTATION_CACHE_TTL_MS = 5_000;
 const cleanupResultCache = new Map<string, CleanupCacheEntry>();
 const cleanupResultInflight = new Map<string, Promise<CleanupSummary>>();
 
@@ -97,9 +118,18 @@ function readCleanupCache(key: string) {
 }
 
 function writeCleanupCache(key: string, value: CleanupSummary) {
+  const mutated =
+    value.cleanedGuildIds.length > 0 ||
+    value.expiredPendingOrderIds.length > 0 ||
+    value.touchedSessionIds.length > 0;
+
   cleanupResultCache.set(key, {
     value: cloneCleanupSummary(value),
-    expiresAt: Date.now() + CLEANUP_RESULT_CACHE_TTL_MS,
+    expiresAt:
+      Date.now() +
+      (mutated
+        ? CLEANUP_RESULT_MUTATION_CACHE_TTL_MS
+        : CLEANUP_RESULT_CACHE_TTL_MS),
   });
 }
 
@@ -108,6 +138,16 @@ function buildCleanupCacheKey(input: {
   guildId?: string | null;
 }) {
   return `${input.userId}:${input.guildId?.trim() || "*"}`;
+}
+
+function createEmptyCleanupSummary(): CleanupSummary {
+  return {
+    cleanedGuildIds: [],
+    expiredPendingOrderIds: [],
+    removedGlobalGuildSettingsIds: [],
+    removedPlanGuildIds: [],
+    touchedSessionIds: [],
+  };
 }
 
 function resolveTimedOutSetupCutoffIso(nowMs = Date.now()) {
@@ -211,6 +251,17 @@ function registerLatestGuildActivity(
   }
 }
 
+function registerProtectedGuildIds(
+  target: Set<string>,
+  records: Array<{ guild_id: string }>,
+) {
+  for (const record of records) {
+    if (typeof record.guild_id === "string" && record.guild_id.trim()) {
+      target.add(record.guild_id);
+    }
+  }
+}
+
 function collectGuildIdsFromSessionContext(session: ActiveSessionCleanupRecord) {
   const guildIds = new Set<string>();
   const draft = sanitizeConfigDraft(session.config_draft);
@@ -301,15 +352,36 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     .select("guild_id, updated_at")
     .eq("configured_by_user_id", input.userId);
 
+  let welcomeSettingsActivityQuery = supabase
+    .from("guild_welcome_settings")
+    .select("guild_id, updated_at")
+    .eq("configured_by_user_id", input.userId);
+
   let autoRoleSettingsActivityQuery = supabase
     .from("guild_autorole_settings")
     .select("guild_id, updated_at")
     .eq("configured_by_user_id", input.userId);
 
+  let securityLogsSettingsActivityQuery = supabase
+    .from("guild_security_logs_settings")
+    .select("guild_id, updated_at")
+    .eq("configured_by_user_id", input.userId);
+
   let planSettingsActivityQuery = supabase
     .from("guild_plan_settings")
-    .select("guild_id, updated_at")
+    .select("guild_id")
     .eq("user_id", input.userId);
+
+  let secureSnapshotsActivityQuery = supabase
+    .from("guild_settings_secure_snapshots")
+    .select("guild_id")
+    .eq("configured_by_user_id", input.userId);
+
+  let activePlanGuildsQuery = supabase
+    .from("auth_user_plan_guilds")
+    .select("guild_id")
+    .eq("user_id", input.userId)
+    .eq("is_active", true);
 
   if (input.guildId) {
     ticketSettingsActivityQuery = ticketSettingsActivityQuery.eq(
@@ -324,11 +396,24 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
       "guild_id",
       input.guildId,
     );
+    welcomeSettingsActivityQuery = welcomeSettingsActivityQuery.eq(
+      "guild_id",
+      input.guildId,
+    );
     autoRoleSettingsActivityQuery = autoRoleSettingsActivityQuery.eq(
       "guild_id",
       input.guildId,
     );
+    securityLogsSettingsActivityQuery = securityLogsSettingsActivityQuery.eq(
+      "guild_id",
+      input.guildId,
+    );
     planSettingsActivityQuery = planSettingsActivityQuery.eq("guild_id", input.guildId);
+    secureSnapshotsActivityQuery = secureSnapshotsActivityQuery.eq(
+      "guild_id",
+      input.guildId,
+    );
+    activePlanGuildsQuery = activePlanGuildsQuery.eq("guild_id", input.guildId);
   }
 
   const [
@@ -337,16 +422,24 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     ticketSettingsActivityResult,
     staffSettingsActivityResult,
     antiLinkSettingsActivityResult,
+    welcomeSettingsActivityResult,
     autoRoleSettingsActivityResult,
+    securityLogsSettingsActivityResult,
     planSettingsActivityResult,
+    secureSnapshotsActivityResult,
+    activePlanGuildsResult,
   ] = await Promise.all([
     activeSessionsQuery.returns<ActiveSessionCleanupRecord[]>(),
     latestUnpaidOrdersQuery.returns<CleanupCandidateOrderRecord[]>(),
     ticketSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     staffSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     antiLinkSettingsActivityQuery.returns<GuildActivityRecord[]>(),
+    welcomeSettingsActivityQuery.returns<GuildActivityRecord[]>(),
     autoRoleSettingsActivityQuery.returns<GuildActivityRecord[]>(),
-    planSettingsActivityQuery.returns<GuildActivityRecord[]>(),
+    securityLogsSettingsActivityQuery.returns<GuildActivityRecord[]>(),
+    planSettingsActivityQuery.returns<ActivePlanGuildRecord[]>(),
+    secureSnapshotsActivityQuery.returns<ActivePlanGuildRecord[]>(),
+    activePlanGuildsQuery.returns<ActivePlanGuildRecord[]>(),
   ]);
 
   if (activeSessionsResult.error) {
@@ -379,15 +472,42 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     );
   }
 
+  if (welcomeSettingsActivityResult.error) {
+    throw new Error(
+      `Erro ao carregar atividade das configuracoes de entrada e saida: ${welcomeSettingsActivityResult.error.message}`,
+    );
+  }
+
   if (autoRoleSettingsActivityResult.error) {
     throw new Error(
       `Erro ao carregar atividade das configuracoes de autorole: ${autoRoleSettingsActivityResult.error.message}`,
     );
   }
 
+  if (securityLogsSettingsActivityResult.error) {
+    throw new Error(
+      `Erro ao carregar atividade das configuracoes de logs de seguranca: ${securityLogsSettingsActivityResult.error.message}`,
+    );
+  }
+
   if (planSettingsActivityResult.error) {
     throw new Error(
       `Erro ao carregar atividade do plano do servidor: ${planSettingsActivityResult.error.message}`,
+    );
+  }
+
+  if (
+    secureSnapshotsActivityResult.error &&
+    !isMissingSecureSnapshotsRelationError(secureSnapshotsActivityResult.error)
+  ) {
+    throw new Error(
+      `Erro ao carregar atividade dos snapshots seguros do servidor: ${secureSnapshotsActivityResult.error.message}`,
+    );
+  }
+
+  if (activePlanGuildsResult.error) {
+    throw new Error(
+      `Erro ao carregar vinculos ativos de plano do servidor: ${activePlanGuildsResult.error.message}`,
     );
   }
 
@@ -398,34 +518,54 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     }
   }
 
-  const lastActivityByGuild = new Map<string, number>();
+  const temporarySetupActivityByGuild = new Map<string, number>();
+  const protectedCustomerDataGuildIds = new Set<string>();
   for (const order of latestOrderByGuild.values()) {
     registerLatestGuildActivity(
-      lastActivityByGuild,
+      temporarySetupActivityByGuild,
       order.guild_id,
       order.updated_at || order.created_at,
     );
   }
 
-  for (const item of ticketSettingsActivityResult.data || []) {
-    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
-  }
-
-  for (const item of staffSettingsActivityResult.data || []) {
-    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
-  }
-
-  for (const item of antiLinkSettingsActivityResult.data || []) {
-    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
-  }
-
-  for (const item of autoRoleSettingsActivityResult.data || []) {
-    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
-  }
-
-  for (const item of planSettingsActivityResult.data || []) {
-    registerLatestGuildActivity(lastActivityByGuild, item.guild_id, item.updated_at);
-  }
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    ticketSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    staffSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    antiLinkSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    welcomeSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    autoRoleSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    securityLogsSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    planSettingsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    secureSnapshotsActivityResult.error
+      ? []
+      : secureSnapshotsActivityResult.data || [],
+  );
+  registerProtectedGuildIds(
+    protectedCustomerDataGuildIds,
+    activePlanGuildsResult.data || [],
+  );
 
   for (const session of activeSessionsResult.data || []) {
     if (!session.config_context_updated_at) {
@@ -434,25 +574,19 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
 
     for (const guildId of collectGuildIdsFromSessionContext(session)) {
       registerLatestGuildActivity(
-        lastActivityByGuild,
+        temporarySetupActivityByGuild,
         guildId,
         session.config_context_updated_at,
       );
     }
   }
 
-  const timedOutGuildIds = Array.from(lastActivityByGuild.entries())
+  const timedOutGuildIds = Array.from(temporarySetupActivityByGuild.entries())
     .filter(([, activityAtMs]) => nowMs - activityAtMs >= UNPAID_SETUP_TIMEOUT_MS)
     .map(([guildId]) => guildId);
 
   if (!timedOutGuildIds.length) {
-    return {
-      cleanedGuildIds: [],
-      expiredPendingOrderIds: [],
-      removedGlobalGuildSettingsIds: [],
-      removedPlanGuildIds: [],
-      touchedSessionIds: [],
-    };
+    return createEmptyCleanupSummary();
   }
 
   const approvedOrdersByUserResult = await supabase
@@ -473,18 +607,12 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     (approvedOrdersByUserResult.data || []).map((item) => item.guild_id),
   );
 
-  const cleanupGuildIds = timedOutGuildIds.filter(
+  const staleUnpaidGuildIds = timedOutGuildIds.filter(
     (guildId) => !paidGuildIdsByUser.has(guildId),
   );
 
-  if (!cleanupGuildIds.length) {
-    return {
-      cleanedGuildIds: [],
-      expiredPendingOrderIds: [],
-      removedGlobalGuildSettingsIds: [],
-      removedPlanGuildIds: [],
-      touchedSessionIds: [],
-    };
+  if (!staleUnpaidGuildIds.length) {
+    return createEmptyCleanupSummary();
   }
 
   const expiredPendingOrdersResult = await supabase
@@ -497,7 +625,7 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
       checkout_link_invalidated_at: nowIso,
     })
     .eq("user_id", input.userId)
-    .in("guild_id", cleanupGuildIds)
+    .in("guild_id", staleUnpaidGuildIds)
     .eq("status", "pending")
     .lt("created_at", cutoffIso)
     .select("id, order_number, guild_id")
@@ -515,7 +643,7 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
       checkout_link_invalidated_at: nowIso,
     })
     .eq("user_id", input.userId)
-    .in("guild_id", cleanupGuildIds)
+    .in("guild_id", staleUnpaidGuildIds)
     .in("status", [...UNPAID_SETUP_ELIGIBLE_STATUSES])
     .lt("created_at", cutoffIso)
     .is("checkout_link_invalidated_at", null);
@@ -531,141 +659,46 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     ),
   );
 
-  const guildsWithAnyApprovedOrderResult = await supabase
-    .from("payment_orders")
-    .select("guild_id")
-    .eq("status", "approved")
-    .in("guild_id", cleanupGuildIds)
-    .returns<ApprovedGuildRecord[]>();
-
-  if (guildsWithAnyApprovedOrderResult.error) {
-    throw new Error(
-      `Erro ao validar configuracoes globais durante limpeza: ${guildsWithAnyApprovedOrderResult.error.message}`,
-    );
-  }
-
-  const guildsWithAnyApprovedOrder = new Set(
-    (guildsWithAnyApprovedOrderResult.data || []).map((item) => item.guild_id),
+  // Safety rail: cleanup timeout may expire stale checkout attempts, but it must
+  // never remove persisted customer/server data. Only transient session context
+  // is eligible for reset, and only when no protected records exist.
+  const cleanupGuildIds = staleUnpaidGuildIds.filter(
+    (guildId) => !protectedCustomerDataGuildIds.has(guildId),
   );
-  const removableGlobalGuildIds = cleanupGuildIds.filter(
-    (guildId) => !guildsWithAnyApprovedOrder.has(guildId),
-  );
-
-  if (removableGlobalGuildIds.length) {
-    const [
-      ticketSettingsDeleteResult,
-      staffSettingsDeleteResult,
-      antiLinkSettingsDeleteResult,
-      autoRoleSettingsDeleteResult,
-      autoRoleQueueDeleteResult,
-    ] =
-      await Promise.all([
-        supabase
-          .from("guild_ticket_settings")
-          .delete()
-          .eq("configured_by_user_id", input.userId)
-          .lt("updated_at", cutoffIso)
-          .in("guild_id", removableGlobalGuildIds),
-        supabase
-          .from("guild_ticket_staff_settings")
-          .delete()
-          .eq("configured_by_user_id", input.userId)
-          .lt("updated_at", cutoffIso)
-          .in("guild_id", removableGlobalGuildIds),
-        supabase
-          .from("guild_antilink_settings")
-          .delete()
-          .eq("configured_by_user_id", input.userId)
-          .lt("updated_at", cutoffIso)
-          .in("guild_id", removableGlobalGuildIds),
-        supabase
-          .from("guild_autorole_settings")
-          .delete()
-          .eq("configured_by_user_id", input.userId)
-          .lt("updated_at", cutoffIso)
-          .in("guild_id", removableGlobalGuildIds),
-        supabase
-          .from("guild_autorole_queue")
-          .delete()
-          .in("guild_id", removableGlobalGuildIds),
-      ]);
-
-    if (ticketSettingsDeleteResult.error) {
-      throw new Error(
-        `Erro ao remover configuracoes de canais do servidor: ${ticketSettingsDeleteResult.error.message}`,
-      );
-    }
-
-    if (staffSettingsDeleteResult.error) {
-      throw new Error(
-        `Erro ao remover configuracoes de cargos do servidor: ${staffSettingsDeleteResult.error.message}`,
-      );
-    }
-
-    if (antiLinkSettingsDeleteResult.error) {
-      throw new Error(
-        `Erro ao remover configuracoes anti-link do servidor: ${antiLinkSettingsDeleteResult.error.message}`,
-      );
-    }
-
-    if (autoRoleSettingsDeleteResult.error) {
-      throw new Error(
-        `Erro ao remover configuracoes de autorole do servidor: ${autoRoleSettingsDeleteResult.error.message}`,
-      );
-    }
-
-    if (autoRoleQueueDeleteResult.error) {
-      throw new Error(
-        `Erro ao remover fila de autorole do servidor: ${autoRoleQueueDeleteResult.error.message}`,
-      );
-    }
-  }
-
-  const planSettingsDeleteResult = await supabase
-    .from("guild_plan_settings")
-    .delete()
-    .eq("user_id", input.userId)
-    .lt("updated_at", cutoffIso)
-    .in("guild_id", cleanupGuildIds);
-
-  if (planSettingsDeleteResult.error) {
-    throw new Error(
-      `Erro ao remover configuracoes de plano do servidor: ${planSettingsDeleteResult.error.message}`,
-    );
-  }
-
   const cleanupGuildIdSet = new Set(cleanupGuildIds);
   const touchedSessionIds: string[] = [];
 
-  for (const session of activeSessionsResult.data || []) {
-    const currentDraft = sanitizeConfigDraft(session.config_draft);
-    const nextDraftResult = removeGuildsFromDraft(currentDraft, cleanupGuildIdSet);
-    const shouldResetActiveGuild =
-      !!session.active_guild_id && cleanupGuildIdSet.has(session.active_guild_id);
+  if (cleanupGuildIdSet.size > 0) {
+    for (const session of activeSessionsResult.data || []) {
+      const currentDraft = sanitizeConfigDraft(session.config_draft);
+      const nextDraftResult = removeGuildsFromDraft(currentDraft, cleanupGuildIdSet);
+      const shouldResetActiveGuild =
+        !!session.active_guild_id && cleanupGuildIdSet.has(session.active_guild_id);
 
-    if (!nextDraftResult.changed && !shouldResetActiveGuild) {
-      continue;
+      if (!nextDraftResult.changed && !shouldResetActiveGuild) {
+        continue;
+      }
+
+      const updateResult = await supabase
+        .from("auth_sessions")
+        .update({
+          active_guild_id: shouldResetActiveGuild ? null : session.active_guild_id,
+          config_current_step: shouldResetActiveGuild
+            ? 1
+            : normalizeConfigStep(session.config_current_step) || 1,
+          config_draft: nextDraftResult.draft,
+          config_context_updated_at: nowIso,
+        })
+        .eq("id", session.id);
+
+      if (updateResult.error) {
+        throw new Error(
+          `Erro ao limpar contexto de configuracao da sessao: ${updateResult.error.message}`,
+        );
+      }
+
+      touchedSessionIds.push(session.id);
     }
-
-    const updateResult = await supabase
-      .from("auth_sessions")
-      .update({
-        active_guild_id: shouldResetActiveGuild ? null : session.active_guild_id,
-        config_current_step: shouldResetActiveGuild
-          ? 1
-          : normalizeConfigStep(session.config_current_step) || 1,
-        config_draft: nextDraftResult.draft,
-        config_context_updated_at: nowIso,
-      })
-      .eq("id", session.id);
-
-    if (updateResult.error) {
-      throw new Error(
-        `Erro ao limpar contexto de configuracao da sessao: ${updateResult.error.message}`,
-      );
-    }
-
-    touchedSessionIds.push(session.id);
   }
 
   return {
@@ -673,8 +706,8 @@ async function runCleanupExpiredUnpaidServerSetups(input: {
     expiredPendingOrderIds: (expiredPendingOrdersResult.data || []).map(
       (order) => order.id,
     ),
-    removedGlobalGuildSettingsIds: removableGlobalGuildIds,
-    removedPlanGuildIds: cleanupGuildIds,
+    removedGlobalGuildSettingsIds: [],
+    removedPlanGuildIds: [],
     touchedSessionIds,
   };
 }

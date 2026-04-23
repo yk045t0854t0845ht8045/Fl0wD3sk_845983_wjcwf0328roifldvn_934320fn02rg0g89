@@ -17,6 +17,11 @@ import {
   recordServerSaveDiagnostic,
   resolveServerSaveAccessMode,
 } from "@/lib/servers/serverSaveDiagnostics";
+import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
+import {
+  readServerSettingsVaultSnapshot,
+  writeServerSettingsVaultSnapshot,
+} from "@/lib/servers/serverSettingsVault";
 import {
   extractAuditErrorMessage,
   sanitizeErrorMessage,
@@ -251,16 +256,58 @@ export async function GET(request: Request) {
     });
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const result = await supabase
-      .from("guild_antilink_settings")
-      .select(
-        "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, ignored_channel_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
-      )
-      .eq("guild_id", guildId)
-      .maybeSingle();
+    const [result, secureSnapshotResult] = await Promise.all([
+      supabase
+        .from("guild_antilink_settings")
+        .select(
+          "enabled, log_channel_id, enforcement_action, timeout_minutes, ignored_role_ids, ignored_channel_ids, block_external_links, block_discord_invites, block_obfuscated_links, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      readServerSettingsVaultSnapshot<Record<string, unknown>>({
+        guildId,
+        moduleKey: "antilink_settings",
+      }),
+    ]);
 
     if (result.error) {
       throw new Error(result.error.message);
+    }
+
+    const secureSnapshot =
+      secureSnapshotResult?.payload &&
+      typeof secureSnapshotResult.payload === "object"
+        ? (secureSnapshotResult.payload as Record<string, unknown>)
+        : null;
+    if (secureSnapshot) {
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          settings: {
+            enabled: secureSnapshot.enabled === true,
+            logChannelId:
+              typeof secureSnapshot.logChannelId === "string"
+                ? secureSnapshot.logChannelId
+                : null,
+            enforcementAction: normalizeAction(secureSnapshot.enforcementAction),
+            timeoutMinutes: normalizeTimeoutMinutes(secureSnapshot.timeoutMinutes),
+            ignoredRoleIds: Array.isArray(secureSnapshot.ignoredRoleIds)
+              ? secureSnapshot.ignoredRoleIds.filter(
+                  (roleId): roleId is string => typeof roleId === "string",
+                )
+              : [],
+            ignoredChannelIds: Array.isArray(secureSnapshot.ignoredChannelIds)
+              ? secureSnapshot.ignoredChannelIds.filter(
+                  (channelId): channelId is string => typeof channelId === "string",
+                )
+              : [],
+            blockExternalLinks: secureSnapshot.blockExternalLinks !== false,
+            blockDiscordInvites: secureSnapshot.blockDiscordInvites !== false,
+            blockObfuscatedLinks: secureSnapshot.blockObfuscatedLinks !== false,
+            updatedAt: secureSnapshotResult?.updatedAt || null,
+          },
+        }),
+      );
     }
 
     if (!result.data) {
@@ -621,6 +668,23 @@ export async function POST(request: Request) {
         blockObfuscatedLinks,
         configuredByUserId: authUserId,
       });
+      await writeServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "antilink_settings",
+        configuredByUserId: authUserId,
+        payload: {
+          enabled,
+          logChannelId,
+          enforcementAction,
+          timeoutMinutes,
+          ignoredRoleIds,
+          ignoredChannelIds,
+          blockExternalLinks,
+          blockDiscordInvites,
+          blockObfuscatedLinks,
+        },
+      });
+      invalidateDashboardSettingsCache({ guildId });
     } catch (error) {
       const auditDetail = extractAuditErrorMessage(error);
       recordServerSaveDiagnostic({

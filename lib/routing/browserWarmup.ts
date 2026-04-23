@@ -121,7 +121,12 @@ export function warmBrowserRoute(
     warmOrigin(new URL(target.href).origin);
   }
 
-  if (options?.prefetchDocument !== false) {
+  const shouldWarmDocument =
+    options?.prefetchDocument !== false &&
+    !options?.router &&
+    target.sameOrigin;
+
+  if (shouldWarmDocument) {
     warmDocument(target.href, !target.sameOrigin);
   }
 

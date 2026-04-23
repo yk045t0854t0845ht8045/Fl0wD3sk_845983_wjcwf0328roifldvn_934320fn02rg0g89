@@ -133,6 +133,7 @@ export const CANONICAL_PUBLIC_PATH_PREFIXES = [
   "/discord",
   "/domains",
 ] as const;
+const DASHBOARD_EMBEDDED_PATH_PREFIXES = ["/domains"] as const;
 
 function normalizeHostCandidate(value: string | null | undefined) {
   return value?.split(",")[0]?.trim().toLowerCase() || "";
@@ -705,11 +706,36 @@ export function buildCanonicalUrlFromInternalPath(
       : null);
 
   if (pathArea) {
+    const externalPath = getWorkspaceAreaExternalPath(
+      pathArea,
+      resolvedUrl.pathname,
+    );
+
+    if (
+      isCanonicalPublicPath(externalPath) &&
+      !(pathArea === "dashboard" && isDashboardEmbeddedPath(externalPath))
+    ) {
+      return (
+        buildCanonicalPublicUrl(request, externalPath, resolvedUrl.search) ||
+        resolvedUrl.toString()
+      );
+    }
+
     return (
       buildCanonicalWorkspaceUrl(
         request,
         pathArea,
-        getWorkspaceAreaExternalPath(pathArea, resolvedUrl.pathname),
+        externalPath,
+        resolvedUrl.search,
+      ) || resolvedUrl.toString()
+    );
+  }
+
+  if (isCanonicalPublicPath(resolvedUrl.pathname)) {
+    return (
+      buildCanonicalPublicUrl(
+        request,
+        resolvedUrl.pathname,
         resolvedUrl.search,
       ) || resolvedUrl.toString()
     );
@@ -776,6 +802,15 @@ export function isCanonicalPublicPath(pathname: string) {
   const normalizedPathname = ensureLeadingSlash(pathname);
 
   return CANONICAL_PUBLIC_PATH_PREFIXES.some((prefix) => {
+    if (normalizedPathname === prefix) return true;
+    return normalizedPathname.startsWith(`${prefix}/`);
+  });
+}
+
+export function isDashboardEmbeddedPath(pathname: string) {
+  const normalizedPathname = ensureLeadingSlash(pathname);
+
+  return DASHBOARD_EMBEDDED_PATH_PREFIXES.some((prefix) => {
     if (normalizedPathname === prefix) return true;
     return normalizedPathname.startsWith(`${prefix}/`);
   });

@@ -31,6 +31,7 @@ import {
   getWorkspaceAreaExternalPath,
   getWorkspaceAreaInternalPath,
   isCanonicalPublicPath,
+  isDashboardEmbeddedPath,
   resolveCanonicalHostOrigin,
   resolveAuthOrigin,
 } from "@/lib/routing/subdomains";
@@ -401,7 +402,10 @@ function maybeBuildCanonicalWorkspaceRedirect(
     return null;
   }
 
-  if (isCanonicalPublicPath(pathname)) {
+  const shouldKeepDashboardPathInWorkspace =
+    hostArea === "dashboard" && isDashboardEmbeddedPath(pathname);
+
+  if (isCanonicalPublicPath(pathname) && !shouldKeepDashboardPathInWorkspace) {
     const fallbackArea = pathname.startsWith("/login") ? "account" : "public";
     const targetLocation = buildCanonicalUrlFromInternalPath(
       request,

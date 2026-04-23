@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
-import { cancelMercadoPagoCardPayment } from "@/lib/payments/mercadoPago";
+import {
+  cancelMercadoPagoCardPayment,
+  fetchMercadoPagoPaymentById,
+  resolvePaymentStatus,
+} from "@/lib/payments/mercadoPago";
 import { ensureCheckoutAccessTokenForOrder } from "@/lib/payments/checkoutLinkSecurity";
+import { reconcilePaymentOrderWithProviderPayment } from "@/lib/payments/reconciliation";
 import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
@@ -149,9 +154,134 @@ export async function POST(request: Request) {
 
     if (order.provider_payment_id) {
       try {
-        await cancelMercadoPagoCardPayment(order.provider_payment_id);
+        const providerSnapshot = await fetchMercadoPagoPaymentById(
+          order.provider_payment_id,
+          {
+            useCardToken: true,
+            forceFresh: true,
+          },
+        );
+        const resolvedProviderStatus = resolvePaymentStatus(providerSnapshot.status);
+        if (resolvedProviderStatus !== "pending") {
+          const reconciled = await reconcilePaymentOrderWithProviderPayment(
+            order as Parameters<typeof reconcilePaymentOrderWithProviderPayment>[0],
+            providerSnapshot,
+            {
+              source: "payment_card_cancel_preflight",
+            },
+          );
+          const hydratedOrder = {
+            ...order,
+            ...reconciled.order,
+            guild_id: guildId,
+          } as PaymentOrderRecord;
+          const securedOrder = await ensureCheckoutAccessTokenForOrder({
+            order: hydratedOrder,
+            forceRotate: false,
+            invalidateOtherOrders: false,
+          });
+
+          return respond({
+            ok: true,
+            order: toApiOrder(
+              securedOrder.order,
+              securedOrder.checkoutAccessToken,
+            ),
+          });
+        }
       } catch {
-        // melhor esforco; ainda encerramos o checkout local para o usuario sair do loop
+        // melhor esforco; seguimos para a tentativa de cancelamento do provedor
+      }
+    }
+
+    if (order.provider_payment_id) {
+      try {
+        await cancelMercadoPagoCardPayment(order.provider_payment_id);
+        const providerSnapshot = await fetchMercadoPagoPaymentById(
+          order.provider_payment_id,
+          {
+            useCardToken: true,
+            forceFresh: true,
+          },
+        );
+        const resolvedProviderStatus = resolvePaymentStatus(providerSnapshot.status);
+        if (resolvedProviderStatus !== "pending") {
+          const reconciled = await reconcilePaymentOrderWithProviderPayment(
+            order as Parameters<typeof reconcilePaymentOrderWithProviderPayment>[0],
+            providerSnapshot,
+            {
+              source: "payment_card_cancel_post_provider",
+            },
+          );
+          const hydratedOrder = {
+            ...order,
+            ...reconciled.order,
+            guild_id: guildId,
+          } as PaymentOrderRecord;
+          const securedOrder = await ensureCheckoutAccessTokenForOrder({
+            order: hydratedOrder,
+            forceRotate: false,
+            invalidateOtherOrders: false,
+          });
+
+          return respond({
+            ok: true,
+            order: toApiOrder(
+              securedOrder.order,
+              securedOrder.checkoutAccessToken,
+            ),
+          });
+        }
+      } catch {
+        try {
+          const providerSnapshot = await fetchMercadoPagoPaymentById(
+            order.provider_payment_id,
+            {
+              useCardToken: true,
+              forceFresh: true,
+            },
+          );
+          const resolvedProviderStatus = resolvePaymentStatus(providerSnapshot.status);
+          if (resolvedProviderStatus !== "pending") {
+            const reconciled = await reconcilePaymentOrderWithProviderPayment(
+              order as Parameters<typeof reconcilePaymentOrderWithProviderPayment>[0],
+              providerSnapshot,
+              {
+                source: "payment_card_cancel_provider_recovery",
+              },
+            );
+            const hydratedOrder = {
+              ...order,
+              ...reconciled.order,
+              guild_id: guildId,
+            } as PaymentOrderRecord;
+            const securedOrder = await ensureCheckoutAccessTokenForOrder({
+              order: hydratedOrder,
+              forceRotate: false,
+              invalidateOtherOrders: false,
+            });
+
+            return respond({
+              ok: true,
+              order: toApiOrder(
+                securedOrder.order,
+                securedOrder.checkoutAccessToken,
+              ),
+            });
+          }
+        } catch {
+          // se nem o cancelamento nem a confirmacao do status funcionarem,
+          // nao cancelamos localmente para evitar estado falso.
+        }
+
+        return respond(
+          {
+            ok: false,
+            message:
+              "Nao foi possivel confirmar o cancelamento seguro do checkout com cartao agora. Aguarde alguns instantes e tente novamente.",
+          },
+          { status: 409 },
+        );
       }
     }
 

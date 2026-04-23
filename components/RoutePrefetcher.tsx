@@ -25,7 +25,6 @@ export function RoutePrefetcher() {
         "/dashboard/",
         "/dashboard/hosting",
         "/dashboard/flowai-api",
-        "/dashboard/domains",
         "/dashboard/billing/subscriptions",
         "/servers",
         "/servers/",
@@ -34,11 +33,11 @@ export function RoutePrefetcher() {
         "/account/",
         "/account/tickets",
         "/account/status",
-        "/discord/link",
       ],
       {
         router,
         delayMs: 90,
+        prefetchDocument: false,
       },
     );
   }, [pathname, router]);

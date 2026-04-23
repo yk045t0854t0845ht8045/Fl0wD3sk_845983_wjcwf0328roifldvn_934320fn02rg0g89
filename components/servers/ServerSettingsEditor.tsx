@@ -33,6 +33,7 @@ import { PermissionDeniedState } from "@/components/servers/PermissionDeniedStat
 import { serversScale } from "@/components/servers/serversScale";
 import {
   getServerDashboardSettings,
+  invalidateCachedServerDashboardSettings,
   readCachedServerDashboardSettings,
 } from "@/lib/servers/serverDashboardSettingsClient";
 import type { ServerDashboardSettingsPayload } from "@/lib/servers/serverDashboardSettingsClient";
@@ -5029,6 +5030,7 @@ export function ServerSettingsEditor({
         setSavedSettingsDraft(nextSavedTicketDraft);
       }
 
+      invalidateCachedServerDashboardSettings(guildId);
       setSuccessMessage("Configuracoes salvas com sucesso.");
       setShowSaveSuccessBar(true);
     } catch (error) {
@@ -5204,6 +5206,7 @@ export function ServerSettingsEditor({
           exitLogThumbnailMode,
         }),
       );
+      invalidateCachedServerDashboardSettings(guildId);
       setShowSaveSuccessBar(true);
       setSuccessMessage("Modulo ativado com sucesso.");
       setIsWelcomeActivationModalOpen(false);
@@ -5288,6 +5291,7 @@ export function ServerSettingsEditor({
           blockObfuscatedLinks: ANTILINK_DEFAULT_DETECTION.blockObfuscatedLinks,
         }),
       );
+      invalidateCachedServerDashboardSettings(guildId);
       setShowSaveSuccessBar(true);
       setSuccessMessage("Modulo AntiLink ativado com sucesso.");
       setIsAntiLinkActivationModalOpen(false);
