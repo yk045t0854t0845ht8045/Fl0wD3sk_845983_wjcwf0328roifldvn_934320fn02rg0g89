@@ -519,7 +519,7 @@ export function DashboardWorkspace({
       : readTeamsSnapshotMemoryCache(workspaceCacheKey);
   const [sidebarSearchText, setSidebarSearchText] = useState("");
   const [pendingViewId, setPendingViewId] = useState<DashboardViewId | null>(null);
-  const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
   const [teamServers, setTeamServers] = useState<ManagedServer[]>([]);
   const [isTeamServersLoading, setIsTeamServersLoading] = useState(
     Boolean(currentAccount.discordUserId),

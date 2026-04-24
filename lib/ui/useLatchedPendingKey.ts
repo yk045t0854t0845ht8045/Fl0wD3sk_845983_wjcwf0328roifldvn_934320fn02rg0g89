@@ -19,8 +19,13 @@ export function useLatchedPendingKey({
   useEffect(() => {
     if (pendingKey && pendingKey !== resolvedKey) {
       startedAtRef.current = Date.now();
-      setLatchedKey(pendingKey);
-      return;
+      const frameId = window.requestAnimationFrame(() => {
+        setLatchedKey((current) => (current === pendingKey ? current : pendingKey));
+      });
+
+      return () => {
+        window.cancelAnimationFrame(frameId);
+      };
     }
 
     if (!latchedKey || latchedKey !== resolvedKey) {

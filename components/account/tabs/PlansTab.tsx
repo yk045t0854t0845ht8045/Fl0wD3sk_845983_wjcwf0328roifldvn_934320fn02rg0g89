@@ -6,18 +6,6 @@ import { useRouter } from "next/navigation";
 import { usePlanInfo } from "@/hooks/useAccountData";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 
-type PlanData = {
-  code: string;
-  name: string;
-  status: "inactive" | "trial" | "active" | "expired";
-  expiresAt: string | null;
-  activatedAt: string | null;
-  billingCycleDays: number;
-  recurrenceLabel: string;
-  isActive: boolean;
-  maxLicensedServers: number;
-};
-
 const PLAN_CONFIGS: Record<string, { 
   color: string; 
   bg: string; 

@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
-import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
@@ -493,6 +492,8 @@ function HeaderAccountButton({
     </LandingActionButton>
   );
 }
+
+void HeaderAccountButton;
 
 export function LandingHeader({
   authenticatedUser = null,

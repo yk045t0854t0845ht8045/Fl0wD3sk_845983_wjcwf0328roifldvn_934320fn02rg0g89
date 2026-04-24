@@ -1,6 +1,6 @@
 "use client";
 
-import { ShieldCheck, Zap, Globe, Lock, Headset, CreditCard } from "lucide-react";
+import { ShieldCheck, Globe, Lock, Headset } from "lucide-react";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 
 const TRUST_FEATURES = [

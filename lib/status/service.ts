@@ -896,7 +896,11 @@ export async function getSystemStatus() {
       })
       // Hide incidents that were exclusively linked to FlowAI
       .filter((incident) => !incident._onlyFlowAi)
-      .map(({ _onlyFlowAi: _, ...rest }) => rest);
+      .map((incident) => {
+        const { _onlyFlowAi: onlyFlowAiFlag, ...rest } = incident;
+        void onlyFlowAiFlag;
+        return rest;
+      });
 
     const rawOverallStatus = getWorstSystemStatus(
       componentsWithHistory.map((component) => component.status),

@@ -1,9 +1,9 @@
-import { getUserPlanState, repairOrphanPlanGuildLinkForUser, getBasicPlanAvailability } from "@/lib/plans/state";
-
+import type { AccountPlanUsageSnapshot } from "@/lib/plans/accountPlanUsage";
+import { buildAccountPlanUsageSnapshot } from "@/lib/plans/accountPlanUsage";
+import { getBasicPlanAvailability, getUserPlanState, repairOrphanPlanGuildLinkForUser, type UserPlanStateRecord } from "@/lib/plans/state";
 import { countPlanGuildsForUser, getPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { getUserPlanScheduledChange } from "@/lib/plans/change";
 import { ensureDowngradeEnforcementForUser, getDowngradeEnforcementSummaryForUser } from "@/lib/plans/downgradeEnforcement";
-import { buildAccountPlanUsageSnapshot } from "@/lib/plans/accountPlanUsage";
 import { PLAN_ORDER, resolvePlanPricing, type PlanCode } from "@/lib/plans/catalog";
 
 const planStateCache = new Map<number, { data: ManagedPlanState; timestamp: number }>();
@@ -12,12 +12,26 @@ const CACHE_TTL_MS = 600000;
 const STALE_THRESHOLD_MS = 20000;
 
 export type ManagedPlanState = {
-  plan: any;
-  usage: any;
+  plan:
+    | {
+        planCode: UserPlanStateRecord["plan_code"];
+        planName: string;
+        status: UserPlanStateRecord["status"];
+        amount: number;
+        currency: string;
+        billingCycleDays: number;
+        maxLicensedServers: number;
+        activatedAt: string | null;
+        expiresAt: string | null;
+      }
+    | null;
+  usage: AccountPlanUsageSnapshot;
   totalLinkedServersCount: number;
   isBasicAvailable: boolean;
-  downgradeEnforcement: any;
-  upgradeRecommendation: any;
+  downgradeEnforcement: Awaited<
+    ReturnType<typeof getDowngradeEnforcementSummaryForUser>
+  >;
+  upgradeRecommendation: ReturnType<typeof resolveUpgradeRecommendation>;
 };
 
 function resolveUpgradeRecommendation(input: {

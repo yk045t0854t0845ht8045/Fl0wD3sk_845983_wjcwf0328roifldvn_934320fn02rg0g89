@@ -119,6 +119,7 @@ function PlanCta({
   accountPlanStatus,
   isInitialLoading,
   isGlobalLoading,
+  pendingPlanCode,
   onStartLoading,
   serviceState,
 }: {
@@ -127,6 +128,7 @@ function PlanCta({
   accountPlanStatus: string | null;
   isInitialLoading?: boolean;
   isGlobalLoading: boolean;
+  pendingPlanCode: string | null;
   onStartLoading: (planCode: string) => void;
   serviceState: LandingServiceState;
 }) {
@@ -137,13 +139,13 @@ function PlanCta({
       fresh: "1",
     },
   });
-  const [isLocalLoading, setIsLocalLoading] = useState(false);
   const isCurrentPlan =
     !!accountPlanCode &&
     accountPlanCode === plan.code &&
     (accountPlanStatus === "active" || accountPlanStatus === "trial");
   const isServiceReady = serviceState === "ready";
   const isServiceLoading = serviceState === "loading";
+  const isLocalLoading = isGlobalLoading && pendingPlanCode === plan.code;
 
   const isDisabled =
     !isServiceReady ||
@@ -151,12 +153,6 @@ function PlanCta({
     !plan.isAvailable ||
     isInitialLoading ||
     isGlobalLoading;
-
-  useEffect(() => {
-    if (!isGlobalLoading || !isServiceReady) {
-      setIsLocalLoading(false);
-    }
-  }, [isGlobalLoading, isServiceReady]);
 
   return (
     <LandingActionButton
@@ -166,7 +162,6 @@ function PlanCta({
       disabled={isDisabled}
       onClick={() => {
         if (isDisabled) return;
-        setIsLocalLoading(true);
         onStartLoading(plan.code);
       }}
     >
@@ -194,6 +189,7 @@ function OfferPlanCard({
   accountPlanStatus,
   isInitialLoading,
   isGlobalLoading,
+  pendingPlanCode,
   onStartLoading,
   serviceState,
 }: {
@@ -203,6 +199,7 @@ function OfferPlanCard({
   accountPlanStatus: string | null;
   isInitialLoading?: boolean;
   isGlobalLoading: boolean;
+  pendingPlanCode: string | null;
   onStartLoading: (planCode: string) => void;
   serviceState: LandingServiceState;
 }) {
@@ -269,6 +266,7 @@ function OfferPlanCard({
             accountPlanStatus={accountPlanStatus}
             isInitialLoading={isInitialLoading}
             isGlobalLoading={isGlobalLoading}
+            pendingPlanCode={pendingPlanCode}
             onStartLoading={onStartLoading}
             serviceState={serviceState}
           />
@@ -324,6 +322,7 @@ export function LandingOfferPlans({
   const [isBasicAvailable, setIsBasicAvailable] = useState<boolean>(true);
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
   const [isGlobalLoading, setIsGlobalLoading] = useState<boolean>(false);
+  const [pendingPlanCode, setPendingPlanCode] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState<number>(0);
   const planStateRequestInFlightRef = useRef(false);
   const hasResolvedPlanStateRef = useRef(false);
@@ -345,6 +344,7 @@ export function LandingOfferPlans({
       setAccountPlanStatus(null);
       setIsBasicAvailable(true);
       setIsGlobalLoading(false);
+      setPendingPlanCode(null);
       setIsInitialLoading(serviceState === "loading");
       return;
     }
@@ -451,7 +451,11 @@ export function LandingOfferPlans({
             accountPlanStatus={accountPlanStatus}
             isInitialLoading={isInitialLoading}
             isGlobalLoading={isGlobalLoading}
-            onStartLoading={() => setIsGlobalLoading(true)}
+            pendingPlanCode={pendingPlanCode}
+            onStartLoading={(planCode) => {
+              setPendingPlanCode(planCode);
+              setIsGlobalLoading(true);
+            }}
             serviceState={serviceState}
           />
         ))}

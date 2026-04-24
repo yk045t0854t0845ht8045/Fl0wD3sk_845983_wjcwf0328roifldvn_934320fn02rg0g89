@@ -1,9 +1,6 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { openProviderClient } from "@/lib/openprovider/client";
-import {
-  runFlowAiHealthProbe,
-  type FlowAiHealthResponse,
-} from "@/lib/flowai/service";
+import type { FlowAiHealthResponse } from "@/lib/flowai/service";
 import type { StatusCheckResult, SystemStatus } from "./types";
 import { getWorstSystemStatus } from "./types";
 
@@ -39,8 +36,6 @@ export type DiscordBotStatusResponse = StatusCheckResult & {
 export type SquareCloudStatusResponse = StatusCheckResult;
 export type DiscordCdnStatusResponse = StatusCheckResult;
 
-const OPENAI_MAX_ATTEMPTS = 2;
-const OPENAI_BASE_TIMEOUT_MS = 8500;
 const OPENAI_DEFAULT_URL = "https://api.openai.com/v1";
 
 type StatusStabilityMemory = {
@@ -109,7 +104,7 @@ function stabilizeSystemStatus(
 }
 
 export function stabilizeStatusCheckResult<
-  T extends { status: SystemStatus; message: string | null; latencyMs: number | null; ok?: boolean; checkedAt?: string | null; [key: string]: any },
+  T extends { status: SystemStatus; message: string | null; latencyMs: number | null; ok?: boolean; checkedAt?: string | null; [key: string]: unknown },
 >(sourceKey: string, payload: T): T {
   const stabilizedStatus = stabilizeSystemStatus(
     sourceKey,
@@ -141,25 +136,6 @@ export function stabilizeFlowAiStatusResponse(payload: FlowAiStatusResponse) {
       ...overall,
     },
   };
-}
-
-function mapStatusFromHttp(status: number) {
-  if (status >= 200 && status < 300) return "operational" as const;
-  if (status === 429) return "degraded_performance" as const;
-  if (status === 401 || status === 403) return "major_outage" as const;
-  if (status >= 500 && status < 600) return "partial_outage" as const;
-  return "partial_outage" as const;
-}
-
-function getOpenAiApiKey() {
-  return process.env.OPENAI_API_KEY?.trim() || "";
-}
-
-function getOpenAiBaseUrl() {
-  return (process.env.OPENAI_BASE_URL?.trim() || OPENAI_DEFAULT_URL).replace(
-    /\/$/,
-    "",
-  );
 }
 
 export function emptyTaskStats() {
@@ -216,210 +192,6 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timeout);
   }
-}
-
-async function fetchOpenAi(path: string, options: RequestInit, timeoutMs: number) {
-  const baseUrl = getOpenAiBaseUrl();
-  const url = `${baseUrl}${path}`;
-
-  let lastError: unknown = null;
-
-  for (let attempt = 1; attempt <= OPENAI_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const res = await fetchWithTimeout(url, options, timeoutMs);
-      if (res.ok || ![429, 500, 502, 503, 504].includes(res.status)) {
-        return res;
-      }
-
-      lastError = new Error(`OpenAI ${res.status} ${res.statusText}`);
-      await delay(attempt * 400);
-    } catch (error) {
-      lastError = error;
-
-      if (
-        error instanceof Error &&
-        !(error instanceof DOMException && error.name === "AbortError") &&
-        !/network|failed/i.test(error.message)
-      ) {
-        throw error;
-      }
-
-      await delay(attempt * 400);
-    }
-  }
-
-  throw lastError;
-}
-
-async function checkOpenAiUpstream(): Promise<FlowAiStatusResponse["upstream"]["openai"]> {
-  const apiKey = getOpenAiApiKey();
-  const baseUrl = getOpenAiBaseUrl();
-
-  if (!apiKey) {
-    return {
-      status: "major_outage",
-      latencyMs: null,
-      message: "OPENAI_API_KEY nao configurada no servidor.",
-      baseUrl,
-    };
-  }
-
-  const startedAt = Date.now();
-
-  try {
-    const res = await fetchOpenAi(
-      "/models",
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      },
-      8000,
-    );
-
-    const latencyMs = Date.now() - startedAt;
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      const detail = text.trim().slice(0, 200) || `HTTP ${res.status}`;
-
-      return {
-        status: mapStatusFromHttp(res.status),
-        latencyMs,
-        message:
-          res.status === 401 || res.status === 403
-            ? "Credenciais da OpenAI invalidas."
-            : `Falha ao consultar a OpenAI: ${detail}`,
-        baseUrl,
-      };
-    }
-
-    return {
-      status: "operational",
-      latencyMs,
-      message: null,
-      baseUrl,
-    };
-  } catch (error) {
-    return {
-      status: "partial_outage",
-      latencyMs: Date.now() - startedAt,
-      message:
-        error instanceof Error
-          ? `Falha de conexao com a OpenAI: ${error.message}`
-          : "Falha de conexao com a OpenAI.",
-      baseUrl,
-    };
-  }
-}
-
-function pickOpenAiModels() {
-  const explicitModel = process.env.OPENAI_MODEL?.trim();
-  const fallbacks =
-    process.env.OPENAI_MODEL_FALLBACKS?.split(",")
-      .map((value) => value.trim())
-      .filter(Boolean) || [];
-
-  return [explicitModel, ...fallbacks, "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"].filter(
-    Boolean,
-  );
-}
-
-async function checkOpenAiCompletion(
-  kind: "domains" | "tickets" | "discord",
-): Promise<FlowAiStatusResponse["upstream"]["openai"]> {
-  const apiKey = getOpenAiApiKey();
-  const baseUrl = getOpenAiBaseUrl();
-
-  if (!apiKey) {
-    return {
-      status: "major_outage",
-      latencyMs: null,
-      message: "OPENAI_API_KEY nao configurada no servidor.",
-      baseUrl,
-    };
-  }
-
-  const prompts: Record<typeof kind, string> = {
-    domains:
-      "Gere 1 nome curto de dominio para uma empresa ficticia chamada Flowdesk. Responda em ate 2 palavras.",
-    tickets: "Resuma em 8 palavras: Cliente sem acesso ao painel do Discord.",
-    discord:
-      "Gere uma mensagem curta e educada, em uma frase, para responder uma duvida no Discord.",
-  };
-
-  const models = pickOpenAiModels();
-  let lastStatus: SystemStatus = "major_outage";
-  let lastLatency: number | null = null;
-  let lastMessage: string | null = null;
-
-  for (const model of models) {
-    const startedAt = Date.now();
-
-    try {
-      const res = await fetchOpenAi(
-        "/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: "Responda de forma objetiva." },
-              { role: "user", content: prompts[kind] },
-            ],
-            max_tokens: 16,
-            temperature: 0,
-          }),
-        },
-        OPENAI_BASE_TIMEOUT_MS,
-      );
-
-      const latencyMs = Date.now() - startedAt;
-      lastLatency = latencyMs;
-      lastStatus = mapStatusFromHttp(res.status);
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        lastMessage = text.trim().slice(0, 220) || `HTTP ${res.status}`;
-
-        if ([400, 404, 422].includes(res.status)) {
-          continue;
-        }
-
-        break;
-      }
-
-      await res.json().catch(() => null);
-
-      return {
-        status: "operational",
-        latencyMs,
-        message: null,
-        baseUrl,
-      };
-    } catch (error) {
-      lastLatency = Date.now() - startedAt;
-      lastStatus = "partial_outage";
-      lastMessage =
-        error instanceof DOMException && error.name === "AbortError"
-          ? "Timeout ao consultar completions da OpenAI."
-          : error instanceof Error
-            ? error.message
-            : "Falha desconhecida ao consultar completions da OpenAI.";
-    }
-  }
-
-  return {
-    status: lastStatus,
-    latencyMs: lastLatency,
-    message: lastMessage,
-    baseUrl,
-  };
 }
 
 export async function checkFlowAiStatus(): Promise<FlowAiStatusResponse> {
@@ -1099,7 +871,7 @@ export async function checkSquareCloudStatus(): Promise<SquareCloudStatusRespons
       message: hasOutage ? "Square Cloud reportando instabilidade oficial." : "Sistemas Square Cloud operantes.",
       source: "squarecloud"
     };
-  } catch (error) {
+  } catch {
     return {
       ok: false,
       checkedAt,
@@ -1144,7 +916,7 @@ export async function checkDiscordCdnStatus(): Promise<DiscordCdnStatusResponse>
       message: "Discord CDN operando normalmente.",
       source: "discord_cdn"
     };
-  } catch (error: any) {
+  } catch {
     return {
       ok: false,
       checkedAt,

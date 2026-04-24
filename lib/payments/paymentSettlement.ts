@@ -77,7 +77,6 @@ const FINALIZATION_STATUS_PENDING = "pending";
 const FINALIZATION_STATUS_REFUNDED = "refunded";
 const DEFAULT_FINALIZATION_REFUND_GRACE_MS = 15 * 60 * 1000;
 const DEFAULT_FINALIZATION_MAX_FAILURES = 3;
-const DEFAULT_SETTLEMENT_RECOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function normalizeOptionalString(value: string | null | undefined) {
   if (typeof value !== "string") return null;
@@ -177,17 +176,6 @@ function resolveFinalizationMaxFailures() {
   }
 
   return clampInteger(parsed, DEFAULT_FINALIZATION_MAX_FAILURES, 1, 10);
-}
-
-function resolveSettlementRecoveryWindowMs() {
-  const rawValue =
-    process.env.FLOWDESK_PAYMENT_SETTLEMENT_RECOVERY_WINDOW_SECONDS?.trim() || "";
-  const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_SETTLEMENT_RECOVERY_WINDOW_MS;
-  }
-
-  return Math.max(60_000, Math.min(Math.trunc(parsed * 1000), 7 * 24 * 60 * 60 * 1000));
 }
 
 function resolveSettlementReferenceMs(order: PaymentSettlementOrderRecord) {
@@ -554,7 +542,7 @@ export async function settleApprovedPaymentOrder<
       source: input.source,
       message: errorMessage,
     });
-    let pendingOrder = pendingSettlement.order;
+    const pendingOrder = pendingSettlement.order;
 
     if (!input.allowAutoRefundOnFailure) {
       return {

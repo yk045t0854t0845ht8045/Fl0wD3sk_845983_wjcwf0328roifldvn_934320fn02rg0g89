@@ -140,34 +140,35 @@ function resolveExpirationDate(input: {
 
 export function CreateApiKeyModal({
   isOpen,
+  ...dialogProps
+}: CreateApiKeyModalProps) {
+  useBodyScrollLock(isOpen);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const portalTarget = typeof document === "undefined" ? null : document.body;
+  if (!portalTarget) {
+    return null;
+  }
+
+  return createPortal(<CreateApiKeyModalDialog {...dialogProps} />, portalTarget);
+}
+
+function CreateApiKeyModalDialog({
   isProcessing,
   errorMessage,
   onClose,
   onSubmit,
-}: CreateApiKeyModalProps) {
+}: Omit<CreateApiKeyModalProps, "isOpen">) {
   const [name, setName] = useState("");
   const [reason, setReason] = useState<string>(REASON_OPTIONS[0]);
   const [expirationPreset, setExpirationPreset] = useState<string>("never");
   const [customDate, setCustomDate] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  useBodyScrollLock(isOpen);
-
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    setName("");
-    setReason(REASON_OPTIONS[0]);
-    setExpirationPreset("never");
-    setCustomDate("");
-    setValidationError(null);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !isProcessing) {
         onClose();
@@ -176,7 +177,7 @@ export function CreateApiKeyModal({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isProcessing, onClose]);
+  }, [isProcessing, onClose]);
 
   const customDatePlaceholder = useMemo(() => "00/00/0000", []);
   const reasonSelectOptions = useMemo(
@@ -191,15 +192,6 @@ export function CreateApiKeyModal({
       })),
     [],
   );
-
-  if (!isOpen) {
-    return null;
-  }
-
-  const portalTarget = typeof document === "undefined" ? null : document.body;
-  if (!portalTarget) {
-    return null;
-  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -409,5 +401,5 @@ export function CreateApiKeyModal({
     </div>
   );
 
-  return createPortal(modalContent, portalTarget);
+  return modalContent;
 }

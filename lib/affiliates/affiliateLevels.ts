@@ -3,7 +3,7 @@ import type {
   AffiliateRankTier,
   AffiliateLevelConfig,
 } from "./affiliateTypes";
-import { Trophy, Zap, Star, Sparkles, type LucideIcon } from "lucide-react";
+import { Trophy, Zap, Star, Sparkles } from "lucide-react";
 
 export const AFFILIATE_LEVELS: Record<AffiliateLevel, AffiliateLevelConfig> = {
   bronze: {

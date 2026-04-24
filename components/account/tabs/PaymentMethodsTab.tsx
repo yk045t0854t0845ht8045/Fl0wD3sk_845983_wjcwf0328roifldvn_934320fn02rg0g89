@@ -108,8 +108,11 @@ export function PaymentMethodsTab() {
       ) : (
         <div className="space-y-[12px]">
           {(filteredMethods as SavedMethod[]).map((method) => {
+            const methodKey =
+              method.id ||
+              `${method.brand || "card"}-${method.lastFour || "unknown"}-${method.expMonth || "mm"}-${method.expYear || "yy"}`;
             return (
-              <div key={method.id || Math.random()} className="flex items-center justify-between rounded-[16px] border border-[#131313] bg-[#0A0A0A] p-[16px] transition hover:border-[#222222]">
+              <div key={methodKey} className="flex items-center justify-between rounded-[16px] border border-[#131313] bg-[#0A0A0A] p-[16px] transition hover:border-[#222222]">
                 <div className="flex items-center gap-[16px]">
                   <div className="flex h-[40px] w-[56px] items-center justify-center rounded-[6px] bg-[#141414] border border-[#1E1E1E]">
                     <span className="text-[12px] font-bold text-[#D0D0D0] uppercase">{method.brand || "CARD"}</span>

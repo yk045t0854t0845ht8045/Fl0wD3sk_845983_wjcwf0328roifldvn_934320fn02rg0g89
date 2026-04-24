@@ -31,7 +31,6 @@ type CachedDiscordGuild = {
 
 const PAGE_SIZE = 200;
 const MAX_PAGES = 5;
-const ICONS_CACHE_TTL_MS = 60_000;
 const MAX_RETURNED_ICONS = 48;
 const GUILD_COUNT_FETCH_CONCURRENCY = 12;
 const MAX_SESSION_CACHE_ROWS = 400;
@@ -399,7 +398,7 @@ export async function GET() {
     
     return NextResponse.json({ icons }, { headers: { "Cache-Control": "no-store", "X-Cache": "MISS" }});
 
-  } catch (error) {
+  } catch {
     return NextResponse.json({ icons: cachedIcons || [] }, { headers: { "Cache-Control": "no-store", "X-Cache": "ERROR_FALLBACK" }});
   }
 }

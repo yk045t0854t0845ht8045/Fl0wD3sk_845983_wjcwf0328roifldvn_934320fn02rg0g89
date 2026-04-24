@@ -6,6 +6,8 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { updateSessionActiveGuild } from "@/lib/auth/session";
+import { clearPlanStateCacheForUser } from "@/lib/account/managedPlanState";
+import { ensureUserPaymentDeliveryReady } from "@/lib/payments/paymentReadiness";
 import { buildAccountPlanUsageSnapshot } from "@/lib/plans/accountPlanUsage";
 import {
   countPlanGuildsForUser,
@@ -117,6 +119,12 @@ export async function POST(request: Request) {
     }
 
     const userId = sessionData.authSession.user.id;
+    await ensureUserPaymentDeliveryReady({
+      userId,
+      guildId,
+      source: "servers_claim_post",
+    });
+
     const [userPlanState, licensedServersCount] = await Promise.all([
       getUserPlanState(userId),
       countPlanGuildsForUser(userId),
@@ -128,6 +136,7 @@ export async function POST(request: Request) {
       usage.canAddMoreServers;
 
     if (!hasUsablePlan || !userPlanState) {
+      clearPlanStateCacheForUser(userId);
       return applyNoStoreHeaders(
         NextResponse.json(
           {

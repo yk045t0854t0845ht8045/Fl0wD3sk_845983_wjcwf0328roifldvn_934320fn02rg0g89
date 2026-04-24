@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { DashboardWorkspace } from "@/components/dashboard/DashboardWorkspace";
 import { MaintenanceGate } from "@/components/common/MaintenanceGate";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
+import { ensureUserPaymentDeliveryReady } from "@/lib/payments/paymentReadiness";
 import { getPanelManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import { resolveDashboardWorkspaceAlertMessage } from "@/lib/servers/workspaceAlerts";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
@@ -25,6 +26,11 @@ async function DashboardLayoutContent({
   if (!user) {
     redirect("/login");
   }
+
+  await ensureUserPaymentDeliveryReady({
+    userId: user.id,
+    source: "dashboard_layout_bootstrap",
+  });
 
   const [managedServers, teamsSnapshot] = await Promise.all([
     user.discord_user_id

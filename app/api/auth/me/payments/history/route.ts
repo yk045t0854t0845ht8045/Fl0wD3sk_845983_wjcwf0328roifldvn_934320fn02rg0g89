@@ -12,11 +12,7 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
-import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { getManagedHistoryForUser } from "@/lib/account/managedHistory";
-
-
-
 
 export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);

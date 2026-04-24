@@ -671,10 +671,11 @@ function PlanComparisonTable({ plans }: { plans: PlanPricingDefinition[] }) {
 
 export function ServersPlansUpgradePage({
   currentPlan,
-  preferredGuildId: _preferredGuildId,
+  preferredGuildId,
   bannerReason = null,
   basicPlanAvailable = true,
 }: Props) {
+  void preferredGuildId;
   const [selectedBillingPeriodCode, setSelectedBillingPeriodCode] =
     useState<PlanBillingPeriodCode>(() =>
       resolveInitialBillingPeriodCode(currentPlan),

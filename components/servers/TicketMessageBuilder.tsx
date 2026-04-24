@@ -560,16 +560,6 @@ function moveById<T extends { id: string }>(items: T[], id: string, direction: -
   return next;
 }
 
-function reorderById<T extends { id: string }>(items: T[], sourceId: string, targetId: string) {
-  const sourceIndex = items.findIndex((item) => item.id === sourceId);
-  const targetIndex = items.findIndex((item) => item.id === targetId);
-  if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) return items;
-  const next = [...items];
-  const [moved] = next.splice(sourceIndex, 1);
-  next.splice(targetIndex, 0, moved);
-  return next;
-}
-
 function reorderByIndex<T extends { id: string }>(items: T[], sourceId: string, targetIndex: number) {
   const sourceIndex = items.findIndex((item) => item.id === sourceId);
   if (sourceIndex === -1) return items;

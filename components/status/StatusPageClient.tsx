@@ -3,18 +3,11 @@
 import React, { useEffect, useState, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import Image from "next/image";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   CheckCircle2,
   AlertCircle,
-  AlertTriangle,
   XCircle,
-  ChevronRight,
-  Bell,
-  Mail,
-  Webhook,
-  MessageSquare,
   Cloud,
   ShieldCheck,
   Server,
@@ -23,12 +16,10 @@ import {
 import { LandingActionButton } from "@/components/landing/LandingActionButton";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
-import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { StatusSubscribeModalContent } from "@/components/status/StatusSubscribeModalContent";
 import type {
   ComponentStatus,
   Incident,
-  IncidentImpact,
   IncidentStatus,
   StatusSubscriptionType,
   StatusTeamNote,
@@ -88,12 +79,6 @@ const BANNER_LABELS: Record<SystemStatus, string> = {
   degraded_performance: "Todos os sistemas operacionais",
   partial_outage: "Alguns sistemas operando com latencia",
   major_outage: "Falha critica - nossa equipe ja esta atuando",
-};
-
-const IMPACT_CONFIG: Record<IncidentImpact, { label: string; color: string }> = {
-  critical: { label: "Critico", color: "#FF3B30" },
-  warning: { label: "Aviso", color: "#FF9F0A" },
-  info: { label: "Informativo", color: "#0070FF" }
 };
 
 const INCIDENT_STATUS_LABELS: Record<IncidentStatus, string> = {
@@ -286,7 +271,7 @@ export default function StatusPageClient() {
         } else {
           setError(json.error || "Erro ao buscar status.");
         }
-      } catch (error) {
+      } catch {
         setError("Falha na conexao.");
       } finally {
         if (alive) {

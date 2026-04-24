@@ -477,11 +477,6 @@ export function ServersDashboard({
     [handleCopyGuildId],
   );
 
-  const handleCardMenuDeactivate = useCallback(() => {
-    setOpenCardMenuGuildId(null);
-    setErrorMessage("Opcao de desativacao sera liberada em breve.");
-  }, []);
-
   const handleStartAddServer = useCallback(async () => {
     if (isResolvingAddServer) return;
     setErrorMessage(null);

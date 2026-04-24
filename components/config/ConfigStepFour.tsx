@@ -4498,11 +4498,7 @@ export function ConfigStepFour({
     guildId,
     pendingPixOrderId,
     pendingPixOrderNumber,
-    pixOrder?.checkoutAccessToken,
-    pixOrder?.finalizationStatus,
-    pixOrder?.planTransitionExecution,
-    pixOrder?.method,
-    pixOrder?.status,
+    pixOrder,
     onApproved,
   ]);
 

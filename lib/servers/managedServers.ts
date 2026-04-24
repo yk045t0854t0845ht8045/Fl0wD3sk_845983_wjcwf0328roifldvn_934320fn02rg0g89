@@ -280,7 +280,6 @@ async function fetchManagedServersFresh(
 
   const accessibleGuilds = accessibleGuildsResult.ok ? accessibleGuildsResult.guilds : [];
   const accessibleGuildLookup = buildGuildLookup(accessibleGuilds);
-  const accessibleGuildIds = new Set(accessibleGuilds.map((guild) => guild.id));
   const sessionGuildLookup = buildGuildLookup(authSession.discordGuildsCache);
 
   const acceptedTeamGuildIds = new Set(
@@ -375,7 +374,6 @@ async function fetchManagedServersFresh(
     .map((guild) => {
       const ownedPlanGuild = ownedPlanGuildsByGuildId.get(guild.id) || null;
       const lockedRecord = normalizedLockedGuildMap.get(guild.id) || null;
-      const isAccessibleToCurrentUser = accessibleGuildIds.has(guild.id);
       const currentLicenseBelongsToViewer = Boolean(
         lockedRecord && lockedRecord.userId !== authSession.user.id,
       );

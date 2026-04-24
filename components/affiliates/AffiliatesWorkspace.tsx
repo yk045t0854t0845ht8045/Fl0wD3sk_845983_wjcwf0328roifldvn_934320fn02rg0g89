@@ -2,14 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   MousePointerClick,
   Sparkles,
   Star,
   TrendingUp,
   Trophy,
-  Webhook,
   Zap,
   Bell,
   BookOpen,
@@ -27,17 +26,18 @@ import {
   Check,
   ArrowRight,
   BarChart3,
-  Ticket,
   type LucideIcon,
 } from "lucide-react";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { buildLoginHref } from "@/lib/auth/paths";
-import { AFFILIATE_LEVELS, formatCurrency, getLevelConfig } from "@/lib/affiliates/affiliateLevels";
+import { formatCurrency, getLevelConfig } from "@/lib/affiliates/affiliateLevels";
 import type {
   AffiliateLevel,
   AffiliateAIInsightCard,
+  AffiliatePeriod,
+  AffiliatePlan,
   AffiliateProfile,
   AffiliateStats,
   AffiliateLink,
@@ -73,6 +73,12 @@ export type AffiliatesWorkspaceProps = {
   initialTab?: AffiliateTab;
 };
 
+type AffiliateWorkspaceSettings = {
+  notify_email?: boolean | null;
+  notify_sms?: boolean | null;
+  webhook_url?: string | null;
+};
+
 // ─── Hook: Dados Reais ────────────────────────────────────────────────────────
 
 function useAffiliateData() {
@@ -80,7 +86,7 @@ function useAffiliateData() {
     profile: AffiliateProfile | null;
     stats: AffiliateStats | null;
     insight: AffiliateAIInsightCard | null;
-    settings: any | null;
+    settings: AffiliateWorkspaceSettings | null;
     links: AffiliateLink[];
     conversions: AffiliateCommission[];
     withdrawals: AffiliateWithdrawal[];
@@ -645,8 +651,15 @@ function LinksTab({ links, reload }: { links: AffiliateLink[]; reload: () => voi
   const [period, setPeriod] = useState("monthly");
   const [loading, setLoading] = useState(false);
 
-  const PLAN_LABELS: Record<string, string> = { basic: "Basic", pro: "Pro", enterprise: "Enterprise" };
-  const PERIOD_LABELS: Record<string, string> = { monthly: "Mensal", annual: "Anual" };
+  const PLAN_LABELS: Record<AffiliatePlan, string> = {
+    basic: "Basic",
+    pro: "Pro",
+    enterprise: "Enterprise",
+  };
+  const PERIOD_LABELS: Record<AffiliatePeriod, string> = {
+    monthly: "Mensal",
+    annual: "Anual",
+  };
 
   const handleCreate = async () => {
     setLoading(true);
@@ -746,10 +759,10 @@ function LinksTab({ links, reload }: { links: AffiliateLink[]; reload: () => voi
               <div className="space-y-[12px]">
                 <div className="flex flex-wrap items-center gap-[8px]">
                   <span className="rounded-full border border-[#181818] bg-[#0C0C0C] px-[9px] py-[3px] text-[11px] font-semibold text-[#D0D0D0]">
-                    {PLAN_LABELS[link.plan as any] || link.plan}
+                    {PLAN_LABELS[link.plan] || link.plan}
                   </span>
                   <span className="rounded-full border border-[#181818] bg-[#0C0C0C] px-[9px] py-[3px] text-[11px] text-[#888]">
-                    {PERIOD_LABELS[link.period as any] || link.period}
+                    {PERIOD_LABELS[link.period] || link.period}
                   </span>
                 </div>
                 <div className="flex items-center gap-[8px]">
@@ -787,7 +800,7 @@ function LinksTab({ links, reload }: { links: AffiliateLink[]; reload: () => voi
 // ─── Components Tab ───────────────────────────────────────────────────────────
 
 function ComponentsTab({ profile }: { profile: AffiliateProfile | null }) {
-  const affiliateId = profile?.affiliateId || (profile as any)?.affiliate_id || "---";
+  const affiliateId = profile?.affiliateId || "---";
   const demoAffId = affiliateId;
   const [activeSnippet, setActiveSnippet] = useState<"html" | "react">("html");
 
@@ -1059,7 +1072,13 @@ function WithdrawalsTab({ withdrawals }: { withdrawals: AffiliateWithdrawal[] })
 
 // ─── Notifications Tab ────────────────────────────────────────────────────────
 
-function NotificationsTab({ settings, reload }: { settings: any; reload: () => void }) {
+function NotificationsTab({
+  settings,
+  reload,
+}: {
+  settings: AffiliateWorkspaceSettings | null;
+  reload: () => void;
+}) {
   const [emailEnabled, setEmailEnabled] = useState(settings?.notify_email ?? true);
   const [smsEnabled, setSmsEnabled] = useState(settings?.notify_sms ?? false);
   const [webhookEnabled, setWebhookEnabled] = useState(!!settings?.webhook_url);
@@ -1069,8 +1088,8 @@ function NotificationsTab({ settings, reload }: { settings: any; reload: () => v
 
   useEffect(() => {
     if (settings) {
-      setEmailEnabled(settings.notify_email);
-      setSmsEnabled(settings.notify_sms);
+      setEmailEnabled(settings.notify_email ?? true);
+      setSmsEnabled(settings.notify_sms ?? false);
       setWebhookEnabled(!!settings.webhook_url);
       setWebhookUrl(settings.webhook_url || "");
     }
@@ -1209,8 +1228,7 @@ function TrainingTab() {
 
 // ─── Templates Tab ────────────────────────────────────────────────────────────
 
-function TemplatesTab({ profile }: { profile: any }) {
-  const router = useRouter();
+function TemplatesTab({ profile }: { profile: AffiliateProfile | null }) {
   const templates = [
     { name: "Landing Minimalista", desc: "Design clean para conversão focada.", icon: BarChart3, status: "available", plan: "basic" },
     { name: "Landing Premium", desc: "Visual premium com seções completas.", icon: Zap, status: "available", plan: "pro" },
@@ -1264,6 +1282,8 @@ function MousePointerClickIcon({ className, strokeWidth }: { className?: string;
 }
 
 // ─── Main Workspace ───────────────────────────────────────────────────────────
+
+void MousePointerClickIcon;
 
 export function AffiliatesWorkspace({
   displayName,

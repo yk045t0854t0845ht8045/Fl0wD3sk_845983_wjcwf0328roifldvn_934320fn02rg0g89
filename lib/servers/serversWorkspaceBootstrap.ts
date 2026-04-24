@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserFromSessionCookie } from "@/lib/auth/session";
+import { ensureUserPaymentDeliveryReady } from "@/lib/payments/paymentReadiness";
 import {
   DEFAULT_MANAGED_SERVERS_SYNC_STATE,
   getPanelManagedServersSnapshotForCurrentSession,
@@ -21,6 +22,11 @@ export async function getServersWorkspaceBootstrap() {
   if (!user) {
     redirect("/login");
   }
+
+  await ensureUserPaymentDeliveryReady({
+    userId: user.id,
+    source: "servers_workspace_bootstrap",
+  });
 
   const [serversSnapshot, teamsSnapshot] = await Promise.all([
     getPanelManagedServersSnapshotForCurrentSession().catch(() => ({

@@ -111,15 +111,6 @@ export default async function ConfigPage({ searchParams }: ConfigPageProps) {
     ) {
       redirect(buildServersPlansPath());
     }
-
-    return (
-      <ConfigFlow
-        displayName={user.display_name}
-        initialPlanCode={normalizePlanCode(null, "pro")}
-        initialBillingPeriodCode={normalizePlanBillingPeriodCode(null, "monthly")}
-        hasExplicitInitialPlan={false}
-      />
-    );
   } catch (error) {
     if (isAuthSessionAvailabilityError(error)) {
       return (
@@ -135,4 +126,13 @@ export default async function ConfigPage({ searchParams }: ConfigPageProps) {
 
     throw error;
   }
+
+  return (
+    <ConfigFlow
+      displayName={user.display_name}
+      initialPlanCode={normalizePlanCode(null, "pro")}
+      initialBillingPeriodCode={normalizePlanBillingPeriodCode(null, "monthly")}
+      hasExplicitInitialPlan={false}
+    />
+  );
 }

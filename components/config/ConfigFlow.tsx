@@ -1188,6 +1188,8 @@ export function ConfigFlow({
     setStepHash(1);
   }, [managedServers, setAndSyncContext]);
 
+  void handleStepFourApproved;
+
   const handleResolvedStepFourApproved = useCallback((order?: {
     planTransitionKind?: "new" | "current" | "upgrade" | "downgrade" | null;
   }) => {

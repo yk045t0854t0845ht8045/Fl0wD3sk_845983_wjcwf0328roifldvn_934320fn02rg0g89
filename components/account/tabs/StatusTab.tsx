@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, X, ShieldAlert, ArrowRight } from "lucide-react";
@@ -48,9 +48,6 @@ function ViolationDetailModal({
   violation: Violation;
   onClose: () => void;
 }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
   const categoryName = violation.category?.name || violation.type;
   const ruleUrl = violation.category?.ruleUrl || "https://flwdesk.com/privacy";
 
@@ -66,12 +63,11 @@ function ViolationDetailModal({
   };
 
   const createdAtFriendly = formatDateFriendly(violation.createdAt);
-  const expiresAtFriendly = formatDateFriendly(violation.expiresAt);
 
   // For violations, we can assume impact until expiry or a long time if permanent
   const impactDateFriendly = violation.expired ? "Expirada" : (violation.expiresAt ? formatDateFriendly(violation.expiresAt) : "por tempo indeterminado");
-
-  if (!mounted) return null;
+  const portalTarget = typeof document === "undefined" ? null : document.body;
+  if (!portalTarget) return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[2600] isolate flex items-center justify-center p-4">
@@ -161,7 +157,7 @@ function ViolationDetailModal({
         </div>
       </motion.div>
     </div>,
-    document.body
+    portalTarget
   );
 }
 

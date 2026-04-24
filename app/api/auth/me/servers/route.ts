@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
+import { ensureUserPaymentDeliveryReady } from "@/lib/payments/paymentReadiness";
 import {
   DEFAULT_MANAGED_SERVERS_SYNC_STATE,
   getPanelManagedServersSnapshotForCurrentSession,
@@ -30,6 +31,11 @@ export async function GET(request: Request) {
         { status: 401 },
       );
     }
+
+    await ensureUserPaymentDeliveryReady({
+      userId: authSession.user.id,
+      source: "managed_servers_get",
+    });
 
     const snapshot = await getPanelManagedServersSnapshotForCurrentSession();
     const auditContext = extendSecurityRequestContext(requestContext, {

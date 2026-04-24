@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "security:flowsecure": "node scripts/flowsecure-checkup.mjs",
+    "security:secrets": "node scripts/flowsecure-checkup.mjs",
     "site": "node ../scripts/site-publish.js",
     "puxar": "node ../scripts/site-pull.js"
   },

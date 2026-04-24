@@ -405,7 +405,8 @@ export function DomainSearchSection({ initialTab = "register" }: DomainSearchSec
           setAiData(null);
           const errorMessage = resolveDomainSearchMessage({
             status: response.status,
-            backendMessage: (data as any).message || "Falha ao gerar dominios com IA.",
+            backendMessage:
+              "message" in data ? data.message : "Falha ao gerar dominios com IA.",
           });
           setError(errorMessage);
           setIsMaintenanceMode(/manutenc/i.test(errorMessage));

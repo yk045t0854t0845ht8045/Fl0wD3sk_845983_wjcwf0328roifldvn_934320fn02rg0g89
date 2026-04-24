@@ -14,7 +14,7 @@ export async function GET() {
       timestamp: new Date().toISOString(),
       source: "exchangerate-api.com (through FlowAPI caching)"
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({
       ok: false,
       message: "Falha ao obter taxa de cambio em tempo real."

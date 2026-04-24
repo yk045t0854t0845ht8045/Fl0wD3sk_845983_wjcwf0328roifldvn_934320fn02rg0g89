@@ -4,7 +4,6 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowRightLeft,
   CircleHelp,
   ImageUp,
   LogIn,
@@ -2288,10 +2287,6 @@ export function ServerSettingsEditor({
       const nextNotifyRoleIds = Array.isArray(payload.staffSettings?.notifyRoleIds)
           ? payload.staffSettings.notifyRoleIds.filter((id) => roleSet.has(id))
           : [];
-      const nextAiRulesRaw = typeof payload.ticketSettings?.aiRules === "string" 
-          ? payload.ticketSettings.aiRules 
-          : "";
-      
       let nextAiRules = typeof payload.ticketSettings?.aiRules === "string" 
           ? payload.ticketSettings.aiRules 
           : "";
@@ -3694,6 +3689,7 @@ export function ServerSettingsEditor({
     [
       antiLinkEnabled,
       antiLinkEnforcementAction,
+      antiLinkIgnoredChannelIds,
       antiLinkIgnoredRoleIds,
       antiLinkLogChannelId,
       antiLinkTimeoutValue,

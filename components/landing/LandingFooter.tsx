@@ -192,7 +192,7 @@ export function LandingFooter({
             setStatusMessage("Todos sistemas normais");
           }
         }
-      } catch (e) {
+      } catch {
         // Fallback silently
       }
     }

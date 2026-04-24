@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { getServerEnv, getServerEnvList } from "@/lib/serverEnv";
-import { getWorstSystemStatus, type SystemStatus } from "@/lib/status/types";
+import { getServerEnv } from "@/lib/serverEnv";
+import type { SystemStatus } from "@/lib/status/types";
 import {
   canFlowAiProviderRun,
   getFlowAiCircuitSnapshot,
@@ -302,10 +302,6 @@ export function normalizeFlowAiTaskKey(taskKey: string) {
   return normalized || "generic";
 }
 
-function toTaskEnvKey(taskKey: string) {
-  return normalizeFlowAiTaskKey(taskKey).toUpperCase();
-}
-
 function normalizeText(value: string, maxLength = 12_000) {
   return String(value || "")
     .replace(/\r\n/g, "\n")
@@ -389,49 +385,8 @@ function clampMaxTokens(value: number | undefined, fallback = 400) {
   return Math.min(1_500, Math.max(32, Math.round(Number(value))));
 }
 
-function resolveOpenAiApiKey() {
-  return getServerEnv("OPENAI_API_KEY") || "";
-}
-
 function resolveOpenAiBaseUrl() {
   return (getServerEnv("OPENAI_BASE_URL") || DEFAULT_OPENAI_BASE_URL).replace(/\/$/, "");
-}
-
-function resolveTaskSpecificModels(taskKey: string) {
-  const taskProfile = getTaskProfile(taskKey);
-  const taskEnvKey = toTaskEnvKey(taskKey);
-  const taskModel = getServerEnv(`FLOWAI_MODEL_${taskEnvKey}`);
-  const taskFallbacks = getServerEnvList(`FLOWAI_MODEL_${taskEnvKey}_FALLBACKS`);
-
-  const specialModels: string[] = [];
-  if (normalizeFlowAiTaskKey(taskKey).startsWith("status_")) {
-    const statusModel = getServerEnv("OPENAI_STATUS_MODEL");
-    if (statusModel) {
-      specialModels.push(statusModel);
-    }
-  }
-
-  return [
-    taskProfile.preferredModel || null,
-    taskModel,
-    ...taskFallbacks,
-    ...specialModels,
-  ].filter(Boolean) as string[];
-}
-
-function resolveModelCandidates(taskKey: string, preferredModel?: string | null) {
-  return Array.from(
-    new Set(
-      [
-        preferredModel || null,
-        ...resolveTaskSpecificModels(taskKey),
-        getServerEnv("OPENAI_MODEL"),
-        ...getServerEnvList("OPENAI_MODEL_FALLBACKS"),
-        "gpt-4o-mini",
-        "gpt-4o",
-      ].filter(Boolean),
-    ),
-  ) as string[];
 }
 
 function buildTaskSystemGuard(taskKey: string, mode: "text" | "json") {

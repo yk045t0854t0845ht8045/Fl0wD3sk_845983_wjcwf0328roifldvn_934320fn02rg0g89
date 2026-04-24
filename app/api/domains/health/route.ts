@@ -20,7 +20,7 @@ export async function GET() {
     ];
 
     const startTime = Date.now();
-    const results = await Promise.race([
+    await Promise.race([
       // Test request with short timeout
       openProviderClient.post("domains/check", {
         domains: testDomains,
