@@ -16,10 +16,6 @@ type WorkspaceRouteLoadingProps = {
   settingsSection?: ServerSettingsSkeletonSection | null;
 };
 
-type ResolvedWorkspaceMainSkeletonProps = WorkspaceRouteLoadingProps & {
-  contentOnly?: boolean;
-};
-
 function SkeletonBar({
   width,
   height,
@@ -41,17 +37,11 @@ function SkeletonNavRow({
   active = false,
   compact = false,
   indent = false,
-  textWidth,
-  showIndicator,
 }: {
   active?: boolean;
   compact?: boolean;
   indent?: boolean;
-  textWidth?: number | string;
-  showIndicator?: boolean;
 }) {
-  const shouldShowIndicator = showIndicator ?? !indent;
-
   return (
     <div
       className={`flex items-center gap-[12px] rounded-[14px] px-[12px] ${
@@ -66,128 +56,17 @@ function SkeletonNavRow({
         className="rounded-[10px]"
       />
       <SkeletonBar
-        width={textWidth ?? (compact ? "48%" : "58%")}
+        width={compact ? "48%" : "58%"}
         height={compact ? 12 : 13}
         className="max-w-full rounded-full"
       />
-      {shouldShowIndicator ? (
+      {!indent ? (
         <SkeletonBar
           width={14}
           height={14}
           className="ml-auto rounded-full"
         />
       ) : null}
-    </div>
-  );
-}
-
-function resolveServerSettingsSidebarGroup(
-  settingsSection: ServerSettingsSkeletonSection | null | undefined,
-) {
-  if (
-    settingsSection === "entry_exit_overview" ||
-    settingsSection === "entry_exit_message"
-  ) {
-    return "entry_exit" as const;
-  }
-
-  if (
-    settingsSection === "security_antilink" ||
-    settingsSection === "security_autorole" ||
-    settingsSection === "security_logs"
-  ) {
-    return "security" as const;
-  }
-
-  return "ticket" as const;
-}
-
-function ServerSettingsSidebarNavSkeleton({
-  settingsSection = "overview",
-}: {
-  settingsSection?: ServerSettingsSkeletonSection | null;
-}) {
-  const activeGroup = resolveServerSettingsSidebarGroup(settingsSection);
-
-  return (
-    <div className="space-y-[12px]">
-      <div className="space-y-[4px]">
-        <SkeletonNavRow textWidth="34%" />
-        <SkeletonNavRow textWidth="42%" />
-      </div>
-
-      <div className="h-px rounded-full bg-[#202020]" />
-
-      <div className="space-y-[12px]">
-        <div>
-          <SkeletonNavRow active={activeGroup === "ticket"} textWidth="38%" />
-          <div className="mt-[6px] space-y-[4px] pl-[12px]">
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "overview"}
-              textWidth="52%"
-            />
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "message"}
-              textWidth="66%"
-            />
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "ticket_ai"}
-              textWidth="58%"
-            />
-          </div>
-        </div>
-
-        <div>
-          <SkeletonNavRow
-            active={activeGroup === "entry_exit"}
-            textWidth="62%"
-          />
-          <div className="mt-[6px] space-y-[4px] pl-[12px]">
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "entry_exit_overview"}
-              textWidth="48%"
-            />
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "entry_exit_message"}
-              textWidth="64%"
-            />
-          </div>
-        </div>
-
-        <div>
-          <SkeletonNavRow active={activeGroup === "security"} textWidth="44%" />
-          <div className="mt-[6px] space-y-[4px] pl-[12px]">
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "security_antilink"}
-              textWidth="42%"
-            />
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "security_autorole"}
-              textWidth="40%"
-            />
-            <SkeletonNavRow
-              compact
-              indent
-              active={settingsSection === "security_logs"}
-              textWidth="34%"
-            />
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -245,7 +124,7 @@ function AccountSidebarSkeleton() {
   );
 }
 
-function ServersWorkspaceSidebarSkeleton() {
+function WorkspaceSidebarSkeleton() {
   return (
     <div className="flex h-full flex-col px-[14px] py-[14px]">
       <div className="rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px]">
@@ -310,68 +189,6 @@ function ServersWorkspaceSidebarSkeleton() {
       </div>
     </div>
   );
-}
-
-function ServerSettingsWorkspaceSidebarSkeleton({
-  settingsSection = "overview",
-}: {
-  settingsSection?: ServerSettingsSkeletonSection | null;
-}) {
-  return (
-    <div className="flex h-full flex-col px-[14px] py-[14px]">
-      <div className="rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px]">
-        <div className="flex items-center justify-between gap-[12px]">
-          <div className="flex min-w-0 items-center gap-[10px]">
-            <SkeletonBar width={34} height={34} className="rounded-[12px]" />
-            <div className="min-w-0 space-y-[6px]">
-              <SkeletonBar width={148} height={12} className="rounded-full" />
-              <SkeletonBar width={96} height={10} className="rounded-full bg-[#111111]" />
-            </div>
-          </div>
-          <SkeletonBar width={28} height={28} className="rounded-[10px]" />
-        </div>
-      </div>
-
-      <div className="mt-[14px] flex items-center gap-[10px] rounded-[16px] border border-[#141414] bg-[#080808] px-[14px] py-[12px]">
-        <SkeletonBar width={18} height={18} className="rounded-full" />
-        <SkeletonBar width="46%" height={14} className="max-w-full rounded-full" />
-        <SkeletonBar width={30} height={28} className="ml-auto rounded-[9px]" />
-      </div>
-
-      <div className="mt-[14px] min-h-0 flex-1 overflow-hidden pr-[2px]">
-        <ServerSettingsSidebarNavSkeleton settingsSection={settingsSection} />
-      </div>
-
-      <div className="mt-[14px]">
-        <div className="flex items-center justify-between gap-[12px] rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px]">
-          <div className="flex min-w-0 items-center gap-[10px]">
-            <SkeletonBar width={38} height={38} className="rounded-full" />
-            <div className="min-w-0 space-y-[6px]">
-              <SkeletonBar width={118} height={12} className="rounded-full" />
-              <SkeletonBar width={88} height={10} className="rounded-full bg-[#111111]" />
-            </div>
-          </div>
-          <SkeletonBar width={28} height={28} className="rounded-[10px]" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WorkspaceSidebarSkeleton({
-  variant,
-  settingsSection,
-}: {
-  variant?: WorkspaceRouteLoadingVariant;
-  settingsSection?: ServerSettingsSkeletonSection | null;
-}) {
-  if (variant === "server-settings") {
-    return (
-      <ServerSettingsWorkspaceSidebarSkeleton settingsSection={settingsSection} />
-    );
-  }
-
-  return <ServersWorkspaceSidebarSkeleton />;
 }
 
 export function DashboardContentSkeleton() {
@@ -641,11 +458,9 @@ function ServersOverviewMainSkeleton() {
 function ServerSettingsMainSkeleton({
   tab = "settings",
   settingsSection = "overview",
-  showSettingsSidebar = false,
 }: {
   tab?: ServerSettingsSkeletonTab;
   settingsSection?: ServerSettingsSkeletonSection | null;
-  showSettingsSidebar?: boolean;
 }) {
   return (
     <section className="min-w-0">
@@ -656,48 +471,15 @@ function ServerSettingsMainSkeleton({
             <SkeletonBar width="min(460px,78vw)" height={42} className="max-w-full rounded-[18px] bg-[#131313]" />
             <SkeletonBar width="min(620px,82vw)" height={14} className="max-w-full rounded-[12px] bg-[#111111]" />
           </div>
-          <div className="flex flex-wrap items-center gap-[8px]" aria-hidden="true">
-            <SkeletonBar width={118} height={36} className="rounded-full bg-[#101010]" />
-            <SkeletonBar width={86} height={36} className="rounded-full bg-[#111111]" />
-          </div>
         </div>
       </div>
 
-      <div
-        className={`mt-[22px] ${
-          showSettingsSidebar
-            ? "grid gap-[14px] xl:grid-cols-[292px_minmax(0,1fr)] xl:items-start"
-            : ""
-        }`.trim()}
-      >
-        {showSettingsSidebar ? (
-          <aside className="min-w-0">
-            <div className="rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] p-[16px] shadow-[0_24px_80px_rgba(0,0,0,0.38)] sm:p-[18px]">
-              <div className="rounded-[22px] border border-[#151515] bg-[#080808] px-[16px] py-[16px]">
-                <div className="flex items-start gap-[12px]">
-                  <SkeletonBar width={46} height={46} className="shrink-0 rounded-[16px] bg-[#101010]" />
-                  <div className="min-w-0 flex-1 space-y-[8px]">
-                    <SkeletonBar width={132} height={13} className="rounded-full" />
-                    <SkeletonBar width="74%" height={10} className="max-w-full rounded-full bg-[#111111]" />
-                  </div>
-                </div>
-                <SkeletonBar width="100%" height={36} className="mt-[14px] rounded-[14px] bg-[#0A0A0A]" />
-              </div>
-
-              <div className="mt-[14px] rounded-[22px] border border-[#141414] bg-[#080808] px-[12px] py-[12px]">
-                <ServerSettingsSidebarNavSkeleton settingsSection={settingsSection} />
-              </div>
-            </div>
-          </aside>
-        ) : null}
-
-        <div className="min-w-0">
-          <ServerSettingsEditorSkeleton
-            standalone
-            tab={tab}
-            settingsSection={settingsSection}
-          />
-        </div>
+      <div className="mt-[22px]">
+        <ServerSettingsEditorSkeleton
+          standalone
+          tab={tab}
+          settingsSection={settingsSection}
+        />
       </div>
     </section>
   );
@@ -707,8 +489,7 @@ function resolveWorkspaceMainSkeleton({
   variant,
   tab,
   settingsSection,
-  contentOnly = false,
-}: ResolvedWorkspaceMainSkeletonProps) {
+}: WorkspaceRouteLoadingProps) {
   if (variant === "dashboard") {
     return <DashboardMainSkeleton />;
   }
@@ -718,13 +499,7 @@ function resolveWorkspaceMainSkeleton({
   }
 
   if (variant === "server-settings") {
-    return (
-      <ServerSettingsMainSkeleton
-        tab={tab}
-        settingsSection={settingsSection}
-        showSettingsSidebar={contentOnly}
-      />
-    );
+    return <ServerSettingsMainSkeleton tab={tab} settingsSection={settingsSection} />;
   }
 
   return <ServersOverviewMainSkeleton />;
@@ -745,12 +520,7 @@ export function WorkspaceRouteContentLoading({
 
   return (
     <section className="min-w-0">
-      {resolveWorkspaceMainSkeleton({
-        variant,
-        tab,
-        settingsSection,
-        contentOnly: true,
-      })}
+      {resolveWorkspaceMainSkeleton({ variant, tab, settingsSection })}
     </section>
   );
 }
@@ -774,7 +544,6 @@ export function WorkspaceRouteLoading({
     variant,
     tab,
     settingsSection,
-    contentOnly: false,
   });
 
   return (
@@ -791,14 +560,7 @@ export function WorkspaceRouteLoading({
               isAccount ? "border-r-[#151515]" : "border-r-[#151515]"
             }`}
           >
-            {isAccount ? (
-              <AccountSidebarSkeleton />
-            ) : (
-              <WorkspaceSidebarSkeleton
-                variant={variant}
-                settingsSection={settingsSection}
-              />
-            )}
+            {isAccount ? <AccountSidebarSkeleton /> : <WorkspaceSidebarSkeleton />}
           </div>
         </aside>
       </div>
@@ -807,14 +569,7 @@ export function WorkspaceRouteLoading({
         <div className="mx-auto w-full max-w-[1220px]">
           <aside className={mobileSidebarVisibilityClass}>
             <div className={`${sidebarShellClass} rounded-[28px]`}>
-              {isAccount ? (
-                <AccountSidebarSkeleton />
-              ) : (
-                <WorkspaceSidebarSkeleton
-                  variant={variant}
-                  settingsSection={settingsSection}
-                />
-              )}
+              {isAccount ? <AccountSidebarSkeleton /> : <WorkspaceSidebarSkeleton />}
             </div>
           </aside>
 
