@@ -436,8 +436,6 @@ async function fetchManagedServersFresh(
   );
 
   const guildIdsForLookup = Array.from(guildCatalog.keys());
-  const accessibleGuildIds = new Set(accessibleGuildLookup.keys());
-  const activeGuildIdSet = new Set(activeGuildIds);
   const globalTeamLinkedGuildIds = await getGlobalTeamLinkedGuildIds(guildIdsForLookup);
 
   const servers = Array.from(guildCatalog.values())
@@ -454,18 +452,17 @@ async function fetchManagedServersFresh(
       const accessMode: ManagedServer["accessMode"] =
         ownedPlanGuildIds.has(guild.id) || guild.owner ? "owner" : "viewer";
       const isLinkedToTeam = globalTeamLinkedGuildIds.has(guild.id);
-      const isPanelVisible = Boolean(
-        accessibleGuildIds.has(guild.id) ||
-          activeGuildIdSet.has(guild.id) ||
-          acceptedTeamGuildIds.has(guild.id) ||
+      const hasPanelRegistration = Boolean(
+        acceptedTeamGuildIds.has(guild.id) ||
           configuredGuildIds.has(guild.id) ||
           ownedPlanGuildIds.has(guild.id) ||
           lockedRecord,
       );
+      const isPanelVisible = hasPanelRegistration;
       const canLinkToTeam = Boolean(
         !currentLicenseBelongsToViewer &&
           !isLinkedToTeam &&
-          isPanelVisible,
+          hasPanelRegistration,
       );
       const isOwnedPlanGuildInactive = Boolean(
         !currentLicenseBelongsToViewer &&
@@ -525,10 +522,8 @@ async function fetchManagedServersFresh(
           !currentLicenseBelongsToViewer &&
           (
             ownedPlanGuildIds.has(guild.id) ||
-            accessibleGuildIds.has(guild.id) ||
-            activeGuildIdSet.has(guild.id) ||
             acceptedTeamGuildIds.has(guild.id) ||
-            (!isLinkedToTeam && (guild.owner || false))
+            configuredGuildIds.has(guild.id)
           ),
         canLinkToTeam,
         blockedByPlanLimit: isOwnedPlanGuildInactive || isPendingDowngradePayment,

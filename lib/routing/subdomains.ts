@@ -723,6 +723,7 @@ export function buildCanonicalUrlFromInternalPath(
   options?: CanonicalRoutingFallbackOptions,
 ) {
   const resolvedUrl = new URL(internalPath, getRequestOrigin(request));
+  const suffix = `${resolvedUrl.search}${resolvedUrl.hash}`;
   const pathArea = detectWorkspaceAreaFromPath(resolvedUrl.pathname);
   const fallbackHost =
     options?.fallbackHost ??
@@ -743,7 +744,7 @@ export function buildCanonicalUrlFromInternalPath(
       !(pathArea === "dashboard" && isDashboardEmbeddedPath(externalPath))
     ) {
       return (
-        buildCanonicalPublicUrl(request, externalPath, resolvedUrl.search) ||
+        buildCanonicalPublicUrl(request, externalPath, suffix) ||
         resolvedUrl.toString()
       );
     }
@@ -753,7 +754,7 @@ export function buildCanonicalUrlFromInternalPath(
         request,
         pathArea,
         externalPath,
-        resolvedUrl.search,
+        suffix,
       ) || resolvedUrl.toString()
     );
   }
@@ -763,14 +764,14 @@ export function buildCanonicalUrlFromInternalPath(
       buildCanonicalPublicUrl(
         request,
         resolvedUrl.pathname,
-        resolvedUrl.search,
+        suffix,
       ) || resolvedUrl.toString()
     );
   }
 
   if (fallbackHost === "public") {
     return (
-      buildCanonicalPublicUrl(request, resolvedUrl.pathname, resolvedUrl.search) ||
+      buildCanonicalPublicUrl(request, resolvedUrl.pathname, suffix) ||
       resolvedUrl.toString()
     );
   }
@@ -778,7 +779,7 @@ export function buildCanonicalUrlFromInternalPath(
   if (fallbackHost) {
     const origin = resolveCanonicalHostOrigin(request, fallbackHost);
     return origin
-      ? new URL(`${ensureLeadingSlash(resolvedUrl.pathname)}${resolvedUrl.search}`, origin).toString()
+      ? new URL(`${ensureLeadingSlash(resolvedUrl.pathname)}${suffix}`, origin).toString()
       : resolvedUrl.toString();
   }
 
