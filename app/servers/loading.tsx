@@ -1,5 +1,5 @@
-import { ServersRouteSpinner } from "@/components/servers/ServersRouteSpinner";
+import { WorkspaceRouteLoading } from "@/components/workspace/WorkspaceRouteLoading";
 
 export default function ServersLoading() {
-  return <ServersRouteSpinner />;
+  return <WorkspaceRouteLoading variant="servers" />;
 }

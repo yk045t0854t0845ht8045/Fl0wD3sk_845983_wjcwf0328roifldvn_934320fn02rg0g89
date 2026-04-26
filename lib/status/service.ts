@@ -114,6 +114,7 @@ type LiveStatusSnapshot = {
     discordBot: DiscordBotStatusResponse;
     squareCloud: SquareCloudStatusResponse;
     discordCdn: DiscordCdnStatusResponse;
+    notifications: MonitorSignal;
     audit: MonitorSignal;
     payments: MonitorSignal;
   };
@@ -146,8 +147,11 @@ export function inferComponentSourceKey(name: string) {
   if (normalized.includes("pagamentos") || normalized.includes("transacoes")) {
     return "payments";
   }
-  if (normalized.includes("discord bot") || normalized.includes("notificacoes")) {
+  if (normalized.includes("discord bot")) {
     return "discord";
+  }
+  if (normalized.includes("notificacoes")) {
+    return "notifications";
   }
   if (normalized.includes("auditoria") || normalized.includes("analises")) {
     return "audit";
@@ -428,6 +432,13 @@ async function collectInternalSignals() {
   ]);
   const discordLatencyMs = Date.now() - discordStartedAt;
 
+  const notificationsStartedAt = Date.now();
+  const [subscriptionsProbe, webhookDeliveriesProbe] = await Promise.all([
+    safeHeadCount("system_status_subscriptions"),
+    safeHeadCount("system_status_webhook_deliveries"),
+  ]);
+  const notificationsLatencyMs = Date.now() - notificationsStartedAt;
+
   const auditStartedAt = Date.now();
   const [transcriptsProbe, auditLogsProbe] = await Promise.all([
     safeHeadCount("ticket_transcripts"),
@@ -463,6 +474,17 @@ async function collectInternalSignals() {
     latencyMs: discordLatencyMs,
   };
 
+  const notificationsTablesAvailable =
+    subscriptionsProbe.available || webhookDeliveriesProbe.available;
+  const notificationsStatus: MonitorSignal = {
+    status: notificationsTablesAvailable ? "operational" : "degraded_performance",
+    message: notificationsTablesAvailable
+      ? null
+      : "Monitoramento de notificacoes indisponivel na base.",
+    checkedAt: now.toISOString(),
+    latencyMs: notificationsLatencyMs,
+  };
+
   const auditTablesAvailable = transcriptsProbe.available && auditLogsProbe.available;
   const auditStatus: MonitorSignal = {
     status: auditTablesAvailable ? "operational" : "degraded_performance",
@@ -481,6 +503,7 @@ async function collectInternalSignals() {
       latencyMs: paymentsLatencyMs,
     } satisfies MonitorSignal,
     discord: discordStatus,
+    notifications: notificationsStatus,
     audit: auditStatus,
   };
 }
@@ -531,6 +554,10 @@ export async function collectLiveStatusSnapshot(): Promise<LiveStatusSnapshot> {
   const scheduledTasks = stabilizeStatusCheckResult("scheduled_tasks", scheduledRaw);
   const domains = stabilizeStatusCheckResult("domains", domainsRaw);
   let discordBot = { ...stabilizeStatusCheckResult("discord", discordRaw) };
+  const notifications = stabilizeStatusCheckResult(
+    "notifications",
+    internalSignals.notifications,
+  );
   const payments = stabilizeStatusCheckResult("payments", internalSignals.payments);
   const audit = stabilizeStatusCheckResult("audit", internalSignals.audit);
   const squareCloud = stabilizeStatusCheckResult("squarecloud", squareCloudRaw);
@@ -600,6 +627,12 @@ export async function collectLiveStatusSnapshot(): Promise<LiveStatusSnapshot> {
         checkedAt: squareCloud.checkedAt,
         latencyMs: squareCloud.latencyMs,
       },
+      notifications: {
+        status: notifications.status,
+        message: notifications.message,
+        checkedAt: notifications.checkedAt,
+        latencyMs: notifications.latencyMs,
+      },
       discord_cdn: {
         status: discordCdn.status,
         message: discordCdn.message,
@@ -627,6 +660,7 @@ export async function collectLiveStatusSnapshot(): Promise<LiveStatusSnapshot> {
       discordBot,
       squareCloud,
       discordCdn,
+      notifications,
       audit,
       payments,
     },

@@ -51,6 +51,24 @@ function softenStatus(status: SystemStatus) {
   return status;
 }
 
+function getRequiredFailureStreak(sourceKey: string, status: SystemStatus) {
+  if (status === "operational" || status === "degraded_performance") {
+    return 1;
+  }
+
+  if (sourceKey === "discord") {
+    if (status === "major_outage") return 4;
+    if (status === "partial_outage") return 3;
+  }
+
+  if (sourceKey === "notifications") {
+    if (status === "major_outage") return 6;
+    if (status === "partial_outage") return 4;
+  }
+
+  return 2;
+}
+
 function isImmediateEscalation(
   status: SystemStatus,
   message: string | null,
@@ -96,7 +114,7 @@ function stabilizeSystemStatus(
     return status;
   }
 
-  if (failureStreak < 2) {
+  if (failureStreak < getRequiredFailureStreak(sourceKey, status)) {
     return softenStatus(status);
   }
 
@@ -718,7 +736,12 @@ export async function checkDiscordBotStatus(): Promise<DiscordBotStatusResponse>
            continue;
         }
 
-        const mappedStatus = response.status === 401 || response.status === 403 ? "major_outage" : "partial_outage";
+        const mappedStatus: SystemStatus =
+          response.status === 401 || response.status === 403
+            ? "degraded_performance"
+            : response.status >= 500
+              ? "partial_outage"
+              : "degraded_performance";
 
         return {
           ok: false,
@@ -727,7 +750,7 @@ export async function checkDiscordBotStatus(): Promise<DiscordBotStatusResponse>
           status: mappedStatus,
           message:
             response.status === 401 || response.status === 403
-              ? "Endpoint de saude do Discord Bot negou acesso."
+              ? "Endpoint de saude do Discord Bot negou acesso. Monitoramento reduzido, sem evidencia suficiente de indisponibilidade real."
               : `Discord Bot nao respondeu corretamente ao health check HTTP (${response.status}).`,
           source: "discord",
           ready,
@@ -742,17 +765,20 @@ export async function checkDiscordBotStatus(): Promise<DiscordBotStatusResponse>
       let message: string | null = null;
 
       if (!ready || wsStatus !== 0) {
-        if (wsStatus === 1 || wsStatus === 2 || wsStatus === 8) {
+        if (wsStatus === 0 && !ready) {
           status = "degraded_performance";
-          message = "Discord Bot esta conectando/reconectando ao gateway.";
+          message = "Discord Bot respondeu ao health check, mas ainda nao marcou estado pronto.";
+        } else if (wsStatus === 1 || wsStatus === 2 || wsStatus === 7 || wsStatus === 8 || wsStatus === null) {
+          status = "degraded_performance";
+          message = "Discord Bot esta conectando ou reconectando ao gateway.";
         } else {
-          status = "major_outage";
-          message = "Discord Bot esta offline ou ainda nao concluiu a conexao com o gateway.";
+          status = "partial_outage";
+          message = "Discord Bot reportou estado instavel no gateway.";
         }
-      } else if (latencyMs > 5000) {
+      } else if (latencyMs > 9000) {
         status = "partial_outage";
         message = `Resposta critica do Discord Bot: ${latencyMs}ms.`;
-      } else if (latencyMs > 2500) {
+      } else if (latencyMs > 4500) {
         status = "degraded_performance";
         message = `Resposta lenta do Discord Bot: ${latencyMs}ms.`;
       }
@@ -821,7 +847,7 @@ export async function checkDiscordBotStatus(): Promise<DiscordBotStatusResponse>
     ok: false,
     checkedAt,
     latencyMs: Date.now() - startedAt,
-    status: "major_outage",
+    status: "partial_outage",
     message: `Discord Bot indisponivel no health check HTTP: ${lastError?.message || "Timeout"}`,
     source: "discord",
     ready: false,

@@ -29,6 +29,7 @@ import {
   Search as SearchLucide,
   Settings2,
   Shield,
+  ShoppingBag,
   SlidersHorizontal,
   Ticket,
   UserRound,
@@ -107,6 +108,11 @@ type ServerEditorTab = "settings" | "payments" | "methods" | "plans";
 type ServerSettingsSection =
   | "overview"
   | "message"
+  | "sales_overview"
+  | "sales_categories"
+  | "sales_products"
+  | "sales_payment_methods"
+  | "sales_coupons_gifts"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
@@ -160,7 +166,7 @@ const FILTER_LABEL: Record<FilterOption, string> = {
 
 type SidebarItem = {
   label: string;
-  kind: "overview" | "settings" | "ticket" | "entry_exit" | "security" | "dashboard";
+  kind: "overview" | "settings" | "sales" | "ticket" | "entry_exit" | "security" | "dashboard";
   tab?: ServerEditorTab | null;
   settingsSection?: ServerSettingsSection | null;
   disabled?: boolean;
@@ -235,6 +241,49 @@ const TICKET_SIDEBAR_ITEMS: SidebarItem[] = [
       "regras",
       "empresa",
     ],
+  },
+];
+
+const SALES_SIDEBAR_ITEMS: SidebarItem[] = [
+  {
+    label: "Configurando vendas",
+    kind: "sales",
+    tab: "settings",
+    settingsSection: "sales_overview",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: ["vendas", "loja", "configuracao", "checkout", "pedidos"],
+  },
+  {
+    label: "Categorias",
+    kind: "sales",
+    tab: "settings",
+    settingsSection: "sales_categories",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: ["vendas", "categorias", "colecoes", "grupos"],
+  },
+  {
+    label: "Produtos",
+    kind: "sales",
+    tab: "settings",
+    settingsSection: "sales_products",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: ["vendas", "produtos", "itens", "estoque"],
+  },
+  {
+    label: "Métodos de Pagamento",
+    kind: "sales",
+    tab: "settings",
+    settingsSection: "sales_payment_methods",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: ["vendas", "pagamento", "metodos", "pix", "cartao"],
+  },
+  {
+    label: "Cupons e Gifts",
+    kind: "sales",
+    tab: "settings",
+    settingsSection: "sales_coupons_gifts",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: ["vendas", "cupons", "gifts", "descontos", "presentes"],
   },
 ];
 
@@ -453,7 +502,7 @@ function parseWorkspaceRoute(pathname: string | null): {
     }
 
     if (
-      /^\/\d{10,25}(?:\/(?:tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
+      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
         comparablePathname,
       )
     ) {
@@ -483,6 +532,27 @@ function parseWorkspaceRoute(pathname: string | null): {
         ticketSectionMatch[2] === "flowai"
           ? "ticket_ai"
           : (ticketSectionMatch[2] as ServerSettingsSection),
+    };
+  }
+
+  const salesSectionMatch = normalizedPathname.match(
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories|products|payment-methods|coupons-gifts)\/?$/,
+  );
+  if (salesSectionMatch) {
+    const salesSection = salesSectionMatch[2];
+    return {
+      guildId: salesSectionMatch[1],
+      tab: "settings",
+      settingsSection:
+        salesSection === "categories"
+          ? "sales_categories"
+          : salesSection === "products"
+            ? "sales_products"
+            : salesSection === "payment-methods"
+              ? "sales_payment_methods"
+              : salesSection === "coupons-gifts"
+                ? "sales_coupons_gifts"
+                : "sales_overview",
     };
   }
 
@@ -546,7 +616,7 @@ function isServersWorkspacePath(pathname: string) {
     return true;
   }
 
-  return /^\/\d{10,25}(?:\/(?:tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
+  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
     pathname,
   );
 }
@@ -1044,6 +1114,7 @@ function SidebarNavIcon({
     ticket: Ticket,
     entry_exit: ArrowRightLeft,
     security: Shield,
+    sales: ShoppingBag,
     dashboard: ChevronLeft,
     payments: WalletCards,
     methods: Workflow,
@@ -1523,6 +1594,7 @@ export function ServersWorkspace({
     useState<ServerSettingsSection>(initialSettingsSection);
   const [hasUnsavedSettingsChanges, setHasUnsavedSettingsChanges] = useState(false);
   const [navigationBlockSignal, setNavigationBlockSignal] = useState(0);
+  const [isSalesSidebarOpen, setIsSalesSidebarOpen] = useState(false);
   const [isTicketSidebarOpen, setIsTicketSidebarOpen] = useState(false);
   const [isEntryExitSidebarOpen, setIsEntryExitSidebarOpen] = useState(false);
   const [isSecuritySidebarOpen, setIsSecuritySidebarOpen] = useState(false);
@@ -2359,6 +2431,27 @@ export function ServersWorkspace({
       .map((entry) => entry.item);
   }, [isEditingServer, normalizedSidebarQuery]);
 
+  const filteredSalesSidebarItems = useMemo(() => {
+    if (!isEditingServer) return [];
+
+    const items = SALES_SIDEBAR_ITEMS;
+
+    if (!normalizedSidebarQuery) return items;
+
+    return items
+      .map((item) => {
+        const haystack = [item.label, ...(item.searchAliases || [])].join(" ");
+        return { item, score: getSearchScore(haystack, normalizedSidebarQuery) };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) =>
+        a.score !== b.score
+          ? b.score - a.score
+          : a.item.label.localeCompare(b.item.label, "pt-BR"),
+      )
+      .map((entry) => entry.item);
+  }, [isEditingServer, normalizedSidebarQuery]);
+
   const filteredEntryExitSidebarItems = useMemo(() => {
     if (!isEditingServer) return [];
 
@@ -2408,7 +2501,16 @@ export function ServersWorkspace({
     isEditingServer &&
     selectedEditorTabForConfig === "settings" &&
     (selectedSettingsSectionForConfig === "overview" ||
-      selectedSettingsSectionForConfig === "message");
+      selectedSettingsSectionForConfig === "message" ||
+      selectedSettingsSectionForConfig === "ticket_ai");
+  const isSalesGroupActive =
+    isEditingServer &&
+    selectedEditorTabForConfig === "settings" &&
+    (selectedSettingsSectionForConfig === "sales_overview" ||
+      selectedSettingsSectionForConfig === "sales_categories" ||
+      selectedSettingsSectionForConfig === "sales_products" ||
+      selectedSettingsSectionForConfig === "sales_payment_methods" ||
+      selectedSettingsSectionForConfig === "sales_coupons_gifts");
   const isEntryExitGroupActive =
     isEditingServer &&
     selectedEditorTabForConfig === "settings" &&
@@ -2423,11 +2525,15 @@ export function ServersWorkspace({
   useEffect(() => {
     if (normalizedSidebarQuery) {
       setIsTicketSidebarOpen(true);
+      setIsSalesSidebarOpen(true);
       setIsEntryExitSidebarOpen(true);
       setIsSecuritySidebarOpen(true);
       return;
     }
 
+    if (isSalesGroupActive) {
+      setIsSalesSidebarOpen(true);
+    }
     if (isTicketGroupActive) {
       setIsTicketSidebarOpen(true);
     }
@@ -2437,7 +2543,7 @@ export function ServersWorkspace({
     if (isSecurityGroupActive) {
       setIsSecuritySidebarOpen(true);
     }
-  }, [isEntryExitGroupActive, isSecurityGroupActive, isTicketGroupActive, normalizedSidebarQuery]);
+  }, [isEntryExitGroupActive, isSalesGroupActive, isSecurityGroupActive, isTicketGroupActive, normalizedSidebarQuery]);
 
   useEffect(() => {
     if (!selectedGuildIdForConfig) {
@@ -2503,6 +2609,21 @@ export function ServersWorkspace({
     }
 
     const encodedGuildId = encodeURIComponent(guildId);
+    if (settingsSection === "sales_overview") {
+      return `/servers/${encodedGuildId}/sales/overview/`;
+    }
+    if (settingsSection === "sales_categories") {
+      return `/servers/${encodedGuildId}/sales/categories/`;
+    }
+    if (settingsSection === "sales_products") {
+      return `/servers/${encodedGuildId}/sales/products/`;
+    }
+    if (settingsSection === "sales_payment_methods") {
+      return `/servers/${encodedGuildId}/sales/payment-methods/`;
+    }
+    if (settingsSection === "sales_coupons_gifts") {
+      return `/servers/${encodedGuildId}/sales/coupons-gifts/`;
+    }
     if (settingsSection === "message") {
       return `/servers/${encodedGuildId}/tickets/message/`;
     }
@@ -3103,6 +3224,16 @@ export function ServersWorkspace({
     if (section === "overview" || section === "message") {
       return perms.has("server_manage_tickets_overview");
     }
+    if (
+      section === "ticket_ai" ||
+      section === "sales_overview" ||
+      section === "sales_categories" ||
+      section === "sales_products" ||
+      section === "sales_payment_methods" ||
+      section === "sales_coupons_gifts"
+    ) {
+      return perms.has("server_manage_tickets_overview");
+    }
     if (section === "entry_exit_overview" || section === "entry_exit_message") {
       return perms.has("server_manage_welcome_overview");
     }
@@ -3455,6 +3586,86 @@ export function ServersWorkspace({
 
             {isEditingServer ? (
               <div className="my-[12px] h-px rounded-full bg-[#202020]" />
+            ) : null}
+
+            {filteredSalesSidebarItems.length ? (
+              <div className="mt-[12px]">
+                <button
+                  type="button"
+                  onClick={() => setIsSalesSidebarOpen((current) => !current)}
+                  className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                    isSalesGroupActive
+                      ? "bg-[#1E1E1E] text-[#F0F0F0]"
+                      : isSalesSidebarOpen
+                        ? "bg-[#121212] text-[#D6D6D6]"
+                        : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                  }`}
+                >
+                  <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isSalesGroupActive ? "text-[#F0F0F0]" : isSalesSidebarOpen ? "text-[#C7C7C7]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
+                    <SidebarNavIcon kind="sales" active={isSalesGroupActive} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[15px] leading-none font-medium tracking-[-0.03em]">
+                    Vendas
+                  </span>
+                  <span
+                    className={`transition-transform duration-200 ${
+                      isSalesSidebarOpen || normalizedSidebarQuery
+                        ? "rotate-180 text-[#C9C9C9]"
+                        : "rotate-0 text-[#6F6F6F] group-hover:text-[#BEBEBE]"
+                    }`}
+                  >
+                    <SidebarDropdownChevronIcon />
+                  </span>
+                </button>
+
+                {isSalesSidebarOpen || normalizedSidebarQuery ? (
+                  <div className="mt-[6px] space-y-[4px] pl-[12px]">
+                    {filteredSalesSidebarItems.map((item) => {
+                      const isDisabled = item.disabled || !selectedServer || !item.tab;
+                      const isActive =
+                        Boolean(
+                          item.tab &&
+                            selectedEditorTabForConfig === item.tab &&
+                            selectedSettingsSectionForConfig === item.settingsSection &&
+                            isEditingServer,
+                        );
+
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onMouseEnter={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onFocus={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onPointerDown={() => prefetchSelectedWorkspaceSections(item.tab)}
+                            onClick={() => {
+                              if (isDisabled || !selectedServer || !item.tab) return;
+                              handleSidebarSettingsSectionNavigation({
+                              guildId: selectedServer.guildId,
+                              tab: item.tab,
+                              settingsSection: item.settingsSection || "sales_overview",
+                            });
+                          }}
+                          disabled={isDisabled}
+                          className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[10px] text-left transition-all duration-200 ${
+                            isActive
+                              ? "bg-[#1A1A1A] text-[#F0F0F0]"
+                              : isDisabled
+                                ? "text-[#585858]"
+                                : "text-[#AFAFAF] hover:bg-[#101010] hover:text-[#E3E3E3]"
+                          }`}
+                        >
+                          <span className={`inline-flex h-[20px] w-[20px] items-center justify-center ${isActive ? "text-[#F0F0F0]" : isDisabled ? "text-[#4A4A4A]" : "text-[#7F7F7F] group-hover:text-[#DADADA]"}`}>
+                            <SidebarNavIcon kind={item.kind} active={isActive} />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[14px] leading-none font-medium tracking-[-0.03em]">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             ) : null}
 
             {filteredTicketSidebarItems.length ? (

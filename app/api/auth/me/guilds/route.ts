@@ -34,6 +34,40 @@ const guildSavedSetupInflight = new Map<
   Promise<Map<string, GuildSavedSetupMapValue>>
 >();
 
+function buildDiscordReconnectPayload(input: {
+  sessionHasDiscordIdentity: boolean;
+  message?: string;
+}) {
+  return {
+    ok: false,
+    code: input.sessionHasDiscordIdentity
+      ? "discord_reconnect_required"
+      : "discord_link_required",
+    requiresDiscordReconnect: input.sessionHasDiscordIdentity,
+    requiresDiscordLink: !input.sessionHasDiscordIdentity,
+    message:
+      input.message ||
+      (input.sessionHasDiscordIdentity
+        ? "Sua conexao com o Discord expirou e precisa ser renovada para listar os servidores."
+        : "Esta conta ainda precisa ser vinculada a um Discord para listar os servidores."),
+  };
+}
+
+function shouldTreatGuildsFailureAsReconnect(error: unknown) {
+  if (!(error instanceof Error)) return false;
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("falha ao renovar token discord") ||
+    message.includes("invalid_grant") ||
+    message.includes("invalid token") ||
+    message.includes("unauthorized") ||
+    message.includes("401 unauthorized") ||
+    message.includes("403 forbidden") ||
+    message.includes("oauth")
+  );
+}
+
 function buildGuildIconUrl(guildId: string, icon: string | null) {
   if (!icon) return null;
 
@@ -225,7 +259,14 @@ export async function GET(request: Request) {
     if (!sessionData.accessToken) {
       return applyNoStoreHeaders(
         NextResponse.json(
-          { ok: false, message: "Token OAuth ausente na sessao." },
+          buildDiscordReconnectPayload({
+            sessionHasDiscordIdentity: Boolean(
+              sessionData.authSession.user.discord_user_id,
+            ),
+            message: sessionData.authSession.user.discord_user_id
+              ? "Sua sessao do Discord nao esta mais conectada. Reconecte a mesma conta para sincronizar os servidores novamente."
+              : "Sua conta Flowdesk ainda nao possui um Discord conectado para carregar os servidores.",
+          }),
           { status: 401 },
         ),
       );
@@ -316,6 +357,22 @@ export async function GET(request: Request) {
       }),
     );
   } catch (error) {
+    const sessionData = await resolveSessionAccessToken().catch(() => null);
+    if (sessionData?.authSession && shouldTreatGuildsFailureAsReconnect(error)) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          buildDiscordReconnectPayload({
+            sessionHasDiscordIdentity: Boolean(
+              sessionData.authSession.user.discord_user_id,
+            ),
+            message:
+              "Nao foi possivel renovar sua conexao com o Discord. Reconecte a conta para listar os servidores novamente.",
+          }),
+          { status: 401 },
+        ),
+      );
+    }
+
     return applyNoStoreHeaders(
       NextResponse.json(
         {

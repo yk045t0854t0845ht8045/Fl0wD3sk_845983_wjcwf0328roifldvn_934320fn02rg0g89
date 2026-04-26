@@ -71,6 +71,11 @@ type EditorTab = "settings" | "payments" | "methods" | "plans";
 type ServerSettingsSection =
   | "overview"
   | "message"
+  | "sales_overview"
+  | "sales_categories"
+  | "sales_products"
+  | "sales_payment_methods"
+  | "sales_coupons_gifts"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
@@ -431,6 +436,49 @@ const AUTOROLE_DELAY_OPTIONS: Array<{
   { id: "20", name: "Adicionar depois de 20 min" },
   { id: "30", name: "Adicionar depois de 30 min" },
 ];
+
+const SALES_PLACEHOLDER_CONTENT: Record<
+  Extract<
+    ServerSettingsSection,
+    | "sales_overview"
+    | "sales_categories"
+    | "sales_products"
+    | "sales_payment_methods"
+    | "sales_coupons_gifts"
+  >,
+  { tag: string; title: string; description: string }
+> = {
+  sales_overview: {
+    tag: "Vendas",
+    title: "Configurando vendas",
+    description:
+      "Centralize aqui a base do sistema de vendas do bot. Em breve esta tela recebera os ajustes principais da loja.",
+  },
+  sales_categories: {
+    tag: "Vendas",
+    title: "Categorias",
+    description:
+      "Organize os grupos que vao separar produtos, ofertas e vitrines dentro do servidor.",
+  },
+  sales_products: {
+    tag: "Vendas",
+    title: "Produtos",
+    description:
+      "Cadastre e gerencie os itens que serao vendidos pelo bot quando o modulo estiver completo.",
+  },
+  sales_payment_methods: {
+    tag: "Vendas",
+    title: "Métodos de Pagamento",
+    description:
+      "Prepare os meios de pagamento que a loja vai oferecer para finalizar as compras.",
+  },
+  sales_coupons_gifts: {
+    tag: "Vendas",
+    title: "Cupons e Gifts",
+    description:
+      "Configure futuramente descontos, codigos promocionais e gifts para campanhas de venda.",
+  },
+};
 
 const ANTILINK_DEFAULT_DETECTION = {
   blockExternalLinks: true,
@@ -2100,6 +2148,11 @@ export function ServerSettingsEditor({
       const map: Record<ServerSettingsSection, string> = {
         overview: "server_manage_tickets_overview",
         message: "server_manage_tickets_message",
+        sales_overview: "server_manage_tickets_overview",
+        sales_categories: "server_manage_tickets_overview",
+        sales_products: "server_manage_tickets_overview",
+        sales_payment_methods: "server_manage_tickets_overview",
+        sales_coupons_gifts: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
         entry_exit_message: "server_manage_welcome_message",
         security_antilink: "server_manage_antilink",
@@ -3410,6 +3463,15 @@ export function ServerSettingsEditor({
   const isTicketSection =
     settingsSection === "overview" || settingsSection === "message" || settingsSection === "ticket_ai";
   const isTicketAiSection = settingsSection === "ticket_ai";
+  const isSalesSection =
+    settingsSection === "sales_overview" ||
+    settingsSection === "sales_categories" ||
+    settingsSection === "sales_products" ||
+    settingsSection === "sales_payment_methods" ||
+    settingsSection === "sales_coupons_gifts";
+  const salesPlaceholderContent = isSalesSection
+    ? SALES_PLACEHOLDER_CONTENT[settingsSection]
+    : null;
   const isWelcomeSection =
     settingsSection === "entry_exit_overview" ||
     settingsSection === "entry_exit_message";
@@ -5573,6 +5635,22 @@ export function ServerSettingsEditor({
                         _onTabChange?.("settings");
                       }} 
                     />
+                  ) : salesPlaceholderContent ? (
+                    <div className="space-y-[14px]">
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div>
+                          <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">
+                            {salesPlaceholderContent.tag}
+                          </p>
+                          <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                            {salesPlaceholderContent.title}
+                          </h3>
+                          <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                            {salesPlaceholderContent.description}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   ) : settingsSection === "overview" ? (
                     <div className="space-y-[14px]">
                       <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">

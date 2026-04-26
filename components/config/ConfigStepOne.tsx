@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GuildSelect } from "@/components/config/GuildSelect";
 import { BotMissingModal } from "@/components/config/BotMissingModal";
+import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
@@ -37,6 +38,10 @@ type ConfigStepOneProps = {
 type GuildsApiResponse = {
   ok: boolean;
   guilds?: GuildItem[];
+  code?: "discord_reconnect_required" | "discord_link_required";
+  requiresDiscordReconnect?: boolean;
+  requiresDiscordLink?: boolean;
+  message?: string;
 };
 
 type BotPresenceApiResponse = {
@@ -56,6 +61,14 @@ const GUILDS_REALTIME_SYNC_INTERVAL_MS = 20_000;
 type GuildsCachePayload = {
   guilds: GuildItem[];
   cachedAt: number;
+};
+
+type DiscordConnectionState = {
+  mode: "reconnect" | "link";
+  title: string;
+  description: string;
+  buttonLabel: string;
+  helper: string;
 };
 
 function readGuildsCache() {
@@ -115,6 +128,8 @@ export function ConfigStepOne({
   const [guilds, setGuilds] = useState<GuildItem[]>([]);
   const [isLoadingGuilds, setIsLoadingGuilds] = useState(true);
   const [hasFreshGuildsSync, setHasFreshGuildsSync] = useState(false);
+  const [discordConnectionState, setDiscordConnectionState] =
+    useState<DiscordConnectionState | null>(null);
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(
     initialSelectedGuildId,
   );
@@ -129,6 +144,14 @@ export function ConfigStepOne({
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollLockRef = useRef(false);
   const guildsRefreshLockRef = useRef(false);
+  const discordReconnectHref = useMemo(() => {
+    if (typeof window === "undefined") {
+      return buildDiscordAuthStartHref("/config#/step/1", "link");
+    }
+
+    const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash || "#/step/1"}`;
+    return buildDiscordAuthStartHref(nextPath, "link");
+  }, []);
 
   const refreshGuilds = useCallback(
     async (options?: { allowCachedFallback?: boolean; keepLoadingState?: boolean }) => {
@@ -150,11 +173,44 @@ export function ConfigStepOne({
         });
         const payload = (await response.json()) as GuildsApiResponse;
 
+        if (
+          response.status === 401 &&
+          (payload.requiresDiscordReconnect || payload.requiresDiscordLink)
+        ) {
+          setGuilds([]);
+          setHasFreshGuildsSync(false);
+          setDiscordConnectionState(
+            payload.requiresDiscordReconnect
+              ? {
+                  mode: "reconnect",
+                  title: "Reconecte seu Discord para continuar",
+                  description:
+                    payload.message ||
+                    "Sua conexao com o Discord expirou. Reconecte a mesma conta para atualizar os servidores e continuar a liberacao do Flowdesk.",
+                  buttonLabel: "Reconectar Discord",
+                  helper:
+                    "Se esta conta ja foi vinculada antes, a identidade salva continua na sua conta e a lista volta automaticamente depois do login.",
+                }
+              : {
+                  mode: "link",
+                  title: "Vincule um Discord a esta conta",
+                  description:
+                    payload.message ||
+                    "Precisamos de uma conta Discord conectada para listar seus servidores e validar onde o Flowdesk sera liberado.",
+                  buttonLabel: "Vincular Discord",
+                  helper:
+                    "Depois da vinculacao, voce volta para esta mesma etapa e os servidores sao sincronizados automaticamente.",
+                },
+          );
+          return;
+        }
+
         if (!payload.ok) {
           throw new Error("Falha ao atualizar a lista de servidores.");
         }
 
         const nextGuilds = payload.guilds || [];
+        setDiscordConnectionState(null);
         setGuilds(nextGuilds);
         writeGuildsCache(nextGuilds);
         setHasFreshGuildsSync(true);
@@ -441,12 +497,50 @@ export function ConfigStepOne({
           </div>
 
           <div className="mt-[34px]">
-            <GuildSelect
-              guilds={guilds}
-              selectedGuildId={selectedGuildId}
-              onSelect={handleSelectGuild}
-              isLoading={isLoadingGuilds}
-            />
+            {discordConnectionState ? (
+              <div className="relative overflow-hidden rounded-[28px] border border-[rgba(255,255,255,0.08)] bg-[linear-gradient(180deg,rgba(11,11,11,0.98)_0%,rgba(6,6,6,0.98)_100%)] px-[22px] py-[24px] text-left shadow-[0_28px_80px_rgba(0,0,0,0.38)]">
+                <p className="text-[12px] font-medium tracking-[0.18em] uppercase text-[#A7A7A7]">
+                  Vinculo com Discord
+                </p>
+                <h2 className="mt-[12px] text-[26px] leading-[1.05] font-medium tracking-[-0.05em] text-[#F1F1F1] sm:text-[32px]">
+                  {discordConnectionState.title}
+                </h2>
+                <p className="mt-[14px] max-w-[660px] text-[14px] leading-[1.8] text-[#969696] sm:text-[15px]">
+                  {discordConnectionState.description}
+                </p>
+                <p className="mt-[10px] max-w-[660px] text-[13px] leading-[1.75] text-[#6F6F6F]">
+                  {discordConnectionState.helper}
+                </p>
+
+                <div className="mt-[20px] flex flex-col gap-[10px] sm:flex-row sm:items-center">
+                  <a
+                    href={discordReconnectHref}
+                    className="inline-flex h-[48px] items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] px-6 text-[15px] font-semibold text-[#282828] transition-transform duration-150 ease-out hover:scale-[1.02] active:scale-[0.985]"
+                  >
+                    {discordConnectionState.buttonLabel}
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void refreshGuilds({
+                        allowCachedFallback: false,
+                        keepLoadingState: false,
+                      });
+                    }}
+                    className="inline-flex h-[48px] items-center justify-center rounded-[14px] border border-[#1A1A1A] bg-[#101010] px-6 text-[14px] font-medium text-[#D3D3D3] transition-colors hover:border-[#2A2A2A] hover:bg-[#121212]"
+                  >
+                    Tentar novamente
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <GuildSelect
+                guilds={guilds}
+                selectedGuildId={selectedGuildId}
+                onSelect={handleSelectGuild}
+                isLoading={isLoadingGuilds}
+              />
+            )}
           </div>
 
           {nextActionError && !selectedGuild ? (
