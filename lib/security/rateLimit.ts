@@ -48,6 +48,7 @@ type RateLimitInspection = {
   trafficScope: RateLimitTrafficScope;
   requestMethod: string;
   requestPath: string;
+  hostKey: string;
   routeKey: string;
   signatureHash: string;
   signatureKind: RateLimitSignatureKind;
@@ -211,7 +212,7 @@ function shouldBypassRateLimit(request: NextRequest) {
 function resolveThresholds(scope: RateLimitTrafficScope): RateLimitThresholds {
   const duplicateThreshold = resolveIntegerEnv(
     "FLOWSECURE_RATE_LIMIT_DUPLICATE_MAX",
-    10,
+    8,
   );
 
   return {
@@ -322,6 +323,26 @@ function extractClientIp(request: Request) {
   }
 
   return null;
+}
+
+function normalizeRateLimitHost(request: NextRequest) {
+  const rawHost =
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+    request.headers.get("host")?.trim() ||
+    request.nextUrl.host;
+  const normalized = rawHost.toLowerCase();
+
+  if (normalized.startsWith("[")) {
+    const endIndex = normalized.indexOf("]");
+    return endIndex >= 0 ? normalized.slice(0, endIndex + 1) : normalized;
+  }
+
+  const colonCount = normalized.split(":").length - 1;
+  if (colonCount === 1) {
+    return normalized.split(":")[0] || normalized;
+  }
+
+  return normalized || "unknown-host";
 }
 
 function fingerprintClientIp(ipAddress: string) {
@@ -506,6 +527,12 @@ async function inspectRequest(
   const secFetchDest = request.headers.get("sec-fetch-dest")?.toLowerCase() || "";
   const secFetchMode = request.headers.get("sec-fetch-mode")?.toLowerCase() || "";
   const isApi = pathname.startsWith("/api/");
+  const isDocumentNavigation =
+    !isApi &&
+    (method === "GET" ||
+      method === "HEAD" ||
+      secFetchDest === "document" ||
+      secFetchMode === "navigate");
 
   const responseMode: RateLimitResponseMode = isApi ? "json" : "html";
   const trafficScope: RateLimitTrafficScope =
@@ -515,7 +542,7 @@ async function inspectRequest(
         ? "api_mutation"
         : isApi
           ? "api_read"
-          : secFetchDest === "document" || secFetchMode === "navigate"
+          : isDocumentNavigation
             ? "page"
             : "other";
 
@@ -537,8 +564,11 @@ async function inspectRequest(
   const thresholds = resolveThresholds(trafficScope);
   const queryPayload = buildQueryPayload(request);
   const bodyPayload = await buildBodyPayload(request, thresholds.maxBodyBytes);
+  const hostKey = normalizeRateLimitHost(request);
+  const routeKey = `${method}:${hostKey}:${pathname}`;
   const signatureSource = {
     method,
+    host: hostKey,
     pathname,
     query: queryPayload,
     body: bodyPayload.signaturePayload,
@@ -562,7 +592,8 @@ async function inspectRequest(
     trafficScope,
     requestMethod: method,
     requestPath: pathname,
-    routeKey: `${method}:${pathname}`,
+    hostKey,
+    routeKey,
     signatureHash,
     signatureKind:
       trafficScope === "page" ? "page" : bodyPayload.signatureKind,
@@ -572,6 +603,7 @@ async function inspectRequest(
     userAgent: request.headers.get("user-agent")?.trim() || null,
     metadata: {
       host: request.headers.get("host")?.trim() || null,
+      hostKey,
       pathname,
       queryKeys: queryPayload.map(([key]) => key),
       ...bodyPayload.metadata,
@@ -662,13 +694,13 @@ function applyLocalFallbackRateLimit(
   };
 
   let reason: string | null = null;
-  if (counts.duplicateHits >= thresholds.duplicateThreshold) {
-    reason = "duplicate_signature";
-  } else if (
+  if (
     inspection.trafficScope === "page" &&
     counts.routeHits >= thresholds.duplicateThreshold
   ) {
     reason = "page_reload_burst";
+  } else if (counts.duplicateHits >= thresholds.duplicateThreshold) {
+    reason = "duplicate_signature";
   } else if (counts.routeHits >= thresholds.routeThreshold) {
     reason = "route_burst";
   } else if (
@@ -888,27 +920,15 @@ function maskIpAddress(ipAddress: string) {
 }
 
 function resolveBlockedHeadline(reason: string) {
-  if (reason === "page_reload_burst") {
-    return "Muitas recargas da mesma pagina foram detectadas.";
+  if (reason === "page_reload_burst" || reason === "route_burst") {
+    return "Acesso temporariamente limitado nesta pagina";
   }
 
-  if (reason === "duplicate_signature") {
-    return "A mesma requisicao foi repetida muitas vezes em pouco tempo.";
+  if (reason === "scope_burst" || reason === "site_burst") {
+    return "Muitas requisicoes foram detectadas";
   }
 
-  if (reason === "route_burst") {
-    return "Muitas acoes repetidas foram detectadas nesta mesma tela.";
-  }
-
-  if (reason === "scope_burst") {
-    return "O volume de acessos desta area passou do limite permitido.";
-  }
-
-  if (reason === "site_burst") {
-    return "O IP excedeu o limite geral de requisicoes da plataforma.";
-  }
-
-  return "Este IP esta temporariamente bloqueado por limite de requisicoes.";
+  return "You are being rate limited";
 }
 
 function buildRateLimitHtml(
@@ -917,9 +937,10 @@ function buildRateLimitHtml(
 ) {
   const rayId = formatRayId(requestId);
   const blockedAt = formatUtcDateTime(decision.blockedUntilIso);
+  const headline = resolveBlockedHeadline(decision.reason);
+  const retryAfterSeconds = Math.max(1, Math.trunc(decision.retryAfterSeconds || 60));
   const maskedIp = maskIpAddress(decision.ipAddress);
   const revealedIp = JSON.stringify(decision.ipAddress);
-  const headline = resolveBlockedHeadline(decision.reason);
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -936,7 +957,6 @@ function buildRateLimitHtml(
         --text: #172033;
         --muted: #6c7385;
         --accent: #0062ff;
-        --accent-soft: rgba(0, 98, 255, 0.12);
       }
 
       * {
@@ -960,33 +980,10 @@ function buildRateLimitHtml(
       }
 
       .panel {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 28px;
-        box-shadow:
-          0 24px 80px rgba(19, 34, 62, 0.08),
-          inset 0 1px 0 rgba(255, 255, 255, 0.55);
         padding: 38px 36px 28px;
-        backdrop-filter: blur(14px);
-      }
-
-      .eyebrow {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        border-radius: 999px;
-        border: 1px solid rgba(0, 98, 255, 0.16);
-        background: var(--accent-soft);
-        color: var(--accent);
-        padding: 9px 14px;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
       }
 
       .header {
-        margin-top: 20px;
         display: flex;
         flex-wrap: wrap;
         align-items: baseline;
@@ -1003,14 +1000,21 @@ function buildRateLimitHtml(
 
       .meta {
         color: var(--muted);
-        font-size: 23px;
+        font-size: 18px;
         letter-spacing: -0.035em;
       }
 
       .submeta {
-        margin-top: 10px;
         color: #4f5b74;
         font-size: 18px;
+      }
+
+      .limit-meta {
+        margin-top: 10px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 18px;
       }
 
       .content {
@@ -1019,7 +1023,7 @@ function buildRateLimitHtml(
       }
 
       .content h2 {
-        margin: 0 0 16px;
+        margin: 0;
         font-size: clamp(34px, 5vw, 48px);
         line-height: 0.98;
         font-weight: 500;
@@ -1027,20 +1031,14 @@ function buildRateLimitHtml(
       }
 
       .content p {
-        margin: 0;
-        color: #354159;
+        margin: 22px 0 0;
+        color: #4f5b74;
         font-size: 21px;
-        line-height: 1.7;
+        line-height: 1.6;
       }
 
-      .reason {
-        margin-top: 22px !important;
-        color: #27324b !important;
-      }
-
-      .helper {
-        margin-top: 14px !important;
-        color: var(--muted) !important;
+      .content strong {
+        color: #1b2230;
       }
 
       .feedback {
@@ -1142,6 +1140,11 @@ function buildRateLimitHtml(
           font-size: 18px;
         }
 
+        .limit-meta {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
         .feedback {
           margin-top: 52px;
         }
@@ -1155,33 +1158,25 @@ function buildRateLimitHtml(
   <body>
     <main class="shell">
       <section class="panel">
-        <span class="eyebrow">FlowSecure Protection</span>
-
         <div class="header">
           <h1>Error 1015</h1>
+        </div>
+
+        <div class="limit-meta">
+          <div class="submeta">You are being rate limited</div>
           <div class="meta">FlowSecure Ray ID: ${escapeHtml(rayId)} &bull; ${escapeHtml(blockedAt)}</div>
         </div>
 
-        <div class="submeta">You are being rate limited</div>
-
         <div class="content">
-          <h2>O que aconteceu?</h2>
-          <p>
-            O Flowdesk detectou um volume de acessos acima do permitido para este IP e aplicou um
-            bloqueio temporario de 1 minuto para proteger a plataforma.
-          </p>
-          <p class="reason">${escapeHtml(headline)}</p>
-          <p class="helper">
-            Repetir a mesma pagina, rota ou requisicao em excesso ativa essa protecao. Quando o
-            acesso muda de tela ou de operacao, o FlowSecure tenta manter a navegacao normal. O
-            link de consulta sera adicionado em breve.
-          </p>
+          <h2>${escapeHtml(headline)}</h2>
+          <p>O FlowSecure bloqueou temporariamente este IP porque muitas requisicoes foram feitas em pouco tempo para este endereco.</p>
+          <p>Aguarde cerca de <strong>${escapeHtml(String(retryAfterSeconds))} segundos</strong> antes de tentar novamente. Se voce estava apenas atualizando a pagina varias vezes, espere o bloqueio expirar.</p>
         </div>
 
         <div class="feedback">
-          <span>Was this page helpful?</span>
-          <button type="button" data-feedback="yes">Yes</button>
-          <button type="button" data-feedback="no">No</button>
+          <span>Esta informacao foi util?</span>
+          <button type="button" data-feedback="yes">Sim</button>
+          <button type="button" data-feedback="no">Nao</button>
         </div>
         <div class="feedback-note" id="feedback-note"></div>
 
@@ -1194,7 +1189,7 @@ function buildRateLimitHtml(
           <button class="reveal" id="reveal-ip" type="button">Click to reveal</button>
           <span id="revealed-ip" hidden>${escapeHtml(maskedIp)}</span>
           <span>&bull;</span>
-          <span>Performance & security by FlowSecure</span>
+          <span>Performance &amp; security by FlowSecure</span>
         </div>
       </section>
     </main>

@@ -5,16 +5,19 @@ import {
   getOAuthNextPathCookieName,
   getOAuthRedirectUriCookieName,
   getOAuthStateCookieName,
+  normalizeInternalNextPath,
   type OAuthProvider,
 } from "@/lib/auth/config";
 import {
   clearSharedAuthCookie,
   setSharedAuthCookie,
 } from "@/lib/auth/cookies";
+import { getRequestOrigin } from "@/lib/routing/subdomains";
 import { constantTimeEqualText } from "@/lib/security/flowSecure";
 
 const OAUTH_COOKIE_TTL_SECONDS = 60 * 10;
 const OAUTH_PKCE_METHOD = "S256";
+const OAUTH_STATE_PREFIX = "fs1";
 
 type OAuthMode = "login" | "link";
 
@@ -44,6 +47,181 @@ type ValidatedOAuthTransaction = {
   pkceVerifier: string | null;
   nonce: string | null;
 };
+
+type SignedOAuthStatePayload = {
+  v: 1;
+  p: OAuthProvider;
+  r: string;
+  u: string;
+  m: OAuthMode;
+  n?: string | null;
+  pk?: string | null;
+  no?: string | null;
+  iat: number;
+  exp: number;
+};
+
+function readCookieValues(request: NextRequest, name: string) {
+  const values = request.cookies
+    .getAll(name)
+    .map((cookie) => cookie.value)
+    .filter((value) => typeof value === "string" && value.length > 0);
+
+  if (values.length > 0) {
+    return values;
+  }
+
+  const fallbackValue = request.cookies.get(name)?.value;
+  return fallbackValue ? [fallbackValue] : [];
+}
+
+function readFirstCookieValue(request: NextRequest, name: string) {
+  return readCookieValues(request, name)[0] || null;
+}
+
+function resolveOAuthStateSecret() {
+  const candidates = [
+    process.env.AUTH_COOKIE_SECRET,
+    process.env.AUTH_SECRET,
+    process.env.NEXTAUTH_SECRET,
+    process.env.DISCORD_CLIENT_SECRET,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return "flowdesk-oauth-state-dev-secret";
+}
+
+function signOAuthStatePayload(payload: string) {
+  return crypto
+    .createHmac("sha256", resolveOAuthStateSecret())
+    .update(payload)
+    .digest("base64url");
+}
+
+function encodeOAuthStatePayload(payload: SignedOAuthStatePayload) {
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString(
+    "base64url",
+  );
+  const signature = signOAuthStatePayload(encodedPayload);
+  return `${OAUTH_STATE_PREFIX}.${encodedPayload}.${signature}`;
+}
+
+function decodeOAuthStatePayload(
+  provider: OAuthProvider,
+  returnedState: string | null | undefined,
+) {
+  if (!returnedState?.startsWith(`${OAUTH_STATE_PREFIX}.`)) {
+    return null;
+  }
+
+  const segments = returnedState.split(".");
+  if (segments.length !== 3) {
+    return null;
+  }
+
+  const [, encodedPayload, signature] = segments;
+  const expectedSignature = signOAuthStatePayload(encodedPayload);
+  if (!constantTimeEqualText(signature, expectedSignature)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    ) as Partial<SignedOAuthStatePayload>;
+    const now = Math.floor(Date.now() / 1000);
+
+    if (
+      payload.v !== 1 ||
+      payload.p !== provider ||
+      typeof payload.r !== "string" ||
+      payload.r.length < 16 ||
+      typeof payload.u !== "string" ||
+      !payload.u.trim() ||
+      (payload.m !== "login" && payload.m !== "link") ||
+      typeof payload.exp !== "number" ||
+      payload.exp < now ||
+      typeof payload.iat !== "number" ||
+      payload.iat > now + 60
+    ) {
+      return null;
+    }
+
+    return payload as SignedOAuthStatePayload;
+  } catch {
+    return null;
+  }
+}
+
+function pickReturnedStateCookie(
+  stateCookieValues: string[],
+  returnedState: string | null | undefined,
+) {
+  if (!returnedState) {
+    return null;
+  }
+
+  return (
+    stateCookieValues.find((cookieValue) =>
+      constantTimeEqualText(returnedState, cookieValue),
+    ) || null
+  );
+}
+
+function pickRedirectUriCookie(
+  request: NextRequest,
+  redirectUriCookieValues: string[],
+) {
+  if (redirectUriCookieValues.length <= 1) {
+    return redirectUriCookieValues[0] || null;
+  }
+
+  const currentOrigin = request.nextUrl.origin;
+  const sameOriginValue = redirectUriCookieValues.find((value) => {
+    try {
+      return new URL(value).origin === currentOrigin;
+    } catch {
+      return false;
+    }
+  });
+
+  return sameOriginValue || redirectUriCookieValues[0] || null;
+}
+
+function validateSignedOAuthTransactionFromState(
+  request: NextRequest,
+  provider: OAuthProvider,
+  returnedState: string | null | undefined,
+): ValidatedOAuthTransaction | null {
+  const payload = decodeOAuthStatePayload(provider, returnedState);
+  if (!payload) {
+    return null;
+  }
+
+  let redirectUri: string;
+  try {
+    redirectUri = new URL(payload.u).toString();
+  } catch {
+    redirectUri = new URL(
+      `/api/auth/${provider}/callback`,
+      getRequestOrigin(request),
+    ).toString();
+  }
+
+  return {
+    state: returnedState || payload.r,
+    redirectUri,
+    nextPath: normalizeInternalNextPath(payload.n),
+    mode: payload.m,
+    pkceVerifier: typeof payload.pk === "string" ? payload.pk : null,
+    nonce: typeof payload.no === "string" ? payload.no : null,
+  };
+}
 
 const OAUTH_PROVIDER_IDENTITY_REGISTRY: Record<
   OAuthProvider,
@@ -120,6 +298,24 @@ export function createOAuthPkcePair() {
 
 export function createOAuthNonce() {
   return crypto.randomBytes(24).toString("base64url");
+}
+
+export function createOAuthTransactionState(
+  input: Omit<OAuthTransactionInput, "state">,
+) {
+  const now = Math.floor(Date.now() / 1000);
+  return encodeOAuthStatePayload({
+    v: 1,
+    p: input.provider,
+    r: crypto.randomBytes(18).toString("base64url"),
+    u: input.redirectUri,
+    m: input.requestedMode,
+    n: normalizeInternalNextPath(input.requestedNextPath),
+    pk: input.pkceVerifier || null,
+    no: input.nonce || null,
+    iat: now,
+    exp: now + OAUTH_COOKIE_TTL_SECONDS,
+  });
 }
 
 export function setOAuthTransactionCookies(
@@ -262,26 +458,37 @@ export function validateOAuthTransactionFromRequest(
   provider: OAuthProvider,
   returnedState: string | null | undefined,
 ): ValidatedOAuthTransaction | null {
-  const stateCookie = request.cookies.get(getOAuthStateCookieName(provider))?.value || null;
-  const redirectUriCookie =
-    request.cookies.get(getOAuthRedirectUriCookieName(provider))?.value || null;
-  const nextPathCookie =
-    request.cookies.get(getOAuthNextPathCookieName(provider))?.value || null;
+  const stateCookie = pickReturnedStateCookie(
+    readCookieValues(request, getOAuthStateCookieName(provider)),
+    returnedState,
+  );
+  const redirectUriCookie = pickRedirectUriCookie(
+    request,
+    readCookieValues(request, getOAuthRedirectUriCookieName(provider)),
+  );
+  const nextPathCookie = readFirstCookieValue(
+    request,
+    getOAuthNextPathCookieName(provider),
+  );
   const modeCookie =
-    request.cookies.get(getOAuthModeCookieName(provider))?.value === "link"
+    readFirstCookieValue(request, getOAuthModeCookieName(provider)) === "link"
       ? "link"
       : "login";
-  const pkceVerifierCookie =
-    request.cookies.get(getOAuthPkceVerifierCookieName(provider))?.value || null;
-  const nonceCookie =
-    request.cookies.get(getOAuthNonceCookieName(provider))?.value || null;
+  const pkceVerifierCookie = readFirstCookieValue(
+    request,
+    getOAuthPkceVerifierCookieName(provider),
+  );
+  const nonceCookie = readFirstCookieValue(
+    request,
+    getOAuthNonceCookieName(provider),
+  );
 
   if (!returnedState || !stateCookie || !redirectUriCookie) {
-    return null;
-  }
-
-  if (!constantTimeEqualText(returnedState, stateCookie)) {
-    return null;
+    return validateSignedOAuthTransactionFromState(
+      request,
+      provider,
+      returnedState,
+    );
   }
 
   return {

@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
           pattern: /^[A-Za-z0-9]+$/,
         }),
         next: flowSecureDto.optional(
-          flowSecureDto.internalPath(),
+          flowSecureDto.nullable(flowSecureDto.internalPath()),
         ),
         rememberSession: flowSecureDto.optional(
           flowSecureDto.boolean({

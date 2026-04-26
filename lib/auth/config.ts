@@ -214,10 +214,17 @@ function resolveRequestScopedRedirectUri(
   request: NextRequest,
   callbackPathname: string,
   fallbackRedirectUri: string,
+  options?: {
+    preferFallbackForLocal?: boolean;
+  },
 ) {
   const runtime = resolveHostRuntimeContext(getRequestHostname(request));
 
   if (runtime.mode === "isolated") {
+    return fallbackRedirectUri;
+  }
+
+  if (runtime.mode === "local" && options?.preferFallbackForLocal) {
     return fallbackRedirectUri;
   }
 
@@ -232,6 +239,9 @@ export function resolveDiscordRedirectUri(request: NextRequest) {
       resolveHostRuntimeContext(getRequestHostname(request)).mode === "local"
       ? authConfig.discordRedirectUriLocal
       : authConfig.discordRedirectUriProd,
+    {
+      preferFallbackForLocal: true,
+    },
   );
 }
 

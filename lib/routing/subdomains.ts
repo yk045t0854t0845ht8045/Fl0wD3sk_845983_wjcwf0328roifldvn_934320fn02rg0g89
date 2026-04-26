@@ -315,6 +315,21 @@ function isLoopbackHostname(hostname: string) {
   );
 }
 
+function isBareLoopbackHostname(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1"
+  );
+}
+
+function isLocalSingleHostRequest(request: RequestLike) {
+  const currentHost = parseHost(getRequestHost(request));
+  const runtime = resolveHostRuntimeContext(currentHost.hostname, currentHost.port);
+  return runtime.mode === "local" && isBareLoopbackHostname(currentHost.hostname);
+}
+
 function ensureLeadingSlash(pathname: string) {
   if (!pathname) return "/";
   return pathname.startsWith("/") ? pathname : `/${pathname}`;
@@ -597,6 +612,10 @@ export function resolveCanonicalHostOrigin(
     return null;
   }
 
+  if (isLocalSingleHostRequest(request)) {
+    return getRequestOrigin(request);
+  }
+
   const protocol = runtime.mode === "production" ? "https" : getRequestProtocol(request);
   const portSegment =
     runtime.mode === "local" && runtime.port ? `:${runtime.port}` : "";
@@ -654,7 +673,11 @@ export function buildCanonicalPaymentUrl(
 export function resolveCookieDomainForHostname(hostname: string) {
   const { hostname: normalizedHostname } = parseHost(hostname);
 
-  if (!normalizedHostname || isIpHostname(normalizedHostname)) {
+  if (
+    !normalizedHostname ||
+    isIpHostname(normalizedHostname) ||
+    isBareLoopbackHostname(normalizedHostname)
+  ) {
     return null;
   }
 
@@ -676,7 +699,11 @@ export function buildCanonicalWorkspaceUrl(
   if (!origin) return null;
 
   const pathname = ensureLeadingSlash(externalPath);
-  return new URL(`${pathname}${search}`, origin).toString();
+  const resolvedPathname = isLocalSingleHostRequest(request)
+    ? getWorkspaceAreaInternalPath(area, pathname)
+    : pathname;
+
+  return new URL(`${resolvedPathname}${search}`, origin).toString();
 }
 
 export function buildCanonicalPublicUrl(
