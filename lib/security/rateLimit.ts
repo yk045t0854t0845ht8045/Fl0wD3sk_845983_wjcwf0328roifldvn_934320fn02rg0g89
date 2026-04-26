@@ -979,7 +979,7 @@ function buildRateLimitHtml(
         padding: 52px 24px 64px;
       }
 
-      .panel {
+      .panel2 {
         padding: 38px 36px 28px;
       }
 
@@ -1000,21 +1000,14 @@ function buildRateLimitHtml(
 
       .meta {
         color: var(--muted);
-        font-size: 18px;
+        font-size: 23px;
         letter-spacing: -0.035em;
       }
 
       .submeta {
+        margin-top: 10px;
         color: #4f5b74;
         font-size: 18px;
-      }
-
-      .limit-meta {
-        margin-top: 10px;
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 18px;
       }
 
       .content {
@@ -1127,7 +1120,7 @@ function buildRateLimitHtml(
           padding: 20px 14px 32px;
         }
 
-        .panel {
+        .panel2 {
           padding: 24px 18px 22px;
           border-radius: 20px;
         }
@@ -1138,11 +1131,6 @@ function buildRateLimitHtml(
 
         .content p {
           font-size: 18px;
-        }
-
-        .limit-meta {
-          align-items: flex-start;
-          flex-direction: column;
         }
 
         .feedback {
@@ -1157,15 +1145,13 @@ function buildRateLimitHtml(
   </head>
   <body>
     <main class="shell">
-      <section class="panel">
+      <section class="panel2">
         <div class="header">
           <h1>Error 1015</h1>
-        </div>
-
-        <div class="limit-meta">
-          <div class="submeta">You are being rate limited</div>
           <div class="meta">FlowSecure Ray ID: ${escapeHtml(rayId)} &bull; ${escapeHtml(blockedAt)}</div>
         </div>
+
+        <div class="submeta">You are being rate limited</div>
 
         <div class="content">
           <h2>${escapeHtml(headline)}</h2>
@@ -1214,7 +1200,7 @@ function buildRateLimitHtml(
         feedbackButtons.forEach((button) => {
           button.addEventListener("click", () => {
             if (feedbackNote) {
-              feedbackNote.textContent = "Obrigado. O feedback foi registrado localmente nesta pagina.";
+              feedbackNote.textContent = "Obrigado. O feedback foi registrado com sucesso.";
             }
           });
         });

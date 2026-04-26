@@ -1819,7 +1819,7 @@ export function ServersWorkspace({
       activeTimeoutId = window.setTimeout(() => controller.abort("timeout"), 12000);
 
       try {
-        const response = await fetch("/api/auth/me/servers", { cache: "no-store", signal: controller.signal });
+        const response = await fetch("/api/auth/me/servers?fresh=1", { cache: "no-store", signal: controller.signal });
         const payload = (await response.json()) as ServersApiResponse;
         if (!isMounted) return;
         if (!response.ok || !payload.ok) {

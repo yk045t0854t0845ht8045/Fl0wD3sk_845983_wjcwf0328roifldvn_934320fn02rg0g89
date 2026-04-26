@@ -803,7 +803,7 @@ export function ConfigFlow({
 
     async function loadGuilds() {
       try {
-        const response = await fetch("/api/auth/me/guilds", {
+        const response = await fetch("/api/auth/me/guilds?fresh=1", {
           cache: "no-store",
         });
         const payload = (await response.json()) as GuildsApiResponse;
@@ -832,7 +832,7 @@ export function ConfigFlow({
   useEffect(() => {
     async function loadManagedServerStatuses() {
       try {
-        const response = await fetch("/api/auth/me/servers", {
+        const response = await fetch("/api/auth/me/servers?fresh=1", {
           cache: "no-store",
         });
         const payload = (await response.json()) as ServersApiResponse;

@@ -233,6 +233,10 @@ type SessionAccessContext = {
   accessToken: string;
 };
 
+type AccessibleGuildsOptions = {
+  forceFresh?: boolean;
+};
+
 export function filterAccessibleGuilds(guilds: DiscordGuild[]) {
   return guilds.filter((guild) => hasAdminAccess(guild.permissions, guild.owner));
 }
@@ -252,9 +256,11 @@ export async function getAccessibleGuildsFromAccessToken(accessToken: string) {
 
 export async function getAccessibleGuildsForSession(
   sessionContext: SessionAccessContext,
+  options: AccessibleGuildsOptions = {},
 ) {
   const cachedGuilds = sessionContext.authSession.discordGuildsCache;
   if (
+    !options.forceFresh &&
     cachedGuilds !== null &&
     isGuildCacheFresh(sessionContext.authSession.discordGuildsCachedAt)
   ) {

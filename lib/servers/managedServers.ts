@@ -21,6 +21,7 @@ import {
   repairOrphanPlanGuildLinkForUser,
 } from "@/lib/plans/state";
 import { buildFlowSecureDiagnosticFingerprint } from "@/lib/security/flowSecure";
+import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   getAcceptedTeamGuildIdsForUser,
   getGlobalTeamLinkedGuildIds,
@@ -51,6 +52,14 @@ const refreshingUserIds = new Set<number>();
 const CACHE_TTL_MS = 600000;
 const STALE_THRESHOLD_MS = 20000;
 
+type ManagedServersSnapshotOptions = {
+  forceFresh?: boolean;
+};
+
+type ConfiguredGuildRecord = {
+  guild_id: string | null;
+};
+
 function buildGuildIconUrl(guildId: string, icon: string | null) {
   if (!icon) return null;
 
@@ -74,6 +83,45 @@ function isManagedGuildId(value: string | null | undefined): value is string {
 
 function toUniqueManagedGuildIds(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter(isManagedGuildId)));
+}
+
+async function getConfiguredGuildIdsForUser(userId: number) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const setupTables = [
+    "guild_ticket_settings",
+    "guild_ticket_staff_settings",
+    "guild_welcome_settings",
+    "guild_antilink_settings",
+    "guild_autorole_settings",
+    "guild_settings_secure_snapshots",
+  ];
+
+  const readGuildIds = async (table: string, userColumn: string) => {
+    const result = await supabase
+      .from(table)
+      .select("guild_id")
+      .eq(userColumn, userId)
+      .returns<ConfiguredGuildRecord[]>();
+
+    if (result.error) {
+      console.warn("managed servers configured guild lookup failed", {
+        table,
+        error: result.error.message,
+      });
+      return [] as string[];
+    }
+
+    return toUniqueManagedGuildIds(
+      (result.data || []).map((record) => record.guild_id),
+    );
+  };
+
+  const results = await Promise.all([
+    ...setupTables.map((table) => readGuildIds(table, "configured_by_user_id")),
+    readGuildIds("guild_plan_settings", "user_id"),
+  ]);
+
+  return toUniqueManagedGuildIds(results.flat());
 }
 
 function buildGuildLookup(guilds: DiscordGuild[] | null) {
@@ -130,7 +178,9 @@ function buildManagedServersSyncState(input: {
   return syncState;
 }
 
-export async function getManagedServersSnapshotForCurrentSession(): Promise<ManagedServersSnapshot> {
+export async function getManagedServersSnapshotForCurrentSession(
+  options: ManagedServersSnapshotOptions = {},
+): Promise<ManagedServersSnapshot> {
   const sessionData = await resolveSessionAccessToken();
 
   if (!sessionData?.authSession) {
@@ -139,7 +189,7 @@ export async function getManagedServersSnapshotForCurrentSession(): Promise<Mana
 
   const userId = sessionData.authSession.user.id;
   const cached = managedServersCache.get(userId);
-  if (cached) {
+  if (cached && !options.forceFresh) {
     const cacheAgeMs = Date.now() - cached.timestamp;
     const cacheTtlMs =
       cached.snapshot.sync.degraded || cached.snapshot.sync.requiresDiscordRelink
@@ -167,7 +217,7 @@ export async function getManagedServersSnapshotForCurrentSession(): Promise<Mana
   }
 
   try {
-    return await fetchManagedServersFresh(sessionData);
+    return await fetchManagedServersFresh(sessionData, options);
   } catch (error) {
     if (cached) {
       return cached.snapshot;
@@ -194,21 +244,31 @@ export function filterTeamCatalogManagedServers(servers: ManagedServer[]) {
   );
 }
 
-export async function getPanelManagedServersSnapshotForCurrentSession(): Promise<ManagedServersSnapshot> {
-  const snapshot = await getManagedServersSnapshotForCurrentSession();
+export async function getPanelManagedServersSnapshotForCurrentSession(
+  options: ManagedServersSnapshotOptions = {},
+): Promise<ManagedServersSnapshot> {
+  const snapshot = await getManagedServersSnapshotForCurrentSession(options);
   return {
     ...snapshot,
     servers: filterPanelVisibleManagedServers(snapshot.servers),
   };
 }
 
-export async function getPanelManagedServersForCurrentSession(): Promise<ManagedServer[]> {
-  const snapshot = await getPanelManagedServersSnapshotForCurrentSession();
+export async function getPanelManagedServersForCurrentSession(
+  options: ManagedServersSnapshotOptions = {},
+): Promise<ManagedServer[]> {
+  const snapshot = await getPanelManagedServersSnapshotForCurrentSession(options);
   return snapshot.servers;
+}
+
+export function invalidateManagedServersCacheForUser(userId: number) {
+  managedServersCache.delete(userId);
+  refreshingUserIds.delete(userId);
 }
 
 async function fetchManagedServersFresh(
   sessionData: Awaited<ReturnType<typeof resolveSessionAccessToken>>,
+  options: ManagedServersSnapshotOptions = {},
 ): Promise<ManagedServersSnapshot> {
   if (!sessionData?.authSession) {
     return {
@@ -241,7 +301,7 @@ async function fetchManagedServersFresh(
     ? getAccessibleGuildsForSession({
         authSession,
         accessToken: sessionData.accessToken,
-      })
+      }, { forceFresh: options.forceFresh })
     : Promise.resolve<DiscordGuild[]>([]);
 
   const [
@@ -252,6 +312,7 @@ async function fetchManagedServersFresh(
     ownedPlanGuilds,
     lockedGuildMap,
     downgradeEnforcement,
+    configuredGuildIdsList,
   ] = await Promise.all([
     getUserPlanState(userId),
     getUserPlanScheduledChange(userId),
@@ -265,6 +326,7 @@ async function fetchManagedServersFresh(
     getPlanGuildsForUser(userId, { includeInactive: true }),
     getLockedGuildLicenseMapByUserId(userId),
     getDowngradeEnforcementSummaryForUser(userId),
+    getConfiguredGuildIdsForUser(userId),
   ]);
 
   void repairOrphanPlanGuildLinkForUser({
@@ -304,8 +366,14 @@ async function fetchManagedServersFresh(
       isManagedGuildId(guildId),
     ),
   );
+  const configuredGuildIds = new Set(
+    toUniqueManagedGuildIds(configuredGuildIdsList),
+  );
+  const activeGuildIds = toUniqueManagedGuildIds([authSession.activeGuildId]);
   const coveredGuildIds = toUniqueManagedGuildIds([
+    ...activeGuildIds,
     ...Array.from(acceptedTeamGuildIds),
+    ...Array.from(configuredGuildIds),
     ...Array.from(ownedPlanGuildIds),
     ...Array.from(normalizedLockedGuildMap.keys()),
   ]);
@@ -368,6 +436,8 @@ async function fetchManagedServersFresh(
   );
 
   const guildIdsForLookup = Array.from(guildCatalog.keys());
+  const accessibleGuildIds = new Set(accessibleGuildLookup.keys());
+  const activeGuildIdSet = new Set(activeGuildIds);
   const globalTeamLinkedGuildIds = await getGlobalTeamLinkedGuildIds(guildIdsForLookup);
 
   const servers = Array.from(guildCatalog.values())
@@ -385,7 +455,10 @@ async function fetchManagedServersFresh(
         ownedPlanGuildIds.has(guild.id) || guild.owner ? "owner" : "viewer";
       const isLinkedToTeam = globalTeamLinkedGuildIds.has(guild.id);
       const isPanelVisible = Boolean(
-        acceptedTeamGuildIds.has(guild.id) ||
+        accessibleGuildIds.has(guild.id) ||
+          activeGuildIdSet.has(guild.id) ||
+          acceptedTeamGuildIds.has(guild.id) ||
+          configuredGuildIds.has(guild.id) ||
           ownedPlanGuildIds.has(guild.id) ||
           lockedRecord,
       );
@@ -452,6 +525,8 @@ async function fetchManagedServersFresh(
           !currentLicenseBelongsToViewer &&
           (
             ownedPlanGuildIds.has(guild.id) ||
+            accessibleGuildIds.has(guild.id) ||
+            activeGuildIdSet.has(guild.id) ||
             acceptedTeamGuildIds.has(guild.id) ||
             (!isLinkedToTeam && (guild.owner || false))
           ),
@@ -474,10 +549,11 @@ async function fetchManagedServersFresh(
     });
 
   const coveredGuildCount = coveredGuildIds.length;
+  const hasDatabaseCoverage = coveredGuildCount > 0;
   const shouldMarkDiscordSyncFailed =
     !requiresDiscordRelink &&
-    (!accessibleGuildsResult.ok ||
-      (ownedPlanGuildIds.size > 0 && accessibleGuilds.length === 0));
+    !hasDatabaseCoverage &&
+    (!accessibleGuildsResult.ok || accessibleGuilds.length === 0);
   const sync = buildManagedServersSyncState({
     authUserId: userId,
     accessibleGuildCount: accessibleGuilds.length,
