@@ -112,7 +112,8 @@ function resolveSecurityLogEvent(data: Record<string, unknown>, input: {
   const enabled = data[input.enabledColumn] === true;
   const rawChannelId = data[input.channelColumn];
   const channelId =
-    typeof rawChannelId === "string" && input.textSet.has(rawChannelId)
+    typeof rawChannelId === "string" &&
+    (input.textSet.size === 0 || input.textSet.has(rawChannelId))
       ? rawChannelId
       : null;
 
@@ -126,7 +127,26 @@ function resolveOptionalTextChannelId(
   value: unknown,
   textSet: Set<string>,
 ) {
-  return typeof value === "string" && textSet.has(value) ? value : null;
+  return typeof value === "string" && (textSet.size === 0 || textSet.has(value))
+    ? value
+    : null;
+}
+
+function resolveOptionalRoleId(
+  value: unknown,
+  roleSet: Set<string>,
+) {
+  return typeof value === "string" && (roleSet.size === 0 || roleSet.has(value))
+    ? value
+    : null;
+}
+
+function filterKnownIds(value: unknown, knownIds: Set<string>) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is string =>
+      typeof item === "string" && (knownIds.size === 0 || knownIds.has(item)),
+  );
 }
 
 async function loadGuildTicketSettings(
@@ -168,34 +188,40 @@ function buildTicketSettingsPayload(input: {
   const ticketAiSettings = normalizeTicketAiSettings(input.record);
   const menuChannelId =
     typeof input.snapshot?.menuChannelId === "string" &&
-    input.textSet.has(input.snapshot.menuChannelId)
+    (input.textSet.size === 0 || input.textSet.has(input.snapshot.menuChannelId))
       ? input.snapshot.menuChannelId
       : typeof input.record?.menu_channel_id === "string" &&
-          input.textSet.has(input.record.menu_channel_id)
+          (input.textSet.size === 0 || input.textSet.has(input.record.menu_channel_id))
         ? input.record.menu_channel_id
         : null;
   const ticketsCategoryId =
     typeof input.snapshot?.ticketsCategoryId === "string" &&
-    input.categorySet.has(input.snapshot.ticketsCategoryId)
+    (input.categorySet.size === 0 ||
+      input.categorySet.has(input.snapshot.ticketsCategoryId))
       ? input.snapshot.ticketsCategoryId
       : typeof input.record?.tickets_category_id === "string" &&
-          input.categorySet.has(input.record.tickets_category_id)
+          (input.categorySet.size === 0 ||
+            input.categorySet.has(input.record.tickets_category_id))
         ? input.record.tickets_category_id
         : null;
   const logsCreatedChannelId =
     typeof input.snapshot?.logsCreatedChannelId === "string" &&
-    input.textSet.has(input.snapshot.logsCreatedChannelId)
+    (input.textSet.size === 0 ||
+      input.textSet.has(input.snapshot.logsCreatedChannelId))
       ? input.snapshot.logsCreatedChannelId
       : typeof input.record?.logs_created_channel_id === "string" &&
-          input.textSet.has(input.record.logs_created_channel_id)
+          (input.textSet.size === 0 ||
+            input.textSet.has(input.record.logs_created_channel_id))
         ? input.record.logs_created_channel_id
         : null;
   const logsClosedChannelId =
     typeof input.snapshot?.logsClosedChannelId === "string" &&
-    input.textSet.has(input.snapshot.logsClosedChannelId)
+    (input.textSet.size === 0 ||
+      input.textSet.has(input.snapshot.logsClosedChannelId))
       ? input.snapshot.logsClosedChannelId
       : typeof input.record?.logs_closed_channel_id === "string" &&
-          input.textSet.has(input.record.logs_closed_channel_id)
+          (input.textSet.size === 0 ||
+            input.textSet.has(input.record.logs_closed_channel_id))
         ? input.record.logs_closed_channel_id
         : null;
   const panelTitle =
@@ -272,22 +298,12 @@ function buildTicketStaffPayload(input: {
   }
 
   const sanitizeRoleIds = (value: unknown) =>
-    Array.isArray(value)
-      ? value.filter(
-          (roleId): roleId is string =>
-            typeof roleId === "string" && input.roleSet.has(roleId),
-        )
-      : [];
+    filterKnownIds(value, input.roleSet);
 
   return {
     adminRoleId:
-      typeof input.snapshot?.adminRoleId === "string" &&
-      input.roleSet.has(input.snapshot.adminRoleId)
-        ? input.snapshot.adminRoleId
-        : typeof input.record?.admin_role_id === "string" &&
-            input.roleSet.has(input.record.admin_role_id)
-          ? input.record.admin_role_id
-          : null,
+      resolveOptionalRoleId(input.snapshot?.adminRoleId, input.roleSet) ||
+      resolveOptionalRoleId(input.record?.admin_role_id, input.roleSet),
     claimRoleIds: sanitizeRoleIds(
       input.snapshot?.claimRoleIds ?? input.record?.claim_role_ids,
     ),
@@ -321,34 +337,42 @@ function buildWelcomePayload(input: {
         : input.record?.enabled === true,
     entryPublicChannelId:
       typeof input.snapshot?.entryPublicChannelId === "string" &&
-      input.textSet.has(input.snapshot.entryPublicChannelId)
+      (input.textSet.size === 0 ||
+        input.textSet.has(input.snapshot.entryPublicChannelId))
         ? input.snapshot.entryPublicChannelId
         : typeof input.record?.entry_public_channel_id === "string" &&
-            input.textSet.has(input.record.entry_public_channel_id)
+            (input.textSet.size === 0 ||
+              input.textSet.has(input.record.entry_public_channel_id))
           ? input.record.entry_public_channel_id
           : null,
     entryLogChannelId:
       typeof input.snapshot?.entryLogChannelId === "string" &&
-      input.textSet.has(input.snapshot.entryLogChannelId)
+      (input.textSet.size === 0 ||
+        input.textSet.has(input.snapshot.entryLogChannelId))
         ? input.snapshot.entryLogChannelId
         : typeof input.record?.entry_log_channel_id === "string" &&
-            input.textSet.has(input.record.entry_log_channel_id)
+            (input.textSet.size === 0 ||
+              input.textSet.has(input.record.entry_log_channel_id))
           ? input.record.entry_log_channel_id
           : null,
     exitPublicChannelId:
       typeof input.snapshot?.exitPublicChannelId === "string" &&
-      input.textSet.has(input.snapshot.exitPublicChannelId)
+      (input.textSet.size === 0 ||
+        input.textSet.has(input.snapshot.exitPublicChannelId))
         ? input.snapshot.exitPublicChannelId
         : typeof input.record?.exit_public_channel_id === "string" &&
-            input.textSet.has(input.record.exit_public_channel_id)
+            (input.textSet.size === 0 ||
+              input.textSet.has(input.record.exit_public_channel_id))
           ? input.record.exit_public_channel_id
           : null,
     exitLogChannelId:
       typeof input.snapshot?.exitLogChannelId === "string" &&
-      input.textSet.has(input.snapshot.exitLogChannelId)
+      (input.textSet.size === 0 ||
+        input.textSet.has(input.snapshot.exitLogChannelId))
         ? input.snapshot.exitLogChannelId
         : typeof input.record?.exit_log_channel_id === "string" &&
-            input.textSet.has(input.record.exit_log_channel_id)
+            (input.textSet.size === 0 ||
+              input.textSet.has(input.record.exit_log_channel_id))
           ? input.record.exit_log_channel_id
           : null,
     entryLayout: normalizeWelcomeLayout(
@@ -432,10 +456,10 @@ function buildAntiLinkPayload(input: {
         : input.record?.enabled === true,
     logChannelId:
       typeof input.snapshot?.logChannelId === "string" &&
-      input.textSet.has(input.snapshot.logChannelId)
+      (input.textSet.size === 0 || input.textSet.has(input.snapshot.logChannelId))
         ? input.snapshot.logChannelId
         : typeof input.record?.log_channel_id === "string" &&
-            input.textSet.has(input.record.log_channel_id)
+            (input.textSet.size === 0 || input.textSet.has(input.record.log_channel_id))
           ? input.record.log_channel_id
           : null,
     enforcementAction: normalizeAntiLinkAction(
@@ -444,18 +468,8 @@ function buildAntiLinkPayload(input: {
     timeoutMinutes: normalizeAntiLinkTimeoutMinutes(
       input.snapshot?.timeoutMinutes ?? input.record?.timeout_minutes,
     ),
-    ignoredRoleIds: Array.isArray(ignoredRoleIdsSource)
-      ? ignoredRoleIdsSource.filter(
-          (roleId: unknown): roleId is string =>
-            typeof roleId === "string" && input.roleSet.has(roleId),
-        )
-      : [],
-    ignoredChannelIds: Array.isArray(ignoredChannelIdsSource)
-      ? ignoredChannelIdsSource.filter(
-          (channelId: unknown): channelId is string =>
-            typeof channelId === "string" && input.textSet.has(channelId),
-        )
-      : [],
+    ignoredRoleIds: filterKnownIds(ignoredRoleIdsSource, input.roleSet),
+    ignoredChannelIds: filterKnownIds(ignoredChannelIdsSource, input.textSet),
     blockExternalLinks:
       input.snapshot?.blockExternalLinks !== false,
     blockDiscordInvites:
@@ -487,12 +501,7 @@ function buildAutoRolePayload(input: {
       typeof input.snapshot?.enabled === "boolean"
         ? input.snapshot.enabled
         : input.record?.enabled === true,
-    roleIds: Array.isArray(roleIdsSource)
-      ? roleIdsSource.filter(
-          (roleId: unknown): roleId is string =>
-            typeof roleId === "string" && input.roleSet.has(roleId),
-        )
-      : [],
+    roleIds: filterKnownIds(roleIdsSource, input.roleSet),
     assignmentDelayMinutes:
       assignmentDelay === 10 || assignmentDelay === 20 || assignmentDelay === 30
         ? assignmentDelay
@@ -540,7 +549,8 @@ function resolveSnapshotSecurityLogEvent(
   return {
     enabled: record?.enabled === true,
     channelId:
-      typeof record?.channelId === "string" && textSet.has(record.channelId)
+      typeof record?.channelId === "string" &&
+      (textSet.size === 0 || textSet.has(record.channelId))
         ? record.channelId
         : null,
   };
@@ -563,7 +573,8 @@ function buildSecurityLogsPayload(input: {
       useDefaultChannel: input.snapshot.useDefaultChannel === true,
       defaultChannelId:
         typeof input.snapshot.defaultChannelId === "string" &&
-        input.textSet.has(input.snapshot.defaultChannelId)
+        (input.textSet.size === 0 ||
+          input.textSet.has(input.snapshot.defaultChannelId))
           ? input.snapshot.defaultChannelId
           : null,
       events: {
@@ -708,8 +719,8 @@ async function ensureGuildAccess(guildId: string) {
 
   const [
     { permissions: dashboardPerms, isTeamServer },
-    accessibleGuild,
-    managedServers,
+    accessibleGuildResult,
+    managedServersResult,
   ] = await Promise.all([
     getEffectiveDashboardPermissions({
       authUserId: sessionData.authSession.user.id,
@@ -721,16 +732,27 @@ async function ensureGuildAccess(guildId: string) {
         accessToken: sessionData.accessToken,
       },
       guildId,
-    ),
-    getPanelManagedServersForCurrentSession(),
+    )
+      .then((guild) => ({ ok: true as const, guild }))
+      .catch((error) => ({ ok: false as const, error })),
+    getPanelManagedServersForCurrentSession()
+      .then((servers) => ({ ok: true as const, servers }))
+      .catch((error) => ({ ok: false as const, error })),
   ]);
 
-  const isPanelServer = managedServers.some((server) => server.guildId === guildId);
+  const accessibleGuild = accessibleGuildResult.ok
+    ? accessibleGuildResult.guild
+    : null;
+  const managedServers = managedServersResult.ok ? managedServersResult.servers : [];
+  const panelServer = managedServers.find((server) => server.guildId === guildId);
+  const isPanelServer = Boolean(panelServer);
   const hasTeamAccess =
     dashboardPerms === "full" ||
     (dashboardPerms instanceof Set && dashboardPerms.size > 0);
   const hasOwnerAccess = Boolean(
-    !isTeamServer && isPanelServer && accessibleGuild && dashboardPerms === "full",
+    !isTeamServer &&
+      isPanelServer &&
+      (dashboardPerms === "full" || accessibleGuild || panelServer?.canManage),
   );
   const hasAccess = isTeamServer ? hasTeamAccess : hasOwnerAccess;
 
@@ -796,8 +818,8 @@ export async function GET(request: Request) {
 
     const supabase = getSupabaseAdminClientOrThrow();
     const [
-      rawChannels,
-      rawRoles,
+      rawChannelsResult,
+      rawRolesResult,
       ticketResult,
       staffResult,
       welcomeResult,
@@ -806,8 +828,12 @@ export async function GET(request: Request) {
       securityLogsResult,
       secureSnapshots,
     ] = await Promise.all([
-      fetchGuildChannelsByBot(guildId),
-      fetchGuildRolesByBot(guildId),
+      fetchGuildChannelsByBot(guildId)
+        .then((channels) => ({ ok: true as const, channels }))
+        .catch((error) => ({ ok: false as const, error })),
+      fetchGuildRolesByBot(guildId)
+        .then((roles) => ({ ok: true as const, roles }))
+        .catch((error) => ({ ok: false as const, error })),
       loadGuildTicketSettings(supabase, guildId),
       supabase
         .from("guild_ticket_staff_settings")
@@ -857,29 +883,8 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    if (!rawChannels) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          {
-            ok: false,
-            message: "Bot nao possui acesso aos canais deste servidor.",
-          },
-          { status: 403 },
-        ),
-      );
-    }
-
-    if (!rawRoles) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          {
-            ok: false,
-            message: "Bot nao possui acesso aos cargos deste servidor.",
-          },
-          { status: 403 },
-        ),
-      );
-    }
+    const rawChannels = rawChannelsResult.ok ? rawChannelsResult.channels : null;
+    const rawRoles = rawRolesResult.ok ? rawRolesResult.roles : null;
 
     if (ticketResult.error) throw new Error(ticketResult.error.message);
     if (staffResult.error) throw new Error(staffResult.error.message);
@@ -891,7 +896,7 @@ export async function GET(request: Request) {
     }
 
     const categories = sortChannels(
-      rawChannels
+      (rawChannels || [])
         .filter((channel) => channel.type === GUILD_CATEGORY)
         .map((channel) => ({
           id: channel.id,
@@ -902,7 +907,7 @@ export async function GET(request: Request) {
     );
 
     const textChannels = sortChannels(
-      rawChannels
+      (rawChannels || [])
         .filter(
           (channel) =>
             channel.type === GUILD_TEXT || channel.type === GUILD_ANNOUNCEMENT,
@@ -917,7 +922,7 @@ export async function GET(request: Request) {
     const textSet = new Set(textChannels.map((channel) => channel.id));
 
     const roles = sortRoles(
-      rawRoles
+      (rawRoles || [])
         .filter((role) => role.id !== guildId && !role.managed)
         .map((role) => ({
           id: role.id,
@@ -940,6 +945,10 @@ export async function GET(request: Request) {
         categories,
       },
       roles,
+      discordResourceSync: {
+        channelsAvailable: Boolean(rawChannels),
+        rolesAvailable: Boolean(rawRoles),
+      },
       ticketSettings: buildTicketSettingsPayload({
         record: toRecordOrNull(ticketResult.data),
         snapshot: toRecordOrNull(secureSnapshots.get("ticket_settings")?.payload),

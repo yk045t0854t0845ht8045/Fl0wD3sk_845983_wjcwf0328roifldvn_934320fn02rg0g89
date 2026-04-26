@@ -16,6 +16,13 @@ import {
 
 export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);
+  const url = new URL(request.url);
+  const freshValue =
+    url.searchParams.get("fresh") ||
+    url.searchParams.get("forceFresh") ||
+    url.searchParams.get("refresh");
+  const forceFresh =
+    freshValue === "1" || freshValue === "true" || freshValue === "yes";
   const respond = (body: unknown, init?: ResponseInit) =>
     attachRequestId(applyNoStoreHeaders(NextResponse.json(body, init)), requestContext.requestId);
 
@@ -37,7 +44,9 @@ export async function GET(request: Request) {
       source: "managed_servers_get",
     });
 
-    const snapshot = await getPanelManagedServersSnapshotForCurrentSession();
+    const snapshot = await getPanelManagedServersSnapshotForCurrentSession({
+      forceFresh,
+    });
     const auditContext = extendSecurityRequestContext(requestContext, {
       sessionId: authSession.id,
       userId: authSession.user.id,

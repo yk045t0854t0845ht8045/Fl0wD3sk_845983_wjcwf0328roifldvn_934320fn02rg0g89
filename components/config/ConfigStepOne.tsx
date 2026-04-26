@@ -145,7 +145,7 @@ export function ConfigStepOne({
       }
 
       try {
-        const response = await fetch("/api/auth/me/guilds?excludePaid=1", {
+        const response = await fetch("/api/auth/me/guilds?excludePaid=1&fresh=1", {
           cache: "no-store",
         });
         const payload = (await response.json()) as GuildsApiResponse;
@@ -588,4 +588,3 @@ export function ConfigStepOne({
     </main>
   );
 }
-

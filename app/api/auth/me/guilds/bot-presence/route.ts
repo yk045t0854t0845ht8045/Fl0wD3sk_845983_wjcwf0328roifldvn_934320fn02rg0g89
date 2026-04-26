@@ -8,6 +8,7 @@ import {
 } from "@/lib/auth/discordGuildAccess";
 import { updateSessionActiveGuild } from "@/lib/auth/session";
 import { getLockedGuildLicenseByGuildId } from "@/lib/payments/licenseStatus";
+import { invalidateManagedServersCacheForUser } from "@/lib/servers/managedServers";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import {
   FlowSecureDtoError,
@@ -289,6 +290,7 @@ export async function POST(request: Request) {
     if (sessionData.authSession.activeGuildId !== guildId) {
       await updateSessionActiveGuild(sessionData.authSession.id, guildId);
     }
+    invalidateManagedServersCacheForUser(sessionData.authSession.user.id);
 
     const botStatus = await getBotGuildStatus(guildId);
     const canProceed = botStatus.inGuild && botStatus.hasAdministrator;

@@ -14,6 +14,7 @@ import {
   licenseGuildForUser,
 } from "@/lib/plans/planGuilds";
 import { getUserPlanState } from "@/lib/plans/state";
+import { invalidateManagedServersCacheForUser } from "@/lib/servers/managedServers";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import {
   FlowSecureDtoError,
@@ -183,6 +184,7 @@ export async function POST(request: Request) {
     if (sessionData.authSession.activeGuildId !== guildId) {
       await updateSessionActiveGuild(sessionData.authSession.id, guildId);
     }
+    invalidateManagedServersCacheForUser(userId);
 
     return applyNoStoreHeaders(
       NextResponse.json({

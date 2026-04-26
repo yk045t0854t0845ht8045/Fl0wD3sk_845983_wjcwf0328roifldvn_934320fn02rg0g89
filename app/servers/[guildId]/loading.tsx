@@ -1,11 +1,5 @@
-import { WorkspaceRouteContentLoading } from "@/components/workspace/WorkspaceRouteLoading";
+import { ServersRouteSpinner } from "@/components/servers/ServersRouteSpinner";
 
 export default function ServerByGuildLoading() {
-  return (
-    <WorkspaceRouteContentLoading
-      variant="server-settings"
-      tab="settings"
-      settingsSection="overview"
-    />
-  );
+  return <ServersRouteSpinner />;
 }

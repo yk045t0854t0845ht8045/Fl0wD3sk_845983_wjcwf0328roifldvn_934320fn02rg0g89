@@ -806,7 +806,7 @@ export function DashboardWorkspace({
 
     async function loadServers() {
       try {
-        const response = await fetch("/api/auth/me/servers", { cache: "no-store" });
+        const response = await fetch("/api/auth/me/servers?fresh=1", { cache: "no-store" });
         const payload = (await response.json()) as { ok?: boolean; servers?: ManagedServer[] };
         if (!isMounted || !response.ok || !payload.ok) {
           return;
@@ -1160,7 +1160,7 @@ export function DashboardWorkspace({
             try {
               await Promise.all([
                 (async () => {
-                  const refreshResponse = await fetch("/api/auth/me/servers", {
+                  const refreshResponse = await fetch("/api/auth/me/servers?fresh=1", {
                     cache: "no-store",
                   });
                   const refreshPayload = (await refreshResponse.json()) as {

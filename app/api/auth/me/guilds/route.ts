@@ -60,6 +60,15 @@ function cloneGuildSavedSetupMap(value: Map<string, GuildSavedSetupMapValue>) {
   );
 }
 
+function shouldForceFreshGuildSync(url: URL) {
+  const value =
+    url.searchParams.get("fresh") ||
+    url.searchParams.get("forceFresh") ||
+    url.searchParams.get("refresh");
+
+  return value === "1" || value === "true" || value === "yes";
+}
+
 async function getGuildSavedSetupMap(userId: number, guildIds: string[]) {
   if (!guildIds.length) {
     return new Map<string, { hasSavedSetup: boolean; lastConfiguredAt: string | null }>();
@@ -230,7 +239,7 @@ export async function GET(request: Request) {
     const personalGuilds = await getAccessibleGuildsForSession({
       authSession: sessionData.authSession,
       accessToken: sessionData.accessToken,
-    });
+    }, { forceFresh: shouldForceFreshGuildSync(url) });
 
     const teamGuildIds = await getAcceptedTeamGuildIdsForUser({
       authUserId: sessionData.authSession.user.id,
