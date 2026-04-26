@@ -584,18 +584,19 @@ export function LoginPanel({
     setInfoMessage(null);
 
     try {
+      const requestPayload = {
+        email: normalizedEmail || email.trim().toLowerCase(),
+        password,
+        confirmPassword: passwordStep === "set_password" ? confirmPassword : undefined,
+        ...(nextPath ? { next: nextPath } : {}),
+      };
       const response = await fetch("/api/auth/email/password", {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
         credentials: "same-origin",
-        body: JSON.stringify({
-          email: normalizedEmail || email.trim().toLowerCase(),
-          password,
-          confirmPassword: passwordStep === "set_password" ? confirmPassword : undefined,
-          next: nextPath,
-        }),
+        body: JSON.stringify(requestPayload),
       });
       const payload = (await response.json()) as EmailPasswordResponse;
       const retryAfterHeader = response.headers.get("Retry-After");
@@ -659,18 +660,19 @@ export function LoginPanel({
     setErrorMessage(null);
 
     try {
+      const requestPayload = {
+        challengeId,
+        code: otpCode,
+        rememberSession,
+        ...(nextPath ? { next: nextPath } : {}),
+      };
       const response = await fetch("/api/auth/email/otp", {
         method: "POST",
         headers: {
           "content-type": "application/json",
         },
         credentials: "same-origin",
-        body: JSON.stringify({
-          challengeId,
-          code: otpCode,
-          next: nextPath,
-          rememberSession,
-        }),
+        body: JSON.stringify(requestPayload),
       });
       const payload = (await response.json()) as EmailOtpResponse;
 

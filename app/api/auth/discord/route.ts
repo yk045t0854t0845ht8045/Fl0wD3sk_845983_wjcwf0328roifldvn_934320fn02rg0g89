@@ -6,9 +6,11 @@ import {
 import { buildLoginRedirectResponse } from "@/lib/auth/loginFlash";
 import { buildAuthOriginRedirectResponse } from "@/lib/auth/requestOrigin";
 import { isLikelyEmbeddedAuthBrowser } from "@/lib/auth/oauthBrowser";
-import { setOAuthTransactionCookies } from "@/lib/auth/oauthIdentity";
+import {
+  createOAuthTransactionState,
+  setOAuthTransactionCookies,
+} from "@/lib/auth/oauthIdentity";
 import { buildDiscordAuthorizeUrl } from "@/lib/auth/discord";
-import { createOAuthState } from "@/lib/auth/session";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -79,8 +81,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const state = createOAuthState();
   const redirectUri = resolveDiscordRedirectUri(request);
+  const state = createOAuthTransactionState({
+    provider: "discord",
+    redirectUri,
+    requestedMode,
+    requestedNextPath,
+  });
   const discordAuthUrl = buildDiscordAuthorizeUrl(state, redirectUri);
 
   const response = NextResponse.redirect(discordAuthUrl, 302);

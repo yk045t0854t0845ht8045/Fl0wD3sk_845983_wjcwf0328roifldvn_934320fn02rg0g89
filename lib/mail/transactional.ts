@@ -42,6 +42,13 @@ type PaymentEventPayload = Record<string, unknown>;
 const AUTH_USER_EMAIL_SELECT_COLUMNS =
   "id, email, display_name, username";
 
+function shouldSkipLocalAuthTransactionalEmail() {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.AUTH_ENABLE_LOCAL_TRANSACTIONAL_EMAILS !== "1"
+  );
+}
+
 function normalizeEmail(value: unknown) {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
@@ -255,6 +262,8 @@ async function sendPaymentEmailOnce(
 }
 
 export async function sendAccountCreatedEmailSafe(user: EmailUser) {
+  if (shouldSkipLocalAuthTransactionalEmail()) return;
+
   const email = normalizeEmail(user.email);
   if (!email) return;
 
@@ -282,6 +291,8 @@ export async function sendLoginNotificationEmailSafe(input: {
   userAgent?: string | null;
   locationLabel?: string | null;
 }) {
+  if (shouldSkipLocalAuthTransactionalEmail()) return;
+
   try {
     const user = await getUserForEmail(input.userId);
     const email = normalizeEmail(user?.email);

@@ -18,6 +18,10 @@ import {
   FlowSecureDtoError,
   parseFlowSecureDto,
 } from "@/lib/security/flowSecure";
+import {
+  getRequestHostname,
+  resolveHostRuntimeContext,
+} from "@/lib/routing/subdomains";
 import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -43,6 +47,10 @@ function extractClientIp(request: NextRequest) {
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (!forwardedFor) return null;
   return forwardedFor.split(",")[0]?.trim() || null;
+}
+
+function isLocalEmailAuthRequest(request: NextRequest) {
+  return resolveHostRuntimeContext(getRequestHostname(request)).mode === "local";
 }
 
 function resolveLocalPasswordCooldownKey(
@@ -120,7 +128,7 @@ export async function POST(request: NextRequest) {
     email: string;
     password: string;
     confirmPassword?: string | null;
-    next?: string;
+    next?: string | null;
   };
   try {
     payload = parseFlowSecureDto(
@@ -144,7 +152,7 @@ export async function POST(request: NextRequest) {
           ),
         ),
         next: flowSecureDto.optional(
-          flowSecureDto.internalPath(),
+          flowSecureDto.nullable(flowSecureDto.internalPath()),
         ),
       },
       {
@@ -174,6 +182,7 @@ export async function POST(request: NextRequest) {
   const confirmPassword = payload.confirmPassword ?? null;
   const nextPath = payload.next ? normalizeInternalNextPath(payload.next) : null;
   const normalizedEmail = normalizeAuthEmail(email) || email.trim().toLowerCase();
+  const localEmailAuth = isLocalEmailAuthRequest(request);
 
   pruneLocalPasswordCooldownMapIfNeeded();
   const localCooldownKey = resolveLocalPasswordCooldownKey(
@@ -246,6 +255,7 @@ export async function POST(request: NextRequest) {
         request.cookies.get(
           getSharedAuthCookieProofName(authConfig.rememberedDeviceCookieName),
         )?.value || null,
+      skipOtp: localEmailAuth,
     });
 
     await logSecurityAuditEventSafe(requestContext, {
@@ -282,6 +292,7 @@ export async function POST(request: NextRequest) {
         ipAddress: extractClientIp(request),
         userAgent: request.headers.get("user-agent"),
         rememberSession: result.rememberSession,
+        skipLoginNotification: localEmailAuth,
       });
 
       setSharedSessionCookie(request, response, session.sessionToken, {

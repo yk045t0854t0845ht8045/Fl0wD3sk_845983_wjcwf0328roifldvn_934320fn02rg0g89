@@ -48,6 +48,7 @@ type SessionTokens = {
 type CreateSessionOptions = {
   rememberSession?: boolean;
   sessionTtlHours?: number | null;
+  skipLoginNotification?: boolean;
 };
 
 export type AuthUserRecord = {
@@ -512,6 +513,9 @@ function isDuplicateUsernameInsertError(message: string) {
 
 async function insertAuthUserWithResolvedUsername(
   payload: AuthUserMutationPayload,
+  options?: {
+    skipAccountCreatedEmail?: boolean;
+  },
 ) {
   const supabase = getSupabaseAdminClientOrThrow();
   let lastError: Error | null = null;
@@ -528,7 +532,9 @@ async function insertAuthUserWithResolvedUsername(
       .single<AuthUserRecord>();
 
     if (!result.error) {
-      void sendAccountCreatedEmailSafe(result.data);
+      if (!options?.skipAccountCreatedEmail) {
+        void sendAccountCreatedEmailSafe(result.data);
+      }
       return result.data;
     }
 
@@ -573,6 +579,7 @@ function buildEmailUserPayload(email: string, emailVerifiedAt: string | null) {
 export async function createEmailAuthUser(input: {
   email: string;
   emailVerifiedAt?: string | null;
+  skipAccountCreatedEmail?: boolean;
 }) {
   const normalizedEmail = normalizeAuthEmail(input.email);
   if (!normalizedEmail) {
@@ -584,35 +591,36 @@ export async function createEmailAuthUser(input: {
     return existing;
   }
 
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("auth_users")
-    .insert(
+  try {
+    return await insertAuthUserWithResolvedUsername(
       buildEmailUserPayload(
         normalizedEmail,
         input.emailVerifiedAt ?? new Date().toISOString(),
       ),
-    )
-    .select(AUTH_USER_SELECT_COLUMNS)
-    .single<AuthUserRecord>();
-
-  if (result.error) {
+      {
+        skipAccountCreatedEmail: input.skipAccountCreatedEmail,
+      },
+    );
+  } catch (error) {
     if (normalizedEmail) {
       const concurrent = await findAuthUserByEmail(normalizedEmail);
       if (concurrent) return concurrent;
     }
 
-    throw new Error(`Erro ao criar usuario por email: ${result.error.message}`);
+    throw new Error(
+      `Erro ao criar usuario por email: ${
+        error instanceof Error ? error.message : "erro_desconhecido"
+      }`,
+    );
   }
-
-  void sendAccountCreatedEmailSafe(result.data);
-
-  return result.data;
 }
 
 async function saveDiscordUserToAuthUser(
   discordUser: DiscordUser,
   linkToUserId?: number | null,
+  options?: {
+    skipAccountCreatedEmail?: boolean;
+  },
 ) {
   const normalizedEmail = discordUser.verified
     ? normalizeAuthEmail(discordUser.email)
@@ -661,17 +669,19 @@ async function saveDiscordUserToAuthUser(
   }
 
   try {
-    return await insertAuthUserWithResolvedUsername(payload);
+    return await insertAuthUserWithResolvedUsername(payload, {
+      skipAccountCreatedEmail: options?.skipAccountCreatedEmail,
+    });
   } catch (error) {
     const existingByDiscord = await findAuthUserByDiscordUserId(discordUser.id);
     if (existingByDiscord) {
-      return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id);
+      return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id, options);
     }
 
     if (normalizedEmail) {
       const byEmail = await findAuthUserByEmail(normalizedEmail);
       if (byEmail && (!byEmail.discord_user_id || byEmail.discord_user_id === discordUser.id)) {
-        return saveDiscordUserToAuthUser(discordUser, byEmail.id);
+        return saveDiscordUserToAuthUser(discordUser, byEmail.id, options);
       }
     }
 
@@ -687,6 +697,7 @@ export async function resolveAuthUserForDiscordLogin(
   discordUser: DiscordUser,
   input?: {
     currentUserId?: number | null;
+    skipAccountCreatedEmail?: boolean;
   },
 ) {
   const existingByDiscord = await findAuthUserByDiscordUserId(discordUser.id);
@@ -711,11 +722,15 @@ export async function resolveAuthUserForDiscordLogin(
       throw new Error("Sua conta Flowdesk ja esta vinculada a outro Discord.");
     }
 
-    return saveDiscordUserToAuthUser(discordUser, currentUser.id);
+    return saveDiscordUserToAuthUser(discordUser, currentUser.id, {
+      skipAccountCreatedEmail: input?.skipAccountCreatedEmail,
+    });
   }
 
   if (existingByDiscord) {
-    return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id);
+    return saveDiscordUserToAuthUser(discordUser, existingByDiscord.id, {
+      skipAccountCreatedEmail: input?.skipAccountCreatedEmail,
+    });
   }
 
   if (!normalizedDiscordEmail) {
@@ -731,10 +746,14 @@ export async function resolveAuthUserForDiscordLogin(
       throw new Error("O email desta conta ja esta vinculado a outro Discord.");
     }
 
-    return saveDiscordUserToAuthUser(discordUser, existingByEmail.id);
+    return saveDiscordUserToAuthUser(discordUser, existingByEmail.id, {
+      skipAccountCreatedEmail: input?.skipAccountCreatedEmail,
+    });
   }
 
-  return saveDiscordUserToAuthUser(discordUser);
+  return saveDiscordUserToAuthUser(discordUser, null, {
+    skipAccountCreatedEmail: input?.skipAccountCreatedEmail,
+  });
 }
 
 async function touchAuthUserLastLogin(userId: number, authMethod: AuthMethod) {
@@ -815,13 +834,15 @@ async function createSession(
   }
 
   await touchAuthUserLastLogin(userId, authMethod);
-  void sendLoginNotificationEmailSafe({
-    userId,
-    authMethod,
-    ipAddress: context.ipAddress,
-    userAgent: context.userAgent,
-    locationLabel: context.ipAddress,
-  });
+  if (!options?.skipLoginNotification) {
+    void sendLoginNotificationEmailSafe({
+      userId,
+      authMethod,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      locationLabel: context.ipAddress,
+    });
+  }
 
   return {
     sessionToken,

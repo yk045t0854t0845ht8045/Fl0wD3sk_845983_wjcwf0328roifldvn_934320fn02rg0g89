@@ -27,7 +27,11 @@ import {
   updateSessionDiscordTokens,
 } from "@/lib/auth/session";
 import { validateTrustedDevice } from "@/lib/auth/trustedDevice";
-import { buildCanonicalUrlFromInternalPath } from "@/lib/routing/subdomains";
+import {
+  buildCanonicalUrlFromInternalPath,
+  getRequestHostname,
+  resolveHostRuntimeContext,
+} from "@/lib/routing/subdomains";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import {
   attachRequestId,
@@ -85,6 +89,10 @@ function readTrustedDeviceCookies(request: NextRequest) {
         getSharedAuthCookieProofName(authConfig.rememberedDeviceCookieName),
       )?.value || null,
   };
+}
+
+function isLocalDiscordAuthRequest(request: NextRequest) {
+  return resolveHostRuntimeContext(getRequestHostname(request)).mode === "local";
 }
 
 export async function handleDiscordAuthCallback(request: NextRequest) {
@@ -171,8 +179,10 @@ export async function handleDiscordAuthCallback(request: NextRequest) {
     const discordTokenExpiresAt = new Date(
       Date.now() + tokenPayload.expires_in * 1000,
     ).toISOString();
+    const localDiscordAuth = isLocalDiscordAuthRequest(request);
     const user = await resolveAuthUserForDiscordLogin(discordUser, {
       currentUserId: currentSession?.user.id ?? null,
+      skipAccountCreatedEmail: localDiscordAuth,
     });
     const successLocation = buildCanonicalUrlFromInternalPath(
       request,
@@ -214,6 +224,52 @@ export async function handleDiscordAuthCallback(request: NextRequest) {
 
     if (!user.email) {
       throw new Error("Sua conta Discord precisa ter um email verificado para continuar.");
+    }
+
+    if (localDiscordAuth) {
+      const session = await createSessionForUser(
+        user.id,
+        {
+          ipAddress: extractClientIp(request),
+          userAgent: request.headers.get("user-agent"),
+        },
+        {
+          authMethod: "discord",
+          discordAccessToken: tokenPayload.access_token,
+          discordRefreshToken: tokenPayload.refresh_token || null,
+          discordTokenExpiresAt,
+        },
+        {
+          rememberSession: true,
+          skipLoginNotification: true,
+        },
+      );
+
+      const response = redirectWithLocation(successLocation);
+      setSharedSessionCookie(request, response, session.sessionToken, {
+        maxAge: session.maxAgeSeconds,
+      });
+      clearOAuthCookies(request, response);
+
+      const authenticatedContext = extendSecurityRequestContext(
+        initialRequestContext,
+        {
+          userId: user.id,
+        },
+      );
+
+      await logSecurityAuditEventSafe(authenticatedContext, {
+        action: "auth_discord_callback",
+        outcome: "succeeded",
+        metadata: {
+          redirectTo: successLocation,
+          oauthMode: oauthModeCookie,
+          otpRequired: false,
+          localDiscordAuth: true,
+        },
+      });
+
+      return attachRequestId(response, initialRequestContext.requestId);
     }
 
     const rememberedDevice = await validateTrustedDevice({

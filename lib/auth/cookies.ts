@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { NextResponse } from "next/server";
 import { authConfig } from "@/lib/auth/config";
 import {
+  getRequestHostname,
   getRequestProtocol,
   resolveCookieDomainForRequest,
 } from "@/lib/routing/subdomains";
@@ -36,6 +37,26 @@ function buildSharedCookieOptionVariants(
   }
 
   return [baseOptions, { ...baseOptions, domain }];
+}
+
+function buildLegacyLocalCookieOptionVariants(
+  request: RequestLike,
+  options: SharedAuthCookieOptions,
+) {
+  const hostname = getRequestHostname(request);
+
+  if (hostname !== "localhost") {
+    return [];
+  }
+
+  return [
+    {
+      ...options,
+      path: options.path || "/",
+      secure: getRequestProtocol(request) === "https",
+      domain: "localhost",
+    },
+  ];
 }
 
 function resolveSharedAuthCookieSecret() {
@@ -98,6 +119,14 @@ export function setSharedAuthCookie(
   value: string,
   options: SharedAuthCookieOptions,
 ) {
+  for (const cookieOptions of buildLegacyLocalCookieOptionVariants(request, options)) {
+    response.cookies.set(name, "", {
+      ...cookieOptions,
+      expires: new Date(0),
+      maxAge: 0,
+    });
+  }
+
   for (const cookieOptions of buildSharedCookieOptionVariants(request, options)) {
     response.cookies.set(name, value, cookieOptions);
   }
@@ -110,7 +139,10 @@ export function clearSharedAuthCookie(
   options: SharedAuthCookieOptions = {},
 ) {
   response.cookies.delete(name);
-  for (const cookieOptions of buildSharedCookieOptionVariants(request, options)) {
+  for (const cookieOptions of [
+    ...buildLegacyLocalCookieOptionVariants(request, options),
+    ...buildSharedCookieOptionVariants(request, options),
+  ]) {
     response.cookies.set(name, "", {
       ...cookieOptions,
       expires: new Date(0),

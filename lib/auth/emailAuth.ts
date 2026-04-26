@@ -106,6 +106,7 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
   userAgent: string | null;
   trustedDeviceToken?: string | null;
   trustedDeviceProof?: string | null;
+  skipOtp?: boolean;
 }) {
   const start = await resolveEmailAuthStart(input.email);
   let user = start.user;
@@ -144,6 +145,7 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
       user = await createEmailAuthUser({
         email: start.email,
         emailVerifiedAt: new Date().toISOString(),
+        skipAccountCreatedEmail: Boolean(input.skipOtp),
       });
     }
 
@@ -163,14 +165,14 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
 
   clearTrustedDeviceCookie = trustedDeviceValidation.shouldClearCookie;
 
-  if (trustedDeviceValidation.ok) {
+  if (trustedDeviceValidation.ok || input.skipOtp) {
     return {
       nextStep: "session" as const,
       passwordStep: start.nextStep,
       userId: user.id,
       maskedEmail: user.email,
       clearTrustedDeviceCookie,
-      rememberSession: true,
+      rememberSession: trustedDeviceValidation.ok || Boolean(input.skipOtp),
     };
   }
 
@@ -210,6 +212,7 @@ export async function createEmailSession(input: {
   ipAddress: string | null;
   userAgent: string | null;
   rememberSession?: boolean;
+  skipLoginNotification?: boolean;
 }) {
   return createSessionForUser(
     input.userId,
@@ -225,6 +228,7 @@ export async function createEmailSession(input: {
     },
     {
       rememberSession: input.rememberSession ?? false,
+      skipLoginNotification: input.skipLoginNotification ?? false,
     },
   );
 }

@@ -179,6 +179,52 @@ function buildRedirectResponse(
   return response;
 }
 
+function maybeBuildTrailingSlashRedirect(
+  request: NextRequest,
+  requestId: string,
+  csp: string,
+) {
+  const pathname = request.nextUrl.pathname;
+  if (
+    pathname === "/" ||
+    !pathname.endsWith("/") ||
+    pathname.startsWith("/api/") ||
+    isNextInternalAssetPath(pathname) ||
+    isStaticPublicAssetPath(pathname)
+  ) {
+    return null;
+  }
+
+  if (pathname === "/tos/") {
+    return buildRedirectResponse(
+      request,
+      requestId,
+      csp,
+      new URL("/terms", getRequestOrigin(request)).toString(),
+      308,
+    );
+  }
+
+  if (pathname === "/rules/") {
+    return buildRedirectResponse(
+      request,
+      requestId,
+      csp,
+      new URL("/privacy", getRequestOrigin(request)).toString(),
+      308,
+    );
+  }
+
+  const redirectUrl = request.nextUrl.clone();
+  redirectUrl.pathname = pathname.replace(/\/+$/, "") || "/";
+  const location = new URL(
+    `${redirectUrl.pathname}${redirectUrl.search}`,
+    getRequestOrigin(request),
+  ).toString();
+
+  return buildRedirectResponse(request, requestId, csp, location, 308);
+}
+
 function getCurrentRequestLocation(request: NextRequest) {
   return `${getRequestOrigin(request)}${request.nextUrl.pathname}${request.nextUrl.search}`;
 }
@@ -492,6 +538,15 @@ export async function proxy(request: NextRequest) {
     applyFlowSecureTransportPriority(response, request);
 
     return response;
+  }
+
+  const trailingSlashRedirectResponse = maybeBuildTrailingSlashRedirect(
+    request,
+    requestId,
+    csp,
+  );
+  if (trailingSlashRedirectResponse) {
+    return trailingSlashRedirectResponse;
   }
 
   if (!isOAuthHandshakeRequest) {
