@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { createPasswordResetRequest } from "@/lib/auth/passwordReset";
 import { sendPasswordResetEmail } from "@/lib/mail/authEmail";
 import { resolveAuthOrigin } from "@/lib/routing/subdomains";
@@ -19,6 +20,33 @@ function extractClientIp(request: NextRequest) {
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (!forwardedFor) return null;
   return forwardedFor.split(",")[0]?.trim() || null;
+}
+
+function schedulePasswordResetEmail(input: {
+  toEmail: string;
+  resetUrl: string;
+  expiresInMinutes: number;
+  requestContext: ReturnType<typeof createSecurityRequestContext>;
+}) {
+  after(async () => {
+    try {
+      await sendPasswordResetEmail({
+        toEmail: input.toEmail,
+        resetUrl: input.resetUrl,
+        expiresInMinutes: input.expiresInMinutes,
+      });
+      await logSecurityAuditEventSafe(input.requestContext, {
+        action: "auth_password_reset_email_delivery",
+        outcome: "succeeded",
+      });
+    } catch (error) {
+      await logSecurityAuditEventSafe(input.requestContext, {
+        action: "auth_password_reset_email_delivery",
+        outcome: "failed",
+        metadata: { reason: error instanceof Error ? error.message : "unknown" },
+      });
+    }
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -77,10 +105,11 @@ export async function POST(request: NextRequest) {
 
     if (reset) {
       const resetUrl = new URL(`/pass/v1/tk/${reset.token}`, resolveAuthOrigin(request)).toString();
-      await sendPasswordResetEmail({
+      schedulePasswordResetEmail({
         toEmail: reset.user.email || payload.email,
         resetUrl,
         expiresInMinutes: reset.expiresInMinutes,
+        requestContext,
       });
     }
 

@@ -7,6 +7,7 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const PASSWORD_RESET_TOKEN_LENGTH = 50;
 const PASSWORD_RESET_TTL_MINUTES = 45;
+const PASSWORD_RESET_REQUEST_COOLDOWN_SECONDS = 45;
 
 type PasswordResetTokenRow = {
   id: string;
@@ -16,6 +17,12 @@ type PasswordResetTokenRow = {
   max_attempts: number;
   expires_at: string;
   consumed_at: string | null;
+};
+
+type RecentPasswordResetTokenRow = {
+  created_at: string;
+  consumed_at: string | null;
+  expires_at: string;
 };
 
 function createNumericResetToken() {
@@ -60,6 +67,29 @@ export async function createPasswordResetRequest(input: {
   }
 
   const supabase = getSupabaseAdminClientOrThrow();
+  const recentTokenResult = await supabase
+    .from("auth_password_reset_tokens")
+    .select("created_at, consumed_at, expires_at")
+    .eq("user_id", user.id)
+    .is("consumed_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<RecentPasswordResetTokenRow>();
+
+  if (recentTokenResult.error) {
+    throw new Error(recentTokenResult.error.message);
+  }
+
+  const recentToken = recentTokenResult.data;
+  if (
+    recentToken &&
+    Date.parse(recentToken.expires_at) > Date.now() &&
+    Date.now() - Date.parse(recentToken.created_at) <
+      PASSWORD_RESET_REQUEST_COOLDOWN_SECONDS * 1000
+  ) {
+    return null;
+  }
+
   await supabase
     .from("auth_password_reset_tokens")
     .update({ consumed_at: new Date().toISOString() })
