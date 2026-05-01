@@ -10,7 +10,6 @@ import {
   Bell,
   ChevronDown,
   ChevronRight,
-  CheckCircle2,
   CircleHelp,
   Clock,
   Cog,
@@ -138,6 +137,15 @@ type DashboardTask = {
   actionLabel: string;
   tone: "danger" | "warning" | "info" | "success";
   priority: number;
+};
+
+type DashboardRecentActivity = {
+  key: string;
+  title: string;
+  eyebrow: string;
+  meta: string;
+  href: string;
+  icon: LucideIcon;
 };
 
 const sidebarShellClass =
@@ -417,7 +425,7 @@ function resolveTaskToneClass(tone: DashboardTask["tone"]) {
       return {
         shell: "border-[rgba(127,247,176,0.14)] bg-[linear-gradient(180deg,rgba(7,14,10,0.98)_0%,rgba(5,8,6,0.98)_100%)]",
         icon: "bg-[rgba(127,247,176,0.1)] text-[#9DF0B9]",
-        action: "border border-[#242424] bg-[#101010] text-[#DCDCDC]",
+        action: "bg-[linear-gradient(180deg,#FFFFFF_0%,#D8D8D8_100%)] text-[#101010]",
       };
     default:
       return {
@@ -477,7 +485,7 @@ function DashboardTaskCard({
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-[22px] border px-[16px] py-[15px] shadow-[0_22px_70px_rgba(0,0,0,0.22)] transition-colors ${toneClass.shell}`}
+      className={`group relative w-full overflow-hidden rounded-[22px] border px-[16px] py-[15px] shadow-[0_22px_70px_rgba(0,0,0,0.22)] transition-colors ${toneClass.shell}`}
     >
       <span
         aria-hidden="true"
@@ -512,13 +520,76 @@ function DashboardTaskCard({
             onFocus={() => onPrefetch(task.href)}
             onPointerDown={() => onPrefetch(task.href)}
             onClick={() => onNavigate(task.href)}
-            className={`mt-[13px] inline-flex h-[38px] items-center justify-center rounded-[12px] px-[14px] text-[13px] font-semibold transition-transform duration-150 ease-out hover:translate-y-[-1px] ${toneClass.action}`}
+            className={`mt-[13px] inline-flex h-[42px] items-center justify-center rounded-[13px] px-[17px] text-[14px] font-semibold transition-transform duration-150 ease-out hover:translate-y-[-1px] ${toneClass.action}`}
           >
             {task.actionLabel}
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+function DashboardRecentActivityList({
+  items,
+  onNavigate,
+  onPrefetch,
+}: {
+  items: DashboardRecentActivity[];
+  onNavigate: (href: string) => void;
+  onPrefetch: (href: string) => void;
+}) {
+  return (
+    <section className="mt-[24px]" aria-label="Ultimas atualizacoes">
+      <div className="mb-[12px] flex items-center justify-between gap-[12px]">
+        <h2 className="text-[20px] leading-none font-semibold tracking-[-0.04em] text-[#F1F1F1]">
+          Ultimas atualizacoes
+        </h2>
+        <span className="text-[12px] font-medium text-[#686868]">
+          Tempo real
+        </span>
+      </div>
+
+      <div className="overflow-hidden rounded-[24px] border border-[#161616] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+        {items.map((item, index) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onMouseEnter={() => onPrefetch(item.href)}
+              onFocus={() => onPrefetch(item.href)}
+              onPointerDown={() => onPrefetch(item.href)}
+              onClick={() => onNavigate(item.href)}
+              className={`group flex w-full items-center gap-[14px] px-[16px] py-[16px] text-left transition-colors hover:bg-[#090909] sm:px-[20px] ${
+                index > 0 ? "border-t border-[#161616]" : ""
+              }`}
+            >
+              <span className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[14px] border border-[#191919] bg-[#0D0D0D] text-[#AFAFAF]">
+                <Icon className="h-[20px] w-[20px]" strokeWidth={1.95} aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[16px] leading-none font-semibold tracking-[-0.035em] text-[#F0F0F0]">
+                  {item.title}
+                </span>
+                <span className="mt-[9px] flex flex-wrap items-center gap-[8px]">
+                  <span className="inline-flex h-[24px] items-center rounded-full border border-[#1B1B1B] bg-[#090909] px-[9px] text-[12px] font-medium text-[#B9B9B9]">
+                    {item.eyebrow}
+                  </span>
+                  <span className="inline-flex h-[24px] items-center rounded-full border border-[#1B1B1B] bg-[#090909] px-[9px] text-[12px] font-medium text-[#7EE7C1]">
+                    <span className="mr-[6px] h-[7px] w-[7px] rounded-full bg-[#43D6B0]" />
+                    {item.meta}
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[22px] leading-none text-[#787878] transition-colors group-hover:text-[#D7D7D7]">
+                ...
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -1061,16 +1132,38 @@ export function DashboardWorkspace({
     }
 
     if (tasks.length === 0) {
-      tasks.push({
-        key: "all-set",
-        icon: CheckCircle2,
-        title: "Sua central esta em dia",
-        description: "Nenhuma pendencia critica agora. Explore dominios, hospedagem e novas automacoes.",
-        href: "/dashboard/domains/acquire",
-        actionLabel: "Explorar",
-        tone: "success",
-        priority: 90,
-      });
+      tasks.push(
+        {
+          key: "redeem-beta-code",
+          icon: Sparkles,
+          title: "Resgate um codigo BETA da FlowAI",
+          description: "Use codigos de campanha para testar API, automacoes e recursos antecipados.",
+          href: "/dashboard/flowai-api",
+          actionLabel: "Resgatar",
+          tone: "info",
+          priority: 90,
+        },
+        {
+          key: "domain-brand-check",
+          icon: Globe,
+          title: "Proteja o dominio da sua marca",
+          description: "Pesquise nomes disponiveis antes de publicar loja, comunidade ou painel proprio.",
+          href: "/dashboard/domains/acquire",
+          actionLabel: "Pesquisar",
+          tone: "info",
+          priority: 91,
+        },
+        {
+          key: "hosting-preview",
+          icon: HardDrive,
+          title: "Prepare uma VPS para bots e jogos",
+          description: "Planeje hospedagem para Discord, API, sites e servidores de comunidade.",
+          href: "/dashboard/hosting",
+          actionLabel: "Planejar",
+          tone: "success",
+          priority: 92,
+        },
+      );
     }
 
     return tasks
@@ -1088,6 +1181,76 @@ export function DashboardWorkspace({
     teams.length,
   ]);
   const dashboardTasksTotal = dashboardTasks.length;
+  const recentActivities = useMemo<DashboardRecentActivity[]>(() => {
+    const activities: DashboardRecentActivity[] = [];
+    const recentlyTouchedServers = [...servers]
+      .sort((left, right) => {
+        const leftTime = Date.parse(left.licensePaidAt || left.licenseExpiresAt || "");
+        const rightTime = Date.parse(right.licensePaidAt || right.licenseExpiresAt || "");
+        return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+      })
+      .slice(0, 2);
+
+    for (const server of recentlyTouchedServers) {
+      activities.push({
+        key: `server-${server.guildId}`,
+        title:
+          server.status === "paid"
+            ? `${server.guildName} esta operacional`
+            : `${server.guildName} precisa de revisao`,
+        eyebrow: server.status === "paid" ? "Servidor" : "Auditoria",
+        meta:
+          server.status === "paid"
+            ? `${Math.max(0, server.daysUntilExpire)}d restantes`
+            : server.status,
+        href: `/servers/${server.guildId}`,
+        icon: Server,
+      });
+    }
+
+    if (teams[0]) {
+      activities.push({
+        key: `team-${teams[0].id}`,
+        title: `${teams[0].name} sincronizada`,
+        eyebrow: "Equipe",
+        meta: `${teams[0].memberCount} membros`,
+        href: "/account/teams",
+        icon: Users,
+      });
+    }
+
+    if (accountPlan) {
+      activities.push({
+        key: "plan-current",
+        title: `${accountPlan.name} ${accountPlan.isActive ? "ativo" : "em revisao"}`,
+        eyebrow: "Plano",
+        meta: accountPlan.recurrenceLabel || accountPlan.status,
+        href: "/account/plans",
+        icon: BadgePercent,
+      });
+    }
+
+    activities.push(
+      {
+        key: "flowai-preview",
+        title: "FlowAI API pronta para conectar",
+        eyebrow: "Preview",
+        meta: "API",
+        href: "/dashboard/flowai-api",
+        icon: PlugZap,
+      },
+      {
+        key: "domains-preview",
+        title: "Dominios e DNS em preparacao",
+        eyebrow: "Produto",
+        meta: "DNS",
+        href: "/dashboard/domains/acquire",
+        icon: Globe,
+      },
+    );
+
+    return activities.slice(0, 3);
+  }, [accountPlan, servers, teams]);
   const isCreateTeamNextDisabled =
     isCreatingTeam ||
     (createTeamStep === "name" && createTeamName.trim().length < 3) ||
@@ -2475,7 +2638,7 @@ export function DashboardWorkspace({
                       </button>
                     </div>
 
-                    <div className="grid gap-[12px] xl:grid-cols-3">
+                    <div className="grid w-full gap-[12px]">
                       {dashboardTasks.map((task) => (
                         <DashboardTaskCard
                           key={task.key}
@@ -2496,6 +2659,92 @@ export function DashboardWorkspace({
                       onDismiss={() => setIsMarketingBannerDismissed(true)}
                     />
                   ) : null}
+
+                  <div className="grid gap-[24px] xl:grid-cols-[minmax(0,0.95fr)_minmax(320px,0.62fr)]">
+                    <section className="relative overflow-hidden rounded-[26px] border border-[#141414] bg-[linear-gradient(180deg,rgba(9,9,9,0.98)_0%,rgba(5,5,5,0.98)_100%)] p-[18px] shadow-[0_24px_80px_rgba(0,0,0,0.26)]">
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[120px] rounded-t-[25px] bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.06)_0%,transparent_70%)]"
+                      />
+                      <div className="relative z-10 flex flex-col gap-[16px] md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <h2 className="text-[22px] leading-[1.05] font-semibold tracking-[-0.045em] text-[#F1F1F1]">
+                            Central de crescimento
+                          </h2>
+                          <p className="mt-[9px] max-w-[620px] text-[13px] leading-[1.65] text-[#7F7F7F]">
+                            Combine Discord, dominios, hospedagem e API para transformar sua comunidade em uma operacao completa.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onMouseEnter={() => prefetchRoute("/dashboard/flowai-api")}
+                          onFocus={() => prefetchRoute("/dashboard/flowai-api")}
+                          onPointerDown={() => prefetchRoute("/dashboard/flowai-api")}
+                          onClick={() => navigateToHref("/dashboard/flowai-api")}
+                          className="inline-flex h-[46px] shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D8D8D8_100%)] px-[18px] text-[14px] font-semibold text-[#101010] transition-transform duration-150 ease-out hover:translate-y-[-1px]"
+                        >
+                          Ver FlowAI
+                        </button>
+                      </div>
+                      <div className="relative z-10 mt-[18px] grid gap-[10px] md:grid-cols-3">
+                        {[
+                          { label: "Discord", value: `${managedServersCount} servidor(es)` },
+                          { label: "Equipes", value: `${teams.length} equipe(s)` },
+                          { label: "Plano", value: accountPlan?.name || "Flowdesk" },
+                        ].map((item) => (
+                          <div
+                            key={item.label}
+                            className="rounded-[18px] border border-[#161616] bg-[#090909] px-[14px] py-[13px]"
+                          >
+                            <p className="text-[11px] uppercase tracking-[0.16em] text-[#666666]">
+                              {item.label}
+                            </p>
+                            <p className="mt-[8px] truncate text-[15px] font-semibold tracking-[-0.03em] text-[#E7E7E7]">
+                              {item.value}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="relative overflow-hidden rounded-[26px] border border-[#141414] bg-[#070707] p-[18px] shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+                      <div className="flex items-center justify-between gap-[12px]">
+                        <div>
+                          <h2 className="text-[22px] leading-[1.05] font-semibold tracking-[-0.045em] text-[#F1F1F1]">
+                            Proximos lancamentos
+                          </h2>
+                          <p className="mt-[9px] text-[13px] leading-[1.6] text-[#787878]">
+                            VPS, jogos e automacoes entrando no ecossistema.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-[16px] space-y-[9px]">
+                        {[
+                          ["VPS para bots", "Hospedagem"],
+                          ["Servidores de jogos", "Infra"],
+                          ["Workflows com IA", "FlowAI"],
+                        ].map(([title, label]) => (
+                          <div
+                            key={title}
+                            className="flex items-center justify-between gap-[12px] rounded-[16px] border border-[#151515] bg-[#0A0A0A] px-[13px] py-[12px]"
+                          >
+                            <span className="text-[14px] font-medium text-[#D9D9D9]">
+                              {title}
+                            </span>
+                            <span className="rounded-full border border-[#1E1E1E] bg-[#101010] px-[9px] py-[5px] text-[11px] font-medium text-[#8E8E8E]">
+                              {label}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  </div>
+
+                  <DashboardRecentActivityList
+                    items={recentActivities}
+                    onNavigate={navigateToHref}
+                    onPrefetch={prefetchRoute}
+                  />
                 </div>
               </LandingReveal>
             ) : null}
