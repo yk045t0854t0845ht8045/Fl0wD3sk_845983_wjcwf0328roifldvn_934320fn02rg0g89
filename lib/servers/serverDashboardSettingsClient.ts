@@ -78,6 +78,17 @@ type ServerDashboardSettingsPayload = {
     syncError: string | null;
     updatedAt: string | null;
   } | null;
+  salesSettings: {
+    enabled: boolean;
+    cartsCategoryId: string | null;
+    paymentApprovedLogChannelId: string | null;
+    paymentPendingLogChannelId: string | null;
+    paymentRejectedLogChannelId: string | null;
+    receiptCompanyName: string;
+    receiptCompanyDocument: string;
+    receiptSupportText: string;
+    updatedAt: string | null;
+  } | null;
   securityLogsSettings: {
     enabled: boolean;
     useDefaultChannel: boolean;

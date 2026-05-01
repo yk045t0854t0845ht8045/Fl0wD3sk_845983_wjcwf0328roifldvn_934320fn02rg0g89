@@ -85,6 +85,37 @@ function toUniqueManagedGuildIds(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter(isManagedGuildId)));
 }
 
+function withTimeout<TValue>(
+  promise: Promise<TValue>,
+  timeoutMs: number,
+  fallback: TValue,
+) {
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<TValue>((resolve) => {
+      setTimeout(() => resolve(fallback), timeoutMs);
+    }),
+  ]);
+}
+
+function isMissingConfiguredGuildLookupTableError(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message =
+    typeof error?.message === "string" ? error.message.toLowerCase() : "";
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    message.includes("schema cache") ||
+    message.includes("could not find the table") ||
+    message.includes("relation") ||
+    message.includes("does not exist")
+  );
+}
+
 async function getConfiguredGuildIdsForUser(userId: number) {
   const supabase = getSupabaseAdminClientOrThrow();
   const setupTables = [
@@ -93,6 +124,7 @@ async function getConfiguredGuildIdsForUser(userId: number) {
     "guild_welcome_settings",
     "guild_antilink_settings",
     "guild_autorole_settings",
+    "guild_sales_settings",
     "guild_settings_secure_snapshots",
   ];
 
@@ -104,6 +136,10 @@ async function getConfiguredGuildIdsForUser(userId: number) {
       .returns<ConfiguredGuildRecord[]>();
 
     if (result.error) {
+      if (isMissingConfiguredGuildLookupTableError(result.error)) {
+        return [] as string[];
+      }
+
       console.warn("managed servers configured guild lookup failed", {
         table,
         error: result.error.message,
@@ -301,7 +337,10 @@ async function fetchManagedServersFresh(
     ? getAccessibleGuildsForSession({
         authSession,
         accessToken: sessionData.accessToken,
-      }, { forceFresh: options.forceFresh })
+      }, {
+        forceFresh: options.forceFresh,
+        allowStaleCache: !options.forceFresh,
+      })
     : Promise.resolve<DiscordGuild[]>([]);
 
   const [
@@ -393,25 +432,28 @@ async function fetchManagedServersFresh(
     (guildId) => !accessibleGuildLookup.has(guildId),
   );
 
+  const supplementalGuildFetchLimit = options.forceFresh ? missingCoveredGuildIds.length : 8;
+  const supplementalGuildIdsToFetch = missingCoveredGuildIds.slice(0, supplementalGuildFetchLimit);
+  const supplementalGuildIdsFallbackOnly = missingCoveredGuildIds.slice(supplementalGuildFetchLimit);
   const supplementalGuilds = await Promise.all(
-    missingCoveredGuildIds.map(async (guildId) => {
+    supplementalGuildIdsToFetch.map(async (guildId) => {
       const cachedGuild = sessionGuildLookup.get(guildId);
       if (cachedGuild) {
         return cachedGuild;
       }
 
-      try {
-        const botGuild = await fetchGuildSummaryByBot(guildId);
-        if (botGuild) {
-          return {
-            id: botGuild.id,
-            name: botGuild.name,
-            icon: botGuild.icon,
-            owner: ownedPlanGuildIds.has(guildId),
-          };
-        }
-      } catch {
-        // fallback local
+      const botGuild = await withTimeout(
+        fetchGuildSummaryByBot(guildId),
+        options.forceFresh ? 2400 : 900,
+        null,
+      );
+      if (botGuild) {
+        return {
+          id: botGuild.id,
+          name: botGuild.name,
+          icon: botGuild.icon,
+          owner: ownedPlanGuildIds.has(guildId),
+        };
       }
 
       return {
@@ -422,6 +464,12 @@ async function fetchManagedServersFresh(
       };
     }),
   );
+  const supplementalFallbackGuilds = supplementalGuildIdsFallbackOnly.map((guildId) => ({
+    id: guildId,
+    name: sessionGuildLookup.get(guildId)?.name || buildFallbackGuildName(guildId),
+    icon: sessionGuildLookup.get(guildId)?.icon || null,
+    owner: ownedPlanGuildIds.has(guildId),
+  }));
 
   const guildCatalog = new Map(
     [
@@ -432,6 +480,7 @@ async function fetchManagedServersFresh(
         owner: guild.owner,
       })),
       ...supplementalGuilds,
+      ...supplementalFallbackGuilds,
     ].map((guild) => [guild.id, guild]),
   );
 

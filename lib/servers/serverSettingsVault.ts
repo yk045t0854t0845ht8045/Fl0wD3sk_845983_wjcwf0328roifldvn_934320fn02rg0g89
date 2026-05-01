@@ -10,6 +10,7 @@ export type ServerSettingsVaultModule =
   | "welcome_settings"
   | "antilink_settings"
   | "autorole_settings"
+  | "sales_settings"
   | "security_logs_settings";
 
 type ServerSettingsVaultRow = {

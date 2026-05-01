@@ -23,10 +23,11 @@ export async function getServersWorkspaceBootstrap() {
     redirect("/login");
   }
 
-  await ensureUserPaymentDeliveryReady({
+  void ensureUserPaymentDeliveryReady({
     userId: user.id,
     source: "servers_workspace_bootstrap",
-  });
+    limit: 3,
+  }).catch(() => null);
 
   const [serversSnapshot, teamsSnapshot] = await Promise.all([
     getPanelManagedServersSnapshotForCurrentSession().catch(() => ({

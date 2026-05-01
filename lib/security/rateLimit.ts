@@ -117,6 +117,13 @@ function isExplicitlyEnabled(value: string | undefined) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function isPageNavigationRateLimitEnabled() {
+  return isExplicitlyEnabled(
+    getServerEnv("FLOWSECURE_RATE_LIMIT_PAGES") ??
+      process.env.FLOWSECURE_RATE_LIMIT_PAGES,
+  );
+}
+
 function resolveIntegerEnv(name: string, fallback: number) {
   const rawValue = getServerEnv(name) ?? process.env[name];
   if (!rawValue?.trim()) {
@@ -545,6 +552,10 @@ async function inspectRequest(
           : isDocumentNavigation
             ? "page"
             : "other";
+
+  if (trafficScope === "page" && !isPageNavigationRateLimitEnabled()) {
+    return null;
+  }
 
   if (trafficScope === "other" && !isApi) {
     return null;

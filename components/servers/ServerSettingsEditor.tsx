@@ -207,6 +207,17 @@ type AutoRoleSettingsDraft = {
   assignmentDelayMinutes: AutoRoleAssignmentDelayMinutes;
 };
 
+type SalesSettingsDraft = {
+  enabled: boolean;
+  cartsCategoryId: string | null;
+  paymentApprovedLogChannelId: string | null;
+  paymentPendingLogChannelId: string | null;
+  paymentRejectedLogChannelId: string | null;
+  receiptCompanyName: string;
+  receiptCompanyDocument: string;
+  receiptSupportText: string;
+};
+
 type AutoRoleSyncStatus =
   | "idle"
   | "pending"
@@ -730,6 +741,39 @@ function areAutoRoleSettingsDraftsEqual(
   if (!left || !right) return left === right;
 
   return JSON.stringify(normalizeAutoRoleSettingsDraft(left)) === JSON.stringify(normalizeAutoRoleSettingsDraft(right));
+}
+
+function normalizeSalesSettingsDraft(
+  draft: SalesSettingsDraft,
+): SalesSettingsDraft {
+  return {
+    enabled: draft.enabled === true,
+    cartsCategoryId: draft.cartsCategoryId || null,
+    paymentApprovedLogChannelId: draft.paymentApprovedLogChannelId || null,
+    paymentPendingLogChannelId: draft.paymentPendingLogChannelId || null,
+    paymentRejectedLogChannelId: draft.paymentRejectedLogChannelId || null,
+    receiptCompanyName:
+      typeof draft.receiptCompanyName === "string"
+        ? draft.receiptCompanyName.trim()
+        : "",
+    receiptCompanyDocument:
+      typeof draft.receiptCompanyDocument === "string"
+        ? draft.receiptCompanyDocument.trim()
+        : "",
+    receiptSupportText:
+      typeof draft.receiptSupportText === "string"
+        ? draft.receiptSupportText.trim()
+        : "",
+  };
+}
+
+function areSalesSettingsDraftsEqual(
+  left: SalesSettingsDraft | null,
+  right: SalesSettingsDraft | null,
+) {
+  if (!left || !right) return left === right;
+
+  return JSON.stringify(normalizeSalesSettingsDraft(left)) === JSON.stringify(normalizeSalesSettingsDraft(right));
 }
 
 function normalizeAutoRoleSyncStatus(value: unknown): AutoRoleSyncStatus {
@@ -2001,6 +2045,17 @@ export function ServerSettingsEditor({
     useState<AutoRoleAssignmentDelayMinutes>(0);
   const [autoRoleSyncExistingMembers, setAutoRoleSyncExistingMembers] =
     useState(false);
+  const [salesEnabled, setSalesEnabled] = useState(false);
+  const [salesCartsCategoryId, setSalesCartsCategoryId] = useState<string | null>(null);
+  const [salesPaymentApprovedLogChannelId, setSalesPaymentApprovedLogChannelId] =
+    useState<string | null>(null);
+  const [salesPaymentPendingLogChannelId, setSalesPaymentPendingLogChannelId] =
+    useState<string | null>(null);
+  const [salesPaymentRejectedLogChannelId, setSalesPaymentRejectedLogChannelId] =
+    useState<string | null>(null);
+  const [salesReceiptCompanyName, setSalesReceiptCompanyName] = useState("");
+  const [salesReceiptCompanyDocument, setSalesReceiptCompanyDocument] = useState("");
+  const [salesReceiptSupportText, setSalesReceiptSupportText] = useState("");
   const [autoRoleSyncStatus, setAutoRoleSyncStatus] =
     useState<AutoRoleSyncStatus>("idle");
   const [autoRoleSyncRequestedAt, setAutoRoleSyncRequestedAt] = useState<
@@ -2045,6 +2100,8 @@ export function ServerSettingsEditor({
     useState<AntiLinkSettingsDraft | null>(null);
   const [savedAutoRoleSettingsDraft, setSavedAutoRoleSettingsDraft] =
     useState<AutoRoleSettingsDraft | null>(null);
+  const [savedSalesSettingsDraft, setSavedSalesSettingsDraft] =
+    useState<SalesSettingsDraft | null>(null);
   const currentTicketDraftRef = useRef<ServerSettingsDraft | null>(null);
   const savedTicketDraftRef = useRef<ServerSettingsDraft | null>(null);
   const [isStaffCardCollapsed, setIsStaffCardCollapsed] = useState(true);
@@ -2418,6 +2475,39 @@ export function ServerSettingsEditor({
       const nextAutoRoleSyncCompletedAt =
         payload.autoRoleSettings?.syncCompletedAt || null;
       const nextAutoRoleSyncError = payload.autoRoleSettings?.syncError || null;
+      const nextSalesEnabled = Boolean(payload.salesSettings?.enabled);
+      const nextSalesCartsCategoryId =
+        payload.salesSettings?.cartsCategoryId &&
+        categorySet.has(payload.salesSettings.cartsCategoryId)
+          ? payload.salesSettings.cartsCategoryId
+          : null;
+      const nextSalesPaymentApprovedLogChannelId =
+        payload.salesSettings?.paymentApprovedLogChannelId &&
+        textSet.has(payload.salesSettings.paymentApprovedLogChannelId)
+          ? payload.salesSettings.paymentApprovedLogChannelId
+          : null;
+      const nextSalesPaymentPendingLogChannelId =
+        payload.salesSettings?.paymentPendingLogChannelId &&
+        textSet.has(payload.salesSettings.paymentPendingLogChannelId)
+          ? payload.salesSettings.paymentPendingLogChannelId
+          : null;
+      const nextSalesPaymentRejectedLogChannelId =
+        payload.salesSettings?.paymentRejectedLogChannelId &&
+        textSet.has(payload.salesSettings.paymentRejectedLogChannelId)
+          ? payload.salesSettings.paymentRejectedLogChannelId
+          : null;
+      const nextSalesReceiptCompanyName =
+        typeof payload.salesSettings?.receiptCompanyName === "string"
+          ? payload.salesSettings.receiptCompanyName
+          : "";
+      const nextSalesReceiptCompanyDocument =
+        typeof payload.salesSettings?.receiptCompanyDocument === "string"
+          ? payload.salesSettings.receiptCompanyDocument
+          : "";
+      const nextSalesReceiptSupportText =
+        typeof payload.salesSettings?.receiptSupportText === "string"
+          ? payload.salesSettings.receiptSupportText
+          : "";
       const nextSecurityLogsDraft = normalizeSecurityLogsSettingsDraft(
         payload.securityLogsSettings
           ? {
@@ -2571,6 +2661,14 @@ export function ServerSettingsEditor({
       setAutoRoleSyncStartedAt(nextAutoRoleSyncStartedAt);
       setAutoRoleSyncCompletedAt(nextAutoRoleSyncCompletedAt);
       setAutoRoleSyncError(nextAutoRoleSyncError);
+      setSalesEnabled(nextSalesEnabled);
+      setSalesCartsCategoryId(nextSalesCartsCategoryId);
+      setSalesPaymentApprovedLogChannelId(nextSalesPaymentApprovedLogChannelId);
+      setSalesPaymentPendingLogChannelId(nextSalesPaymentPendingLogChannelId);
+      setSalesPaymentRejectedLogChannelId(nextSalesPaymentRejectedLogChannelId);
+      setSalesReceiptCompanyName(nextSalesReceiptCompanyName);
+      setSalesReceiptCompanyDocument(nextSalesReceiptCompanyDocument);
+      setSalesReceiptSupportText(nextSalesReceiptSupportText);
       setSecurityLogsDraft(nextSecurityLogsDraft);
       setSavedSettingsDraft(
         normalizeServerSettingsDraft({
@@ -2626,6 +2724,18 @@ export function ServerSettingsEditor({
           enabled: nextAutoRoleEnabled,
           roleIds: nextAutoRoleRoleIds,
           assignmentDelayMinutes: nextAutoRoleAssignmentDelayMinutes,
+        }),
+      );
+      setSavedSalesSettingsDraft(
+        normalizeSalesSettingsDraft({
+          enabled: nextSalesEnabled,
+          cartsCategoryId: nextSalesCartsCategoryId,
+          paymentApprovedLogChannelId: nextSalesPaymentApprovedLogChannelId,
+          paymentPendingLogChannelId: nextSalesPaymentPendingLogChannelId,
+          paymentRejectedLogChannelId: nextSalesPaymentRejectedLogChannelId,
+          receiptCompanyName: nextSalesReceiptCompanyName,
+          receiptCompanyDocument: nextSalesReceiptCompanyDocument,
+          receiptSupportText: nextSalesReceiptSupportText,
         }),
       );
       setSavedSecurityLogsDraft(nextSecurityLogsDraft);
@@ -2703,6 +2813,7 @@ export function ServerSettingsEditor({
     setSavedWelcomeSettingsDraft(null);
     setSavedAntiLinkSettingsDraft(null);
     setSavedAutoRoleSettingsDraft(null);
+    setSavedSalesSettingsDraft(null);
     setSavedSecurityLogsDraft(null);
     setPanelLayout(createDefaultTicketPanelLayout());
     setTicketEnabled(false);
@@ -2736,6 +2847,14 @@ export function ServerSettingsEditor({
     setAutoRoleSyncStartedAt(null);
     setAutoRoleSyncCompletedAt(null);
     setAutoRoleSyncError(null);
+    setSalesEnabled(false);
+    setSalesCartsCategoryId(null);
+    setSalesPaymentApprovedLogChannelId(null);
+    setSalesPaymentPendingLogChannelId(null);
+    setSalesPaymentRejectedLogChannelId(null);
+    setSalesReceiptCompanyName("");
+    setSalesReceiptCompanyDocument("");
+    setSalesReceiptSupportText("");
     setAutoRoleConsoleEntries([]);
     setIsAutoRoleConsoleLoading(false);
     setAutoRoleConsoleLastUpdatedAt(null);
@@ -3469,7 +3588,7 @@ export function ServerSettingsEditor({
     settingsSection === "sales_products" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts";
-  const salesPlaceholderContent = isSalesSection
+  const salesPlaceholderContent = isSalesSection && settingsSection !== "sales_overview"
     ? SALES_PLACEHOLDER_CONTENT[settingsSection]
     : null;
   const isWelcomeSection =
@@ -3624,6 +3743,17 @@ export function ServerSettingsEditor({
       !isSaving &&
       (!autoRoleEnabled || autoRoleRoleIds.length > 0),
   );
+  const canSaveSales = Boolean(
+    !settingsReadOnly &&
+      !isLoading &&
+      !isSaving &&
+      (!salesEnabled ||
+        (salesCartsCategoryId &&
+          salesPaymentApprovedLogChannelId &&
+          salesPaymentPendingLogChannelId &&
+          salesPaymentRejectedLogChannelId &&
+          salesReceiptCompanyName.trim())),
+  );
   const hasAnySecurityLogEnabled = SECURITY_LOG_EVENT_OPTIONS.some(
     (option) => securityLogsDraft.events[option.key].enabled,
   );
@@ -3766,6 +3896,29 @@ export function ServerSettingsEditor({
       }),
     [autoRoleAssignmentDelayValue, autoRoleEnabled, autoRoleRoleIds],
   );
+  const currentSalesDraft = useMemo(
+    () =>
+      normalizeSalesSettingsDraft({
+        enabled: salesEnabled,
+        cartsCategoryId: salesCartsCategoryId,
+        paymentApprovedLogChannelId: salesPaymentApprovedLogChannelId,
+        paymentPendingLogChannelId: salesPaymentPendingLogChannelId,
+        paymentRejectedLogChannelId: salesPaymentRejectedLogChannelId,
+        receiptCompanyName: salesReceiptCompanyName,
+        receiptCompanyDocument: salesReceiptCompanyDocument,
+        receiptSupportText: salesReceiptSupportText,
+      }),
+    [
+      salesCartsCategoryId,
+      salesEnabled,
+      salesPaymentApprovedLogChannelId,
+      salesPaymentPendingLogChannelId,
+      salesPaymentRejectedLogChannelId,
+      salesReceiptCompanyDocument,
+      salesReceiptCompanyName,
+      salesReceiptSupportText,
+    ],
+  );
   const currentSecurityLogsDraft = useMemo(
     () => normalizeSecurityLogsSettingsDraft(securityLogsDraft),
     [securityLogsDraft],
@@ -3777,6 +3930,7 @@ export function ServerSettingsEditor({
     !isLoading && savedAntiLinkSettingsDraft !== null;
   const hasLoadedAutoRoleDraft =
     !isLoading && savedAutoRoleSettingsDraft !== null;
+  const hasLoadedSalesDraft = !isLoading && savedSalesSettingsDraft !== null;
   const hasLoadedSecurityLogsDraft =
     !isLoading && savedSecurityLogsDraft !== null;
   const shouldShowBlockingSkeleton = isLoading && !hasLoadedDashboardSnapshot;
@@ -3814,6 +3968,12 @@ export function ServerSettingsEditor({
       ),
     [currentAutoRoleDraft, hasLoadedAutoRoleDraft, savedAutoRoleSettingsDraft],
   );
+  const hasSalesUnsavedChanges = useMemo(
+    () =>
+      hasLoadedSalesDraft &&
+      !areSalesSettingsDraftsEqual(currentSalesDraft, savedSalesSettingsDraft),
+    [currentSalesDraft, hasLoadedSalesDraft, savedSalesSettingsDraft],
+  );
   const hasSecurityLogsUnsavedChanges = useMemo(
     () =>
       hasLoadedSecurityLogsDraft &&
@@ -3832,6 +3992,8 @@ export function ServerSettingsEditor({
     ? hasLoadedAntiLinkDraft
     : isAutoRoleSection
       ? hasLoadedAutoRoleDraft
+    : isSalesSection
+      ? hasLoadedSalesDraft
     : isSecurityLogsSection
       ? hasLoadedSecurityLogsDraft
     : isWelcomeSection
@@ -3841,6 +4003,8 @@ export function ServerSettingsEditor({
     ? hasAntiLinkUnsavedChanges
     : isAutoRoleSection
       ? hasAutoRoleUnsavedChanges || autoRoleSyncExistingMembers
+    : isSalesSection
+      ? hasSalesUnsavedChanges
     : isSecurityLogsSection
       ? hasSecurityLogsUnsavedChanges
     : isWelcomeSection
@@ -3856,6 +4020,8 @@ export function ServerSettingsEditor({
         ? savedAntiLinkSettingsDraft
         : isAutoRoleSection
           ? savedAutoRoleSettingsDraft
+        : isSalesSection
+          ? savedSalesSettingsDraft
         : isSecurityLogsSection
           ? savedSecurityLogsDraft
         : isWelcomeSection
@@ -3875,6 +4041,8 @@ export function ServerSettingsEditor({
       ? canSaveAntiLink
       : isAutoRoleSection
         ? canSaveAutoRole
+      : isSalesSection
+        ? canSaveSales
       : isSecurityLogsSection
         ? canSaveSecurityLogs
       : isWelcomeSection
@@ -3905,6 +4073,7 @@ export function ServerSettingsEditor({
     isSaving || settingsReadOnly || !antiLinkEnabled || isActivatingAntiLink;
   const autoRoleControlsDisabled =
     isSaving || settingsReadOnly || !autoRoleEnabled;
+  const salesControlsDisabled = isSaving || settingsReadOnly || !salesEnabled;
   const autoRoleSyncInFlight = isAutoRoleSyncStatusActive(autoRoleSyncStatus);
   const autoRoleSyncCheckboxChecked =
     autoRoleSyncExistingMembers || autoRoleSyncInFlight;
@@ -4854,6 +5023,21 @@ export function ServerSettingsEditor({
         savedAutoRoleSettingsDraft.assignmentDelayMinutes,
       );
       setAutoRoleSyncExistingMembers(false);
+    } else if (isSalesSection && savedSalesSettingsDraft) {
+      setSalesEnabled(savedSalesSettingsDraft.enabled);
+      setSalesCartsCategoryId(savedSalesSettingsDraft.cartsCategoryId);
+      setSalesPaymentApprovedLogChannelId(
+        savedSalesSettingsDraft.paymentApprovedLogChannelId,
+      );
+      setSalesPaymentPendingLogChannelId(
+        savedSalesSettingsDraft.paymentPendingLogChannelId,
+      );
+      setSalesPaymentRejectedLogChannelId(
+        savedSalesSettingsDraft.paymentRejectedLogChannelId,
+      );
+      setSalesReceiptCompanyName(savedSalesSettingsDraft.receiptCompanyName);
+      setSalesReceiptCompanyDocument(savedSalesSettingsDraft.receiptCompanyDocument);
+      setSalesReceiptSupportText(savedSalesSettingsDraft.receiptSupportText);
     } else if (isSecurityLogsSection && savedSecurityLogsDraft) {
       setSecurityLogsDraft(savedSecurityLogsDraft);
     } else if (isWelcomeSection && savedWelcomeSettingsDraft) {
@@ -4896,10 +5080,12 @@ export function ServerSettingsEditor({
     canResetSettings,
     isAntiLinkSection,
     isAutoRoleSection,
+    isSalesSection,
     isSecurityLogsSection,
     isWelcomeSection,
     savedAntiLinkSettingsDraft,
     savedAutoRoleSettingsDraft,
+    savedSalesSettingsDraft,
     savedSecurityLogsDraft,
     savedSettingsDraft,
     savedWelcomeSettingsDraft,
@@ -5000,6 +5186,77 @@ export function ServerSettingsEditor({
         }
 
         setSavedSecurityLogsDraft(currentSecurityLogsDraft);
+      } else if (isSalesSection) {
+        const response = await fetch("/api/auth/me/guilds/sales-settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            enabled: salesEnabled,
+            cartsCategoryId: salesCartsCategoryId,
+            paymentApprovedLogChannelId: salesPaymentApprovedLogChannelId,
+            paymentPendingLogChannelId: salesPaymentPendingLogChannelId,
+            paymentRejectedLogChannelId: salesPaymentRejectedLogChannelId,
+            receiptCompanyName: salesReceiptCompanyName,
+            receiptCompanyDocument: salesReceiptCompanyDocument,
+            receiptSupportText: salesReceiptSupportText,
+          }),
+        });
+
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(
+            payload.message || "Falha ao salvar configuracoes de vendas.",
+          );
+        }
+
+        const nextSalesDraft = normalizeSalesSettingsDraft({
+          enabled: payload.settings?.enabled === true,
+          cartsCategoryId:
+            typeof payload.settings?.cartsCategoryId === "string"
+              ? payload.settings.cartsCategoryId
+              : null,
+          paymentApprovedLogChannelId:
+            typeof payload.settings?.paymentApprovedLogChannelId === "string"
+              ? payload.settings.paymentApprovedLogChannelId
+              : null,
+          paymentPendingLogChannelId:
+            typeof payload.settings?.paymentPendingLogChannelId === "string"
+              ? payload.settings.paymentPendingLogChannelId
+              : null,
+          paymentRejectedLogChannelId:
+            typeof payload.settings?.paymentRejectedLogChannelId === "string"
+              ? payload.settings.paymentRejectedLogChannelId
+              : null,
+          receiptCompanyName:
+            typeof payload.settings?.receiptCompanyName === "string"
+              ? payload.settings.receiptCompanyName
+              : "",
+          receiptCompanyDocument:
+            typeof payload.settings?.receiptCompanyDocument === "string"
+              ? payload.settings.receiptCompanyDocument
+              : "",
+          receiptSupportText:
+            typeof payload.settings?.receiptSupportText === "string"
+              ? payload.settings.receiptSupportText
+              : "",
+        });
+
+        setSalesEnabled(nextSalesDraft.enabled);
+        setSalesCartsCategoryId(nextSalesDraft.cartsCategoryId);
+        setSalesPaymentApprovedLogChannelId(
+          nextSalesDraft.paymentApprovedLogChannelId,
+        );
+        setSalesPaymentPendingLogChannelId(
+          nextSalesDraft.paymentPendingLogChannelId,
+        );
+        setSalesPaymentRejectedLogChannelId(
+          nextSalesDraft.paymentRejectedLogChannelId,
+        );
+        setSalesReceiptCompanyName(nextSalesDraft.receiptCompanyName);
+        setSalesReceiptCompanyDocument(nextSalesDraft.receiptCompanyDocument);
+        setSalesReceiptSupportText(nextSalesDraft.receiptSupportText);
+        setSavedSalesSettingsDraft(nextSalesDraft);
       } else if (isWelcomeSection) {
         const response = await fetch("/api/auth/me/guilds/welcome-settings", {
           method: "POST",
@@ -5208,6 +5465,7 @@ export function ServerSettingsEditor({
     guildId,
     isAntiLinkSection,
     isAutoRoleSection,
+    isSalesSection,
     isSecurityLogsSection,
     isTicketSection,
     isWelcomeSection,
@@ -5217,8 +5475,17 @@ export function ServerSettingsEditor({
     notifyRoleIds,
     panelLayout,
     savedSettingsDraft,
+    salesCartsCategoryId,
+    salesEnabled,
+    salesPaymentApprovedLogChannelId,
+    salesPaymentPendingLogChannelId,
+    salesPaymentRejectedLogChannelId,
+    salesReceiptCompanyDocument,
+    salesReceiptCompanyName,
+    salesReceiptSupportText,
     setSavedAntiLinkSettingsDraft,
     setSavedAutoRoleSettingsDraft,
+    setSavedSalesSettingsDraft,
     setSavedSecurityLogsDraft,
     setSavedSettingsDraft,
     setSavedWelcomeSettingsDraft,
@@ -5635,6 +5902,138 @@ export function ServerSettingsEditor({
                         _onTabChange?.("settings");
                       }} 
                     />
+                  ) : settingsSection === "sales_overview" ? (
+                    <div className="space-y-[14px]">
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">
+                              Modulo Vendas
+                            </p>
+                            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Mantenha a loja do servidor em operacao
+                            </h3>
+                            <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                              O Flowdesk libera criacao de carrinho, logs de pagamento e comprovantes personalizados quando o modulo estiver ativo.
+                            </p>
+                          </div>
+
+                          <DashboardInlineSwitch
+                            checked={salesEnabled}
+                            onChange={() => {
+                              if (isSaving || settingsReadOnly) return;
+                              setSalesEnabled((current) => !current);
+                            }}
+                            disabled={isSaving || settingsReadOnly}
+                            ariaLabel="Ativar ou desativar modulo de vendas"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[12px] lg:flex-row lg:items-end lg:justify-between">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Configurando vendas</p>
+                            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                              Carrinhos e logs fixas
+                            </h3>
+                            <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                              Defina a categoria onde cada carrinho nasce e os canais que recebem pagamentos aprovados, pendentes e recusados.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                          <ConfigStepSelect
+                            label="Categoria onde o carrinho sera gerado"
+                            placeholder="Escolha uma categoria"
+                            options={categoryOptions}
+                            value={salesCartsCategoryId}
+                            onChange={setSalesCartsCategoryId}
+                            disabled={salesControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                          <ConfigStepSelect
+                            label="Log de pagamento aprovado"
+                            placeholder="Escolha o canal de logs"
+                            options={textChannelOptions}
+                            value={salesPaymentApprovedLogChannelId}
+                            onChange={setSalesPaymentApprovedLogChannelId}
+                            disabled={salesControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                          <ConfigStepSelect
+                            label="Log de pagamento pendente"
+                            placeholder="Escolha o canal de logs"
+                            options={textChannelOptions}
+                            value={salesPaymentPendingLogChannelId}
+                            onChange={setSalesPaymentPendingLogChannelId}
+                            disabled={salesControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                          <ConfigStepSelect
+                            label="Log de pagamento recusado"
+                            placeholder="Escolha o canal de logs"
+                            options={textChannelOptions}
+                            value={salesPaymentRejectedLogChannelId}
+                            onChange={setSalesPaymentRejectedLogChannelId}
+                            disabled={salesControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div>
+                          <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Comprovante</p>
+                          <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#D1D1D1]">
+                            Identidade do recibo
+                          </h3>
+                          <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
+                            Personalize o nome exibido no comprovante, documento/identificador e a mensagem de suporte enviada ao cliente.
+                          </p>
+                        </div>
+
+                        <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                          <div>
+                            <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Nome da empresa no comprovante</label>
+                            <input
+                              type="text"
+                              value={salesReceiptCompanyName}
+                              onChange={(event) => setSalesReceiptCompanyName(event.currentTarget.value)}
+                              placeholder="Ex: Flowdesk Store"
+                              maxLength={100}
+                              disabled={salesControlsDisabled}
+                              className="h-[48px] w-full rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] disabled:cursor-not-allowed disabled:opacity-60"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Documento ou identificador</label>
+                            <input
+                              type="text"
+                              value={salesReceiptCompanyDocument}
+                              onChange={(event) => setSalesReceiptCompanyDocument(event.currentTarget.value)}
+                              placeholder="Ex: CNPJ, CPF ou ID interno"
+                              maxLength={80}
+                              disabled={salesControlsDisabled}
+                              className="h-[48px] w-full rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] disabled:cursor-not-allowed disabled:opacity-60"
+                            />
+                          </div>
+                          <div className="xl:col-span-2">
+                            <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Texto de suporte no comprovante</label>
+                            <textarea
+                              rows={3}
+                              value={salesReceiptSupportText}
+                              onChange={(event) => setSalesReceiptSupportText(event.currentTarget.value)}
+                              placeholder="Ex: Qualquer duvida, abra um ticket com o comprovante em maos."
+                              maxLength={300}
+                              disabled={salesControlsDisabled}
+                              className="min-h-[92px] w-full resize-none rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] py-[12px] text-[14px] leading-[1.5] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] disabled:cursor-not-allowed disabled:opacity-60"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   ) : salesPlaceholderContent ? (
                     <div className="space-y-[14px]">
                       <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">

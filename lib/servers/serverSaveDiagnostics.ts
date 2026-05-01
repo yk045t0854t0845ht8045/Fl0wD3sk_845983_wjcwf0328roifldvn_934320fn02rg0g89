@@ -9,6 +9,7 @@ export type ServerSaveRouteName =
   | "welcome_settings"
   | "antilink_settings"
   | "autorole_settings"
+  | "sales_settings"
   | "security_logs_settings";
 export type ServerSaveAccessMode = "owner" | "team" | "viewer" | "unknown";
 export type ServerSaveOutcome =

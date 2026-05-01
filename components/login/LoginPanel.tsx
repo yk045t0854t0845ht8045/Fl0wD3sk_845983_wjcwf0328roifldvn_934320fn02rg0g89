@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Eye, EyeOff } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DiscordLoginButton } from "@/components/login/DiscordLoginButton";
 import { GoogleLoginButton } from "@/components/login/GoogleLoginButton";
@@ -47,6 +47,7 @@ type LoginPanelProps = {
     displayName: string;
     email: string | null;
   } | null;
+  initialEmail?: string | null;
 };
 
 type EmailStartResponse = {
@@ -163,15 +164,19 @@ export function LoginPanel({
   emailOtpLength = 6,
   initialOtpState = null,
   currentSessionHint = null,
+  initialEmail = null,
 }: LoginPanelProps) {
   const notifications = useNotifications();
   const termsUrl = process.env.NEXT_PUBLIC_TERMS_URL || TERMS_PATH;
   const privacyUrl = process.env.NEXT_PUBLIC_PRIVACY_URL || PRIVACY_PATH;
   const [stage, setStage] = useState<LoginStage>(initialOtpState ? "otp" : "chooser");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail || "");
   const [maskedEmail, setMaskedEmail] = useState(initialOtpState?.maskedEmail || "");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [isRequestingPasswordReset, setIsRequestingPasswordReset] = useState(false);
   const [passwordStep, setPasswordStep] = useState<"password" | "set_password">("password");
   const [challengeId, setChallengeId] = useState(initialOtpState?.challengeId || "");
   const [otpCode, setOtpCode] = useState("");
@@ -754,6 +759,67 @@ export function LoginPanel({
     setConfirmPassword("");
   }
 
+  async function handleForgotPassword() {
+    const targetEmail = normalizedEmail || normalizeAuthEmail(email);
+    if (!targetEmail) {
+      showErrorNotification("Informe seu email antes de solicitar a redefinicao.", "Email necessario");
+      return;
+    }
+
+    setIsRequestingPasswordReset(true);
+    try {
+      const response = await fetch("/api/auth/email/password-reset/request", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email: targetEmail }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        message?: string;
+      } | null;
+
+      if (!response.ok || payload?.ok !== true) {
+        throw new Error(payload?.message || "Nao foi possivel enviar o link agora.");
+      }
+
+      showInfoNotification(
+        payload.message ||
+          "Se este email estiver cadastrado, enviaremos um link seguro de redefinicao.",
+        "Verifique seu email",
+      );
+    } catch (error) {
+      showErrorNotification(
+        error instanceof Error ? error.message : "Nao foi possivel enviar o link agora.",
+        "Falha ao enviar",
+      );
+    } finally {
+      setIsRequestingPasswordReset(false);
+    }
+  }
+
+  function PasswordVisibilityButton({
+    visible,
+    onClick,
+    label,
+  }: {
+    visible: boolean;
+    onClick: () => void;
+    label: string;
+  }) {
+    const Icon = visible ? EyeOff : Eye;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        className="ml-[10px] inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] text-[#7D7D7D] transition-colors hover:bg-[rgba(255,255,255,0.04)] hover:text-[#F1F1F1]"
+      >
+        <Icon className="h-[18px] w-[18px]" strokeWidth={2} />
+      </button>
+    );
+  }
+
   const chooserView = (
     <>
       <form
@@ -838,26 +904,36 @@ export function LoginPanel({
       >
         <div className={inputShellClassName}>
           <input
-            type="password"
+            type={showPassword ? "text" : "password"}
             value={password}
             onChange={(event) => setPassword(event.currentTarget.value)}
             placeholder={passwordStep === "set_password" ? "Crie sua senha" : "Digite sua senha"}
             autoComplete={passwordStep === "set_password" ? "new-password" : "current-password"}
             maxLength={128}
-            className="w-full bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
+            className="min-w-0 flex-1 bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
+          />
+          <PasswordVisibilityButton
+            visible={showPassword}
+            onClick={() => setShowPassword((current) => !current)}
+            label={showPassword ? "Ocultar senha" : "Mostrar senha"}
           />
         </div>
 
         {passwordStep === "set_password" ? (
           <div className={inputShellClassName}>
             <input
-              type="password"
+              type={showConfirmPassword ? "text" : "password"}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.currentTarget.value)}
               placeholder="Confirme sua senha"
               autoComplete="new-password"
               maxLength={128}
-              className="w-full bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
+              className="min-w-0 flex-1 bg-transparent text-[15px] text-[#F1F1F1] outline-none placeholder:text-[#5A5A5A]"
+            />
+            <PasswordVisibilityButton
+              visible={showConfirmPassword}
+              onClick={() => setShowConfirmPassword((current) => !current)}
+              label={showConfirmPassword ? "Ocultar confirmacao de senha" : "Mostrar confirmacao de senha"}
             />
           </div>
         ) : null}
@@ -890,6 +966,19 @@ export function LoginPanel({
           disabled={passwordSubmitDisabled}
         />
       </form>
+
+      {passwordStep === "password" ? (
+        <button
+          type="button"
+          onClick={() => {
+            void handleForgotPassword();
+          }}
+          disabled={isRequestingPasswordReset}
+          className="mt-[14px] w-full text-center text-[13px] font-medium text-[#A9A9A9] transition-colors hover:text-[#F2F2F2] disabled:cursor-not-allowed disabled:text-[#666666]"
+        >
+          {isRequestingPasswordReset ? "Enviando link..." : "Esqueceu a senha?"}
+        </button>
+      ) : null}
     </>
   );
 
