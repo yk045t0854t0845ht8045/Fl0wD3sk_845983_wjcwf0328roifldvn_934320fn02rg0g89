@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GuildSelect } from "@/components/config/GuildSelect";
 import { BotMissingModal } from "@/components/config/BotMissingModal";
 import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
+import { buildConfigUrlWithHashRoute } from "@/lib/plans/configRouting";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { LandingFrameLines } from "@/components/landing/LandingFrameLines";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
@@ -56,7 +57,6 @@ const DEFAULT_NEXT_STEP_URL = "/config";
 const BOT_CHECK_INTERVAL_MS = 4_000;
 const GUILDS_CACHE_STORAGE_KEY = "flowdesk_step1_guilds_cache_v4";
 const GUILDS_CACHE_TTL_MS = 5 * 60 * 1000;
-const GUILDS_REALTIME_SYNC_INTERVAL_MS = 20_000;
 
 type GuildsCachePayload = {
   guilds: GuildItem[];
@@ -103,6 +103,20 @@ function writeGuildsCache(guilds: GuildItem[]) {
   }
 }
 
+function buildGuildsSignature(guilds: GuildItem[]) {
+  return guilds
+    .map((guild) =>
+      [
+        guild.id,
+        guild.name,
+        guild.icon_url || "",
+        guild.owner ? "1" : "0",
+        guild.admin ? "1" : "0",
+      ].join(":"),
+    )
+    .join("|");
+}
+
 function resolveSelectionDescription(guild: GuildItem | null) {
   if (!guild) {
     return "Escolha um servidor acima para validar o bot e liberar a configuracao do Flowdesk.";
@@ -117,6 +131,23 @@ function resolveSelectionDescription(guild: GuildItem | null) {
   }
 
   return "Este servidor esta pronto para seguir. O proximo passo valida o bot e decide entre liberar a configuracao agora ou abrir o checkout.";
+}
+
+function resolveConfigOAuthNextPath() {
+  if (typeof window === "undefined") {
+    return buildConfigUrlWithHashRoute("/config", "", "#/step/1");
+  }
+
+  const currentPathname = window.location.pathname || "/";
+  const internalPathname = currentPathname.startsWith("/config")
+    ? currentPathname
+    : `/config${currentPathname === "/" ? "" : currentPathname}`;
+
+  return buildConfigUrlWithHashRoute(
+    internalPathname,
+    window.location.search,
+    window.location.hash || "#/step/1",
+  );
 }
 
 export function ConfigStepOne({
@@ -145,12 +176,7 @@ export function ConfigStepOne({
   const pollLockRef = useRef(false);
   const guildsRefreshLockRef = useRef(false);
   const discordReconnectHref = useMemo(() => {
-    if (typeof window === "undefined") {
-      return buildDiscordAuthStartHref("/config#/step/1", "link");
-    }
-
-    const nextPath = `${window.location.pathname}${window.location.search}${window.location.hash || "#/step/1"}`;
-    return buildDiscordAuthStartHref(nextPath, "link");
+    return buildDiscordAuthStartHref(resolveConfigOAuthNextPath(), "link");
   }, []);
 
   const refreshGuilds = useCallback(
@@ -211,7 +237,11 @@ export function ConfigStepOne({
 
         const nextGuilds = payload.guilds || [];
         setDiscordConnectionState(null);
-        setGuilds(nextGuilds);
+        setGuilds((currentGuilds) =>
+          buildGuildsSignature(currentGuilds) === buildGuildsSignature(nextGuilds)
+            ? currentGuilds
+            : nextGuilds,
+        );
         writeGuildsCache(nextGuilds);
         setHasFreshGuildsSync(true);
       } catch {
@@ -247,16 +277,10 @@ export function ConfigStepOne({
       void refreshGuilds({ allowCachedFallback: false, keepLoadingState: true });
     }
 
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      void refreshGuilds({ allowCachedFallback: false, keepLoadingState: true });
-    }, GUILDS_REALTIME_SYNC_INTERVAL_MS);
-
     window.addEventListener("focus", handleWindowFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      window.clearInterval(intervalId);
       window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };

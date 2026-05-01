@@ -7,9 +7,12 @@ import {
   ArrowUpRight,
   ArrowRightLeft,
   BadgePercent,
+  Bell,
   ChevronDown,
   ChevronRight,
+  CheckCircle2,
   CircleHelp,
+  Clock,
   Cog,
   FolderKanban,
   Globe,
@@ -21,10 +24,14 @@ import {
   Plus,
   PlugZap,
   Search as SearchLucide,
+  Server,
+  ShieldAlert,
+  Sparkles,
   UserRound,
   Users,
   WalletCards,
   Workflow,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
@@ -106,9 +113,38 @@ type TeamsApiResponse = {
   conflictingGuildIds?: string[];
 };
 
+type AccountPlanSummary = {
+  code: string;
+  name: string;
+  status: string;
+  expiresAt: string | null;
+  billingCycleDays: number;
+  recurrenceLabel: string;
+  isActive: boolean;
+  maxLicensedServers: number;
+};
+
+type AccountPlanApiResponse = {
+  ok: boolean;
+  plan?: AccountPlanSummary;
+};
+
+type DashboardTask = {
+  key: string;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  href: string;
+  actionLabel: string;
+  tone: "danger" | "warning" | "info" | "success";
+  priority: number;
+};
+
 const sidebarShellClass =
   "relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
 const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
+const DASHBOARD_DISMISSED_TASKS_KEY = "flowdesk_dashboard_dismissed_tasks_v1";
+const DASHBOARD_HOME_SIGNAL_REFRESH_MS = 30_000;
 
 const TEAM_ICON_OPTIONS = [
   {
@@ -313,6 +349,85 @@ function mergeSavedPanelAccounts(
     .slice(0, 3);
 }
 
+function buildManagedServersSignature(servers: ManagedServer[]) {
+  return servers
+    .map((server) =>
+      [
+        server.guildId,
+        server.guildName,
+        server.status,
+        server.daysUntilExpire,
+        server.daysUntilOff,
+        server.pendingDowngradePayment ? "1" : "0",
+      ].join(":"),
+    )
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
+}
+
+function readDismissedDashboardTasks() {
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_DISMISSED_TASKS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDismissedDashboardTasks(keys: string[]) {
+  try {
+    window.localStorage.setItem(
+      DASHBOARD_DISMISSED_TASKS_KEY,
+      JSON.stringify(Array.from(new Set(keys)).slice(-60)),
+    );
+  } catch {
+    // Ignora ambientes sem localStorage persistente.
+  }
+}
+
+function formatDashboardDate(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function resolveTaskToneClass(tone: DashboardTask["tone"]) {
+  switch (tone) {
+    case "danger":
+      return {
+        shell: "border-[rgba(255,92,92,0.16)] bg-[linear-gradient(180deg,rgba(15,8,8,0.98)_0%,rgba(8,6,6,0.98)_100%)]",
+        icon: "bg-[rgba(255,92,92,0.12)] text-[#FF7777]",
+        action: "bg-[#F4F4F4] text-[#101010]",
+      };
+    case "warning":
+      return {
+        shell: "border-[rgba(255,190,92,0.16)] bg-[linear-gradient(180deg,rgba(16,12,6,0.98)_0%,rgba(8,7,5,0.98)_100%)]",
+        icon: "bg-[rgba(255,190,92,0.12)] text-[#FFCA79]",
+        action: "bg-[#F4F4F4] text-[#101010]",
+      };
+    case "success":
+      return {
+        shell: "border-[rgba(127,247,176,0.14)] bg-[linear-gradient(180deg,rgba(7,14,10,0.98)_0%,rgba(5,8,6,0.98)_100%)]",
+        icon: "bg-[rgba(127,247,176,0.1)] text-[#9DF0B9]",
+        action: "border border-[#242424] bg-[#101010] text-[#DCDCDC]",
+      };
+    default:
+      return {
+        shell: "border-[rgba(255,255,255,0.08)] bg-[linear-gradient(180deg,rgba(12,12,12,0.98)_0%,rgba(7,7,7,0.98)_100%)]",
+        icon: "bg-[rgba(0,98,255,0.12)] text-[#7EA8FF]",
+        action: "border border-[#242424] bg-[#101010] text-[#DCDCDC]",
+      };
+  }
+}
+
 function AccountAvatar({
   avatarUrl,
   displayName,
@@ -342,6 +457,166 @@ function AccountAvatar({
     >
       {accountInitial(displayName, username)}
       <span className="absolute bottom-[2px] right-[2px] h-[8px] w-[8px] rounded-full bg-[#0062FF]" />
+    </div>
+  );
+}
+
+function DashboardTaskCard({
+  task,
+  onDismiss,
+  onNavigate,
+  onPrefetch,
+}: {
+  task: DashboardTask;
+  onDismiss: (taskKey: string) => void;
+  onNavigate: (href: string) => void;
+  onPrefetch: (href: string) => void;
+}) {
+  const Icon = task.icon;
+  const toneClass = resolveTaskToneClass(task.tone);
+
+  return (
+    <div
+      className={`group relative overflow-hidden rounded-[22px] border px-[16px] py-[15px] shadow-[0_22px_70px_rgba(0,0,0,0.22)] transition-colors ${toneClass.shell}`}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[76px] rounded-t-[21px] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.055)_0%,transparent_70%)]"
+      />
+      <div className="relative z-10 flex gap-[14px]">
+        <span className={`inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[14px] ${toneClass.icon}`}>
+          <Icon className="h-[21px] w-[21px]" strokeWidth={2.05} aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-[10px]">
+            <div className="min-w-0">
+              <p className="line-clamp-2 text-[15px] leading-[1.25] font-semibold tracking-[-0.03em] text-[#F1F1F1]">
+                {task.title}
+              </p>
+              <p className="mt-[6px] line-clamp-2 text-[13px] leading-[1.55] text-[#8A8A8A]">
+                {task.description}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onDismiss(task.key)}
+              className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[10px] text-[#6F6F6F] transition-colors hover:bg-[rgba(255,255,255,0.05)] hover:text-[#E7E7E7]"
+              aria-label="Ocultar tarefa"
+            >
+              <X className="h-[15px] w-[15px]" strokeWidth={2.2} aria-hidden="true" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onMouseEnter={() => onPrefetch(task.href)}
+            onFocus={() => onPrefetch(task.href)}
+            onPointerDown={() => onPrefetch(task.href)}
+            onClick={() => onNavigate(task.href)}
+            className={`mt-[13px] inline-flex h-[38px] items-center justify-center rounded-[12px] px-[14px] text-[13px] font-semibold transition-transform duration-150 ease-out hover:translate-y-[-1px] ${toneClass.action}`}
+          >
+            {task.actionLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardMarketingBanner({
+  hasManagedServers,
+  onNavigate,
+  onPrefetch,
+  onDismiss,
+}: {
+  hasManagedServers: boolean;
+  onNavigate: (href: string) => void;
+  onPrefetch: (href: string) => void;
+  onDismiss: () => void;
+}) {
+  const targetHref = hasManagedServers ? "/dashboard/domains/acquire" : "/servers/plans";
+  const title = hasManagedServers
+    ? "Publique sua proxima operacao com dominio profissional"
+    : "Administre seus servidores Discord em uma unica central";
+  const description = hasManagedServers
+    ? "Garanta o nome da sua marca, conecte ao painel e prepare sua estrutura para loja, suporte e automacoes."
+    : "Ative tickets, vendas, seguranca, logs e permissoes com um painel pensado para operacao diaria.";
+  const actionLabel = hasManagedServers ? "Buscar dominio" : "Comecar servidor";
+
+  return (
+    <div className="relative mt-[24px] overflow-hidden rounded-[30px] border border-[#111111] bg-[#020202] shadow-[0_30px_90px_rgba(0,0,0,0.38)]">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_78%_18%,rgba(0,98,255,0.34)_0%,rgba(0,98,255,0.13)_22%,transparent_54%)]"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute right-[-90px] top-[-110px] h-[260px] w-[360px] rotate-[-18deg] bg-[linear-gradient(135deg,#0062FF_0%,#7A4DFF_42%,#FF6A8A_100%)] opacity-90"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute bottom-[-62px] right-[170px] h-[190px] w-[230px] rotate-[18deg] bg-[linear-gradient(135deg,#FFCE7A_0%,#FF6A8A_58%,#7A4DFF_100%)] opacity-70"
+      />
+
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="absolute right-[18px] top-[18px] z-20 inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[rgba(255,255,255,0.08)] bg-[rgba(12,12,12,0.86)] text-[#CFCFCF] backdrop-blur transition-colors hover:bg-[rgba(22,22,22,0.92)] hover:text-white"
+        aria-label="Ocultar banner"
+      >
+        <X className="h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" />
+      </button>
+
+      <div className="relative z-10 grid min-h-[260px] gap-[24px] px-[24px] py-[28px] md:grid-cols-[minmax(0,0.92fr)_minmax(320px,0.8fr)] md:px-[44px] md:py-[42px]">
+        <div className="flex max-w-[560px] flex-col justify-center">
+          <span className="inline-flex w-fit items-center gap-[8px] rounded-full border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] px-[12px] py-[7px] text-[12px] font-medium text-[#BEBEBE]">
+            <Sparkles className="h-[14px] w-[14px] text-[#8DB3FF]" strokeWidth={2.1} aria-hidden="true" />
+            Recomendado para sua conta
+          </span>
+          <h2 className="mt-[18px] max-w-[560px] text-[30px] leading-[1.04] font-semibold tracking-[-0.055em] text-white md:text-[38px]">
+            {title}
+          </h2>
+          <p className="mt-[12px] max-w-[540px] text-[15px] leading-[1.65] text-[#A6A6A6]">
+            {description}
+          </p>
+          <button
+            type="button"
+            onMouseEnter={() => onPrefetch(targetHref)}
+            onFocus={() => onPrefetch(targetHref)}
+            onPointerDown={() => onPrefetch(targetHref)}
+            onClick={() => onNavigate(targetHref)}
+            className="mt-[24px] inline-flex h-[48px] w-fit items-center justify-center rounded-[14px] bg-[#F4F4F4] px-[20px] text-[15px] font-semibold text-[#111111] transition-transform duration-150 ease-out hover:translate-y-[-1px]"
+          >
+            {actionLabel}
+          </button>
+        </div>
+
+        <div className="relative hidden min-h-[220px] items-end md:flex">
+          <div className="relative ml-auto w-full max-w-[440px] overflow-hidden rounded-[24px] border border-[rgba(255,255,255,0.1)] bg-[rgba(8,8,12,0.86)] p-[14px] shadow-[0_28px_80px_rgba(0,0,0,0.42)] backdrop-blur">
+            <div className="flex items-center justify-between border-b border-[rgba(255,255,255,0.07)] pb-[12px]">
+              <div className="flex items-center gap-[8px]">
+                <span className="h-[10px] w-[10px] rounded-full bg-[#FF6A8A]" />
+                <span className="h-[10px] w-[10px] rounded-full bg-[#FFCE7A]" />
+                <span className="h-[10px] w-[10px] rounded-full bg-[#7AF0B1]" />
+              </div>
+              <span className="rounded-full bg-[rgba(255,255,255,0.06)] px-[10px] py-[5px] text-[11px] text-[#AFAFAF]">
+                Flowdesk
+              </span>
+            </div>
+            <div className="mt-[16px] grid grid-cols-[0.88fr_1.12fr] gap-[12px]">
+              <div className="space-y-[10px]">
+                <div className="h-[64px] rounded-[16px] bg-[linear-gradient(135deg,rgba(0,98,255,0.28)_0%,rgba(255,255,255,0.05)_100%)]" />
+                <div className="h-[92px] rounded-[16px] border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.035)]" />
+              </div>
+              <div className="rounded-[18px] bg-[linear-gradient(135deg,#161B2D_0%,#33217A_52%,#0062FF_100%)] p-[16px]">
+                <div className="h-[18px] w-[58%] rounded-full bg-white/80" />
+                <div className="mt-[12px] h-[10px] w-[82%] rounded-full bg-white/32" />
+                <div className="mt-[8px] h-[10px] w-[66%] rounded-full bg-white/24" />
+                <div className="mt-[44px] h-[34px] w-[112px] rounded-[12px] bg-white/88" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -519,7 +794,10 @@ export function DashboardWorkspace({
       : readTeamsSnapshotMemoryCache(workspaceCacheKey);
   const [sidebarSearchText, setSidebarSearchText] = useState("");
   const [pendingViewId, setPendingViewId] = useState<DashboardViewId | null>(null);
-  const [, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [accountPlan, setAccountPlan] = useState<AccountPlanSummary | null>(null);
+  const [dismissedTaskKeys, setDismissedTaskKeys] = useState<string[]>([]);
+  const [isMarketingBannerDismissed, setIsMarketingBannerDismissed] = useState(false);
   const [teamServers, setTeamServers] = useState<ManagedServer[]>([]);
   const [isTeamServersLoading, setIsTeamServersLoading] = useState(
     Boolean(currentAccount.discordUserId),
@@ -572,7 +850,7 @@ export function DashboardWorkspace({
   const hasWorkspaceAlert = Boolean(workspaceAlertMessage);
   const hasResolvedContent = children !== null && children !== undefined;
   const shouldShowDashboardLoading =
-    Boolean(latchedPendingViewId) || !hasResolvedContent;
+    Boolean(latchedPendingViewId) || (!hasResolvedContent && !displayView.isEmptyHome);
 
   useNotificationEffect(teamsErrorMessage, {
     tone: "error",
@@ -664,6 +942,152 @@ export function DashboardWorkspace({
     filteredSecondaryItems.length === 0 &&
     filteredDomainItems.length === 0 &&
     filteredBillingItems.length === 0;
+  const isHomeView = displayView.id === "home";
+  const managedServersCount = servers.length;
+  const expiredServersCount = useMemo(
+    () => servers.filter((server) => server.status === "expired" || server.status === "off").length,
+    [servers],
+  );
+  const expiringSoonServer = useMemo(
+    () =>
+      servers
+        .filter(
+          (server) =>
+            server.status === "paid" &&
+            Number.isFinite(server.daysUntilExpire) &&
+            server.daysUntilExpire >= 0 &&
+            server.daysUntilExpire <= 7,
+        )
+        .sort((left, right) => left.daysUntilExpire - right.daysUntilExpire)[0] || null,
+    [servers],
+  );
+  const dashboardTasks = useMemo<DashboardTask[]>(() => {
+    const tasks: DashboardTask[] = [];
+
+    if (!currentAccount.discordUserId) {
+      tasks.push({
+        key: "discord-link",
+        icon: ShieldAlert,
+        title: "Conecte o Discord para liberar seus servidores",
+        description: "Sem o vinculo, a central nao consegue sincronizar cargos, canais e permissoes.",
+        href: "/discord/link",
+        actionLabel: "Vincular",
+        tone: "warning",
+        priority: 10,
+      });
+    }
+
+    if (expiredServersCount > 0) {
+      tasks.push({
+        key: "servers-expired",
+        icon: Bell,
+        title: `${expiredServersCount} servidor(es) precisam de atencao`,
+        description: "Renove ou revise o plano para manter configuracoes, logs e automacoes ativos.",
+        href: "/servers/plans",
+        actionLabel: "Ver planos",
+        tone: "danger",
+        priority: 20,
+      });
+    }
+
+    if (expiringSoonServer) {
+      tasks.push({
+        key: `server-expiring-${expiringSoonServer.guildId}`,
+        icon: Clock,
+        title: `${expiringSoonServer.guildName} vence em ${expiringSoonServer.daysUntilExpire} dia(s)`,
+        description: "Antecipe a renovacao para evitar pausa nos modulos do servidor.",
+        href: "/servers/plans",
+        actionLabel: "Renovar",
+        tone: "warning",
+        priority: 30,
+      });
+    }
+
+    if (accountPlan?.expiresAt && accountPlan.isActive) {
+      const daysUntilPlanExpire = Math.ceil(
+        (Date.parse(accountPlan.expiresAt) - Date.now()) / 86_400_000,
+      );
+      if (Number.isFinite(daysUntilPlanExpire) && daysUntilPlanExpire >= 0 && daysUntilPlanExpire <= 10) {
+        tasks.push({
+          key: "account-plan-expiring",
+          icon: BadgePercent,
+          title: `${accountPlan.name} expira ${formatDashboardDate(accountPlan.expiresAt)}`,
+          description: "Mantenha sua operacao ativa renovando antes da janela final.",
+          href: "/account/plans",
+          actionLabel: "Assinatura",
+          tone: "warning",
+          priority: 40,
+        });
+      }
+    }
+
+    if (pendingTeamInvites.length > 0) {
+      tasks.push({
+        key: "team-invites",
+        icon: Users,
+        title: `${pendingTeamInvites.length} convite(s) de equipe pendente(s)`,
+        description: "Aceite convites para operar servidores com permissoes compartilhadas.",
+        href: "/account/teams",
+        actionLabel: "Ver convites",
+        tone: "info",
+        priority: 50,
+      });
+    }
+
+    if (managedServersCount === 0 && currentAccount.discordUserId) {
+      tasks.push({
+        key: "first-server",
+        icon: Server,
+        title: "Adicione seu primeiro servidor ao painel",
+        description: "Comece com tickets, protecao, vendas e logs em uma unica configuracao.",
+        href: "/servers/plans",
+        actionLabel: "Comecar",
+        tone: "info",
+        priority: 60,
+      });
+    }
+
+    if (managedServersCount > 0 && teams.length === 0) {
+      tasks.push({
+        key: "create-team",
+        icon: Users,
+        title: "Crie uma equipe para dividir a operacao",
+        description: "Organize staff, acesso por servidor e permissoes sem compartilhar sua conta.",
+        href: "/account/teams",
+        actionLabel: "Criar equipe",
+        tone: "info",
+        priority: 70,
+      });
+    }
+
+    if (tasks.length === 0) {
+      tasks.push({
+        key: "all-set",
+        icon: CheckCircle2,
+        title: "Sua central esta em dia",
+        description: "Nenhuma pendencia critica agora. Explore dominios, hospedagem e novas automacoes.",
+        href: "/dashboard/domains/acquire",
+        actionLabel: "Explorar",
+        tone: "success",
+        priority: 90,
+      });
+    }
+
+    return tasks
+      .filter((task) => !dismissedTaskKeys.includes(task.key))
+      .sort((left, right) => left.priority - right.priority)
+      .slice(0, 3);
+  }, [
+    accountPlan,
+    currentAccount.discordUserId,
+    dismissedTaskKeys,
+    expiredServersCount,
+    expiringSoonServer,
+    managedServersCount,
+    pendingTeamInvites.length,
+    teams.length,
+  ]);
+  const dashboardTasksTotal = dashboardTasks.length;
   const isCreateTeamNextDisabled =
     isCreatingTeam ||
     (createTeamStep === "name" && createTeamName.trim().length < 3) ||
@@ -678,9 +1102,74 @@ export function DashboardWorkspace({
           ? `${pendingTeamInvites.length} convite(s) pendente(s)`
           : "Nenhuma equipe criada";
 
+  const applyServersSnapshot = useCallback(
+    (nextServers: ManagedServer[]) => {
+      storeCachedManagedServers(workspaceCacheKey, nextServers);
+      setServers((currentServers) =>
+        buildManagedServersSignature(currentServers) ===
+        buildManagedServersSignature(nextServers)
+          ? currentServers
+          : nextServers,
+      );
+    },
+    [workspaceCacheKey],
+  );
+
+  const loadAccountPlan = useCallback(async () => {
+    try {
+      const response = await fetch("/api/auth/me/account/plan", {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | AccountPlanApiResponse
+        | null;
+
+      if (!response.ok || !payload?.ok || !payload.plan) {
+        return;
+      }
+
+      setAccountPlan((currentPlan) => {
+        const currentSignature = currentPlan ? JSON.stringify(currentPlan) : "";
+        const nextSignature = JSON.stringify(payload.plan);
+        return currentSignature === nextSignature ? currentPlan : payload.plan || null;
+      });
+    } catch {
+      // noop
+    }
+  }, []);
+
+  const refreshDashboardHomeSignals = useCallback(async () => {
+    const requests: Array<Promise<void>> = [loadAccountPlan()];
+
+    if (currentAccount.discordUserId) {
+      requests.push(
+        (async () => {
+          try {
+            const response = await fetch("/api/auth/me/servers", {
+              cache: "no-store",
+            });
+            const payload = (await response.json().catch(() => null)) as
+              | { ok?: boolean; servers?: ManagedServer[] }
+              | null;
+
+            if (!response.ok || !payload?.ok) {
+              return;
+            }
+
+            applyServersSnapshot(payload.servers || []);
+          } catch {
+            // noop
+          }
+        })(),
+      );
+    }
+
+    await Promise.allSettled(requests);
+  }, [applyServersSnapshot, currentAccount.discordUserId, loadAccountPlan]);
+
   useEffect(() => {
     if (initialServers !== null) {
-      storeCachedManagedServers(workspaceCacheKey, initialServers);
+      applyServersSnapshot(initialServers);
       return;
     }
 
@@ -689,8 +1178,8 @@ export function DashboardWorkspace({
       return;
     }
 
-    setServers(cachedServers);
-  }, [initialServers, workspaceCacheKey]);
+    applyServersSnapshot(cachedServers);
+  }, [applyServersSnapshot, initialServers, workspaceCacheKey]);
 
   useEffect(() => {
     if (initialTeams !== null) {
@@ -713,6 +1202,32 @@ export function DashboardWorkspace({
     setTeamsErrorMessage(null);
     setIsTeamsLoading(false);
   }, [initialPendingInvites, initialTeams, workspaceCacheKey]);
+
+  useEffect(() => {
+    setDismissedTaskKeys(readDismissedDashboardTasks());
+  }, []);
+
+  useEffect(() => {
+    if (!isHomeView) return;
+
+    void refreshDashboardHomeSignals();
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void refreshDashboardHomeSignals();
+    }, DASHBOARD_HOME_SIGNAL_REFRESH_MS);
+
+    function handleDashboardHomeFocus() {
+      void refreshDashboardHomeSignals();
+    }
+
+    window.addEventListener("focus", handleDashboardHomeFocus);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleDashboardHomeFocus);
+    };
+  }, [isHomeView, refreshDashboardHomeSignals]);
 
   useEffect(() => {
     if (isDomainsActive) {
@@ -813,8 +1328,7 @@ export function DashboardWorkspace({
         }
 
         const nextServers = payload.servers || [];
-        storeCachedManagedServers(workspaceCacheKey, nextServers);
-        setServers(nextServers);
+        applyServersSnapshot(nextServers);
       } catch {
         // noop
       }
@@ -825,7 +1339,7 @@ export function DashboardWorkspace({
     return () => {
       isMounted = false;
     };
-  }, [initialServers, workspaceCacheKey]);
+  }, [applyServersSnapshot, initialServers, workspaceCacheKey]);
 
   useEffect(() => {
     void loadTeamServerCatalog();
@@ -1029,6 +1543,14 @@ export function DashboardWorkspace({
     },
     [prefetchRoute],
   );
+
+  const handleDismissDashboardTask = useCallback((taskKey: string) => {
+    setDismissedTaskKeys((currentKeys) => {
+      const nextKeys = Array.from(new Set([...currentKeys, taskKey]));
+      writeDismissedDashboardTasks(nextKeys);
+      return nextKeys;
+    });
+  }, []);
 
   const resetCreateTeamForm = useCallback(() => {
     setCreateTeamStep("name");
@@ -1927,6 +2449,56 @@ export function DashboardWorkspace({
                 </div>
               </div>
             </LandingReveal>
+
+            {isHomeView ? (
+              <LandingReveal delay={48} duration={240}>
+                <div className="mt-[24px] space-y-[24px]">
+                  <section aria-label="Suas tarefas">
+                    <div className="mb-[12px] flex flex-wrap items-center justify-between gap-[12px]">
+                      <div className="flex items-center gap-[10px]">
+                        <h2 className="text-[20px] leading-none font-semibold tracking-[-0.04em] text-[#F1F1F1]">
+                          Suas tarefas
+                        </h2>
+                        <span className="inline-flex h-[24px] min-w-[24px] items-center justify-center rounded-full bg-[#D93A6F] px-[7px] text-[12px] font-semibold text-white">
+                          {dashboardTasksTotal}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onMouseEnter={() => prefetchRoute("/account")}
+                        onFocus={() => prefetchRoute("/account")}
+                        onPointerDown={() => prefetchRoute("/account")}
+                        onClick={() => navigateToHref("/account")}
+                        className="inline-flex h-[36px] items-center justify-center rounded-[12px] border border-[#171717] bg-[#0D0D0D] px-[13px] text-[13px] font-medium text-[#AFAFAF] transition-colors hover:border-[#242424] hover:text-[#F1F1F1]"
+                      >
+                        Visualizar conta
+                      </button>
+                    </div>
+
+                    <div className="grid gap-[12px] xl:grid-cols-3">
+                      {dashboardTasks.map((task) => (
+                        <DashboardTaskCard
+                          key={task.key}
+                          task={task}
+                          onDismiss={handleDismissDashboardTask}
+                          onNavigate={navigateToHref}
+                          onPrefetch={prefetchRoute}
+                        />
+                      ))}
+                    </div>
+                  </section>
+
+                  {!isMarketingBannerDismissed ? (
+                    <DashboardMarketingBanner
+                      hasManagedServers={managedServersCount > 0}
+                      onNavigate={navigateToHref}
+                      onPrefetch={prefetchRoute}
+                      onDismiss={() => setIsMarketingBannerDismissed(true)}
+                    />
+                  ) : null}
+                </div>
+              </LandingReveal>
+            ) : null}
 
             {shouldShowDashboardLoading ? (
               <LandingReveal delay={52} duration={240}>
