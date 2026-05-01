@@ -36,6 +36,7 @@ type LoginPageProps = {
     expiresAt?: string | string[];
     resendAt?: string | string[];
     provider?: string | string[];
+    email?: string | string[];
   }>;
 };
 
@@ -166,6 +167,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                     }
                   : null
               }
+              initialEmail={takeFirstQueryValue(query.email)}
             />
           </div>
         </div>

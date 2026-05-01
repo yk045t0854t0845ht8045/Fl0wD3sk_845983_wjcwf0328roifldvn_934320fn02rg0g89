@@ -785,6 +785,39 @@ export async function sendLoginOtpEmail(input: {
   }
 }
 
+export async function sendPasswordResetEmail(input: {
+  toEmail: string;
+  resetUrl: string;
+  expiresInMinutes: number;
+}) {
+  await sendFlowdeskTransactionalEmail({
+    toEmail: input.toEmail,
+    subject: "Flowdesk | Redefinir senha",
+    preheader: "Use o botao seguro para criar uma nova senha na sua conta Flowdesk.",
+    badgeLabel: "Seguranca da conta",
+    title: "Redefina sua senha",
+    intro:
+      "Recebemos uma solicitacao para trocar a senha da sua conta. Clique no botao abaixo para criar uma nova senha com seguranca.",
+    sections: [
+      {
+        label: "Conta",
+        value: maskEmailAddress(input.toEmail),
+      },
+      {
+        label: "Validade",
+        value: `${Math.max(1, input.expiresInMinutes)} minuto(s)`,
+      },
+    ],
+    action: {
+      label: "Criar nova senha",
+      href: input.resetUrl,
+    },
+    footer:
+      "Se voce nao pediu essa troca, ignore este email. O link e de uso unico e expira automaticamente.",
+    type: "auth-password-reset",
+  });
+}
+
 export type FlowdeskTransactionalEmailSection = {
   label: string;
   value: string | number | null | undefined;

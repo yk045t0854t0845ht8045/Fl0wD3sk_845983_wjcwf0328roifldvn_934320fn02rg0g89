@@ -39,10 +39,19 @@ export async function GET(request: Request) {
       );
     }
 
-    await ensureUserPaymentDeliveryReady({
-      userId: authSession.user.id,
-      source: "managed_servers_get",
-    });
+    if (forceFresh) {
+      await ensureUserPaymentDeliveryReady({
+        userId: authSession.user.id,
+        source: "managed_servers_get",
+        limit: 4,
+      });
+    } else {
+      void ensureUserPaymentDeliveryReady({
+        userId: authSession.user.id,
+        source: "managed_servers_get",
+        limit: 3,
+      }).catch(() => null);
+    }
 
     const snapshot = await getPanelManagedServersSnapshotForCurrentSession({
       forceFresh,

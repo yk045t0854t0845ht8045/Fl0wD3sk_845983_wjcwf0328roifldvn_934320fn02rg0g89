@@ -39,6 +39,20 @@ function resolvePasswordPepper() {
   return null;
 }
 
+function resolvePreviousPasswordPeppers() {
+  const raw = process.env.AUTH_PASSWORD_PREVIOUS_PEPPERS?.trim() || "";
+  if (!raw) return [];
+
+  return Array.from(
+    new Set(
+      raw
+        .split(/[,\n]/g)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 function readPositiveIntegerEnv(name: string, fallback: number) {
   const rawValue = process.env[name]?.trim();
   if (!rawValue) return fallback;
@@ -177,12 +191,16 @@ function scryptAsync(
   });
 }
 
-function preparePasswordForPrefix(password: string, prefix: string) {
+function preparePasswordForPrefix(
+  password: string,
+  prefix: string,
+  pepperOverride?: string | null,
+) {
   if (prefix !== PASSWORD_HASH_PREFIX) {
     return password;
   }
 
-  const pepper = resolvePasswordPepper();
+  const pepper = pepperOverride || resolvePasswordPepper();
   if (!pepper) {
     throw new Error("AUTH_PASSWORD_PEPPER/FLOWSECURE_MASTER_KEY nao configurado no ambiente.");
   }
@@ -224,15 +242,23 @@ export async function verifyPassword(
   password: string,
   storedHash: string | null | undefined,
 ) {
+  const result = await verifyPasswordDetailed(password, storedHash);
+  return result.ok;
+}
+
+export async function verifyPasswordDetailed(
+  password: string,
+  storedHash: string | null | undefined,
+): Promise<{ ok: boolean; usedPreviousPepper: boolean }> {
   if (!storedHash || typeof storedHash !== "string") {
-    return false;
+    return { ok: false, usedPreviousPepper: false };
   }
 
   const [prefix, rawN, rawR, rawP, saltBase64, keyBase64] = storedHash.split("$");
   const supportsPrefix =
     prefix === PASSWORD_HASH_PREFIX || prefix === LEGACY_PASSWORD_HASH_PREFIX;
   if (!supportsPrefix || !rawN || !rawR || !rawP || !saltBase64 || !keyBase64) {
-    return false;
+    return { ok: false, usedPreviousPepper: false };
   }
 
   const N = Number(rawN);
@@ -240,30 +266,47 @@ export async function verifyPassword(
   const p = Number(rawP);
   const scryptParams = resolveStoredHashScryptParams(N, r, p);
   if (!scryptParams) {
-    return false;
+    return { ok: false, usedPreviousPepper: false };
   }
 
   const salt = Buffer.from(saltBase64, "base64url");
   const expectedKey = Buffer.from(keyBase64, "base64url");
-  let derivedKey: Buffer;
-  const preparedPassword = preparePasswordForPrefix(password, prefix);
+  const pepperCandidates =
+    prefix === PASSWORD_HASH_PREFIX
+      ? [null, ...resolvePreviousPasswordPeppers()]
+      : [null];
 
-  try {
-    derivedKey = (await scryptAsync(preparedPassword, salt, expectedKey.length, {
-      N: scryptParams.N,
-      r: scryptParams.r,
-      p: scryptParams.p,
-      maxmem: scryptParams.maxmem,
-    })) as Buffer;
-  } catch (error) {
-    throw normalizeScryptRuntimeError(error, "verify");
+  for (const pepperCandidate of pepperCandidates) {
+    let derivedKey: Buffer;
+    const preparedPassword = preparePasswordForPrefix(
+      password,
+      prefix,
+      pepperCandidate,
+    );
+
+    try {
+      derivedKey = (await scryptAsync(preparedPassword, salt, expectedKey.length, {
+        N: scryptParams.N,
+        r: scryptParams.r,
+        p: scryptParams.p,
+        maxmem: scryptParams.maxmem,
+      })) as Buffer;
+    } catch (error) {
+      throw normalizeScryptRuntimeError(error, "verify");
+    }
+
+    if (
+      derivedKey.length === expectedKey.length &&
+      crypto.timingSafeEqual(derivedKey, expectedKey)
+    ) {
+      return {
+        ok: true,
+        usedPreviousPepper: Boolean(pepperCandidate),
+      };
+    }
   }
 
-  if (derivedKey.length !== expectedKey.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(derivedKey, expectedKey);
+  return { ok: false, usedPreviousPepper: false };
 }
 
 export function shouldUpgradePasswordHash(storedHash: string | null | undefined) {

@@ -420,9 +420,9 @@ export function LandingOfferPlans({
   }, [serviceState]);
 
   return (
-    <div className="mx-auto mt-[18px] w-full max-w-[1582px] pt-0 min-[1580px]:mt-[20px] min-[1580px]:pt-[45px]">
+    <div className="mx-auto mt-[24px] w-full max-w-[1582px] pt-0 min-[1580px]:mt-[30px] min-[1580px]:pt-[45px]">
       <LandingReveal delay={1900}>
-        <div className="relative z-40 flex w-full -translate-y-[45px] justify-center">
+        <div className="relative z-40 flex w-full -translate-y-[0px] justify-center px-[20px] min-[1580px]:-translate-y-[20px] min-[1580px]:px-0">
           <BillingPeriodSwitcher
             value={selectedBillingPeriodCode}
             onChange={setSelectedBillingPeriodCode}
@@ -433,7 +433,7 @@ export function LandingOfferPlans({
 
       {serviceState !== "ready" ? (
         <LandingReveal delay={1960}>
-          <p className="mx-auto -mt-[26px] max-w-[720px] px-[20px] text-center text-[13px] leading-[1.45] text-[rgba(218,218,218,0.56)]">
+          <p className="mx-auto mt-[12px] max-w-[720px] px-[20px] text-center text-[13px] leading-[1.45] text-[rgba(218,218,218,0.56)]">
             {serviceState === "loading"
               ? "Carregando disponibilidade do checkout com seguranca..."
               : "Checkout temporariamente indisponivel. Aguarde alguns instantes antes de tentar novamente."}
@@ -441,7 +441,7 @@ export function LandingOfferPlans({
         </LandingReveal>
       ) : null}
 
-      <div className="mx-auto mt-[22px] grid w-full max-w-[372px] grid-cols-1 justify-items-center items-start gap-x-[12px] gap-y-[26px] px-[20px] min-[900px]:max-w-[756px] min-[900px]:grid-cols-2 min-[900px]:gap-y-[20px] min-[1580px]:max-w-none min-[1580px]:grid-cols-4 min-[1580px]:justify-items-stretch min-[1580px]:gap-y-[12px] min-[1580px]:px-0">
+      <div className="mx-auto mt-[22px] grid w-full max-w-[372px] grid-cols-1 justify-items-center items-start gap-x-[12px] gap-y-[26px] px-[20px] min-[900px]:max-w-[756px] min-[900px]:grid-cols-2 min-[900px]:gap-y-[20px] min-[1580px]:mt-[34px] min-[1580px]:max-w-none min-[1580px]:grid-cols-4 min-[1580px]:justify-items-stretch min-[1580px]:gap-y-[12px] min-[1580px]:px-0">
         {plans.map((plan, index) => (
           <OfferPlanCard
             key={plan.code}

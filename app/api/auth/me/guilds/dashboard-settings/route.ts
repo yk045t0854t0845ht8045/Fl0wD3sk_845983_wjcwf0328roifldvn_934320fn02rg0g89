@@ -317,6 +317,75 @@ function buildTicketStaffPayload(input: {
   };
 }
 
+function buildSalesPayload(input: {
+  record: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+  textSet: Set<string>;
+  categorySet: Set<string>;
+  updatedAt: string | null;
+}) {
+  if (!input.record && !input.snapshot) {
+    return null;
+  }
+
+  const resolveTextChannel = (snapshotKey: string, recordKey: string) =>
+    typeof input.snapshot?.[snapshotKey] === "string" &&
+    (input.textSet.size === 0 || input.textSet.has(input.snapshot[snapshotKey] as string))
+      ? (input.snapshot[snapshotKey] as string)
+      : typeof input.record?.[recordKey] === "string" &&
+          (input.textSet.size === 0 || input.textSet.has(input.record[recordKey] as string))
+        ? (input.record[recordKey] as string)
+        : null;
+
+  return {
+    enabled:
+      typeof input.snapshot?.enabled === "boolean"
+        ? input.snapshot.enabled
+        : input.record?.enabled === true,
+    cartsCategoryId:
+      typeof input.snapshot?.cartsCategoryId === "string" &&
+      (input.categorySet.size === 0 ||
+        input.categorySet.has(input.snapshot.cartsCategoryId))
+        ? input.snapshot.cartsCategoryId
+        : typeof input.record?.carts_category_id === "string" &&
+            (input.categorySet.size === 0 ||
+              input.categorySet.has(input.record.carts_category_id))
+          ? input.record.carts_category_id
+          : null,
+    paymentApprovedLogChannelId: resolveTextChannel(
+      "paymentApprovedLogChannelId",
+      "payment_approved_log_channel_id",
+    ),
+    paymentPendingLogChannelId: resolveTextChannel(
+      "paymentPendingLogChannelId",
+      "payment_pending_log_channel_id",
+    ),
+    paymentRejectedLogChannelId: resolveTextChannel(
+      "paymentRejectedLogChannelId",
+      "payment_rejected_log_channel_id",
+    ),
+    receiptCompanyName:
+      typeof input.snapshot?.receiptCompanyName === "string"
+        ? input.snapshot.receiptCompanyName
+        : typeof input.record?.receipt_company_name === "string"
+          ? input.record.receipt_company_name
+          : "",
+    receiptCompanyDocument:
+      typeof input.snapshot?.receiptCompanyDocument === "string"
+        ? input.snapshot.receiptCompanyDocument
+        : typeof input.record?.receipt_company_document === "string"
+          ? input.record.receipt_company_document
+          : "",
+    receiptSupportText:
+      typeof input.snapshot?.receiptSupportText === "string"
+        ? input.snapshot.receiptSupportText
+        : typeof input.record?.receipt_support_text === "string"
+          ? input.record.receipt_support_text
+          : "",
+    updatedAt: input.updatedAt,
+  };
+}
+
 function buildWelcomePayload(input: {
   record: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
@@ -825,6 +894,7 @@ export async function GET(request: Request) {
       welcomeResult,
       antiLinkResult,
       autoRoleResult,
+      salesResult,
       securityLogsResult,
       secureSnapshots,
     ] = await Promise.all([
@@ -864,6 +934,13 @@ export async function GET(request: Request) {
         .eq("guild_id", guildId)
         .maybeSingle(),
       supabase
+        .from("guild_sales_settings")
+        .select(
+          "enabled, carts_category_id, payment_approved_log_channel_id, payment_pending_log_channel_id, payment_rejected_log_channel_id, receipt_company_name, receipt_company_document, receipt_support_text, updated_at",
+        )
+        .eq("guild_id", guildId)
+        .maybeSingle(),
+      supabase
         .from("guild_security_logs_settings")
         .select(
           "enabled, use_default_channel, default_channel_id, nickname_change_enabled, nickname_change_channel_id, avatar_change_enabled, avatar_change_channel_id, voice_join_enabled, voice_join_channel_id, voice_leave_enabled, voice_leave_channel_id, message_delete_enabled, message_delete_channel_id, message_edit_enabled, message_edit_channel_id, member_ban_enabled, member_ban_channel_id, member_unban_enabled, member_unban_channel_id, member_kick_enabled, member_kick_channel_id, member_timeout_enabled, member_timeout_channel_id, voice_mute_enabled, voice_mute_channel_id, updated_at",
@@ -878,6 +955,7 @@ export async function GET(request: Request) {
           "welcome_settings",
           "antilink_settings",
           "autorole_settings",
+          "sales_settings",
           "security_logs_settings",
         ] satisfies ServerSettingsVaultModule[],
       }),
@@ -891,6 +969,16 @@ export async function GET(request: Request) {
     if (welcomeResult.error) throw new Error(welcomeResult.error.message);
     if (antiLinkResult.error) throw new Error(antiLinkResult.error.message);
     if (autoRoleResult.error) throw new Error(autoRoleResult.error.message);
+    if (salesResult.error) {
+      const code = typeof salesResult.error.code === "string" ? salesResult.error.code : "";
+      const message =
+        typeof salesResult.error.message === "string"
+          ? salesResult.error.message.toLowerCase()
+          : "";
+      if (code !== "42P01" && !message.includes("guild_sales_settings")) {
+        throw new Error(salesResult.error.message);
+      }
+    }
     if (securityLogsResult.error) {
       throw new Error(securityLogsResult.error.message);
     }
@@ -1005,6 +1093,19 @@ export async function GET(request: Request) {
           secureSnapshots.get("autorole_settings")?.updatedAt ||
           (typeof autoRoleResult.data?.updated_at === "string"
             ? autoRoleResult.data.updated_at
+            : null),
+      }),
+      salesSettings: buildSalesPayload({
+        record: toRecordOrNull(salesResult.data),
+        snapshot: toRecordOrNull(
+          secureSnapshots.get("sales_settings")?.payload,
+        ),
+        textSet,
+        categorySet,
+        updatedAt:
+          secureSnapshots.get("sales_settings")?.updatedAt ||
+          (typeof salesResult.data?.updated_at === "string"
+            ? salesResult.data.updated_at
             : null),
       }),
       securityLogsSettings: buildSecurityLogsPayload({

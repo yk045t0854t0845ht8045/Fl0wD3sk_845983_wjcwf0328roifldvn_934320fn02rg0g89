@@ -9,7 +9,7 @@ import { createLoginOtpChallenge, resendLoginOtpChallenge, verifyLoginOtpChallen
 import {
   hashPassword,
   shouldUpgradePasswordHash,
-  verifyPassword,
+  verifyPasswordDetailed,
 } from "@/lib/auth/password";
 import { validatePasswordPolicy } from "@/lib/auth/passwordPolicy";
 import { validateTrustedDevice } from "@/lib/auth/trustedDevice";
@@ -37,7 +37,7 @@ async function getPasswordCredentialForUser(userId: number) {
   return result.data;
 }
 
-async function upsertPasswordCredential(userId: number, password: string) {
+export async function upsertPasswordCredential(userId: number, password: string) {
   const supabase = getSupabaseAdminClientOrThrow();
   const passwordHash = await hashPassword(password);
   const nowIso = new Date().toISOString();
@@ -122,12 +122,18 @@ export async function authenticateEmailPasswordAndIssueOtp(input: {
       throw new Error("Esta conta ainda nao possui senha configurada.");
     }
 
-    const passwordOk = await verifyPassword(input.password, credential.password_hash);
-    if (!passwordOk) {
+    const passwordValidation = await verifyPasswordDetailed(
+      input.password,
+      credential.password_hash,
+    );
+    if (!passwordValidation.ok) {
       throw new Error("Senha incorreta. Revise e tente novamente.");
     }
 
-    if (shouldUpgradePasswordHash(credential.password_hash)) {
+    if (
+      passwordValidation.usedPreviousPepper ||
+      shouldUpgradePasswordHash(credential.password_hash)
+    ) {
       await upsertPasswordCredential(user.id, input.password).catch(() => null);
     }
 

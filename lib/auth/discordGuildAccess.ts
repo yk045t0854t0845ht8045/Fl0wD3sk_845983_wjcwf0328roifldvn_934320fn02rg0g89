@@ -235,6 +235,7 @@ type SessionAccessContext = {
 
 type AccessibleGuildsOptions = {
   forceFresh?: boolean;
+  allowStaleCache?: boolean;
 };
 
 export function filterAccessibleGuilds(guilds: DiscordGuild[]) {
@@ -262,7 +263,8 @@ export async function getAccessibleGuildsForSession(
   if (
     !options.forceFresh &&
     cachedGuilds !== null &&
-    isGuildCacheFresh(sessionContext.authSession.discordGuildsCachedAt)
+    (options.allowStaleCache ||
+      isGuildCacheFresh(sessionContext.authSession.discordGuildsCachedAt))
   ) {
     return filterAccessibleGuilds(cachedGuilds);
   }
