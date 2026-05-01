@@ -681,6 +681,16 @@ function resolveSmtpConfigOrThrow(): AuthSmtpConfig {
   };
 }
 
+function resolveSmtpTimeoutMs(name: string, fallback: number) {
+  const rawValue = process.env[name]?.trim();
+  if (!rawValue) return fallback;
+
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.trunc(parsed)
+    : fallback;
+}
+
 function getTransporter() {
   const config = resolveSmtpConfigOrThrow();
   const cacheKey = JSON.stringify({
@@ -706,6 +716,9 @@ function getTransporter() {
     host: config.host,
     port: config.port,
     secure: config.secure,
+    connectionTimeout: resolveSmtpTimeoutMs("AUTH_SMTP_CONNECTION_TIMEOUT_MS", 4_000),
+    greetingTimeout: resolveSmtpTimeoutMs("AUTH_SMTP_GREETING_TIMEOUT_MS", 4_000),
+    socketTimeout: resolveSmtpTimeoutMs("AUTH_SMTP_SOCKET_TIMEOUT_MS", 10_000),
     auth:
       config.user && config.pass
         ? {
@@ -815,6 +828,7 @@ export async function sendPasswordResetEmail(input: {
     footer:
       "Se voce nao pediu essa troca, ignore este email. O link e de uso unico e expira automaticamente.",
     type: "auth-password-reset",
+    skipDeliverabilityChecks: true,
   });
 }
 
@@ -988,10 +1002,13 @@ export async function sendFlowdeskTransactionalEmail(input: {
   action?: FlowdeskTransactionalEmailAction | null;
   footer?: string | null;
   type: string;
+  skipDeliverabilityChecks?: boolean;
 }) {
   const { transporter, config } = getTransporter();
   await ensureSmtpHostResolvable(config.host);
-  await warnAboutRecommendedDnsRecords(config.fromEmail);
+  if (!input.skipDeliverabilityChecks) {
+    await warnAboutRecommendedDnsRecords(config.fromEmail);
+  }
 
   const from = config.fromName
     ? `"${config.fromName.replace(/"/g, "")}" <${config.fromEmail}>`

@@ -68,6 +68,10 @@ function isOAuthHandshakePath(pathname: string) {
   );
 }
 
+function isPasswordResetPath(pathname: string) {
+  return pathname === "/pass" || pathname.startsWith("/pass/");
+}
+
 function requiresSameOriginProtection(pathname: string, method: string) {
   if (!MUTATION_METHODS.has(method.toUpperCase())) {
     return false;
@@ -284,6 +288,19 @@ function maybeBuildCanonicalAuthRedirect(
   const pathname = request.nextUrl.pathname;
   const currentLocation = getCurrentRequestLocation(request);
 
+  if (isPasswordResetPath(pathname)) {
+    const targetLocation = new URL(
+      `${pathname}${request.nextUrl.search}`,
+      resolveAuthOrigin(request),
+    ).toString();
+
+    if (targetLocation !== currentLocation) {
+      return buildRedirectResponse(request, requestId, csp, targetLocation);
+    }
+
+    return null;
+  }
+
   if (pathname === "/login" || pathname === "/login/") {
     const targetLocation = buildCanonicalUrlFromInternalPath(
       request,
@@ -441,6 +458,10 @@ function maybeBuildCanonicalWorkspaceRedirect(
   }
 
   if (!hostArea) {
+    return null;
+  }
+
+  if (hostArea === "login" && isPasswordResetPath(pathname)) {
     return null;
   }
 
