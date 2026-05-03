@@ -1,12 +1,12 @@
-import { WorkspaceRouteContentLoading } from "@/components/workspace/WorkspaceRouteLoading";
-
 type ServerSettingsSection =
   | "overview"
   | "message"
   | "sales_overview"
   | "sales_categories"
   | "sales_category_create"
+  | "sales_category_edit"
   | "sales_products"
+  | "sales_product_create"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -23,11 +23,6 @@ type ServerSettingsRouteLoadingProps = {
 export function ServerSettingsRouteLoading({
   settingsSection,
 }: ServerSettingsRouteLoadingProps) {
-  return (
-    <WorkspaceRouteContentLoading
-      variant="server-settings"
-      tab="settings"
-      settingsSection={settingsSection}
-    />
-  );
+  void settingsSection;
+  return null;
 }

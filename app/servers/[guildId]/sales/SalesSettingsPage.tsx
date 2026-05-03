@@ -6,7 +6,9 @@ type ServerSalesSettingsSection =
   | "sales_overview"
   | "sales_categories"
   | "sales_category_create"
+  | "sales_category_edit"
   | "sales_products"
+  | "sales_product_create"
   | "sales_payment_methods"
   | "sales_coupons_gifts";
 

@@ -19,6 +19,8 @@ const CATEGORY_TITLE_MAX_LENGTH = 90;
 const CATEGORY_DESCRIPTION_MAX_LENGTH = 1200;
 const SEO_TITLE_MAX_LENGTH = 90;
 const SEO_DESCRIPTION_MAX_LENGTH = 180;
+const CATEGORY_SELECT =
+  "id, guild_id, title, description, collection_type, image_url, theme_model, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at";
 
 type GuildSalesCategoryRecord = {
   id: string;
@@ -61,9 +63,24 @@ function isMissingSalesCategoriesTable(error: unknown) {
   return code === "42P01" || message.includes("guild_sales_categories");
 }
 
+function buildCategoryCode(id: string) {
+  const digits = id.replace(/\D/g, "");
+  const seed =
+    digits ||
+    Array.from(id).reduce((acc, char) => `${acc}${char.charCodeAt(0)}`, "");
+  return `flw-${seed.padEnd(8, "0").slice(0, 8)}`;
+}
+
+function normalizeCategoryCode(value: unknown) {
+  if (typeof value !== "string") return "";
+  const code = value.trim().toLowerCase();
+  return /^flw-[0-9]{8}$/.test(code) ? code : "";
+}
+
 function buildCategoryResponse(record: GuildSalesCategoryRecord) {
   return {
     id: record.id,
+    code: buildCategoryCode(record.id),
     guildId: record.guild_id,
     title: record.title,
     description: record.description || "",
@@ -83,6 +100,21 @@ function buildCategoryResponse(record: GuildSalesCategoryRecord) {
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
+}
+
+async function findCategoryByCode(guildId: string, categoryCode: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_categories")
+    .select(CATEGORY_SELECT)
+    .eq("guild_id", guildId)
+    .limit(300);
+
+  if (result.error) throw new Error(result.error.message);
+
+  return ((result.data || []) as GuildSalesCategoryRecord[]).find(
+    (record) => buildCategoryCode(record.id) === categoryCode,
+  );
 }
 
 async function ensureGuildAccess(
@@ -152,6 +184,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const guildId = (url.searchParams.get("guildId") || "").trim();
+    const categoryCode = normalizeCategoryCode(url.searchParams.get("categoryCode"));
 
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
@@ -166,11 +199,28 @@ export async function GET(request: Request) {
     if (!access.ok) return applyNoStoreHeaders(access.response);
 
     const supabase = getSupabaseAdminClientOrThrow();
+    if (categoryCode) {
+      const category = await findCategoryByCode(guildId, categoryCode);
+      if (!category) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { ok: false, message: "Categoria nao encontrada." },
+            { status: 404 },
+          ),
+        );
+      }
+
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          category: buildCategoryResponse(category),
+        }),
+      );
+    }
+
     const result = await supabase
       .from("guild_sales_categories")
-      .select(
-        "id, guild_id, title, description, collection_type, image_url, theme_model, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at",
-      )
+      .select(CATEGORY_SELECT)
       .eq("guild_id", guildId)
       .order("active", { ascending: false })
       .order("sort_order", { ascending: true })
@@ -271,7 +321,7 @@ export async function POST(request: Request) {
         configured_by_user_id: access.context.authUserId,
       })
       .select(
-        "id, guild_id, title, description, collection_type, image_url, theme_model, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at",
+        CATEGORY_SELECT,
       )
       .single();
 
@@ -291,6 +341,116 @@ export async function POST(request: Request) {
           message: sanitizeErrorMessage(
             error,
             "Erro ao salvar categoria de vendas.",
+          ),
+        },
+        { status: 500 },
+      ),
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) {
+    return applyNoStoreHeaders(invalidMutationResponse);
+  }
+
+  try {
+    const rawBody =
+      (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const guildId = getTrimmedText(rawBody.guildId, 25);
+    const categoryCode = normalizeCategoryCode(rawBody.categoryCode);
+    const title = getTrimmedText(rawBody.title, CATEGORY_TITLE_MAX_LENGTH);
+    const description = getTrimmedText(
+      rawBody.description,
+      CATEGORY_DESCRIPTION_MAX_LENGTH,
+    );
+    const seoTitle = getTrimmedText(rawBody.seoTitle, SEO_TITLE_MAX_LENGTH);
+    const seoDescription = getTrimmedText(
+      rawBody.seoDescription,
+      SEO_DESCRIPTION_MAX_LENGTH,
+    );
+    const collectionType = normalizeCollectionType(rawBody.collectionType);
+    const themeModel = normalizeThemeModel(rawBody.themeModel);
+    const imageUrl = getTrimmedText(rawBody.imageUrl, 500) || null;
+    const publishedVirtualStore = rawBody.publishedVirtualStore !== false;
+    const publishedPointOfSale = rawBody.publishedPointOfSale === true;
+
+    if (!isGuildId(guildId)) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Guild ID invalido." },
+          { status: 400 },
+        ),
+      );
+    }
+
+    if (!categoryCode) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Codigo da categoria invalido." },
+          { status: 400 },
+        ),
+      );
+    }
+
+    if (title.length < 2) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Informe um titulo com pelo menos 2 caracteres." },
+          { status: 400 },
+        ),
+      );
+    }
+
+    const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
+    if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    const category = await findCategoryByCode(guildId, categoryCode);
+    if (!category) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Categoria nao encontrada." },
+          { status: 404 },
+        ),
+      );
+    }
+
+    const supabase = getSupabaseAdminClientOrThrow();
+    const result = await supabase
+      .from("guild_sales_categories")
+      .update({
+        title,
+        description,
+        collection_type: collectionType,
+        image_url: imageUrl,
+        theme_model: themeModel,
+        published_virtual_store: publishedVirtualStore,
+        published_point_of_sale: publishedPointOfSale,
+        seo_title: seoTitle || title,
+        seo_description: seoDescription,
+      })
+      .eq("id", category.id)
+      .eq("guild_id", guildId)
+      .select(CATEGORY_SELECT)
+      .single();
+
+    if (result.error) throw new Error(result.error.message);
+
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        ok: true,
+        category: buildCategoryResponse(result.data as GuildSalesCategoryRecord),
+      }),
+    );
+  } catch (error) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: sanitizeErrorMessage(
+            error,
+            "Erro ao atualizar categoria de vendas.",
           ),
         },
         { status: 500 },

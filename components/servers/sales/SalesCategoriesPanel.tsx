@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Bold,
@@ -38,12 +38,16 @@ import {
 
 type SalesCategory = {
   id: string;
+  code: string;
   title: string;
   description: string;
   collectionType: "manual" | "smart";
+  imageUrl?: string | null;
   themeModel: "default" | "compact" | "featured";
   publishedVirtualStore: boolean;
   publishedPointOfSale: boolean;
+  seoTitle?: string;
+  seoDescription?: string;
   productsCount: number;
   active: boolean;
   createdAt: string;
@@ -84,6 +88,19 @@ function getCreatePath(guildId: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/categories/create/`;
 }
 
+function getEditPath(guildId: string, categoryCode: string) {
+  return `/servers/${encodeURIComponent(guildId)}/sales/categories/edit/${encodeURIComponent(categoryCode)}/`;
+}
+
+function getCategoryCodeFromPath(pathname: string | null) {
+  const match = pathname?.match(/\/sales\/categories\/edit\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function revokeObjectUrl(url: string | null) {
+  if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Agora";
@@ -92,6 +109,100 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(date);
+}
+
+function renderInlineMarkdown(value: string) {
+  const parts: ReactNode[] = [];
+  const pattern =
+    /(!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|_([^_]+)_|`([^`]+)`)/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value))) {
+    if (match.index > cursor) {
+      parts.push(value.slice(cursor, match.index));
+    }
+
+    if (match[2] !== undefined) {
+      parts.push(
+        <span key={`image-${match.index}`} className="font-semibold text-[#EDEDED]">
+          [imagem: {match[2] || "sem descricao"}]
+        </span>,
+      );
+    } else if (match[4] !== undefined) {
+      parts.push(
+        <span key={`link-${match.index}`} className="font-semibold text-[#F2F2F2] underline underline-offset-4">
+          {match[4]}
+        </span>,
+      );
+    } else if (match[6] !== undefined) {
+      parts.push(
+        <strong key={`bold-${match.index}`} className="font-semibold text-[#F4F4F4]">
+          {match[6]}
+        </strong>,
+      );
+    } else if (match[7] !== undefined) {
+      parts.push(
+        <em key={`italic-${match.index}`} className="italic text-[#DFDFDF]">
+          {match[7]}
+        </em>,
+      );
+    } else if (match[8] !== undefined) {
+      parts.push(
+        <code key={`code-${match.index}`} className="rounded-[7px] bg-[#151515] px-[5px] py-[2px] text-[12px] text-[#F1F1F1]">
+          {match[8]}
+        </code>,
+      );
+    }
+
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < value.length) {
+    parts.push(value.slice(cursor));
+  }
+
+  return parts.length ? parts : value;
+}
+
+function MarkdownPreview({ value }: { value: string }) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return (
+      <p className="text-[13px] leading-[1.65] text-[#686868]">
+        A descricao aparecera aqui conforme voce digitar.
+      </p>
+    );
+  }
+
+  const blocks = trimmed.split(/\n{2,}/);
+
+  return (
+    <div className="space-y-[10px]">
+      {blocks.map((block, index) => {
+        if (block.startsWith("```") && block.endsWith("```")) {
+          return (
+            <pre
+              key={`${index}-${block}`}
+              className="overflow-x-auto rounded-[12px] border border-[#1D1D1D] bg-[#111] p-[12px] text-[12px] leading-[1.6] text-[#DCDCDC]"
+            >
+              {block.replace(/^```\n?/, "").replace(/\n?```$/, "")}
+            </pre>
+          );
+        }
+
+        return (
+          <p
+            key={`${index}-${block}`}
+            className="whitespace-pre-wrap break-words text-[13px] leading-[1.65] text-[#CFCFCF]"
+          >
+            {renderInlineMarkdown(block)}
+          </p>
+        );
+      })}
+    </div>
+  );
 }
 
 function IconButton({
@@ -269,6 +380,16 @@ export function SalesCategoriesListPanel({
                   <span className="rounded-full border border-[#1F3D2E] bg-[#0D1A13] px-[10px] py-[6px] text-center text-[12px] text-[#7CE2A0]">
                     {category.active ? "Ativa" : "Pausada"}
                   </span>
+                  <button
+                    type="button"
+                    aria-label={`Editar ${category.title}`}
+                    title="Editar categoria"
+                    onClick={() => router.push(getEditPath(guildId, category.code))}
+                    className="flowdesk-server-button inline-flex h-[34px] w-[34px] items-center justify-center rounded-[12px] border border-[#242424] bg-[#101010] text-[#DADADA] transition hover:border-[#3A3A3A] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
+                    disabled={readOnly}
+                  >
+                    <Pencil className="h-[15px] w-[15px]" />
+                  </button>
                 </div>
               </article>
             ))}
@@ -288,7 +409,12 @@ export function SalesCategoriesListPanel({
 export function SalesCategoryCreatePanel({
   guildId,
   readOnly = false,
-}: SalesCategoriesPanelProps) {
+  mode = "create",
+  categoryCode = "",
+}: SalesCategoriesPanelProps & {
+  mode?: "create" | "edit";
+  categoryCode?: string;
+}) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
@@ -306,6 +432,7 @@ export function SalesCategoryCreatePanel({
   const [productQuery, setProductQuery] = useState("");
   const [imageName, setImageName] = useState<string | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [isLoadingCategory, setIsLoadingCategory] = useState(mode === "edit");
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
   const [isDescriptionPreviewOpen, setIsDescriptionPreviewOpen] = useState(false);
   const [productSortIndex, setProductSortIndex] = useState(0);
@@ -314,9 +441,69 @@ export function SalesCategoryCreatePanel({
 
   useEffect(() => {
     return () => {
-      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+      revokeObjectUrl(imagePreviewUrl);
     };
   }, [imagePreviewUrl]);
+
+  useEffect(() => {
+    if (mode !== "edit") return;
+
+    const safeCategoryCode = categoryCode.trim().toLowerCase();
+    if (!safeCategoryCode) {
+      setStatusMessage("Codigo da categoria invalido.");
+      setIsLoadingCategory(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCategory() {
+      setIsLoadingCategory(true);
+      setStatusMessage(null);
+
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}&categoryCode=${encodeURIComponent(safeCategoryCode)}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+          },
+        );
+        const payload = (await response.json().catch(() => ({}))) as SalesCategoryCreateResponse;
+
+        if (!response.ok || !payload.ok || !payload.category) {
+          throw new Error(payload.message || "Categoria nao encontrada.");
+        }
+
+        if (cancelled) return;
+
+        const category = payload.category;
+        setTitle(category.title);
+        setDescription(category.description || "");
+        setCollectionType(category.collectionType);
+        setThemeModel(category.themeModel);
+        setPublishedVirtualStore(category.publishedVirtualStore);
+        setPublishedPointOfSale(category.publishedPointOfSale);
+        setSeoTitle(category.seoTitle || category.title);
+        setSeoDescription(category.seoDescription || "");
+        setImagePreviewUrl(category.imageUrl || null);
+        setImageName(category.imageUrl ? "Imagem atual" : null);
+      } catch (error) {
+        if (cancelled) return;
+        setStatusMessage(
+          error instanceof Error ? error.message : "Erro ao carregar categoria.",
+        );
+      } finally {
+        if (!cancelled) setIsLoadingCategory(false);
+      }
+    }
+
+    void loadCategory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [categoryCode, guildId, mode]);
 
   useEffect(() => {
     if (!isThemeMenuOpen) return;
@@ -348,7 +535,9 @@ export function SalesCategoryCreatePanel({
     router.push(getCategoriesPath(guildId));
   }, [guildId, router]);
 
-  const canSave = title.trim().length >= 2 && !isSaving && !readOnly;
+  const isEditMode = mode === "edit";
+  const canSave =
+    title.trim().length >= 2 && !isSaving && !isLoadingCategory && !readOnly;
 
   const applyDescriptionFormat = useCallback(
     (
@@ -417,7 +606,7 @@ export function SalesCategoryCreatePanel({
 
       const nextPreviewUrl = URL.createObjectURL(file);
       setImagePreviewUrl((current) => {
-        if (current) URL.revokeObjectURL(current);
+        revokeObjectUrl(current);
         return nextPreviewUrl;
       });
       setImageName(file.name);
@@ -428,7 +617,7 @@ export function SalesCategoryCreatePanel({
 
   const clearImagePreview = useCallback(() => {
     setImagePreviewUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
+      revokeObjectUrl(current);
       return null;
     });
     setImageName(null);
@@ -459,13 +648,14 @@ export function SalesCategoryCreatePanel({
 
     try {
       const response = await fetch("/api/auth/me/guilds/sales-categories", {
-        method: "POST",
+        method: isEditMode ? "PATCH" : "POST",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           guildId,
+          categoryCode: isEditMode ? categoryCode : undefined,
           title,
           description,
           collectionType,
@@ -474,7 +664,10 @@ export function SalesCategoryCreatePanel({
           publishedPointOfSale,
           seoTitle,
           seoDescription,
-          imageUrl: null,
+          imageUrl:
+            imagePreviewUrl && !imagePreviewUrl.startsWith("blob:")
+              ? imagePreviewUrl
+              : null,
         }),
       });
 
@@ -494,9 +687,12 @@ export function SalesCategoryCreatePanel({
     }
   }, [
     canSave,
+    categoryCode,
     collectionType,
     description,
     guildId,
+    imagePreviewUrl,
+    isEditMode,
     publishedPointOfSale,
     publishedVirtualStore,
     router,
@@ -522,7 +718,7 @@ export function SalesCategoryCreatePanel({
           <div className="mt-[10px] flex items-center gap-[10px]">
             <Tag className="h-[18px] w-[18px] text-[#A5A5A5]" />
             <h3 className="text-[24px] font-semibold tracking-[-0.05em] text-[#EFEFEF]">
-              Adicionar categoria
+              {isEditMode ? "Editar categoria" : "Adicionar categoria"}
             </h3>
           </div>
         </div>
@@ -535,7 +731,7 @@ export function SalesCategoryCreatePanel({
           </ServerButton>
           <ServerButton
             aria-busy={isSaving}
-            disabled={readOnly || title.trim().length < 2 || isSaving}
+            disabled={readOnly || title.trim().length < 2 || isSaving || isLoadingCategory}
             onClick={() => void handleSave()}
             variant="primary"
             className="min-w-[172px]"
@@ -552,7 +748,12 @@ export function SalesCategoryCreatePanel({
         </div>
       </div>
 
-      {statusMessage ? (
+      {isLoadingCategory ? (
+        <ServerSurface className="p-[22px]">
+          <div className="h-[14px] w-[220px] animate-pulse rounded-full bg-[#171717]" />
+          <div className="mt-[12px] h-[11px] w-[420px] max-w-full animate-pulse rounded-full bg-[#141414]" />
+        </ServerSurface>
+      ) : statusMessage ? (
         <div className="rounded-[18px] border border-[#3A2A1E] bg-[#170F09] px-[14px] py-[12px] text-[13px] text-[#F2B27D]">
           {statusMessage}
         </div>
@@ -576,7 +777,7 @@ export function SalesCategoryCreatePanel({
               Descricao
             </label>
             <div className="mt-[10px] overflow-hidden rounded-[16px] border border-[#252525] bg-[#0D0D0D]">
-              <div className="flex flex-wrap items-center gap-[6px] border-b border-[#202020] bg-[#111] px-[10px] py-[8px] text-[#BDBDBD]">
+              <div className="flex flex-wrap items-center gap-[6px] bg-[#111] px-[10px] py-[8px] text-[#BDBDBD]">
                 <button
                   type="button"
                   onClick={() => applyDescriptionFormat("paragraph")}
@@ -616,13 +817,13 @@ export function SalesCategoryCreatePanel({
                 className="min-h-[224px] w-full resize-y bg-transparent px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none placeholder:text-[#5D5D5D]"
               />
               {isDescriptionPreviewOpen ? (
-                <div className="border-t border-[#202020] bg-[#0A0A0A] px-[14px] py-[14px]">
+                <div className="bg-[#0A0A0A] px-[14px] py-[14px]">
                   <p className="text-[11px] uppercase tracking-[0.16em] text-[#666]">
                     Previa da descricao
                   </p>
-                  <p className="mt-[8px] whitespace-pre-wrap break-words text-[13px] leading-[1.65] text-[#CFCFCF]">
-                    {description.trim() || "A descricao aparecera aqui conforme voce digitar."}
-                  </p>
+                  <div className="mt-[8px]">
+                    <MarkdownPreview value={description} />
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -935,5 +1136,18 @@ export function SalesCategoryCreatePanel({
         </aside>
       </div>
     </div>
+  );
+}
+
+export function SalesCategoryEditPanel(props: SalesCategoriesPanelProps) {
+  const pathname = usePathname();
+  const categoryCode = getCategoryCodeFromPath(pathname);
+
+  return (
+    <SalesCategoryCreatePanel
+      {...props}
+      mode="edit"
+      categoryCode={categoryCode}
+    />
   );
 }
