@@ -1,22 +1,15 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeft,
-  Bold,
   Check,
   ChevronDown,
-  Code2,
   Globe2,
-  ImagePlus,
-  Italic,
   LayoutGrid,
-  Link2,
   ListFilter,
-  MoreHorizontal,
   PackageSearch,
   Pencil,
   Plus,
@@ -35,6 +28,7 @@ import {
   ServerSurface,
   ServerTextInput,
 } from "@/components/servers/ServerUi";
+import { SalesDescriptionEditor } from "@/components/servers/sales/SalesDescriptionEditor";
 
 type SalesCategory = {
   id: string;
@@ -109,125 +103,6 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(date);
-}
-
-function renderInlineMarkdown(value: string) {
-  const parts: ReactNode[] = [];
-  const pattern =
-    /(!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|_([^_]+)_|`([^`]+)`)/g;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(value))) {
-    if (match.index > cursor) {
-      parts.push(value.slice(cursor, match.index));
-    }
-
-    if (match[2] !== undefined) {
-      parts.push(
-        <span key={`image-${match.index}`} className="font-semibold text-[#EDEDED]">
-          [imagem: {match[2] || "sem descricao"}]
-        </span>,
-      );
-    } else if (match[4] !== undefined) {
-      parts.push(
-        <span key={`link-${match.index}`} className="font-semibold text-[#F2F2F2] underline underline-offset-4">
-          {match[4]}
-        </span>,
-      );
-    } else if (match[6] !== undefined) {
-      parts.push(
-        <strong key={`bold-${match.index}`} className="font-semibold text-[#F4F4F4]">
-          {match[6]}
-        </strong>,
-      );
-    } else if (match[7] !== undefined) {
-      parts.push(
-        <em key={`italic-${match.index}`} className="italic text-[#DFDFDF]">
-          {match[7]}
-        </em>,
-      );
-    } else if (match[8] !== undefined) {
-      parts.push(
-        <code key={`code-${match.index}`} className="rounded-[7px] bg-[#151515] px-[5px] py-[2px] text-[12px] text-[#F1F1F1]">
-          {match[8]}
-        </code>,
-      );
-    }
-
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < value.length) {
-    parts.push(value.slice(cursor));
-  }
-
-  return parts.length ? parts : value;
-}
-
-function MarkdownPreview({ value }: { value: string }) {
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    return (
-      <p className="text-[13px] leading-[1.65] text-[#686868]">
-        A descricao aparecera aqui conforme voce digitar.
-      </p>
-    );
-  }
-
-  const blocks = trimmed.split(/\n{2,}/);
-
-  return (
-    <div className="space-y-[10px]">
-      {blocks.map((block, index) => {
-        if (block.startsWith("```") && block.endsWith("```")) {
-          return (
-            <pre
-              key={`${index}-${block}`}
-              className="overflow-x-auto rounded-[12px] border border-[#1D1D1D] bg-[#111] p-[12px] text-[12px] leading-[1.6] text-[#DCDCDC]"
-            >
-              {block.replace(/^```\n?/, "").replace(/\n?```$/, "")}
-            </pre>
-          );
-        }
-
-        return (
-          <p
-            key={`${index}-${block}`}
-            className="whitespace-pre-wrap break-words text-[13px] leading-[1.65] text-[#CFCFCF]"
-          >
-            {renderInlineMarkdown(block)}
-          </p>
-        );
-      })}
-    </div>
-  );
-}
-
-function IconButton({
-  children,
-  label,
-  onClick,
-  disabled,
-}: {
-  children: ReactNode;
-  label: string;
-  onClick?: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      disabled={disabled}
-      className="flowdesk-server-button inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#101010] text-[#BDBDBD] transition hover:border-[#353535] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
-    >
-      {children}
-    </button>
-  );
 }
 
 export function SalesCategoriesListPanel({
@@ -406,6 +281,48 @@ export function SalesCategoriesListPanel({
   );
 }
 
+function CategoryEditorSkeleton() {
+  return (
+    <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
+      <div className="space-y-[18px]">
+        <ServerSurface className="p-[18px] sm:p-[22px]">
+          <div className="h-[14px] w-[118px] animate-pulse rounded-full bg-[#1A1A1A]" />
+          <div className="mt-[14px] h-[44px] animate-pulse rounded-[14px] bg-[#111]" />
+          <div className="mt-[22px] h-[14px] w-[138px] animate-pulse rounded-full bg-[#1A1A1A]" />
+          <div className="mt-[12px] h-[44px] animate-pulse rounded-[14px] bg-[#111]" />
+          <div className="mt-[10px] h-[168px] animate-pulse rounded-[16px] bg-[#101010]" />
+          <div className="mt-[10px] flex gap-[8px]">
+            <div className="h-[34px] w-[96px] animate-pulse rounded-[12px] bg-[#141414]" />
+            <div className="h-[34px] w-[86px] animate-pulse rounded-[12px] bg-[#141414]" />
+            <div className="h-[34px] w-[72px] animate-pulse rounded-[12px] bg-[#141414]" />
+          </div>
+        </ServerSurface>
+        <ServerSurface className="p-[18px] sm:p-[22px]">
+          <div className="h-[14px] w-[156px] animate-pulse rounded-full bg-[#1A1A1A]" />
+          <div className="mt-[18px] space-y-[14px]">
+            <div className="h-[72px] animate-pulse rounded-[16px] bg-[#101010]" />
+            <div className="h-[72px] animate-pulse rounded-[16px] bg-[#101010]" />
+          </div>
+        </ServerSurface>
+        <ServerSurface className="p-[18px] sm:p-[22px]">
+          <div className="h-[14px] w-[128px] animate-pulse rounded-full bg-[#1A1A1A]" />
+          <div className="mt-[16px] h-[42px] animate-pulse rounded-[14px] bg-[#111]" />
+          <div className="mt-[18px] h-[128px] animate-pulse rounded-[16px] bg-[#101010]" />
+        </ServerSurface>
+      </div>
+      <aside className="space-y-[18px]">
+        {Array.from({ length: 4 }).map((_, sectionIndex) => (
+          <ServerSurface key={sectionIndex} className="p-[18px] sm:p-[20px]">
+            <div className="h-[14px] w-[130px] animate-pulse rounded-full bg-[#1A1A1A]" />
+            <div className="mt-[14px] h-[42px] animate-pulse rounded-[14px] bg-[#111]" />
+            <div className="mt-[12px] h-[42px] animate-pulse rounded-[14px] bg-[#101010]" />
+          </ServerSurface>
+        ))}
+      </aside>
+    </div>
+  );
+}
+
 export function SalesCategoryCreatePanel({
   guildId,
   readOnly = false,
@@ -417,7 +334,6 @@ export function SalesCategoryCreatePanel({
 }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -434,7 +350,6 @@ export function SalesCategoryCreatePanel({
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isLoadingCategory, setIsLoadingCategory] = useState(mode === "edit");
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
-  const [isDescriptionPreviewOpen, setIsDescriptionPreviewOpen] = useState(false);
   const [productSortIndex, setProductSortIndex] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -538,63 +453,6 @@ export function SalesCategoryCreatePanel({
   const isEditMode = mode === "edit";
   const canSave =
     title.trim().length >= 2 && !isSaving && !isLoadingCategory && !readOnly;
-
-  const applyDescriptionFormat = useCallback(
-    (
-      format:
-        | "paragraph"
-        | "bold"
-        | "italic"
-        | "link"
-        | "image"
-        | "code",
-    ) => {
-      const textarea = descriptionRef.current;
-      const start = textarea?.selectionStart ?? description.length;
-      const end = textarea?.selectionEnd ?? description.length;
-      const selected = description.slice(start, end);
-      const fallbackText =
-        format === "link"
-          ? "texto do link"
-          : format === "image"
-            ? "descricao da imagem"
-            : format === "code"
-              ? "codigo"
-              : "texto";
-      const value = selected || fallbackText;
-      let replacement = value;
-
-      if (format === "paragraph") {
-        replacement = value
-          .replace(/^#{1,6}\s+/gm, "")
-          .replace(/^>\s+/gm, "")
-          .replace(/^[-*]\s+/gm, "");
-      } else if (format === "bold") {
-        replacement = `**${value}**`;
-      } else if (format === "italic") {
-        replacement = `_${value}_`;
-      } else if (format === "link") {
-        replacement = `[${value}](https://exemplo.com)`;
-      } else if (format === "image") {
-        replacement = `![${value}](https://exemplo.com/imagem.png)`;
-      } else if (format === "code") {
-        replacement = value.includes("\n") ? `\`\`\`\n${value}\n\`\`\`` : `\`${value}\``;
-      }
-
-      const nextDescription =
-        description.slice(0, start) + replacement + description.slice(end);
-      setDescription(nextDescription.slice(0, 1200));
-      setStatusMessage(null);
-
-      window.requestAnimationFrame(() => {
-        descriptionRef.current?.focus();
-        const selectionStart = start;
-        const selectionEnd = start + replacement.length;
-        descriptionRef.current?.setSelectionRange(selectionStart, selectionEnd);
-      });
-    },
-    [description],
-  );
 
   const handleImageFile = useCallback(
     (file: File | null | undefined) => {
@@ -748,17 +606,15 @@ export function SalesCategoryCreatePanel({
         </div>
       </div>
 
-      {isLoadingCategory ? (
-        <ServerSurface className="p-[22px]">
-          <div className="h-[14px] w-[220px] animate-pulse rounded-full bg-[#171717]" />
-          <div className="mt-[12px] h-[11px] w-[420px] max-w-full animate-pulse rounded-full bg-[#141414]" />
-        </ServerSurface>
-      ) : statusMessage ? (
+      {!isLoadingCategory && statusMessage ? (
         <div className="rounded-[18px] border border-[#3A2A1E] bg-[#170F09] px-[14px] py-[12px] text-[13px] text-[#F2B27D]">
           {statusMessage}
         </div>
       ) : null}
 
+      {isLoadingCategory ? (
+        <CategoryEditorSkeleton />
+      ) : (
       <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
         <div className="space-y-[18px]">
           <ServerSurface className="p-[18px] sm:p-[22px]">
@@ -776,57 +632,19 @@ export function SalesCategoryCreatePanel({
             <label className="mt-[20px] block text-[13px] font-semibold text-[#D8D8D8]">
               Descricao
             </label>
-            <div className="mt-[10px] overflow-hidden rounded-[16px] border border-[#252525] bg-[#0D0D0D]">
-              <div className="flex flex-wrap items-center gap-[6px] bg-[#111] px-[10px] py-[8px] text-[#BDBDBD]">
-                <button
-                  type="button"
-                  onClick={() => applyDescriptionFormat("paragraph")}
-                  className="flowdesk-server-button rounded-[10px] px-[10px] py-[7px] text-[13px] text-[#CFCFCF] transition hover:bg-[#191919]"
-                >
-                  Paragrafo <ChevronDown className="ml-[6px] inline h-[14px] w-[14px]" />
-                </button>
-                <IconButton label="Negrito" onClick={() => applyDescriptionFormat("bold")}>
-                  <Bold className="h-[16px] w-[16px]" />
-                </IconButton>
-                <IconButton label="Italico" onClick={() => applyDescriptionFormat("italic")}>
-                  <Italic className="h-[16px] w-[16px]" />
-                </IconButton>
-                <IconButton label="Link" onClick={() => applyDescriptionFormat("link")}>
-                  <Link2 className="h-[16px] w-[16px]" />
-                </IconButton>
-                <IconButton label="Imagem" onClick={() => applyDescriptionFormat("image")}>
-                  <ImagePlus className="h-[16px] w-[16px]" />
-                </IconButton>
-                <IconButton label="Codigo" onClick={() => applyDescriptionFormat("code")}>
-                  <Code2 className="h-[16px] w-[16px]" />
-                </IconButton>
-                <IconButton
-                  label={isDescriptionPreviewOpen ? "Ocultar previa" : "Mostrar previa"}
-                  onClick={() => setIsDescriptionPreviewOpen((current) => !current)}
-                >
-                  <MoreHorizontal className="h-[16px] w-[16px]" />
-                </IconButton>
-              </div>
-              <textarea
-                ref={descriptionRef}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                maxLength={1200}
-                rows={9}
-                placeholder="Descreva como essa categoria aparece para clientes e equipe."
-                className="min-h-[224px] w-full resize-y bg-transparent px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none placeholder:text-[#5D5D5D]"
-              />
-              {isDescriptionPreviewOpen ? (
-                <div className="bg-[#0A0A0A] px-[14px] py-[14px]">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#666]">
-                    Previa da descricao
-                  </p>
-                  <div className="mt-[8px]">
-                    <MarkdownPreview value={description} />
-                  </div>
-                </div>
-              ) : null}
-            </div>
+            <SalesDescriptionEditor
+              guildId={guildId}
+              kind="category"
+              title={title}
+              value={description}
+              onChange={(nextDescription) => {
+                setDescription(nextDescription);
+                setStatusMessage(null);
+              }}
+              disabled={isLoadingCategory || isSaving || readOnly}
+              maxLength={1200}
+              placeholder="Descreva como essa categoria aparece para clientes e equipe."
+            />
           </ServerSurface>
 
           <ServerSurface className="p-[18px] sm:p-[22px]">
@@ -1135,6 +953,7 @@ export function SalesCategoryCreatePanel({
           </ServerSurface>
         </aside>
       </div>
+      )}
     </div>
   );
 }

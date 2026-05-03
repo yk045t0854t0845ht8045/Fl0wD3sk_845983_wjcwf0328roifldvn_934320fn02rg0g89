@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   BadgeCheck,
@@ -14,10 +14,10 @@ import {
   ImagePlus,
   Package,
   PackageSearch,
+  Pencil,
   Plus,
   Search,
   SlidersHorizontal,
-  Sparkles,
   Tag,
   Upload,
   X,
@@ -31,6 +31,7 @@ import {
   ServerSurface,
   ServerTextInput,
 } from "@/components/servers/ServerUi";
+import { SalesDescriptionEditor } from "@/components/servers/sales/SalesDescriptionEditor";
 
 type ProductStatus = "active" | "draft" | "archived";
 type ProductTheme = "default" | "compact" | "featured";
@@ -44,10 +45,22 @@ type SalesProduct = {
   status: ProductStatus;
   mediaUrls: string[];
   priceAmount: number;
+  compareAtPriceAmount?: number | null;
+  unitPriceAmount?: number | null;
+  chargeTaxes?: boolean;
+  costPerItemAmount?: number | null;
   inventoryTracked: boolean;
   stockQuantity: number;
   sku: string;
   barcode: string;
+  barcodeMode?: "auto" | "manual";
+  productType?: string;
+  manufacturer?: string;
+  tags?: string[];
+  themeModel?: ProductTheme;
+  publishedVirtualStore?: boolean;
+  publishedPointOfSale?: boolean;
+  publishedPinterest?: boolean;
   createdAt: string;
 };
 
@@ -95,6 +108,15 @@ function getCreatePath(guildId: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/products/create/`;
 }
 
+function getEditPath(guildId: string, productCode: string) {
+  return `/servers/${encodeURIComponent(guildId)}/sales/products/edit/${encodeURIComponent(productCode)}/`;
+}
+
+function getProductCodeFromPath(pathname: string | null) {
+  const match = pathname?.match(/\/sales\/products\/edit\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 function formatMoney(value: number) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -132,29 +154,23 @@ function revokeObjectUrl(url: string | null) {
   if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
 }
 
-function buildAiDescription(title: string) {
-  const cleanTitle = title.trim();
-  return [
-    `**${cleanTitle}** foi preparado para entregas rapidas e organizadas pelo Flowdesk.`,
-    "Ideal para clientes que buscam uma compra simples, segura e com comprovante claro.",
-    "Use esta descricao como base e ajuste beneficios, prazo de entrega e regras do produto.",
-  ].join("\n\n");
-}
-
 function InlineSwitch({
   checked,
   onChange,
   label,
+  disabled,
 }: {
   checked: boolean;
   onChange: () => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onChange}
-      className="flowdesk-server-button inline-flex items-center gap-[10px] text-[13px] text-[#AFAFAF]"
+      disabled={disabled}
+      className="flowdesk-server-button inline-flex items-center gap-[10px] text-[13px] text-[#AFAFAF] disabled:cursor-not-allowed disabled:opacity-45"
     >
       {label}
       <span
@@ -176,15 +192,18 @@ function PillToggle({
   active,
   children,
   onClick,
+  disabled,
 }: {
   active: boolean;
   children: ReactNode;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={`flowdesk-server-button rounded-[12px] px-[11px] py-[8px] text-[13px] transition ${
         active
           ? "bg-[#F1F1F1] text-[#080808]"
@@ -200,10 +219,12 @@ function SelectMenu<T extends string>({
   value,
   options,
   onChange,
+  disabled,
 }: {
   value: T;
   options: Array<[T, string]>;
   onChange: (value: T) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -230,7 +251,8 @@ function SelectMenu<T extends string>({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] transition hover:border-[#444]"
+        disabled={disabled}
+        className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] transition hover:border-[#444] disabled:cursor-not-allowed disabled:opacity-55"
       >
         {options.find(([option]) => option === value)?.[1] || "Selecionar"}
         <ChevronDown
@@ -406,6 +428,16 @@ export function SalesProductsListPanel({
                   <span className="rounded-full border border-[#1F3D2E] bg-[#0D1A13] px-[10px] py-[6px] text-center text-[12px] text-[#7CE2A0]">
                     {statusLabel[product.status]}
                   </span>
+                  <button
+                    type="button"
+                    aria-label={`Editar ${product.title}`}
+                    title="Editar produto"
+                    onClick={() => router.push(getEditPath(guildId, product.code))}
+                    className="flowdesk-server-button inline-flex h-[34px] w-[34px] items-center justify-center rounded-[12px] border border-[#242424] bg-[#101010] text-[#DADADA] transition hover:border-[#3A3A3A] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
+                    disabled={readOnly}
+                  >
+                    <Pencil className="h-[15px] w-[15px]" />
+                  </button>
                 </div>
               </article>
             ))}
@@ -432,13 +464,49 @@ export function SalesProductsListPanel({
   );
 }
 
+function ProductEditorSkeleton() {
+  return (
+    <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
+      <div className="space-y-[18px]">
+        {Array.from({ length: 3 }).map((_, sectionIndex) => (
+          <ServerSurface key={sectionIndex} className="p-[18px] sm:p-[22px]">
+            <div className="h-[14px] w-[140px] animate-pulse rounded-full bg-[#1A1A1A]" />
+            <div className="mt-[14px] h-[44px] w-full animate-pulse rounded-[14px] bg-[#111]" />
+            <div className="mt-[18px] grid gap-[10px] sm:grid-cols-2">
+              <div className="h-[42px] animate-pulse rounded-[14px] bg-[#111]" />
+              <div className="h-[42px] animate-pulse rounded-[14px] bg-[#111]" />
+            </div>
+            <div className="mt-[18px] h-[118px] animate-pulse rounded-[16px] bg-[#101010]" />
+          </ServerSurface>
+        ))}
+      </div>
+      <aside className="space-y-[18px]">
+        {Array.from({ length: 5 }).map((_, sectionIndex) => (
+          <ServerSurface key={sectionIndex} className="p-[18px] sm:p-[20px]">
+            <div className="h-[14px] w-[130px] animate-pulse rounded-full bg-[#1A1A1A]" />
+            <div className="mt-[14px] h-[42px] animate-pulse rounded-[14px] bg-[#111]" />
+            <div className="mt-[12px] h-[42px] animate-pulse rounded-[14px] bg-[#101010]" />
+          </ServerSurface>
+        ))}
+      </aside>
+    </div>
+  );
+}
+
 export function SalesProductCreatePanel({
   guildId,
   readOnly = false,
-}: SalesProductsPanelProps) {
+  mode = "create",
+  productCode = "",
+}: SalesProductsPanelProps & {
+  mode?: "create" | "edit";
+  productCode?: string;
+}) {
   const router = useRouter();
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const [categories, setCategories] = useState<SalesCategory[]>([]);
+  const [isLoadingProduct, setIsLoadingProduct] = useState(mode === "edit");
+  const [isLoadingCategories, setIsLoadingCategories] = useState(true);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<ProductStatus>("active");
@@ -463,7 +531,6 @@ export function SalesProductCreatePanel({
   const [publishedPointOfSale, setPublishedPointOfSale] = useState(true);
   const [publishedPinterest, setPublishedPinterest] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const mediaUrlsRef = useRef<string[]>([]);
 
@@ -471,6 +538,7 @@ export function SalesProductCreatePanel({
     let cancelled = false;
 
     async function loadCategories() {
+      setIsLoadingCategories(true);
       try {
         const response = await fetch(
           `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}`,
@@ -482,6 +550,8 @@ export function SalesProductCreatePanel({
         }
       } catch {
         if (!cancelled) setCategories([]);
+      } finally {
+        if (!cancelled) setIsLoadingCategories(false);
       }
     }
 
@@ -490,6 +560,79 @@ export function SalesProductCreatePanel({
       cancelled = true;
     };
   }, [guildId]);
+
+  useEffect(() => {
+    if (mode !== "edit") return;
+
+    const safeProductCode = productCode.trim().toLowerCase();
+    if (!safeProductCode) {
+      setStatusMessage("Codigo do produto invalido.");
+      setIsLoadingProduct(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadProduct() {
+      setIsLoadingProduct(true);
+      setStatusMessage(null);
+
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}&productCode=${encodeURIComponent(safeProductCode)}`,
+          { credentials: "include", cache: "no-store" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
+
+        if (!response.ok || !payload.ok || !payload.product) {
+          throw new Error(payload.message || "Produto nao encontrado.");
+        }
+
+        if (cancelled) return;
+
+        const product = payload.product;
+        setTitle(product.title);
+        setDescription(product.description || "");
+        setStatus(product.status);
+        setCategoryId(product.categoryId || "");
+        setPriceAmount(String(product.priceAmount || ""));
+        setCompareAtPriceAmount(
+          product.compareAtPriceAmount ? String(product.compareAtPriceAmount) : "",
+        );
+        setUnitPriceAmount(product.unitPriceAmount ? String(product.unitPriceAmount) : "");
+        setChargeTaxes(product.chargeTaxes !== false);
+        setCostPerItemAmount(
+          product.costPerItemAmount ? String(product.costPerItemAmount) : "",
+        );
+        setInventoryTracked(product.inventoryTracked);
+        setStockQuantity(String(product.stockQuantity || 0));
+        setSku(product.sku || "");
+        setSkuEdited(true);
+        setBarcodeMode(product.barcodeMode === "manual" ? "manual" : "auto");
+        setBarcode(product.barcode || generateBarcode(product.title));
+        setProductType(product.productType || "");
+        setManufacturer(product.manufacturer || "");
+        setTagsText((product.tags || []).join(", "));
+        setThemeModel(product.themeModel || "default");
+        setPublishedVirtualStore(product.publishedVirtualStore !== false);
+        setPublishedPointOfSale(product.publishedPointOfSale !== false);
+        setPublishedPinterest(product.publishedPinterest === true);
+      } catch (error) {
+        if (cancelled) return;
+        setStatusMessage(
+          error instanceof Error ? error.message : "Erro ao carregar produto.",
+        );
+      } finally {
+        if (!cancelled) setIsLoadingProduct(false);
+      }
+    }
+
+    void loadProduct();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId, mode, productCode]);
 
   useEffect(() => {
     mediaUrlsRef.current = mediaUrls;
@@ -515,7 +658,10 @@ export function SalesProductCreatePanel({
     [categories],
   );
 
-  const canSave = title.trim().length >= 2 && !isSaving && !readOnly;
+  const isEditMode = mode === "edit";
+  const isFormLoading = isLoadingProduct || isLoadingCategories;
+  const controlsDisabled = isFormLoading || isSaving || readOnly;
+  const canSave = title.trim().length >= 2 && !isSaving && !isFormLoading && !readOnly;
 
   const goBack = useCallback(() => {
     router.push(getProductsPath(guildId));
@@ -542,15 +688,6 @@ export function SalesProductCreatePanel({
     revokeObjectUrl(url);
   }, []);
 
-  const handleGenerateDescription = useCallback(() => {
-    if (!title.trim()) return;
-    setIsGeneratingDescription(true);
-    window.setTimeout(() => {
-      setDescription(buildAiDescription(title));
-      setIsGeneratingDescription(false);
-    }, 260);
-  }, [title]);
-
   const handleSave = useCallback(async () => {
     if (!canSave) {
       setStatusMessage("Informe um titulo para salvar o produto.");
@@ -562,11 +699,12 @@ export function SalesProductCreatePanel({
 
     try {
       const response = await fetch("/api/auth/me/guilds/sales-products", {
-        method: "POST",
+        method: isEditMode ? "PATCH" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           guildId,
+          productCode: isEditMode ? productCode : undefined,
           title,
           description,
           categoryId: categoryId || null,
@@ -618,9 +756,11 @@ export function SalesProductCreatePanel({
     description,
     guildId,
     inventoryTracked,
+    isEditMode,
     manufacturer,
     priceAmount,
     productType,
+    productCode,
     publishedPinterest,
     publishedPointOfSale,
     publishedVirtualStore,
@@ -650,7 +790,7 @@ export function SalesProductCreatePanel({
           <div className="mt-[10px] flex items-center gap-[10px]">
             <Package className="h-[18px] w-[18px] text-[#A5A5A5]" />
             <h3 className="text-[24px] font-semibold tracking-[-0.05em] text-[#EFEFEF]">
-              Adicionar produto
+              {isEditMode ? "Editar produto" : "Adicionar produto"}
             </h3>
           </div>
         </div>
@@ -669,7 +809,7 @@ export function SalesProductCreatePanel({
             ) : (
               <>
                 <Check className="h-[16px] w-[16px]" />
-                Salvar produto
+                {isEditMode ? "Salvar alteracoes" : "Salvar produto"}
               </>
             )}
           </ServerButton>
@@ -682,6 +822,9 @@ export function SalesProductCreatePanel({
         </div>
       ) : null}
 
+      {isFormLoading ? (
+        <ProductEditorSkeleton />
+      ) : (
       <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
         <div className="space-y-[18px]">
           <ServerSurface className="relative z-[60] p-[18px] sm:p-[22px]">
@@ -694,32 +837,24 @@ export function SalesProductCreatePanel({
               maxLength={120}
               placeholder="Ex.: Camiseta de manga curta"
               className="mt-[10px]"
+              disabled={controlsDisabled}
             />
 
-            <div className="mt-[20px] flex items-center justify-between gap-[12px]">
-              <label className="block text-[13px] font-semibold text-[#D8D8D8]">
-                Descricao
-              </label>
-              <ServerButton
-                onClick={handleGenerateDescription}
-                disabled={!title.trim() || isGeneratingDescription}
-                size="sm"
-                className="h-[34px]"
-              >
-                {isGeneratingDescription ? (
-                  <ButtonLoader size={14} />
-                ) : (
-                  <Sparkles className="h-[15px] w-[15px]" />
-                )}
-                IA
-              </ServerButton>
-            </div>
-            <textarea
+            <label className="mt-[20px] block text-[13px] font-semibold text-[#D8D8D8]">
+              Descricao
+            </label>
+            <SalesDescriptionEditor
+              guildId={guildId}
+              kind="product"
+              title={title}
               value={description}
-              onChange={(event) => setDescription(event.target.value.slice(0, 1800))}
-              rows={9}
+              onChange={(nextDescription) => {
+                setDescription(nextDescription);
+                setStatusMessage(null);
+              }}
+              disabled={controlsDisabled}
+              maxLength={1800}
               placeholder="Descreva beneficios, prazo de entrega e regras do produto."
-              className="mt-[10px] min-h-[224px] w-full resize-y rounded-[16px] border border-[#252525] bg-[#0D0D0D] px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none transition focus:border-[#4A4A4A] placeholder:text-[#5D5D5D]"
             />
 
             <div className="mt-[22px]">
@@ -729,6 +864,7 @@ export function SalesProductCreatePanel({
                 type="file"
                 accept="image/*"
                 multiple
+                disabled={controlsDisabled}
                 className="hidden"
                 onChange={(event) => addMediaFiles(event.target.files)}
               />
@@ -749,6 +885,7 @@ export function SalesProductCreatePanel({
                       <button
                         type="button"
                         onClick={() => removeMedia(url)}
+                        disabled={controlsDisabled}
                         className="absolute right-[8px] top-[8px] inline-flex h-[28px] w-[28px] items-center justify-center rounded-[10px] bg-[rgba(0,0,0,0.65)] text-white opacity-0 transition group-hover:opacity-100"
                       >
                         <X className="h-[14px] w-[14px]" />
@@ -758,6 +895,7 @@ export function SalesProductCreatePanel({
                   <button
                     type="button"
                     onClick={() => mediaInputRef.current?.click()}
+                    disabled={controlsDisabled}
                     className="flowdesk-server-button aspect-square rounded-[16px] border border-dashed border-[#363636] bg-[#0D0D0D] text-[#DCDCDC] transition hover:border-[#585858] hover:bg-[#111]"
                   >
                     <Plus className="mx-auto h-[22px] w-[22px]" />
@@ -773,6 +911,7 @@ export function SalesProductCreatePanel({
                     addMediaFiles(event.dataTransfer.files);
                   }}
                   className="flowdesk-server-button mt-[14px] flex min-h-[150px] w-full flex-col items-center justify-center rounded-[18px] border border-dashed border-[#363636] bg-[#0D0D0D] px-[16px] text-center transition hover:border-[#585858] hover:bg-[#111]"
+                  disabled={controlsDisabled}
                 >
                   <Upload className="h-[22px] w-[22px] text-[#E8E8E8]" />
                   <span className="mt-[12px] rounded-[12px] border border-[#2C2C2C] bg-[#141414] px-[13px] py-[8px] text-[13px] font-semibold text-[#F0F0F0]">
@@ -794,6 +933,7 @@ export function SalesProductCreatePanel({
                   value={categoryId}
                   options={categoryOptions}
                   onChange={setCategoryId}
+                  disabled={controlsDisabled}
                 />
               </div>
               <p className="mt-[9px] text-[13px] leading-[1.45] text-[#7B7B7B]">
@@ -810,11 +950,13 @@ export function SalesProductCreatePanel({
                   value={priceAmount}
                   onChange={(event) => setPriceAmount(event.target.value)}
                   placeholder="R$ 0,00"
+                  disabled={controlsDisabled}
                 />
                 <ServerTextInput
                   value={compareAtPriceAmount}
                   onChange={(event) => setCompareAtPriceAmount(event.target.value)}
                   placeholder="Preco de comparacao"
+                  disabled={controlsDisabled}
                 />
               </div>
             </div>
@@ -824,10 +966,12 @@ export function SalesProductCreatePanel({
                 onChange={(event) => setUnitPriceAmount(event.target.value)}
                 placeholder="Preco unitario"
                 className="h-[38px] max-w-[180px] text-[13px]"
+                disabled={controlsDisabled}
               />
               <PillToggle
                 active={chargeTaxes}
                 onClick={() => setChargeTaxes((current) => !current)}
+                disabled={controlsDisabled}
               >
                 Cobrar tributos {chargeTaxes ? "Sim" : "Nao"}
               </PillToggle>
@@ -836,6 +980,7 @@ export function SalesProductCreatePanel({
                 onChange={(event) => setCostPerItemAmount(event.target.value)}
                 placeholder="Custo por item"
                 className="h-[38px] max-w-[170px] text-[13px]"
+                disabled={controlsDisabled}
               />
               <CircleDollarSign className="ml-auto h-[17px] w-[17px] text-[#777]" />
             </div>
@@ -848,6 +993,7 @@ export function SalesProductCreatePanel({
                 checked={inventoryTracked}
                 onChange={() => setInventoryTracked((current) => !current)}
                 label="Estoque rastreado"
+                disabled={controlsDisabled}
               />
             </div>
             <div className="mx-[18px] mb-[18px] overflow-hidden rounded-[18px] border border-[#202020] sm:mx-[22px] sm:mb-[20px]">
@@ -864,6 +1010,7 @@ export function SalesProductCreatePanel({
                   onChange={(event) => setStockQuantity(event.target.value)}
                   inputMode="numeric"
                   className="h-[40px]"
+                  disabled={controlsDisabled}
                 />
               </div>
             </div>
@@ -880,6 +1027,7 @@ export function SalesProductCreatePanel({
                   }}
                   placeholder="Gerado automaticamente"
                   className="h-[40px] text-[13px]"
+                  disabled={controlsDisabled}
                 />
               </div>
               <div>
@@ -895,6 +1043,7 @@ export function SalesProductCreatePanel({
                       if (nextMode === "auto") setBarcode(generateBarcode(title));
                     }}
                     className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8A8A8A] transition hover:text-white"
+                    disabled={controlsDisabled}
                   >
                     {barcodeMode === "auto" ? "Auto" : "Manual"}
                   </button>
@@ -907,6 +1056,7 @@ export function SalesProductCreatePanel({
                   }}
                   placeholder="Codigo de barras"
                   className="h-[40px] text-[13px]"
+                  disabled={controlsDisabled}
                 />
               </div>
             </div>
@@ -923,6 +1073,7 @@ export function SalesProductCreatePanel({
                 value={status}
                 options={Object.entries(statusLabel) as Array<[ProductStatus, string]>}
                 onChange={setStatus}
+                disabled={controlsDisabled}
               />
             </div>
           </ServerSurface>
@@ -938,18 +1089,21 @@ export function SalesProductCreatePanel({
               <PillToggle
                 active={publishedVirtualStore}
                 onClick={() => setPublishedVirtualStore((current) => !current)}
+                disabled={controlsDisabled}
               >
                 Loja virtual
               </PillToggle>
               <PillToggle
                 active={publishedPointOfSale}
                 onClick={() => setPublishedPointOfSale((current) => !current)}
+                disabled={controlsDisabled}
               >
                 Ponto de venda
               </PillToggle>
               <PillToggle
                 active={publishedPinterest}
                 onClick={() => setPublishedPinterest((current) => !current)}
+                disabled={controlsDisabled}
               >
                 Pinterest
               </PillToggle>
@@ -969,18 +1123,21 @@ export function SalesProductCreatePanel({
                 onChange={(event) => setProductType(event.target.value)}
                 placeholder="Tipo"
                 className="h-[42px]"
+                disabled={controlsDisabled}
               />
               <ServerTextInput
                 value={manufacturer}
                 onChange={(event) => setManufacturer(event.target.value)}
                 placeholder="Fabricante"
                 className="h-[42px]"
+                disabled={controlsDisabled}
               />
               <ServerTextInput
                 value={tagsText}
                 onChange={(event) => setTagsText(event.target.value)}
                 placeholder="Tags separadas por virgula"
                 className="h-[42px]"
+                disabled={controlsDisabled}
               />
             </div>
           </ServerSurface>
@@ -994,6 +1151,7 @@ export function SalesProductCreatePanel({
                 value={themeModel}
                 options={Object.entries(themeLabel) as Array<[ProductTheme, string]>}
                 onChange={setThemeModel}
+                disabled={controlsDisabled}
               />
             </div>
           </ServerSurface>
@@ -1025,6 +1183,20 @@ export function SalesProductCreatePanel({
           </ServerSurface>
         </aside>
       </div>
+      )}
     </div>
+  );
+}
+
+export function SalesProductEditPanel(props: SalesProductsPanelProps) {
+  const pathname = usePathname();
+  const productCode = getProductCodeFromPath(pathname);
+
+  return (
+    <SalesProductCreatePanel
+      {...props}
+      mode="edit"
+      productCode={productCode}
+    />
   );
 }
