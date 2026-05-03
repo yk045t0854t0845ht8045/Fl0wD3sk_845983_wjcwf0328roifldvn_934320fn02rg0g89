@@ -12,6 +12,7 @@ export type ServerSettingsSkeletonSection =
   | "message"
   | "sales_overview"
   | "sales_categories"
+  | "sales_category_create"
   | "sales_products"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
