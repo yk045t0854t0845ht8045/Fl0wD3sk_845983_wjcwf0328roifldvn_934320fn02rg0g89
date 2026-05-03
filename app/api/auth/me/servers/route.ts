@@ -13,6 +13,10 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+import {
+  createCoalescedRouteKey,
+  runCoalescedRouteResponse,
+} from "@/lib/security/routeCoalescing";
 
 export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);
@@ -26,19 +30,28 @@ export async function GET(request: Request) {
   const respond = (body: unknown, init?: ResponseInit) =>
     attachRequestId(applyNoStoreHeaders(NextResponse.json(body, init)), requestContext.requestId);
 
-  try {
-    const authSession = await getCurrentAuthSessionFromCookie();
-    if (!authSession) {
-      return respond(
-        {
-          ok: false,
-          message: "Nao autenticado.",
-          sync: DEFAULT_MANAGED_SERVERS_SYNC_STATE,
-        },
-        { status: 401 },
-      );
-    }
+  const authSession = await getCurrentAuthSessionFromCookie();
+  if (!authSession) {
+    return respond(
+      {
+        ok: false,
+        message: "Nao autenticado.",
+        sync: DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+      },
+      { status: 401 },
+    );
+  }
 
+  const coalescedKey = createCoalescedRouteKey({
+    namespace: "auth.me.servers.get",
+    parts: [authSession.user.id, forceFresh ? "fresh" : "warm"],
+  });
+
+  return runCoalescedRouteResponse({
+    key: coalescedKey,
+    ttlMs: forceFresh ? 750 : 2500,
+    producer: async () => {
+  try {
     if (forceFresh) {
       await ensureUserPaymentDeliveryReady({
         userId: authSession.user.id,
@@ -107,4 +120,6 @@ export async function GET(request: Request) {
       { status },
     );
   }
+    },
+  });
 }

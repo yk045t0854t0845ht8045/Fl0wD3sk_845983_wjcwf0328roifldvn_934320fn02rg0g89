@@ -85,6 +85,7 @@ import {
   warmBrowserRoute,
 } from "@/lib/routing/browserWarmup";
 import { useLatchedPendingKey } from "@/lib/ui/useLatchedPendingKey";
+import { fetchClientData } from "@/lib/performance/clientData";
 
 type ServersWorkspaceProps = {
   displayName: string;
@@ -381,10 +382,10 @@ const SECURITY_SIDEBAR_ITEMS: SidebarItem[] = [
   },
 ];
 const shellClass =
-  "rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] shadow-[0_24px_80px_rgba(0,0,0,0.38)]";
+  "flowdesk-server-surface rounded-[28px] border border-[#0E0E0E] bg-[#0A0A0A] shadow-[0_24px_80px_rgba(0,0,0,0.38)]";
 
 const sidebarShellClass =
-  "relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
+  "flowdesk-server-surface relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
 
 const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
 const editorPanelRevealClass =
@@ -1705,15 +1706,21 @@ export function ServersWorkspace({
     setIsTeamServersLoading(true);
 
     try {
-      const response = await fetch("/api/auth/me/servers/team-catalog", {
-        cache: "no-store",
-      });
-      const payload = (await response.json()) as {
+      const payload = await fetchClientData<{
         ok?: boolean;
         servers?: ManagedServer[];
-      };
+      }>(
+        "/api/auth/me/servers/team-catalog",
+        { cache: "no-store" },
+        {
+          cacheKey: `team-catalog:${workspaceCacheKey}`,
+          cacheTtlMs: 30_000,
+          timeoutMs: 2800,
+          storage: "memory",
+        },
+      );
 
-      if (!response.ok || !payload.ok) {
+      if (!payload.ok) {
         return;
       }
 
@@ -1723,7 +1730,7 @@ export function ServersWorkspace({
     } finally {
       setIsTeamServersLoading(false);
     }
-  }, [currentAccount.discordUserId]);
+  }, [currentAccount.discordUserId, workspaceCacheKey]);
 
   useEffect(() => {
     serversRef.current = servers;
@@ -1891,21 +1898,29 @@ export function ServersWorkspace({
       const controller = new AbortController();
       activeController = controller;
       clearActiveTimeout();
-      activeTimeoutId = window.setTimeout(() => controller.abort("timeout"), 12000);
+      activeTimeoutId = window.setTimeout(() => controller.abort("timeout"), 6500);
 
       try {
         const serversEndpoint =
           serversReloadToken > 0
             ? "/api/auth/me/servers?fresh=1"
             : "/api/auth/me/servers";
-        const response = await fetch(serversEndpoint, { cache: "no-store", signal: controller.signal });
-        const payload = (await response.json()) as ServersApiResponse;
+        const payload = await fetchClientData<ServersApiResponse>(
+          serversEndpoint,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+          {
+            cacheKey: `servers:${workspaceCacheKey}:${serversReloadToken > 0 ? "fresh" : "warm"}`,
+            cacheTtlMs: serversReloadToken > 0 ? 1200 : 30_000,
+            timeoutMs: serversReloadToken > 0 ? 6500 : 3200,
+            storage: "memory",
+          },
+        );
         if (!isMounted) return;
-        if (!response.ok || !payload.ok) {
+        if (!payload.ok) {
           const message = payload.message || "Falha ao carregar servidores.";
-          if (response.status === 401 || response.status === 403) {
-            throw Object.assign(new Error(message), { cause: "non_retryable" });
-          }
           throw new Error(message);
         }
         requestAttempt = 0;
@@ -1936,8 +1951,9 @@ export function ServersWorkspace({
           (error && typeof error === "object" && "name" in error && error.name === "AbortError");
         const isNonRetryable =
           error instanceof Error &&
-          "cause" in error &&
-          error.cause === "non_retryable";
+          (("cause" in error && error.cause === "non_retryable") ||
+            ("responseStatus" in error &&
+              (error.responseStatus === 401 || error.responseStatus === 403)));
 
         if (isNonRetryable) {
           setErrorMessage(error instanceof Error ? error.message : "Erro ao carregar servidores.");
@@ -2073,20 +2089,25 @@ export function ServersWorkspace({
       const controller = new AbortController();
       activeController = controller;
       clearActiveTimeout();
-      activeTimeoutId = window.setTimeout(() => controller.abort("timeout"), 12000);
+      activeTimeoutId = window.setTimeout(() => controller.abort("timeout"), 5200);
 
       try {
-        const response = await fetch("/api/auth/me/teams", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        const payload = (await response.json()) as TeamsApiResponse;
+        const payload = await fetchClientData<TeamsApiResponse>(
+          "/api/auth/me/teams",
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+          {
+            cacheKey: `teams:${workspaceCacheKey}`,
+            cacheTtlMs: 30_000,
+            timeoutMs: 3000,
+            storage: "memory",
+          },
+        );
         if (!isMounted) return;
-        if (!response.ok || !payload.ok) {
+        if (!payload.ok) {
           const message = payload.message || "Falha ao carregar equipes.";
-          if (response.status === 401 || response.status === 403) {
-            throw Object.assign(new Error(message), { cause: "non_retryable" });
-          }
           throw new Error(message);
         }
         requestAttempt = 0;
@@ -2102,8 +2123,9 @@ export function ServersWorkspace({
           (error && typeof error === "object" && "name" in error && error.name === "AbortError");
         const isNonRetryable =
           error instanceof Error &&
-          "cause" in error &&
-          error.cause === "non_retryable";
+          (("cause" in error && error.cause === "non_retryable") ||
+            ("responseStatus" in error &&
+              (error.responseStatus === 401 || error.responseStatus === 403)));
 
         if (isNonRetryable) {
           setTeamsErrorMessage(
@@ -2139,7 +2161,7 @@ export function ServersWorkspace({
       clearActiveTimeout();
       activeController?.abort("unmount");
     };
-  }, [applyTeamsSnapshot, router, teamsReloadToken]);
+  }, [applyTeamsSnapshot, router, teamsReloadToken, workspaceCacheKey]);
 
   useEffect(() => {
     function shouldRecoverDashboardState() {
@@ -4091,7 +4113,7 @@ export function ServersWorkspace({
     </div>
   );
   return (
-    <div className="relative min-h-screen overflow-x-clip bg-[#040404] text-white">
+    <div className="flowdesk-servers-ui relative min-h-screen overflow-x-clip bg-[#040404] text-white">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05)_0%,rgba(255,255,255,0.012)_28%,transparent_68%)]" />
       {workspaceAlertMessage ? (
         <button
