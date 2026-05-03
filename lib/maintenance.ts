@@ -7,6 +7,7 @@ export type MaintenanceArea =
   | "dashboard"
   | "servers"
   | "account"
+  | "admin"
   | "status";
 
 type MaintenanceContent = {
@@ -58,6 +59,13 @@ const MAINTENANCE_CONTENT: Record<MaintenanceArea, MaintenanceContent> = {
     description:
       "Sua area de conta esta temporariamente em manutencao. Tente novamente em alguns instantes.",
     fallbackHref: "/",
+  },
+  admin: {
+    envKey: "MANUTENTION_ADMIN",
+    title: "Painel administrativo em manutencao",
+    description:
+      "Estamos aplicando ajustes internos para liberar o painel administrativo com seguranca. Tente novamente em breve.",
+    fallbackHref: "/login",
   },
   status: {
     envKey: "MANUTENTION_STATUS",

@@ -13,12 +13,17 @@ export type FlowSecurePurpose =
   | "auth_email_otp_code"
   | "auth_email_otp_session"
   | "auth_session_oauth"
+  | "admin_audit_hash"
+  | "dev_auth_token"
+  | "dev_certificate_token"
+  | "dev_login_token"
   | "diagnostic_fingerprint"
   | "payment_pii"
   | "rate_limit_ip"
   | "server_settings_snapshot"
   | "sensitive_lookup"
-  | "sensitive_fingerprint";
+  | "sensitive_fingerprint"
+  | "test_variable_secret";
 
 type FlowSecureReader<T> = (value: unknown, key: string) => T;
 
