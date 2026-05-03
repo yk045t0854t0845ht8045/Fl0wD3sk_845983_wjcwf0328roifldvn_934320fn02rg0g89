@@ -89,12 +89,24 @@ type PaymentOrderRow = {
   user: NullableUserRelation;
 };
 
-function isMissingRelationOrColumn(error: unknown, relationOrColumn: string) {
+function getPostgrestErrorMessage(error: unknown) {
   const record =
     error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-  const code = typeof record.code === "string" ? record.code : "";
+
+  return typeof record.message === "string" ? record.message.toLowerCase() : "";
+}
+
+function getPostgrestErrorCode(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+
+  return typeof record.code === "string" ? record.code : "";
+}
+
+function isMissingRelationOrColumn(error: unknown, relationOrColumn: string) {
+  const code = getPostgrestErrorCode(error);
   const message =
-    typeof record.message === "string" ? record.message.toLowerCase() : "";
+    getPostgrestErrorMessage(error);
   const target = relationOrColumn.toLowerCase();
 
   return (
@@ -103,6 +115,12 @@ function isMissingRelationOrColumn(error: unknown, relationOrColumn: string) {
     message.includes(target) ||
     message.includes("could not find") ||
     message.includes("does not exist")
+  );
+}
+
+function isMissingAnyRelationOrColumn(error: unknown, relationOrColumns: string[]) {
+  return relationOrColumns.some((relationOrColumn) =>
+    isMissingRelationOrColumn(error, relationOrColumn),
   );
 }
 
@@ -653,13 +671,14 @@ export async function listAdminSupportTickets(
   limit = 80,
 ): Promise<AdminSupportTicketSummary[]> {
   const supabase = getSupabaseAdminClientOrThrow();
+  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 80, 1), 250);
   let ticketsResult = await supabase
     .from("tickets")
     .select(
       "id, protocol, status, guild_id, user_id, opened_at, closed_at, opened_reason, closed_by",
     )
     .order("opened_at", { ascending: false })
-    .limit(limit)
+    .limit(safeLimit)
     .returns<TicketRow[]>();
 
   if (
@@ -670,7 +689,7 @@ export async function listAdminSupportTickets(
       .from("tickets")
       .select("id, protocol, status, guild_id, user_id, opened_at, closed_at, closed_by")
       .order("opened_at", { ascending: false })
-      .limit(limit)
+      .limit(safeLimit)
       .returns<TicketRow[]>();
 
     if (!ticketsResult.error) {
@@ -681,7 +700,18 @@ export async function listAdminSupportTickets(
     }
   }
 
-  if (ticketsResult.error && isMissingRelationOrColumn(ticketsResult.error, "tickets")) {
+  if (
+    ticketsResult.error &&
+    isMissingAnyRelationOrColumn(ticketsResult.error, [
+      "tickets",
+      "protocol",
+      "guild_id",
+      "user_id",
+      "opened_at",
+      "closed_at",
+      "closed_by",
+    ])
+  ) {
     return [];
   }
 
