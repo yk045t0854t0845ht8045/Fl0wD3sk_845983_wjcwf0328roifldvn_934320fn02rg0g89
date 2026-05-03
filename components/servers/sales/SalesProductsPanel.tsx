@@ -226,7 +226,7 @@ function SelectMenu<T extends string>({
   }, [open]);
 
   return (
-    <div ref={menuRef} className="relative">
+    <div ref={menuRef} className={open ? "relative z-[220]" : "relative z-[1]"}>
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -238,7 +238,7 @@ function SelectMenu<T extends string>({
         />
       </button>
       {open ? (
-        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[50] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[120] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
           {options.map(([option, label]) => (
             <button
               key={option}
@@ -684,7 +684,7 @@ export function SalesProductCreatePanel({
 
       <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
         <div className="space-y-[18px]">
-          <ServerSurface className="p-[18px] sm:p-[22px]">
+          <ServerSurface className="relative z-[60] p-[18px] sm:p-[22px]">
             <label className="block text-[13px] font-semibold text-[#D8D8D8]">
               Titulo
             </label>
@@ -850,7 +850,7 @@ export function SalesProductCreatePanel({
                 label="Estoque rastreado"
               />
             </div>
-            <div className="mx-[18px] overflow-hidden rounded-[18px] border border-[#202020] sm:mx-[22px]">
+            <div className="mx-[18px] mb-[18px] overflow-hidden rounded-[18px] border border-[#202020] sm:mx-[22px] sm:mb-[20px]">
               <div className="grid grid-cols-2 bg-[#101010] px-[14px] py-[10px] text-[12px] font-semibold text-[#BDBDBD]">
                 <span>Quantidade</span>
                 <span className="text-right">Quantidade</span>
@@ -914,7 +914,7 @@ export function SalesProductCreatePanel({
         </div>
 
         <aside className="space-y-[18px]">
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[80] p-[18px] sm:p-[20px]">
             <label className="block text-[14px] font-semibold text-[#E2E2E2]">
               Status
             </label>
@@ -927,7 +927,7 @@ export function SalesProductCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[30] p-[18px] sm:p-[20px]">
             <div className="flex items-center justify-between gap-[16px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Publicacao
@@ -956,7 +956,7 @@ export function SalesProductCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[20] p-[18px] sm:p-[20px]">
             <div className="flex items-center gap-[8px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Organizacao do produto
@@ -985,7 +985,7 @@ export function SalesProductCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[70] p-[18px] sm:p-[20px]">
             <label className="block text-[14px] font-semibold text-[#E2E2E2]">
               Modelo de tema
             </label>
@@ -998,7 +998,7 @@ export function SalesProductCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-0 p-[18px] sm:p-[20px]">
             <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
               Resumo
             </h4>

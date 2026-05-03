@@ -114,18 +114,37 @@ export async function touchAdminSession(input: {
   const requestHashes = await getAdminRequestHashes();
   const nowIso = new Date().toISOString();
 
-  const existingResult = await supabase
+  const upsertResult = await supabase
     .from("admin_sessions")
+    .upsert(
+      {
+        auth_session_id: input.authSessionId,
+        auth_user_id: input.authUserId,
+        staff_profile_id: input.staffProfileId,
+        first_seen_at: nowIso,
+        last_seen_at: nowIso,
+        ip_hash: requestHashes.ipHash,
+        user_agent_hash: requestHashes.userAgentHash,
+        status: "active",
+      },
+      {
+        onConflict: "auth_session_id",
+      },
+    )
     .select("id")
-    .eq("auth_session_id", input.authSessionId)
-    .maybeSingle<{ id: string }>();
+    .single<{ id: string }>();
 
-  if (existingResult.error) {
-    throw new Error(existingResult.error.message);
-  }
+  if (upsertResult.error || !upsertResult.data) {
+    const message = upsertResult.error?.message || "";
+    const isDuplicateRace =
+      upsertResult.error?.code === "23505" ||
+      message.includes("admin_sessions_auth_session_id_key");
 
-  if (existingResult.data?.id) {
-    const updateResult = await supabase
+    if (!isDuplicateRace) {
+      throw new Error(message || "Nao foi possivel abrir a sessao administrativa.");
+    }
+
+    const retryResult = await supabase
       .from("admin_sessions")
       .update({
         auth_user_id: input.authUserId,
@@ -135,33 +154,40 @@ export async function touchAdminSession(input: {
         user_agent_hash: requestHashes.userAgentHash,
         status: "active",
       })
-      .eq("id", existingResult.data.id);
+      .eq("auth_session_id", input.authSessionId)
+      .select("id")
+      .single<{ id: string }>();
 
-    if (updateResult.error) {
-      throw new Error(updateResult.error.message);
+    if (retryResult.error || !retryResult.data) {
+      throw new Error(
+        retryResult.error?.message || "Nao foi possivel atualizar a sessao administrativa.",
+      );
     }
 
-    return existingResult.data.id;
+    return retryResult.data.id;
   }
 
-  const insertResult = await supabase
+  const keepFirstSeenResult = await supabase
     .from("admin_sessions")
-    .insert({
+    .update({
       auth_session_id: input.authSessionId,
       auth_user_id: input.authUserId,
       staff_profile_id: input.staffProfileId,
-      first_seen_at: nowIso,
       last_seen_at: nowIso,
       ip_hash: requestHashes.ipHash,
       user_agent_hash: requestHashes.userAgentHash,
       status: "active",
     })
+    .eq("id", upsertResult.data.id)
     .select("id")
     .single<{ id: string }>();
 
-  if (insertResult.error || !insertResult.data) {
-    throw new Error(insertResult.error?.message || "Nao foi possivel abrir a sessao administrativa.");
+  if (keepFirstSeenResult.error || !keepFirstSeenResult.data) {
+    throw new Error(
+      keepFirstSeenResult.error?.message ||
+        "Nao foi possivel confirmar a sessao administrativa.",
+    );
   }
 
-  return insertResult.data.id;
+  return keepFirstSeenResult.data.id;
 }

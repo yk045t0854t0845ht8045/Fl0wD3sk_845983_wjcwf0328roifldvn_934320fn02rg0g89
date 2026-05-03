@@ -89,6 +89,23 @@ type PaymentOrderRow = {
   user: NullableUserRelation;
 };
 
+function isMissingRelationOrColumn(error: unknown, relationOrColumn: string) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+  const target = relationOrColumn.toLowerCase();
+
+  return (
+    code === "42P01" ||
+    code === "42703" ||
+    message.includes(target) ||
+    message.includes("could not find") ||
+    message.includes("does not exist")
+  );
+}
+
 type LicensedServerRow = {
   guild_id: string;
   user_id: number;
@@ -412,7 +429,15 @@ export async function listAdminUserAccounts(limit = 60): Promise<AdminUserAccoun
     throw new Error(`Falha ao carregar historico de pagamentos: ${paymentOrdersResult.error.message}`);
   }
 
-  if (ticketsResult.error) {
+  const ticketRowsForUsers =
+    ticketsResult.error && isMissingRelationOrColumn(ticketsResult.error, "tickets")
+      ? []
+      : ticketsResult.data || [];
+
+  if (
+    ticketsResult.error &&
+    !isMissingRelationOrColumn(ticketsResult.error, "tickets")
+  ) {
     throw new Error(`Falha ao carregar tickets por usuario: ${ticketsResult.error.message}`);
   }
 
@@ -440,7 +465,7 @@ export async function listAdminUserAccounts(limit = 60): Promise<AdminUserAccoun
     }
   }
 
-  for (const ticket of ticketsResult.data || []) {
+  for (const ticket of ticketRowsForUsers) {
     if (!ticket.user_id) {
       continue;
     }
@@ -628,7 +653,7 @@ export async function listAdminSupportTickets(
   limit = 80,
 ): Promise<AdminSupportTicketSummary[]> {
   const supabase = getSupabaseAdminClientOrThrow();
-  const ticketsResult = await supabase
+  let ticketsResult = await supabase
     .from("tickets")
     .select(
       "id, protocol, status, guild_id, user_id, opened_at, closed_at, opened_reason, closed_by",
@@ -636,6 +661,29 @@ export async function listAdminSupportTickets(
     .order("opened_at", { ascending: false })
     .limit(limit)
     .returns<TicketRow[]>();
+
+  if (
+    ticketsResult.error &&
+    isMissingRelationOrColumn(ticketsResult.error, "opened_reason")
+  ) {
+    ticketsResult = await supabase
+      .from("tickets")
+      .select("id, protocol, status, guild_id, user_id, opened_at, closed_at, closed_by")
+      .order("opened_at", { ascending: false })
+      .limit(limit)
+      .returns<TicketRow[]>();
+
+    if (!ticketsResult.error) {
+      ticketsResult.data = (ticketsResult.data || []).map((ticket) => ({
+        ...ticket,
+        opened_reason: "",
+      }));
+    }
+  }
+
+  if (ticketsResult.error && isMissingRelationOrColumn(ticketsResult.error, "tickets")) {
+    return [];
+  }
 
   if (ticketsResult.error) {
     throw new Error(`Falha ao carregar tickets de suporte: ${ticketsResult.error.message}`);
