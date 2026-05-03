@@ -31,9 +31,14 @@ import { TicketMessageBuilder } from "@/components/servers/TicketMessageBuilder"
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
 import { serversScale } from "@/components/servers/serversScale";
 import {
+  SalesCategoryEditPanel,
   SalesCategoriesListPanel,
   SalesCategoryCreatePanel,
 } from "@/components/servers/sales/SalesCategoriesPanel";
+import {
+  SalesProductCreatePanel,
+  SalesProductsListPanel,
+} from "@/components/servers/sales/SalesProductsPanel";
 import {
   getServerDashboardSettings,
   invalidateCachedServerDashboardSettings,
@@ -78,7 +83,9 @@ type ServerSettingsSection =
   | "sales_overview"
   | "sales_categories"
   | "sales_category_create"
+  | "sales_category_edit"
   | "sales_products"
+  | "sales_product_create"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -459,7 +466,9 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     | "sales_overview"
     | "sales_categories"
     | "sales_category_create"
+    | "sales_category_edit"
     | "sales_products"
+    | "sales_product_create"
     | "sales_payment_methods"
     | "sales_coupons_gifts"
   >,
@@ -483,11 +492,23 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     description:
       "Crie uma colecao de vendas preparada para o bot e para a futura vitrine web.",
   },
+  sales_category_edit: {
+    tag: "Vendas",
+    title: "Editar categoria",
+    description:
+      "Ajuste a colecao de vendas sem quebrar a estrutura da loja.",
+  },
   sales_products: {
     tag: "Vendas",
     title: "Produtos",
     description:
       "Cadastre e gerencie os itens que serao vendidos pelo bot quando o modulo estiver completo.",
+  },
+  sales_product_create: {
+    tag: "Vendas",
+    title: "Adicionar produto",
+    description:
+      "Cadastre um item com midias, preco, estoque e publicacao prontos para a loja.",
   },
   sales_payment_methods: {
     tag: "Vendas",
@@ -2220,7 +2241,9 @@ export function ServerSettingsEditor({
         sales_overview: "server_manage_tickets_overview",
         sales_categories: "server_manage_tickets_overview",
         sales_category_create: "server_manage_tickets_overview",
+        sales_category_edit: "server_manage_tickets_overview",
         sales_products: "server_manage_tickets_overview",
+        sales_product_create: "server_manage_tickets_overview",
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
@@ -3599,7 +3622,9 @@ export function ServerSettingsEditor({
     settingsSection === "sales_overview" ||
     settingsSection === "sales_categories" ||
     settingsSection === "sales_category_create" ||
+    settingsSection === "sales_category_edit" ||
     settingsSection === "sales_products" ||
+    settingsSection === "sales_product_create" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts";
   const isSalesSettingsSection = settingsSection === "sales_overview";
@@ -5930,6 +5955,21 @@ export function ServerSettingsEditor({
                     />
                   ) : settingsSection === "sales_category_create" ? (
                     <SalesCategoryCreatePanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_category_edit" ? (
+                    <SalesCategoryEditPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_products" ? (
+                    <SalesProductsListPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_product_create" ? (
+                    <SalesProductCreatePanel
                       guildId={guildId}
                       readOnly={settingsReadOnly}
                     />
