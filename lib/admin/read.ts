@@ -4,7 +4,7 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type CountResponse = {
   count: number | null;
-  error: { message: string } | null;
+  error: { code?: string; message: string } | null;
 };
 
 type NullableUserRelation =
@@ -238,8 +238,37 @@ export type AdminAuditLogRecord = {
   metadataPreview: string;
 };
 
-function resolveCount(result: CountResponse, table: string) {
+function isMissingRelationOrColumnError(error: CountResponse["error"], target: string) {
+  if (!error) {
+    return false;
+  }
+
+  const code = error.code || "";
+  const message = error.message.toLowerCase();
+  const normalizedTarget = target.toLowerCase();
+
+  return (
+    code === "42P01" ||
+    code === "42703" ||
+    message.includes(normalizedTarget) ||
+    message.includes("could not find") ||
+    message.includes("does not exist")
+  );
+}
+
+function resolveCount(
+  result: CountResponse,
+  table: string,
+  options?: {
+    optional?: boolean;
+    fallbackValue?: number;
+  },
+) {
   if (result.error) {
+    if (options?.optional && isMissingRelationOrColumnError(result.error, table)) {
+      return options.fallbackValue || 0;
+    }
+
     throw new Error(`Falha ao carregar ${table}: ${result.error.message}`);
   }
 
@@ -364,7 +393,7 @@ export async function getAdminOverviewData(): Promise<AdminOverviewData> {
     supabase
       .from("tickets")
       .select("*", { count: "exact", head: true })
-      .not("status", "in", "(closed,resolved)"),
+      .neq("status", "closed"),
     supabase
       .from("dev_ip_requests")
       .select("*", { count: "exact", head: true })
@@ -443,7 +472,9 @@ export async function getAdminOverviewData(): Promise<AdminOverviewData> {
     {
       id: "tickets",
       label: "Tickets pendentes",
-      value: resolveCount(pendingTicketsCountResult, "tickets"),
+      value: resolveCount(pendingTicketsCountResult, "tickets", {
+        optional: true,
+      }),
       detail: "Chamados que seguem abertos no suporte oficial.",
     },
     {

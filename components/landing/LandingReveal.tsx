@@ -1,28 +1,24 @@
 "use client";
 
 import {
-  cloneElement,
-  isValidElement,
   useEffect,
   useState,
   type CSSProperties,
-  type ReactElement,
+  type ReactNode,
 } from "react";
 
 type LandingRevealProps = {
-  children: ReactElement<{
-    className?: string;
-    style?: CSSProperties;
-    "data-flowdesk-visible"?: "true" | "false";
-  }>;
+  children: ReactNode;
   delay?: number;
   duration?: number;
+  className?: string;
 };
 
 export function LandingReveal({
   children,
   delay = 0,
   duration = 620,
+  className,
 }: LandingRevealProps) {
   const [isVisible, setIsVisible] = useState(false);
 
@@ -53,24 +49,18 @@ export function LandingReveal({
     };
   }, []);
 
-  if (!isValidElement(children)) {
-    return children;
-  }
-
-  const childProps = (children.props ?? {}) as {
-    className?: string;
-    style?: CSSProperties;
-    "data-flowdesk-visible"?: "true" | "false";
-  };
-
-  return cloneElement(children, {
-    className: `${childProps.className ?? ""} flowdesk-landing-reveal`.trim(),
-    style: {
-      ...(childProps.style ?? {}),
-      "--flowdesk-reveal-delay": `${delay}ms`,
-      "--flowdesk-reveal-duration": `${duration}ms`,
-    } as CSSProperties,
-    // We explicitly use a string "false" during the first render to match hydration
-    "data-flowdesk-visible": isVisible ? "true" : "false",
-  });
+  return (
+    <div
+      className={`${className ?? ""} flowdesk-landing-reveal`.trim()}
+      style={
+        {
+          "--flowdesk-reveal-delay": `${delay}ms`,
+          "--flowdesk-reveal-duration": `${duration}ms`,
+        } as CSSProperties
+      }
+      data-flowdesk-visible={isVisible ? "true" : "false"}
+    >
+      {children}
+    </div>
+  );
 }
