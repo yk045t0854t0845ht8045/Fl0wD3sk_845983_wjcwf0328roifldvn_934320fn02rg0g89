@@ -37,6 +37,7 @@ import {
 } from "@/components/servers/sales/SalesCategoriesPanel";
 import {
   SalesProductCreatePanel,
+  SalesProductEditPanel,
   SalesProductsListPanel,
 } from "@/components/servers/sales/SalesProductsPanel";
 import {
@@ -86,6 +87,7 @@ type ServerSettingsSection =
   | "sales_category_edit"
   | "sales_products"
   | "sales_product_create"
+  | "sales_product_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -469,6 +471,7 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     | "sales_category_edit"
     | "sales_products"
     | "sales_product_create"
+    | "sales_product_edit"
     | "sales_payment_methods"
     | "sales_coupons_gifts"
   >,
@@ -509,6 +512,12 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     title: "Adicionar produto",
     description:
       "Cadastre um item com midias, preco, estoque e publicacao prontos para a loja.",
+  },
+  sales_product_edit: {
+    tag: "Vendas",
+    title: "Editar produto",
+    description:
+      "Atualize preco, midias, estoque e descricao sem tirar a loja do fluxo.",
   },
   sales_payment_methods: {
     tag: "Vendas",
@@ -2244,6 +2253,7 @@ export function ServerSettingsEditor({
         sales_category_edit: "server_manage_tickets_overview",
         sales_products: "server_manage_tickets_overview",
         sales_product_create: "server_manage_tickets_overview",
+        sales_product_edit: "server_manage_tickets_overview",
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
@@ -3625,6 +3635,7 @@ export function ServerSettingsEditor({
     settingsSection === "sales_category_edit" ||
     settingsSection === "sales_products" ||
     settingsSection === "sales_product_create" ||
+    settingsSection === "sales_product_edit" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts";
   const isSalesSettingsSection = settingsSection === "sales_overview";
@@ -5970,6 +5981,11 @@ export function ServerSettingsEditor({
                     />
                   ) : settingsSection === "sales_product_create" ? (
                     <SalesProductCreatePanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_product_edit" ? (
+                    <SalesProductEditPanel
                       guildId={guildId}
                       readOnly={settingsReadOnly}
                     />

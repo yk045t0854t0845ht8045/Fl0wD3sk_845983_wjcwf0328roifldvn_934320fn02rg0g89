@@ -41,6 +41,7 @@ const DEFAULT_PAYMENT_CHECKOUT_PATH = "/payment/flow-pro/mensal";
 
 function isSensitiveApiPath(pathname: string) {
   return (
+    pathname.startsWith("/api/admin/") ||
     pathname.startsWith("/api/auth/") ||
     pathname.startsWith("/api/internal/") ||
     pathname.startsWith("/api/payments/") ||
@@ -86,7 +87,9 @@ function requiresSameOriginProtection(pathname: string, method: string) {
   }
 
   return (
-    pathname.startsWith("/api/auth/") || pathname.startsWith("/api/transcripts/")
+    pathname.startsWith("/api/admin/") ||
+    pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/api/transcripts/")
   );
 }
 

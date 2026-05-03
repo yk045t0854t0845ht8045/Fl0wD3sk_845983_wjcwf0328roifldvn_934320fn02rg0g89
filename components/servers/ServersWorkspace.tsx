@@ -115,6 +115,7 @@ type ServerSettingsSection =
   | "sales_category_edit"
   | "sales_products"
   | "sales_product_create"
+  | "sales_product_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -540,7 +541,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const salesSectionMatch = normalizedPathname.match(
-    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create)?|payment-methods|coupons-gifts)\/?$/,
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)\/?$/,
   );
   if (salesSectionMatch) {
     const salesSection = salesSectionMatch[2];
@@ -558,6 +559,8 @@ function parseWorkspaceRoute(pathname: string | null): {
             ? "sales_products"
           : salesSection === "products/create"
             ? "sales_product_create"
+          : salesSection.startsWith("products/edit/")
+            ? "sales_product_edit"
             : salesSection === "payment-methods"
               ? "sales_payment_methods"
               : salesSection === "coupons-gifts"
@@ -2547,6 +2550,7 @@ export function ServersWorkspace({
       selectedSettingsSectionForConfig === "sales_category_edit" ||
       selectedSettingsSectionForConfig === "sales_products" ||
       selectedSettingsSectionForConfig === "sales_product_create" ||
+      selectedSettingsSectionForConfig === "sales_product_edit" ||
       selectedSettingsSectionForConfig === "sales_payment_methods" ||
       selectedSettingsSectionForConfig === "sales_coupons_gifts");
   const isEntryExitGroupActive =
@@ -2664,6 +2668,9 @@ export function ServersWorkspace({
     }
     if (settingsSection === "sales_product_create") {
       return `/servers/${encodedGuildId}/sales/products/create/`;
+    }
+    if (settingsSection === "sales_product_edit") {
+      return `/servers/${encodedGuildId}/sales/products/`;
     }
     if (settingsSection === "sales_payment_methods") {
       return `/servers/${encodedGuildId}/sales/payment-methods/`;
@@ -3279,6 +3286,7 @@ export function ServersWorkspace({
       section === "sales_category_edit" ||
       section === "sales_products" ||
       section === "sales_product_create" ||
+      section === "sales_product_edit" ||
       section === "sales_payment_methods" ||
       section === "sales_coupons_gifts"
     ) {
@@ -3683,8 +3691,10 @@ export function ServersWorkspace({
                                   selectedSettingsSectionForConfig ===
                                     "sales_category_edit")) ||
                               (item.settingsSection === "sales_products" &&
-                                selectedSettingsSectionForConfig ===
-                                  "sales_product_create")) &&
+                                (selectedSettingsSectionForConfig ===
+                                  "sales_product_create" ||
+                                  selectedSettingsSectionForConfig ===
+                                    "sales_product_edit"))) &&
                             isEditingServer,
                         );
 

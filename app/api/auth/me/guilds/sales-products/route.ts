@@ -114,6 +114,12 @@ function buildProductCode(id: string) {
   return `prd-${seed.padEnd(8, "0").slice(0, 8)}`;
 }
 
+function normalizeProductCode(value: unknown) {
+  if (typeof value !== "string") return "";
+  const code = value.trim().toLowerCase();
+  return /^prd-[0-9]{8}$/.test(code) ? code : "";
+}
+
 function buildProductResponse(record: GuildSalesProductRecord) {
   const mediaUrls = Array.isArray(record.media_urls)
     ? record.media_urls.filter((item): item is string => typeof item === "string")
@@ -229,10 +235,26 @@ async function ensureGuildAccess(
   };
 }
 
+async function findProductByCode(guildId: string, productCode: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_products")
+    .select(PRODUCT_SELECT)
+    .eq("guild_id", guildId)
+    .limit(300);
+
+  if (result.error) throw new Error(result.error.message);
+
+  return ((result.data || []) as GuildSalesProductRecord[]).find(
+    (record) => buildProductCode(record.id) === productCode,
+  );
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const guildId = (url.searchParams.get("guildId") || "").trim();
+    const productCode = normalizeProductCode(url.searchParams.get("productCode"));
 
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
@@ -247,6 +269,25 @@ export async function GET(request: Request) {
     if (!access.ok) return applyNoStoreHeaders(access.response);
 
     const supabase = getSupabaseAdminClientOrThrow();
+    if (productCode) {
+      const product = await findProductByCode(guildId, productCode);
+      if (!product) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { ok: false, message: "Produto nao encontrado." },
+            { status: 404 },
+          ),
+        );
+      }
+
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          product: buildProductResponse(product),
+        }),
+      );
+    }
+
     const result = await supabase
       .from("guild_sales_products")
       .select(PRODUCT_SELECT)
@@ -275,6 +316,142 @@ export async function GET(request: Request) {
         {
           ok: false,
           message: sanitizeErrorMessage(error, "Erro ao carregar produtos."),
+        },
+        { status: 500 },
+      ),
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) {
+    return applyNoStoreHeaders(invalidMutationResponse);
+  }
+
+  try {
+    const rawBody =
+      (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const guildId = getTrimmedText(rawBody.guildId, 25);
+    const productCode = normalizeProductCode(rawBody.productCode);
+    const title = getTrimmedText(rawBody.title, PRODUCT_TITLE_MAX_LENGTH);
+    const description = getTrimmedText(
+      rawBody.description,
+      PRODUCT_DESCRIPTION_MAX_LENGTH,
+    );
+    const categoryId = getTrimmedText(rawBody.categoryId, 60);
+    const mediaUrls = normalizeStringArray(rawBody.mediaUrls, 8, 700);
+    const tags = normalizeStringArray(rawBody.tags, 12, 36);
+    const status = normalizeStatus(rawBody.status);
+    const themeModel = normalizeThemeModel(rawBody.themeModel);
+    const barcodeMode = normalizeBarcodeMode(rawBody.barcodeMode);
+
+    if (!isGuildId(guildId)) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Guild ID invalido." },
+          { status: 400 },
+        ),
+      );
+    }
+
+    if (!productCode) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Codigo do produto invalido." },
+          { status: 400 },
+        ),
+      );
+    }
+
+    if (title.length < 2) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Informe um titulo com pelo menos 2 caracteres." },
+          { status: 400 },
+        ),
+      );
+    }
+
+    const safeCategoryId = categoryId && isUuid(categoryId) ? categoryId : null;
+    const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
+    if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    const product = await findProductByCode(guildId, productCode);
+    if (!product) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Produto nao encontrado." },
+          { status: 404 },
+        ),
+      );
+    }
+
+    const supabase = getSupabaseAdminClientOrThrow();
+    if (safeCategoryId) {
+      const categoryResult = await supabase
+        .from("guild_sales_categories")
+        .select("id")
+        .eq("id", safeCategoryId)
+        .eq("guild_id", guildId)
+        .maybeSingle();
+
+      if (categoryResult.error) throw new Error(categoryResult.error.message);
+      if (!categoryResult.data) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { ok: false, message: "Categoria selecionada nao foi encontrada." },
+            { status: 400 },
+          ),
+        );
+      }
+    }
+
+    const result = await supabase
+      .from("guild_sales_products")
+      .update({
+        title,
+        description,
+        category_id: safeCategoryId,
+        status,
+        media_urls: mediaUrls,
+        price_amount: toMoney(rawBody.priceAmount),
+        compare_at_price_amount: toOptionalMoney(rawBody.compareAtPriceAmount),
+        unit_price_amount: toOptionalMoney(rawBody.unitPriceAmount),
+        charge_taxes: rawBody.chargeTaxes !== false,
+        cost_per_item_amount: toOptionalMoney(rawBody.costPerItemAmount),
+        inventory_tracked: rawBody.inventoryTracked !== false,
+        stock_quantity: Math.max(0, Math.floor(Number(rawBody.stockQuantity) || 0)),
+        sku: getTrimmedText(rawBody.sku, PRODUCT_TEXT_MAX_LENGTH),
+        barcode: getTrimmedText(rawBody.barcode, PRODUCT_TEXT_MAX_LENGTH),
+        barcode_mode: barcodeMode,
+        product_type: getTrimmedText(rawBody.productType, PRODUCT_TEXT_MAX_LENGTH),
+        manufacturer: getTrimmedText(rawBody.manufacturer, PRODUCT_TEXT_MAX_LENGTH),
+        tags,
+        theme_model: themeModel,
+        published_virtual_store: rawBody.publishedVirtualStore !== false,
+        published_point_of_sale: rawBody.publishedPointOfSale !== false,
+        published_pinterest: rawBody.publishedPinterest === true,
+      })
+      .eq("id", product.id)
+      .eq("guild_id", guildId)
+      .select(PRODUCT_SELECT)
+      .single();
+
+    if (result.error) throw new Error(result.error.message);
+
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        ok: true,
+        product: buildProductResponse(result.data as GuildSalesProductRecord),
+      }),
+    );
+  } catch (error) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: sanitizeErrorMessage(error, "Erro ao atualizar produto."),
         },
         { status: 500 },
       ),
