@@ -947,7 +947,7 @@ export function SalesCategoryCreatePanel({
         </div>
 
         <aside className="space-y-[18px]">
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[30] p-[18px] sm:p-[20px]">
             <div className="flex items-center justify-between gap-[16px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Publicacao
@@ -987,7 +987,7 @@ export function SalesCategoryCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[40] p-[18px] sm:p-[20px]">
             <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Imagem</h4>
             <input
               ref={fileInputRef}
@@ -1070,7 +1070,7 @@ export function SalesCategoryCreatePanel({
                 />
               </button>
               {isThemeMenuOpen ? (
-                <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[40] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+                <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[120] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
                   {themeModelOptions.map(([value, label]) => {
                     const isSelected = value === themeModel;
                     return (
@@ -1097,7 +1097,7 @@ export function SalesCategoryCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="overflow-hidden">
+          <ServerSurface className="relative z-0 overflow-hidden">
             <div className="border-b border-[#171717] p-[18px] sm:p-[20px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Previa rapida
