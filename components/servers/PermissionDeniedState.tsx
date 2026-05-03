@@ -1,6 +1,7 @@
 "use client";
 
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
+import { ServerButton } from "@/components/servers/ServerUi";
 
 type PermissionDeniedStateProps = {
   title?: string;
@@ -16,7 +17,7 @@ export function PermissionDeniedState({
   onAction,
 }: PermissionDeniedStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center py-[120px] md:py-[180px] text-center min-h-[65vh]">
+    <div className="flowdesk-servers-ui flex min-h-[65vh] flex-col items-center justify-center px-[18px] py-[120px] text-center md:py-[180px]">
       <div className="mx-auto flex w-fit justify-center">
         <LandingGlowTag className="px-[26px]">Acesso Restrito</LandingGlowTag>
       </div>
@@ -35,17 +36,14 @@ export function PermissionDeniedState({
         {description}
       </p>
 
-      <button
-        type="button"
+      <ServerButton
         onClick={onAction}
-        className="group relative mt-[28px] inline-flex h-[46px] items-center justify-center overflow-hidden rounded-[12px] px-8 text-[15px] leading-none font-semibold"
+        variant="primary"
+        size="lg"
+        className="mt-[28px] h-[46px] px-8 text-[15px]"
       >
-        <span
-          aria-hidden="true"
-          className="absolute inset-0 rounded-[12px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D1D1D1_100%)] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
-        />
-        <span className="relative z-10 text-[#282828]">{actionLabel}</span>
-      </button>
+        {actionLabel}
+      </ServerButton>
     </div>
   );
 }

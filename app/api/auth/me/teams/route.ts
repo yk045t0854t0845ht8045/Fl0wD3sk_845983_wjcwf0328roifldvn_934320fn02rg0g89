@@ -16,6 +16,10 @@ import { applyNoStoreHeaders, ensureSameOriginJsonMutationRequest } from "@/lib/
 import { getPanelManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import { getPlanGuildsForUser } from "@/lib/plans/planGuilds";
 import { sendTeamCreatedEmailSafe } from "@/lib/mail/transactional";
+import {
+  createCoalescedRouteKey,
+  runCoalescedRouteResponse,
+} from "@/lib/security/routeCoalescing";
 
 const TEAM_ICON_KEYS = [
   "aurora",
@@ -125,11 +129,20 @@ export async function GET() {
       return applyNoStoreHeaders(
         NextResponse.json(
           { ok: false, message: "Nao autenticado." },
-          { status: 401 },
-        ),
-      );
-    }
+        { status: 401 },
+      ),
+    );
+  }
 
+    const coalescedKey = createCoalescedRouteKey({
+      namespace: "auth.me.teams.get",
+      parts: [authSession.user.id, authSession.user.discord_user_id || ""],
+    });
+
+    return runCoalescedRouteResponse({
+      key: coalescedKey,
+      ttlMs: 2500,
+      producer: async () => {
     const payload = await getUserTeamsSnapshotForUser({
       authUserId: authSession.user.id,
       discordUserId: authSession.user.discord_user_id,
@@ -141,6 +154,8 @@ export async function GET() {
         ...payload,
       }),
     );
+      },
+    });
   } catch (error) {
     return applyNoStoreHeaders(
       NextResponse.json({

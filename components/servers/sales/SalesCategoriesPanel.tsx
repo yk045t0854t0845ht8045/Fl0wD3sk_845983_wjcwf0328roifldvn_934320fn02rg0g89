@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -25,6 +26,15 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { ButtonLoader } from "@/components/login/ButtonLoader";
+import {
+  ServerButton,
+  ServerEmptyState,
+  ServerIconFrame,
+  ServerSectionHeading,
+  ServerSurface,
+  ServerTextInput,
+} from "@/components/servers/ServerUi";
 
 type SalesCategory = {
   id: string;
@@ -61,6 +71,10 @@ const themeModelLabel: Record<SalesCategory["themeModel"], string> = {
   compact: "Grade compacta",
   featured: "Destaque editorial",
 };
+const themeModelOptions = Object.entries(themeModelLabel) as Array<
+  [SalesCategory["themeModel"], string]
+>;
+const productSortOptions = ["Mais relevantes", "Mais recentes", "A-Z"] as const;
 
 function getCategoriesPath(guildId: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/categories/`;
@@ -78,22 +92,6 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(date);
-}
-
-function CardShell({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <section
-      className={`rounded-[24px] border border-[#171717] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] shadow-[0_24px_80px_rgba(0,0,0,0.22)] ${className}`.trim()}
-    >
-      {children}
-    </section>
-  );
 }
 
 function IconButton({
@@ -114,7 +112,7 @@ function IconButton({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#101010] text-[#BDBDBD] transition hover:border-[#353535] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
+      className="flowdesk-server-button inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#101010] text-[#BDBDBD] transition hover:border-[#353535] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
     >
       {children}
     </button>
@@ -175,42 +173,32 @@ export function SalesCategoriesListPanel({
 
   return (
     <div className="space-y-[18px]">
-      <CardShell className="px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
-        <div className="flex flex-col gap-[16px] lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">
-              Vendas
-            </p>
-            <h3 className="mt-[10px] text-[22px] leading-none font-medium tracking-[-0.04em] text-[#E4E4E4]">
-              Categorias da loja
-            </h3>
-            <p className="mt-[10px] max-w-[760px] text-[14px] leading-[1.6] text-[#7B7B7B]">
-              Organize acessos, contas, passes, robux e qualquer colecao que
-              depois tambem pode virar vitrine web.
-            </p>
-          </div>
-
-          <button
-            type="button"
+      <ServerSectionHeading
+        eyebrow="Vendas"
+        title="Categorias da loja"
+        description="Organize acessos, contas, passes, robux e qualquer colecao que depois tambem pode virar vitrine web."
+        action={
+          <ServerButton
             disabled={createDisabled}
             onClick={() => router.push(getCreatePath(guildId))}
-            className="inline-flex h-[44px] items-center justify-center gap-[9px] rounded-[14px] bg-[#F5F5F5] px-[16px] text-[13px] font-semibold text-[#080808] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
+            variant="primary"
+            size="lg"
           >
             <Plus className="h-[16px] w-[16px]" />
             Adicionar Categoria
-          </button>
-        </div>
-      </CardShell>
+          </ServerButton>
+        }
+      />
 
-      <CardShell className="overflow-hidden">
+      <ServerSurface className="overflow-hidden">
         <div className="flex flex-col gap-[12px] border-b border-[#171717] px-[18px] py-[16px] sm:flex-row sm:items-center sm:justify-between sm:px-[22px]">
           <div className="relative w-full sm:max-w-[360px]">
             <Search className="pointer-events-none absolute left-[14px] top-1/2 h-[16px] w-[16px] -translate-y-1/2 text-[#666]" />
-            <input
+            <ServerTextInput
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Pesquisar categorias"
-              className="h-[42px] w-full rounded-[14px] border border-[#202020] bg-[#0D0D0D] pl-[40px] pr-[14px] text-[13px] text-[#E8E8E8] outline-none transition placeholder:text-[#595959] focus:border-[#3A3A3A]"
+              className="h-[42px] border-[#202020] pl-[40px] text-[13px]"
             />
           </div>
           <div className="inline-flex items-center gap-[8px] rounded-[14px] border border-[#202020] bg-[#0D0D0D] px-[12px] py-[10px] text-[12px] text-[#8C8C8C]">
@@ -240,13 +228,12 @@ export function SalesCategoriesListPanel({
               Nao foi possivel carregar categorias.
             </p>
             <p className="mt-[8px] text-[13px] text-[#7B7B7B]">{errorMessage}</p>
-            <button
-              type="button"
+            <ServerButton
               onClick={() => void loadCategories()}
-              className="mt-[16px] inline-flex h-[40px] items-center justify-center rounded-[13px] border border-[#252525] px-[14px] text-[13px] font-semibold text-[#E7E7E7] transition hover:border-[#3A3A3A] hover:bg-[#121212]"
+              className="mt-[16px]"
             >
               Tentar novamente
-            </button>
+            </ServerButton>
           </div>
         ) : filteredCategories.length ? (
           <div className="divide-y divide-[#171717]">
@@ -256,9 +243,9 @@ export function SalesCategoriesListPanel({
                 className="flex flex-col gap-[14px] px-[18px] py-[16px] transition hover:bg-[#0E0E0E] sm:px-[22px] lg:flex-row lg:items-center"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-[14px]">
-                  <div className="flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[15px] border border-[#232323] bg-[#111] text-[#EAEAEA]">
+                  <ServerIconFrame>
                     <Tag className="h-[20px] w-[20px]" />
-                  </div>
+                  </ServerIconFrame>
                   <div className="min-w-0">
                     <h4 className="truncate text-[15px] font-semibold text-[#EDEDED]">
                       {category.title}
@@ -287,20 +274,13 @@ export function SalesCategoriesListPanel({
             ))}
           </div>
         ) : (
-          <div className="px-[22px] py-[44px] text-center">
-            <div className="mx-auto flex h-[58px] w-[58px] items-center justify-center rounded-[18px] border border-[#232323] bg-[#101010] text-[#E7E7E7]">
-              <ShoppingBag className="h-[24px] w-[24px]" />
-            </div>
-            <h4 className="mt-[18px] text-[16px] font-semibold text-[#EDEDED]">
-              Nenhuma categoria criada ainda.
-            </h4>
-            <p className="mx-auto mt-[8px] max-w-[420px] text-[13px] leading-[1.6] text-[#777]">
-              Crie a primeira categoria para separar produtos no bot e deixar a
-              estrutura pronta para uma futura loja web.
-            </p>
-          </div>
+          <ServerEmptyState
+            icon={<ShoppingBag className="h-[24px] w-[24px]" />}
+            title="Nenhuma categoria criada ainda."
+            description="Crie a primeira categoria para separar produtos no bot e deixar a estrutura pronta para uma futura loja web."
+          />
         )}
-      </CardShell>
+      </ServerSurface>
     </div>
   );
 }
@@ -311,6 +291,8 @@ export function SalesCategoryCreatePanel({
 }: SalesCategoriesPanelProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
+  const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [collectionType, setCollectionType] =
@@ -323,14 +305,148 @@ export function SalesCategoryCreatePanel({
   const [seoDescription, setSeoDescription] = useState("");
   const [productQuery, setProductQuery] = useState("");
   const [imageName, setImageName] = useState<string | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+  const [isDescriptionPreviewOpen, setIsDescriptionPreviewOpen] = useState(false);
+  const [productSortIndex, setProductSortIndex] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+    };
+  }, [imagePreviewUrl]);
+
+  useEffect(() => {
+    if (!isThemeMenuOpen) return;
+
+    function handleOutsideClick(event: MouseEvent) {
+      if (
+        themeMenuRef.current &&
+        event.target instanceof Node &&
+        !themeMenuRef.current.contains(event.target)
+      ) {
+        setIsThemeMenuOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsThemeMenuOpen(false);
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isThemeMenuOpen]);
 
   const goBack = useCallback(() => {
     router.push(getCategoriesPath(guildId));
   }, [guildId, router]);
 
   const canSave = title.trim().length >= 2 && !isSaving && !readOnly;
+
+  const applyDescriptionFormat = useCallback(
+    (
+      format:
+        | "paragraph"
+        | "bold"
+        | "italic"
+        | "link"
+        | "image"
+        | "code",
+    ) => {
+      const textarea = descriptionRef.current;
+      const start = textarea?.selectionStart ?? description.length;
+      const end = textarea?.selectionEnd ?? description.length;
+      const selected = description.slice(start, end);
+      const fallbackText =
+        format === "link"
+          ? "texto do link"
+          : format === "image"
+            ? "descricao da imagem"
+            : format === "code"
+              ? "codigo"
+              : "texto";
+      const value = selected || fallbackText;
+      let replacement = value;
+
+      if (format === "paragraph") {
+        replacement = value
+          .replace(/^#{1,6}\s+/gm, "")
+          .replace(/^>\s+/gm, "")
+          .replace(/^[-*]\s+/gm, "");
+      } else if (format === "bold") {
+        replacement = `**${value}**`;
+      } else if (format === "italic") {
+        replacement = `_${value}_`;
+      } else if (format === "link") {
+        replacement = `[${value}](https://exemplo.com)`;
+      } else if (format === "image") {
+        replacement = `![${value}](https://exemplo.com/imagem.png)`;
+      } else if (format === "code") {
+        replacement = value.includes("\n") ? `\`\`\`\n${value}\n\`\`\`` : `\`${value}\``;
+      }
+
+      const nextDescription =
+        description.slice(0, start) + replacement + description.slice(end);
+      setDescription(nextDescription.slice(0, 1200));
+      setStatusMessage(null);
+
+      window.requestAnimationFrame(() => {
+        descriptionRef.current?.focus();
+        const selectionStart = start;
+        const selectionEnd = start + replacement.length;
+        descriptionRef.current?.setSelectionRange(selectionStart, selectionEnd);
+      });
+    },
+    [description],
+  );
+
+  const handleImageFile = useCallback(
+    (file: File | null | undefined) => {
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        setStatusMessage("Envie uma imagem valida para a categoria.");
+        return;
+      }
+
+      const nextPreviewUrl = URL.createObjectURL(file);
+      setImagePreviewUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return nextPreviewUrl;
+      });
+      setImageName(file.name);
+      setStatusMessage(null);
+    },
+    [],
+  );
+
+  const clearImagePreview = useCallback(() => {
+    setImagePreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+    setImageName(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  const handleProductSearch = useCallback(() => {
+    const normalizedQuery = productQuery.trim();
+    setStatusMessage(
+      normalizedQuery
+        ? `Ainda nao ha produtos com "${normalizedQuery}" nesta colecao.`
+        : "Digite o nome de um produto para pesquisar nesta colecao.",
+    );
+  }, [productQuery]);
+
+  const cycleProductSort = useCallback(() => {
+    setProductSortIndex((current) => (current + 1) % productSortOptions.length);
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!canSave) {
@@ -394,14 +510,15 @@ export function SalesCategoryCreatePanel({
     <div className="space-y-[18px]">
       <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <button
-            type="button"
+          <ServerButton
             onClick={goBack}
-            className="inline-flex items-center gap-[8px] text-[13px] font-medium text-[#8F8F8F] transition hover:text-[#F1F1F1]"
+            variant="ghost"
+            size="sm"
+            className="px-[10px]"
           >
             <ArrowLeft className="h-[16px] w-[16px]" />
             Categorias
-          </button>
+          </ServerButton>
           <div className="mt-[10px] flex items-center gap-[10px]">
             <Tag className="h-[18px] w-[18px] text-[#A5A5A5]" />
             <h3 className="text-[24px] font-semibold tracking-[-0.05em] text-[#EFEFEF]">
@@ -411,22 +528,27 @@ export function SalesCategoryCreatePanel({
         </div>
 
         <div className="flex flex-wrap items-center gap-[10px]">
-          <button
-            type="button"
+          <ServerButton
             onClick={goBack}
-            className="h-[42px] rounded-[14px] border border-[#242424] px-[15px] text-[13px] font-semibold text-[#E6E6E6] transition hover:border-[#3A3A3A] hover:bg-[#121212]"
           >
             Cancelar
-          </button>
-          <button
-            type="button"
-            disabled={!canSave}
+          </ServerButton>
+          <ServerButton
+            aria-busy={isSaving}
+            disabled={readOnly || title.trim().length < 2 || isSaving}
             onClick={() => void handleSave()}
-            className="inline-flex h-[42px] items-center justify-center gap-[8px] rounded-[14px] bg-[#F5F5F5] px-[16px] text-[13px] font-semibold text-[#080808] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
+            variant="primary"
+            className="min-w-[172px]"
           >
-            <Check className="h-[16px] w-[16px]" />
-            {isSaving ? "Salvando..." : "Salvar categoria"}
-          </button>
+            {isSaving ? (
+              <ButtonLoader size={16} colorClassName="text-[#080808]" />
+            ) : (
+              <>
+                <Check className="h-[16px] w-[16px]" />
+                Salvar categoria
+              </>
+            )}
+          </ServerButton>
         </div>
       </div>
 
@@ -438,16 +560,16 @@ export function SalesCategoryCreatePanel({
 
       <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
         <div className="space-y-[18px]">
-          <CardShell className="p-[18px] sm:p-[22px]">
+          <ServerSurface className="p-[18px] sm:p-[22px]">
             <label className="block text-[13px] font-semibold text-[#D8D8D8]">
               Titulo
             </label>
-            <input
+            <ServerTextInput
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               maxLength={90}
               placeholder="Ex.: Acessos, Contas, Passes, Robux"
-              className="mt-[10px] h-[44px] w-full rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[14px] text-[14px] text-[#F1F1F1] outline-none transition placeholder:text-[#646464] focus:border-[#4A4A4A]"
+              className="mt-[10px]"
             />
 
             <label className="mt-[20px] block text-[13px] font-semibold text-[#D8D8D8]">
@@ -455,29 +577,37 @@ export function SalesCategoryCreatePanel({
             </label>
             <div className="mt-[10px] overflow-hidden rounded-[16px] border border-[#252525] bg-[#0D0D0D]">
               <div className="flex flex-wrap items-center gap-[6px] border-b border-[#202020] bg-[#111] px-[10px] py-[8px] text-[#BDBDBD]">
-                <button type="button" className="rounded-[10px] px-[10px] py-[7px] text-[13px] text-[#CFCFCF] transition hover:bg-[#191919]">
+                <button
+                  type="button"
+                  onClick={() => applyDescriptionFormat("paragraph")}
+                  className="flowdesk-server-button rounded-[10px] px-[10px] py-[7px] text-[13px] text-[#CFCFCF] transition hover:bg-[#191919]"
+                >
                   Paragrafo <ChevronDown className="ml-[6px] inline h-[14px] w-[14px]" />
                 </button>
-                <IconButton label="Negrito">
+                <IconButton label="Negrito" onClick={() => applyDescriptionFormat("bold")}>
                   <Bold className="h-[16px] w-[16px]" />
                 </IconButton>
-                <IconButton label="Italico">
+                <IconButton label="Italico" onClick={() => applyDescriptionFormat("italic")}>
                   <Italic className="h-[16px] w-[16px]" />
                 </IconButton>
-                <IconButton label="Link">
+                <IconButton label="Link" onClick={() => applyDescriptionFormat("link")}>
                   <Link2 className="h-[16px] w-[16px]" />
                 </IconButton>
-                <IconButton label="Imagem">
+                <IconButton label="Imagem" onClick={() => applyDescriptionFormat("image")}>
                   <ImagePlus className="h-[16px] w-[16px]" />
                 </IconButton>
-                <IconButton label="Codigo">
+                <IconButton label="Codigo" onClick={() => applyDescriptionFormat("code")}>
                   <Code2 className="h-[16px] w-[16px]" />
                 </IconButton>
-                <IconButton label="Mais">
+                <IconButton
+                  label={isDescriptionPreviewOpen ? "Ocultar previa" : "Mostrar previa"}
+                  onClick={() => setIsDescriptionPreviewOpen((current) => !current)}
+                >
                   <MoreHorizontal className="h-[16px] w-[16px]" />
                 </IconButton>
               </div>
               <textarea
+                ref={descriptionRef}
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 maxLength={1200}
@@ -485,10 +615,20 @@ export function SalesCategoryCreatePanel({
                 placeholder="Descreva como essa categoria aparece para clientes e equipe."
                 className="min-h-[224px] w-full resize-y bg-transparent px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none placeholder:text-[#5D5D5D]"
               />
+              {isDescriptionPreviewOpen ? (
+                <div className="border-t border-[#202020] bg-[#0A0A0A] px-[14px] py-[14px]">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-[#666]">
+                    Previa da descricao
+                  </p>
+                  <p className="mt-[8px] whitespace-pre-wrap break-words text-[13px] leading-[1.65] text-[#CFCFCF]">
+                    {description.trim() || "A descricao aparecera aqui conforme voce digitar."}
+                  </p>
+                </div>
+              ) : null}
             </div>
-          </CardShell>
+          </ServerSurface>
 
-          <CardShell className="p-[18px] sm:p-[22px]">
+          <ServerSurface className="p-[18px] sm:p-[22px]">
             <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
               Tipo de categoria
             </h4>
@@ -511,7 +651,7 @@ export function SalesCategoryCreatePanel({
                   key={option.id}
                   type="button"
                   onClick={() => setCollectionType(option.id)}
-                  className="flex w-full items-start gap-[12px] rounded-[16px] border border-transparent p-[2px] text-left transition hover:border-[#222]"
+                  className="flowdesk-server-button flex w-full items-start gap-[12px] rounded-[16px] border border-transparent p-[2px] text-left transition hover:border-[#222]"
                 >
                   <span
                     className={`mt-[3px] flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full border ${
@@ -535,34 +675,31 @@ export function SalesCategoryCreatePanel({
                 </button>
               ))}
             </div>
-          </CardShell>
+          </ServerSurface>
 
-          <CardShell className="overflow-hidden">
+          <ServerSurface className="overflow-hidden">
             <div className="p-[18px] sm:p-[22px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Produtos</h4>
               <div className="mt-[16px] flex flex-col gap-[10px] lg:flex-row lg:items-center">
                 <div className="relative min-w-0 flex-1">
                   <Search className="pointer-events-none absolute left-[14px] top-1/2 h-[16px] w-[16px] -translate-y-1/2 text-[#666]" />
-                  <input
+                  <ServerTextInput
                     value={productQuery}
                     onChange={(event) => setProductQuery(event.target.value)}
                     placeholder="Pesquisar produtos"
-                    className="h-[42px] w-full rounded-[14px] border border-[#252525] bg-[#0D0D0D] pl-[40px] pr-[14px] text-[14px] text-[#F1F1F1] outline-none placeholder:text-[#646464] focus:border-[#4A4A4A]"
+                    className="h-[42px] pl-[40px]"
                   />
                 </div>
-                <button
-                  type="button"
-                  className="h-[42px] rounded-[14px] border border-[#252525] px-[15px] text-[13px] font-semibold text-[#E8E8E8] transition hover:border-[#3A3A3A] hover:bg-[#121212]"
-                >
+                <ServerButton onClick={handleProductSearch}>
                   Procurar
-                </button>
-                <button
-                  type="button"
+                </ServerButton>
+                <ServerButton
+                  onClick={cycleProductSort}
                   className="inline-flex h-[42px] items-center justify-between gap-[16px] rounded-[14px] border border-[#252525] px-[15px] text-[13px] text-[#BDBDBD] transition hover:border-[#3A3A3A] hover:bg-[#121212]"
                 >
-                  Classificar: Mais relevantes
+                  Classificar: {productSortOptions[productSortIndex]}
                   <ChevronDown className="h-[15px] w-[15px]" />
-                </button>
+                </ServerButton>
               </div>
             </div>
             <div className="max-h-[320px] overflow-y-auto border-t border-[#171717] px-[22px] py-[42px] text-center">
@@ -574,9 +711,9 @@ export function SalesCategoryCreatePanel({
                 Pesquise ou navegue para adicionar produtos.
               </p>
             </div>
-          </CardShell>
+          </ServerSurface>
 
-          <CardShell className="p-[18px] sm:p-[22px]">
+          <ServerSurface className="p-[18px] sm:p-[22px]">
             <div className="flex items-start justify-between gap-[16px]">
               <div>
                 <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
@@ -590,32 +727,37 @@ export function SalesCategoryCreatePanel({
               <Pencil className="h-[18px] w-[18px] shrink-0 text-[#8B8B8B]" />
             </div>
             <div className="mt-[16px] grid gap-[10px] lg:grid-cols-2">
-              <input
+              <ServerTextInput
                 value={seoTitle}
                 onChange={(event) => setSeoTitle(event.target.value)}
                 maxLength={90}
                 placeholder="Titulo para busca"
-                className="h-[42px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[14px] text-[13px] text-[#F1F1F1] outline-none placeholder:text-[#646464] focus:border-[#4A4A4A]"
+                className="h-[42px] text-[13px]"
               />
-              <input
+              <ServerTextInput
                 value={seoDescription}
                 onChange={(event) => setSeoDescription(event.target.value)}
                 maxLength={180}
                 placeholder="Descricao para busca"
-                className="h-[42px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[14px] text-[13px] text-[#F1F1F1] outline-none placeholder:text-[#646464] focus:border-[#4A4A4A]"
+                className="h-[42px] text-[13px]"
               />
             </div>
-          </CardShell>
+          </ServerSurface>
         </div>
 
         <aside className="space-y-[18px]">
-          <CardShell className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="p-[18px] sm:p-[20px]">
             <div className="flex items-center justify-between gap-[16px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Publicacao
               </h4>
               <button
                 type="button"
+                onClick={() => {
+                  setPublishedVirtualStore(true);
+                  setPublishedPointOfSale(true);
+                  setStatusMessage("Categoria marcada para todos os canais de venda.");
+                }}
                 className="text-[13px] font-semibold text-[#F1F1F1] transition hover:text-white"
               >
                 Gerenciar
@@ -642,57 +784,119 @@ export function SalesCategoryCreatePanel({
                 Ponto de venda e Pinterest
               </label>
             </div>
-          </CardShell>
+          </ServerSurface>
 
-          <CardShell className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="p-[18px] sm:p-[20px]">
             <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Imagem</h4>
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(event) =>
-                setImageName(event.target.files?.[0]?.name || null)
-              }
+              onChange={(event) => handleImageFile(event.target.files?.[0])}
             />
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => fileInputRef.current?.click()}
-              className="mt-[18px] flex min-h-[166px] w-full flex-col items-center justify-center rounded-[18px] border border-dashed border-[#363636] bg-[#0D0D0D] px-[16px] text-center transition hover:border-[#585858] hover:bg-[#111]"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                handleImageFile(event.dataTransfer.files?.[0]);
+              }}
+              className="flowdesk-server-button relative mt-[18px] flex min-h-[166px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[18px] border border-dashed border-[#363636] bg-[#0D0D0D] px-[16px] text-center transition hover:border-[#585858] hover:bg-[#111]"
             >
-              <Upload className="h-[22px] w-[22px] text-[#E8E8E8]" />
-              <span className="mt-[12px] rounded-[12px] border border-[#2C2C2C] bg-[#141414] px-[13px] py-[8px] text-[13px] font-semibold text-[#F0F0F0]">
-                Adicionar imagem
-              </span>
-              <span className="mt-[10px] text-[13px] leading-[1.35] text-[#7E7E7E]">
-                {imageName || "ou solte uma imagem para fazer upload"}
-              </span>
-            </button>
-          </CardShell>
+              {imagePreviewUrl ? (
+                <>
+                  <Image
+                    src={imagePreviewUrl}
+                    alt={imageName || "Previa da categoria"}
+                    width={720}
+                    height={320}
+                    unoptimized
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                  <span className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.04)_0%,rgba(0,0,0,0.72)_100%)]" />
+                  <span className="relative z-10 mt-auto rounded-[12px] border border-[rgba(255,255,255,0.18)] bg-[rgba(0,0,0,0.48)] px-[12px] py-[7px] text-[12px] font-semibold text-white backdrop-blur-[8px]">
+                    Trocar imagem
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Upload className="h-[22px] w-[22px] text-[#E8E8E8]" />
+                  <span className="mt-[12px] rounded-[12px] border border-[#2C2C2C] bg-[#141414] px-[13px] py-[8px] text-[13px] font-semibold text-[#F0F0F0]">
+                    Adicionar imagem
+                  </span>
+                  <span className="mt-[10px] text-[13px] leading-[1.35] text-[#7E7E7E]">
+                    ou solte uma imagem para fazer upload
+                  </span>
+                </>
+              )}
+            </div>
+            {imagePreviewUrl ? (
+              <button
+                type="button"
+                onClick={clearImagePreview}
+                className="mt-[10px] text-[12px] font-semibold text-[#AFAFAF] transition hover:text-white"
+              >
+                Remover imagem
+              </button>
+            ) : null}
+          </ServerSurface>
 
-          <CardShell className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="p-[18px] sm:p-[20px]">
             <label className="block text-[14px] font-semibold text-[#E2E2E2]">
               Modelo de tema
             </label>
-            <div className="relative mt-[12px]">
-              <select
-                value={themeModel}
-                onChange={(event) =>
-                  setThemeModel(event.target.value as SalesCategory["themeModel"])
-                }
-                className="h-[42px] w-full appearance-none rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] pr-[38px] text-[13px] text-[#EDEDED] outline-none focus:border-[#4A4A4A]"
+            <div ref={themeMenuRef} className="relative mt-[12px]">
+              <button
+                type="button"
+                onClick={() => setIsThemeMenuOpen((current) => !current)}
+                className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] outline-none transition hover:border-[#4A4A4A]"
+                aria-expanded={isThemeMenuOpen}
               >
-                {Object.entries(themeModelLabel).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-[13px] top-1/2 h-[16px] w-[16px] -translate-y-1/2 text-[#777]" />
+                {themeModelLabel[themeModel]}
+                <ChevronDown
+                  className={`h-[16px] w-[16px] text-[#777] transition ${isThemeMenuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {isThemeMenuOpen ? (
+                <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[40] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+                  {themeModelOptions.map(([value, label]) => {
+                    const isSelected = value === themeModel;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => {
+                          setThemeModel(value);
+                          setIsThemeMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between rounded-[13px] px-[12px] py-[10px] text-left text-[13px] transition ${
+                          isSelected
+                            ? "bg-[#151515] text-[#F1F1F1]"
+                            : "text-[#AFAFAF] hover:bg-[#111] hover:text-white"
+                        }`}
+                      >
+                        {label}
+                        {isSelected ? <Check className="h-[15px] w-[15px]" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
-          </CardShell>
+          </ServerSurface>
 
-          <CardShell className="overflow-hidden">
+          <ServerSurface className="overflow-hidden">
             <div className="border-b border-[#171717] p-[18px] sm:p-[20px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Previa rapida
@@ -701,22 +905,33 @@ export function SalesCategoryCreatePanel({
             <div className="p-[18px] sm:p-[20px]">
               <div className="rounded-[20px] border border-[#242424] bg-[#0F0F0F] p-[16px]">
                 <div className="flex items-center gap-[12px]">
-                  <div className="flex h-[42px] w-[42px] items-center justify-center rounded-[14px] bg-[#F4F4F4] text-[#070707]">
-                    <LayoutGrid className="h-[19px] w-[19px]" />
-                  </div>
+                  {imagePreviewUrl ? (
+                    <Image
+                      src={imagePreviewUrl}
+                      alt=""
+                      width={84}
+                      height={84}
+                      unoptimized
+                      className="h-[42px] w-[42px] rounded-[14px] object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-[42px] w-[42px] items-center justify-center rounded-[14px] bg-[#F4F4F4] text-[#070707]">
+                      <LayoutGrid className="h-[19px] w-[19px]" />
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <p className="truncate text-[14px] font-semibold text-[#F1F1F1]">
                       {title.trim() || "Nova categoria"}
                     </p>
                     <p className="mt-[3px] text-[12px] text-[#7B7B7B]">
-                      {collectionType === "smart" ? "Automatica" : "Manual"} · 0 produtos
+                      {collectionType === "smart" ? "Automatica" : "Manual"} - 0 produtos
                     </p>
                   </div>
                   <X className="ml-auto h-[15px] w-[15px] text-[#666]" />
                 </div>
               </div>
             </div>
-          </CardShell>
+          </ServerSurface>
         </aside>
       </div>
     </div>

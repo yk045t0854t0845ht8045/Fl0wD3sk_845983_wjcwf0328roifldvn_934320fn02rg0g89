@@ -644,6 +644,85 @@ html.lenis body {
   zoom: 0.8;
 }
 
+.flowdesk-servers-ui {
+  --flowdesk-server-border: #171717;
+  --flowdesk-server-border-hover: #282828;
+  --flowdesk-server-bg: #090909;
+  --flowdesk-server-bg-elevated: #0d0d0d;
+  --flowdesk-server-text: #ededed;
+  --flowdesk-server-muted: #7b7b7b;
+}
+
+.flowdesk-servers-ui :where(button, a, input, textarea, select, [role="button"]) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.flowdesk-servers-ui :where(button, a, input, textarea, select, [role="button"]):focus-visible {
+  outline: 2px solid rgba(245, 245, 245, 0.58);
+  outline-offset: 3px;
+}
+
+.flowdesk-servers-ui :where(button:not(:disabled), [role="button"]) {
+  touch-action: manipulation;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-button:not(:disabled)):active {
+  transform: translateY(1px) scale(0.992);
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-surface) {
+  position: relative;
+  isolation: isolate;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-surface)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 38%),
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.035), transparent 34%);
+  opacity: 0.76;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-input:focus, textarea:focus, select:focus) {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.035);
+}
+
+.flowdesk-servers-ui
+  :where(
+    [class*="rounded-[24px]"][class*="border"],
+    [class*="rounded-[26px]"][class*="border"],
+    [class*="rounded-[28px]"][class*="border"]
+  ) {
+  backdrop-filter: saturate(1.08);
+}
+
+.flowdesk-servers-ui :where(img) {
+  background-color: #101010;
+}
+
+.flowdesk-servers-ui :where(button svg, a svg) {
+  flex-shrink: 0;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-reveal) {
+  animation: flowdesk-card-rise 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flowdesk-servers-ui :where(.flowdesk-server-reveal) {
+    animation: none;
+  }
+
+  .flowdesk-servers-ui :where(.flowdesk-server-button:not(:disabled)):active {
+    transform: none;
+  }
+}
+
 @supports not (zoom: 1) {
   .flowdesk-page-scale-80 {
     --flowdesk-page-scale: 0.8;

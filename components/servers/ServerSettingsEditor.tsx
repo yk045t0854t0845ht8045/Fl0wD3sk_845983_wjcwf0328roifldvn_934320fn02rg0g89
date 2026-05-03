@@ -5892,7 +5892,7 @@ export function ServerSettingsEditor({
       }
     >
       <section
-        className="flowdesk-fade-up-soft relative"
+        className="flowdesk-servers-ui flowdesk-fade-up-soft relative"
         style={{
           marginTop: standalone ? "0px" : `${serversScale.cardsTopSpacing}px`,
         }}

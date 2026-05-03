@@ -6,6 +6,7 @@ import {
   getPanelManagedServersSnapshotForCurrentSession,
 } from "@/lib/servers/managedServers";
 import { getUserTeamsSnapshotForUser } from "@/lib/teams/userTeams";
+import { withServerDeadline } from "@/lib/performance/serverData";
 
 function buildDiscordAvatarUrl(
   discordUserId: string | null,
@@ -29,24 +30,36 @@ export async function getServersWorkspaceBootstrap() {
     limit: 3,
   }).catch(() => null);
 
-  const [serversSnapshot, teamsSnapshot] = await Promise.all([
-    getPanelManagedServersSnapshotForCurrentSession().catch(() => ({
-      servers: [],
-      sync: !user.discord_user_id
-        ? {
-            ...DEFAULT_MANAGED_SERVERS_SYNC_STATE,
-            degraded: true,
-            reason: "discord_not_linked" as const,
-            requiresDiscordRelink: true,
-            usedDatabaseFallback: true,
-          }
-        : DEFAULT_MANAGED_SERVERS_SYNC_STATE,
-    })),
-    getUserTeamsSnapshotForUser({
-      authUserId: user.id,
-      discordUserId: user.discord_user_id,
-    }).catch(() => ({ teams: [], pendingInvites: [] })),
+  const [serversDeadline, teamsDeadline] = await Promise.all([
+    withServerDeadline(
+      getPanelManagedServersSnapshotForCurrentSession(),
+      1450,
+    ),
+    withServerDeadline(
+      getUserTeamsSnapshotForUser({
+        authUserId: user.id,
+        discordUserId: user.discord_user_id,
+      }),
+      900,
+    ),
   ]);
+  const serversSnapshot = serversDeadline.ok
+    ? serversDeadline.value
+    : {
+        servers: [],
+        sync: !user.discord_user_id
+          ? {
+              ...DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+              degraded: true,
+              reason: "discord_not_linked" as const,
+              requiresDiscordRelink: true,
+              usedDatabaseFallback: true,
+            }
+          : DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+      };
+  const teamsSnapshot = teamsDeadline.ok
+    ? teamsDeadline.value
+    : { teams: [], pendingInvites: [] };
 
   return {
     displayName: user.display_name,
