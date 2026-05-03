@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
+  fetchGuildChannelsByBot,
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
@@ -14,12 +15,19 @@ import {
 } from "@/lib/security/http";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import {
+  buildSalesProductDiscordPayload,
+  salesProductMessageLooksManaged,
+} from "@/lib/servers/salesProductDiscordPayload";
 
 const PRODUCT_TITLE_MAX_LENGTH = 120;
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
 const PRODUCT_TEXT_MAX_LENGTH = 120;
 const PRODUCT_SELECT =
-  "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
+  "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
+const GUILD_TEXT = 0;
+const GUILD_ANNOUNCEMENT = 5;
+const DISCORD_RETRY_DELAYS_MS = [180, 420];
 
 type GuildSalesProductRecord = {
   id: string;
@@ -43,12 +51,29 @@ type GuildSalesProductRecord = {
   manufacturer: string | null;
   tags: string[] | null;
   theme_model: string | null;
+  discord_publication_mode: string | null;
+  discord_channel_id: string | null;
+  discord_message_id: string | null;
+  discord_last_synced_at: string | null;
+  discord_sync_status: string | null;
+  discord_sync_error: string | null;
   published_virtual_store: boolean;
   published_point_of_sale: boolean;
   published_pinterest: boolean;
   active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+type DiscordChannelMessage = {
+  id?: unknown;
+  author?: { bot?: unknown } | null;
+  components?: unknown;
+};
+
+type ProductCategorySnapshot = {
+  id: string;
+  title: string;
 };
 
 function getTrimmedText(value: unknown, maxLength: number) {
@@ -85,6 +110,10 @@ function normalizeThemeModel(value: unknown) {
   return value === "compact" || value === "featured" ? value : "default";
 }
 
+function normalizeDiscordPublicationMode(value: unknown) {
+  return value === "channel" ? "channel" : "online_only";
+}
+
 function normalizeBarcodeMode(value: unknown) {
   return value === "manual" ? "manual" : "auto";
 }
@@ -112,6 +141,88 @@ function buildProductCode(id: string) {
     digits ||
     Array.from(id).reduce((acc, char) => `${acc}${char.charCodeAt(0)}`, "");
   return `prd-${seed.padEnd(8, "0").slice(0, 8)}`;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function resolveBotToken() {
+  return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || null;
+}
+
+function isValidTextChannelType(type?: number) {
+  return type === GUILD_TEXT || type === GUILD_ANNOUNCEMENT;
+}
+
+function formatProductPrice(value: number | string | null) {
+  const numeric = Number(value || 0);
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(Number.isFinite(numeric) ? numeric : 0);
+}
+
+async function requestDiscordWithBot<T>({
+  url,
+  botToken,
+  method = "GET",
+  body,
+  resourceLabel,
+}: {
+  url: string;
+  botToken: string;
+  method?: "GET" | "POST" | "PATCH";
+  body?: unknown;
+  resourceLabel: string;
+}) {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= DISCORD_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bot ${botToken}`,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        cache: "no-store",
+      });
+
+      if (response.status === 404 && method === "GET") {
+        return null as T;
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        const isRetryable = response.status === 429 || response.status >= 500;
+
+        if (isRetryable && attempt < DISCORD_RETRY_DELAYS_MS.length) {
+          await sleep(DISCORD_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+
+        throw new Error(
+          `Discord respondeu com erro ao ${resourceLabel}: ${text || response.statusText}`,
+        );
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      lastError =
+        error instanceof Error ? error : new Error(`Falha ao ${resourceLabel}.`);
+
+      if (attempt < DISCORD_RETRY_DELAYS_MS.length) {
+        await sleep(DISCORD_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+    }
+  }
+
+  throw lastError || new Error(`Falha ao ${resourceLabel}.`);
 }
 
 function normalizeProductCode(value: unknown) {
@@ -163,6 +274,16 @@ function buildProductResponse(record: GuildSalesProductRecord) {
       record.theme_model === "compact" || record.theme_model === "featured"
         ? record.theme_model
         : "default",
+    discordPublicationMode:
+      record.discord_publication_mode === "channel" ? "channel" : "online_only",
+    discordChannelId: record.discord_channel_id || "",
+    discordMessageId: record.discord_message_id || "",
+    discordLastSyncedAt: record.discord_last_synced_at,
+    discordSyncStatus:
+      record.discord_sync_status === "synced" || record.discord_sync_status === "failed"
+        ? record.discord_sync_status
+        : "idle",
+    discordSyncError: record.discord_sync_error || "",
     publishedVirtualStore: record.published_virtual_store,
     publishedPointOfSale: record.published_point_of_sale,
     publishedPinterest: record.published_pinterest,
@@ -248,6 +369,206 @@ async function findProductByCode(guildId: string, productCode: string) {
   return ((result.data || []) as GuildSalesProductRecord[]).find(
     (record) => buildProductCode(record.id) === productCode,
   );
+}
+
+async function validateProductCategory(
+  guildId: string,
+  categoryId: string | null,
+) {
+  if (!categoryId) return null;
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const categoryResult = await supabase
+    .from("guild_sales_categories")
+    .select("id, title")
+    .eq("id", categoryId)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (categoryResult.error) throw new Error(categoryResult.error.message);
+  if (!categoryResult.data) {
+    return "Categoria selecionada nao foi encontrada.";
+  }
+
+  return null;
+}
+
+async function resolveCategorySnapshot(
+  guildId: string,
+  categoryId: string | null,
+) {
+  if (!categoryId) return null;
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_categories")
+    .select("id, title")
+    .eq("id", categoryId)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (result.error) throw new Error(result.error.message);
+  return (result.data as ProductCategorySnapshot | null) || null;
+}
+
+async function validateDiscordPublicationInput(input: {
+  guildId: string;
+  mode: string;
+  channelId: string;
+}) {
+  if (input.mode !== "channel") {
+    return {
+      ok: true as const,
+      channelId: null as string | null,
+    };
+  }
+
+  if (!isGuildId(input.channelId)) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        {
+          ok: false,
+          message:
+            "Selecione um canal Discord ou use a opcao Somente online antes de salvar.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+
+  const rawChannels = await fetchGuildChannelsByBot(input.guildId);
+  if (!rawChannels) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, message: "Bot nao possui acesso aos canais deste servidor." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const channel = rawChannels.find((item) => item.id === input.channelId);
+  if (!channel || !isValidTextChannelType(channel.type)) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        {
+          ok: false,
+          message: "Canal Discord invalido para publicar o embed do produto.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+
+  return {
+    ok: true as const,
+    channelId: input.channelId,
+  };
+}
+
+async function syncSalesProductDiscordMessage(input: {
+  product: GuildSalesProductRecord;
+  category: ProductCategorySnapshot | null;
+}) {
+  if (input.product.discord_publication_mode !== "channel") {
+    return {
+      messageId: null,
+      status: "idle" as const,
+      error: null,
+    };
+  }
+
+  const channelId = input.product.discord_channel_id;
+  if (!channelId) {
+    throw new Error("Canal Discord ausente para publicar o produto.");
+  }
+
+  const botToken = resolveBotToken();
+  if (!botToken) {
+    throw new Error("DISCORD_BOT_TOKEN nao configurado no ambiente do site.");
+  }
+
+  const productCode = buildProductCode(input.product.id);
+  const payload = buildSalesProductDiscordPayload({
+    productCode,
+    title: input.product.title,
+    description: input.product.description || "",
+    priceLabel: formatProductPrice(input.product.price_amount),
+    categoryTitle: input.category?.title || null,
+    sku: input.product.sku,
+    stockQuantity: input.product.stock_quantity,
+    mediaUrls: Array.isArray(input.product.media_urls)
+      ? input.product.media_urls.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [],
+    paymentReady: false,
+  });
+
+  const storedMessageId = input.product.discord_message_id || "";
+  const storedMessage = storedMessageId
+    ? await requestDiscordWithBot<DiscordChannelMessage | null>({
+        url: `https://discord.com/api/v10/channels/${channelId}/messages/${storedMessageId}`,
+        botToken,
+        resourceLabel: "buscar o embed do produto",
+      })
+    : null;
+
+  const managedMessage =
+    storedMessage && salesProductMessageLooksManaged(storedMessage, productCode)
+      ? storedMessage
+      : null;
+
+  const dispatchedMessage =
+    managedMessage && typeof managedMessage.id === "string"
+      ? await requestDiscordWithBot<{ id: string }>({
+          url: `https://discord.com/api/v10/channels/${channelId}/messages/${managedMessage.id}`,
+          method: "PATCH",
+          body: payload,
+          botToken,
+          resourceLabel: "atualizar o embed do produto",
+        })
+      : await requestDiscordWithBot<{ id: string }>({
+          url: `https://discord.com/api/v10/channels/${channelId}/messages`,
+          method: "POST",
+          body: payload,
+          botToken,
+          resourceLabel: "enviar o embed do produto",
+        });
+
+  return {
+    messageId: dispatchedMessage.id,
+    status: "synced" as const,
+    error: null,
+  };
+}
+
+async function persistDiscordSyncState(input: {
+  productId: string;
+  guildId: string;
+  mode: "online_only" | "channel";
+  messageId: string | null;
+  status: "idle" | "synced" | "failed";
+  error: string | null;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_products")
+    .update({
+      discord_message_id: input.mode === "channel" ? input.messageId : null,
+      discord_last_synced_at:
+        input.status === "synced" ? new Date().toISOString() : null,
+      discord_sync_status: input.status,
+      discord_sync_error: input.error,
+    })
+    .eq("id", input.productId)
+    .eq("guild_id", input.guildId)
+    .select(PRODUCT_SELECT)
+    .single();
+
+  if (result.error) throw new Error(result.error.message);
+  return result.data as GuildSalesProductRecord;
 }
 
 export async function GET(request: Request) {
@@ -344,6 +665,10 @@ export async function PATCH(request: Request) {
     const tags = normalizeStringArray(rawBody.tags, 12, 36);
     const status = normalizeStatus(rawBody.status);
     const themeModel = normalizeThemeModel(rawBody.themeModel);
+    const discordPublicationMode = normalizeDiscordPublicationMode(
+      rawBody.discordPublicationMode,
+    );
+    const discordChannelId = getTrimmedText(rawBody.discordChannelId, 25);
     const barcodeMode = normalizeBarcodeMode(rawBody.barcodeMode);
 
     if (!isGuildId(guildId)) {
@@ -388,23 +713,23 @@ export async function PATCH(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-    if (safeCategoryId) {
-      const categoryResult = await supabase
-        .from("guild_sales_categories")
-        .select("id")
-        .eq("id", safeCategoryId)
-        .eq("guild_id", guildId)
-        .maybeSingle();
+    const categoryError = await validateProductCategory(guildId, safeCategoryId);
+    if (categoryError) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: categoryError },
+          { status: 400 },
+        ),
+      );
+    }
 
-      if (categoryResult.error) throw new Error(categoryResult.error.message);
-      if (!categoryResult.data) {
-        return applyNoStoreHeaders(
-          NextResponse.json(
-            { ok: false, message: "Categoria selecionada nao foi encontrada." },
-            { status: 400 },
-          ),
-        );
-      }
+    const discordPublication = await validateDiscordPublicationInput({
+      guildId,
+      mode: discordPublicationMode,
+      channelId: discordChannelId,
+    });
+    if (!discordPublication.ok) {
+      return applyNoStoreHeaders(discordPublication.response);
     }
 
     const result = await supabase
@@ -429,6 +754,17 @@ export async function PATCH(request: Request) {
         manufacturer: getTrimmedText(rawBody.manufacturer, PRODUCT_TEXT_MAX_LENGTH),
         tags,
         theme_model: themeModel,
+        discord_publication_mode: discordPublicationMode,
+        discord_channel_id: discordPublication.channelId,
+        ...(discordPublicationMode === "channel" &&
+        discordPublication.channelId === product.discord_channel_id
+          ? {}
+          : {
+              discord_message_id: null,
+              discord_last_synced_at: null,
+              discord_sync_status: "idle",
+              discord_sync_error: null,
+            }),
         published_virtual_store: rawBody.publishedVirtualStore !== false,
         published_point_of_sale: rawBody.publishedPointOfSale !== false,
         published_pinterest: rawBody.publishedPinterest === true,
@@ -439,11 +775,62 @@ export async function PATCH(request: Request) {
       .single();
 
     if (result.error) throw new Error(result.error.message);
+    let savedProduct = result.data as GuildSalesProductRecord;
+
+    if (discordPublicationMode === "channel") {
+      try {
+        const category = await resolveCategorySnapshot(guildId, safeCategoryId);
+        const sync = await syncSalesProductDiscordMessage({
+          product: savedProduct,
+          category,
+        });
+        savedProduct = await persistDiscordSyncState({
+          productId: savedProduct.id,
+          guildId,
+          mode: discordPublicationMode,
+          messageId: sync.messageId,
+          status: sync.status,
+          error: null,
+        });
+      } catch (error) {
+        savedProduct = await persistDiscordSyncState({
+          productId: savedProduct.id,
+          guildId,
+          mode: discordPublicationMode,
+          messageId: savedProduct.discord_message_id,
+          status: "failed",
+          error: sanitizeErrorMessage(error, "Erro ao sincronizar embed do produto."),
+        });
+
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              ok: false,
+              message: sanitizeErrorMessage(
+                error,
+                "Produto salvo, mas nao foi possivel sincronizar o embed no Discord.",
+              ),
+              product: buildProductResponse(savedProduct),
+            },
+            { status: 502 },
+          ),
+        );
+      }
+    } else {
+      savedProduct = await persistDiscordSyncState({
+        productId: savedProduct.id,
+        guildId,
+        mode: discordPublicationMode,
+        messageId: null,
+        status: "idle",
+        error: null,
+      });
+    }
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        product: buildProductResponse(result.data as GuildSalesProductRecord),
+        product: buildProductResponse(savedProduct),
       }),
     );
   } catch (error) {
@@ -479,6 +866,10 @@ export async function POST(request: Request) {
     const tags = normalizeStringArray(rawBody.tags, 12, 36);
     const status = normalizeStatus(rawBody.status);
     const themeModel = normalizeThemeModel(rawBody.themeModel);
+    const discordPublicationMode = normalizeDiscordPublicationMode(
+      rawBody.discordPublicationMode,
+    );
+    const discordChannelId = getTrimmedText(rawBody.discordChannelId, 25);
     const barcodeMode = normalizeBarcodeMode(rawBody.barcodeMode);
 
     if (!isGuildId(guildId)) {
@@ -504,23 +895,23 @@ export async function POST(request: Request) {
     if (!access.ok) return applyNoStoreHeaders(access.response);
 
     const supabase = getSupabaseAdminClientOrThrow();
-    if (safeCategoryId) {
-      const categoryResult = await supabase
-        .from("guild_sales_categories")
-        .select("id")
-        .eq("id", safeCategoryId)
-        .eq("guild_id", guildId)
-        .maybeSingle();
+    const categoryError = await validateProductCategory(guildId, safeCategoryId);
+    if (categoryError) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: categoryError },
+          { status: 400 },
+        ),
+      );
+    }
 
-      if (categoryResult.error) throw new Error(categoryResult.error.message);
-      if (!categoryResult.data) {
-        return applyNoStoreHeaders(
-          NextResponse.json(
-            { ok: false, message: "Categoria selecionada nao foi encontrada." },
-            { status: 400 },
-          ),
-        );
-      }
+    const discordPublication = await validateDiscordPublicationInput({
+      guildId,
+      mode: discordPublicationMode,
+      channelId: discordChannelId,
+    });
+    if (!discordPublication.ok) {
+      return applyNoStoreHeaders(discordPublication.response);
     }
 
     const result = await supabase
@@ -546,6 +937,12 @@ export async function POST(request: Request) {
         manufacturer: getTrimmedText(rawBody.manufacturer, PRODUCT_TEXT_MAX_LENGTH),
         tags,
         theme_model: themeModel,
+        discord_publication_mode: discordPublicationMode,
+        discord_channel_id: discordPublication.channelId,
+        discord_message_id: null,
+        discord_last_synced_at: null,
+        discord_sync_status: "idle",
+        discord_sync_error: null,
         published_virtual_store: rawBody.publishedVirtualStore !== false,
         published_point_of_sale: rawBody.publishedPointOfSale !== false,
         published_pinterest: rawBody.publishedPinterest === true,
@@ -555,11 +952,53 @@ export async function POST(request: Request) {
       .single();
 
     if (result.error) throw new Error(result.error.message);
+    let savedProduct = result.data as GuildSalesProductRecord;
+
+    if (discordPublicationMode === "channel") {
+      try {
+        const category = await resolveCategorySnapshot(guildId, safeCategoryId);
+        const sync = await syncSalesProductDiscordMessage({
+          product: savedProduct,
+          category,
+        });
+        savedProduct = await persistDiscordSyncState({
+          productId: savedProduct.id,
+          guildId,
+          mode: discordPublicationMode,
+          messageId: sync.messageId,
+          status: sync.status,
+          error: null,
+        });
+      } catch (error) {
+        savedProduct = await persistDiscordSyncState({
+          productId: savedProduct.id,
+          guildId,
+          mode: discordPublicationMode,
+          messageId: savedProduct.discord_message_id,
+          status: "failed",
+          error: sanitizeErrorMessage(error, "Erro ao sincronizar embed do produto."),
+        });
+
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            {
+              ok: false,
+              message: sanitizeErrorMessage(
+                error,
+                "Produto salvo, mas nao foi possivel enviar o embed no Discord.",
+              ),
+              product: buildProductResponse(savedProduct),
+            },
+            { status: 502 },
+          ),
+        );
+      }
+    }
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        product: buildProductResponse(result.data as GuildSalesProductRecord),
+        product: buildProductResponse(savedProduct),
       }),
     );
   } catch (error) {

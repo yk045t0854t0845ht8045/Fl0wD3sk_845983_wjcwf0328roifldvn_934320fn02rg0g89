@@ -11,6 +11,7 @@ import {
   Check,
   ChevronDown,
   CircleDollarSign,
+  Hash,
   ImagePlus,
   Package,
   PackageSearch,
@@ -34,7 +35,7 @@ import {
 import { SalesDescriptionEditor } from "@/components/servers/sales/SalesDescriptionEditor";
 
 type ProductStatus = "active" | "draft" | "archived";
-type ProductTheme = "default" | "compact" | "featured";
+type ProductDiscordPublicationMode = "online_only" | "channel";
 
 type SalesProduct = {
   id: string;
@@ -57,7 +58,12 @@ type SalesProduct = {
   productType?: string;
   manufacturer?: string;
   tags?: string[];
-  themeModel?: ProductTheme;
+  discordPublicationMode?: ProductDiscordPublicationMode;
+  discordChannelId?: string;
+  discordMessageId?: string;
+  discordLastSyncedAt?: string | null;
+  discordSyncStatus?: "idle" | "synced" | "failed";
+  discordSyncError?: string;
   publishedVirtualStore?: boolean;
   publishedPointOfSale?: boolean;
   publishedPinterest?: boolean;
@@ -68,6 +74,12 @@ type SalesCategory = {
   id: string;
   code: string;
   title: string;
+};
+
+type DiscordChannel = {
+  id: string;
+  name: string;
+  type: number;
 };
 
 type ProductsResponse = {
@@ -83,6 +95,14 @@ type CategoriesResponse = {
   categories?: SalesCategory[];
 };
 
+type ChannelsResponse = {
+  ok: boolean;
+  message?: string;
+  channels?: {
+    text?: DiscordChannel[];
+  };
+};
+
 type SalesProductsPanelProps = {
   guildId: string;
   readOnly?: boolean;
@@ -94,10 +114,9 @@ const statusLabel: Record<ProductStatus, string> = {
   archived: "Arquivado",
 };
 
-const themeLabel: Record<ProductTheme, string> = {
-  default: "Produto padrao",
-  compact: "Produto compacto",
-  featured: "Produto em destaque",
+const discordPublicationLabel: Record<ProductDiscordPublicationMode, string> = {
+  online_only: "Somente online",
+  channel: "Canal Discord",
 };
 
 function getProductsPath(guildId: string) {
@@ -505,8 +524,10 @@ export function SalesProductCreatePanel({
   const router = useRouter();
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const [categories, setCategories] = useState<SalesCategory[]>([]);
+  const [discordChannels, setDiscordChannels] = useState<DiscordChannel[]>([]);
   const [isLoadingProduct, setIsLoadingProduct] = useState(mode === "edit");
   const [isLoadingCategories, setIsLoadingCategories] = useState(true);
+  const [isLoadingChannels, setIsLoadingChannels] = useState(true);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<ProductStatus>("active");
@@ -526,7 +547,9 @@ export function SalesProductCreatePanel({
   const [productType, setProductType] = useState("");
   const [manufacturer, setManufacturer] = useState("");
   const [tagsText, setTagsText] = useState("");
-  const [themeModel, setThemeModel] = useState<ProductTheme>("default");
+  const [discordPublicationMode, setDiscordPublicationMode] =
+    useState<ProductDiscordPublicationMode>("online_only");
+  const [discordChannelId, setDiscordChannelId] = useState("");
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
   const [publishedPointOfSale, setPublishedPointOfSale] = useState(true);
   const [publishedPinterest, setPublishedPinterest] = useState(false);
@@ -556,6 +579,33 @@ export function SalesProductCreatePanel({
     }
 
     void loadCategories();
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChannels() {
+      setIsLoadingChannels(true);
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
+          { credentials: "include", cache: "no-store" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+        if (!cancelled && response.ok && payload.ok) {
+          setDiscordChannels(payload.channels?.text || []);
+        }
+      } catch {
+        if (!cancelled) setDiscordChannels([]);
+      } finally {
+        if (!cancelled) setIsLoadingChannels(false);
+      }
+    }
+
+    void loadChannels();
     return () => {
       cancelled = true;
     };
@@ -613,7 +663,10 @@ export function SalesProductCreatePanel({
         setProductType(product.productType || "");
         setManufacturer(product.manufacturer || "");
         setTagsText((product.tags || []).join(", "));
-        setThemeModel(product.themeModel || "default");
+        setDiscordPublicationMode(
+          product.discordPublicationMode === "channel" ? "channel" : "online_only",
+        );
+        setDiscordChannelId(product.discordChannelId || "");
         setPublishedVirtualStore(product.publishedVirtualStore !== false);
         setPublishedPointOfSale(product.publishedPointOfSale !== false);
         setPublishedPinterest(product.publishedPinterest === true);
@@ -657,11 +710,25 @@ export function SalesProductCreatePanel({
       >,
     [categories],
   );
+  const discordChannelOptions = useMemo(
+    () =>
+      [["", "Escolha um canal Discord"], ...discordChannels.map((item) => [item.id, `#${item.name}`])] as Array<
+        [string, string]
+      >,
+    [discordChannels],
+  );
 
   const isEditMode = mode === "edit";
-  const isFormLoading = isLoadingProduct || isLoadingCategories;
+  const isFormLoading = isLoadingProduct || isLoadingCategories || isLoadingChannels;
   const controlsDisabled = isFormLoading || isSaving || readOnly;
-  const canSave = title.trim().length >= 2 && !isSaving && !isFormLoading && !readOnly;
+  const hasDiscordPublicationTarget =
+    discordPublicationMode === "online_only" || Boolean(discordChannelId);
+  const canSave =
+    title.trim().length >= 2 &&
+    hasDiscordPublicationTarget &&
+    !isSaving &&
+    !isFormLoading &&
+    !readOnly;
 
   const goBack = useCallback(() => {
     router.push(getProductsPath(guildId));
@@ -690,7 +757,11 @@ export function SalesProductCreatePanel({
 
   const handleSave = useCallback(async () => {
     if (!canSave) {
-      setStatusMessage("Informe um titulo para salvar o produto.");
+      setStatusMessage(
+        title.trim().length < 2
+          ? "Informe um titulo para salvar o produto."
+          : "Escolha Somente online ou selecione um canal Discord antes de salvar.",
+      );
       return;
     }
 
@@ -726,7 +797,10 @@ export function SalesProductCreatePanel({
             .split(",")
             .map((tag) => tag.trim())
             .filter(Boolean),
-          themeModel,
+          themeModel: "default",
+          discordPublicationMode,
+          discordChannelId:
+            discordPublicationMode === "channel" ? discordChannelId : null,
           publishedVirtualStore,
           publishedPointOfSale,
           publishedPinterest,
@@ -754,6 +828,8 @@ export function SalesProductCreatePanel({
     compareAtPriceAmount,
     costPerItemAmount,
     description,
+    discordChannelId,
+    discordPublicationMode,
     guildId,
     inventoryTracked,
     isEditMode,
@@ -769,7 +845,6 @@ export function SalesProductCreatePanel({
     status,
     stockQuantity,
     tagsText,
-    themeModel,
     title,
     unitPriceAmount,
   ]);
@@ -1143,17 +1218,51 @@ export function SalesProductCreatePanel({
           </ServerSurface>
 
           <ServerSurface className="relative z-[70] p-[18px] sm:p-[20px]">
-            <label className="block text-[14px] font-semibold text-[#E2E2E2]">
-              Modelo de tema
-            </label>
-            <div className="mt-[12px]">
+            <div className="flex items-center justify-between gap-[12px]">
+              <label className="block text-[14px] font-semibold text-[#E2E2E2]">
+                Canal Discord
+              </label>
+              <Hash className="h-[16px] w-[16px] text-[#8A8A8A]" />
+            </div>
+            <p className="mt-[10px] text-[13px] leading-[1.5] text-[#7B7B7B]">
+              O bot publica um embed Component V2 com nome, descricao, valor e o botao Adicionar ao carrinho.
+            </p>
+            <div className="mt-[14px]">
               <SelectMenu
-                value={themeModel}
-                options={Object.entries(themeLabel) as Array<[ProductTheme, string]>}
-                onChange={setThemeModel}
+                value={discordPublicationMode}
+                options={
+                  Object.entries(discordPublicationLabel) as Array<
+                    [ProductDiscordPublicationMode, string]
+                  >
+                }
+                onChange={(nextMode) => {
+                  setDiscordPublicationMode(nextMode);
+                  if (nextMode === "online_only") setDiscordChannelId("");
+                  setStatusMessage(null);
+                }}
                 disabled={controlsDisabled}
               />
             </div>
+            {discordPublicationMode === "channel" ? (
+              <div className="mt-[10px]">
+                <SelectMenu
+                  value={discordChannelId}
+                  options={discordChannelOptions}
+                  onChange={(nextChannelId) => {
+                    setDiscordChannelId(nextChannelId);
+                    setStatusMessage(null);
+                  }}
+                  disabled={controlsDisabled}
+                />
+                <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">
+                  Ao criar ou atualizar, o painel envia ou edita o embed nesse canal automaticamente.
+                </p>
+              </div>
+            ) : (
+              <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">
+                Nao envia embed no Discord; o produto fica preparado apenas para a loja online.
+              </p>
+            )}
           </ServerSurface>
 
           <ServerSurface className="relative z-0 p-[18px] sm:p-[20px]">
