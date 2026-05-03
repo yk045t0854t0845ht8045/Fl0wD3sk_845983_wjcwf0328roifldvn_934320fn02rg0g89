@@ -4,6 +4,7 @@ export type AccountTab =
   | "payment_methods"
   | "payment_history"
   | "api_keys"
+  | "dev_environment"
   | "teams"
   | "tickets"
   | "status"
@@ -15,6 +16,7 @@ export const ACCOUNT_TABS: AccountTab[] = [
   "payment_methods",
   "payment_history",
   "api_keys",
+  "dev_environment",
   "teams",
   "tickets",
   "status",

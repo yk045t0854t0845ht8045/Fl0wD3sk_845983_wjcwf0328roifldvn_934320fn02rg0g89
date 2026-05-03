@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Code2,
   Cog,
   CreditCard,
   History,
@@ -107,6 +108,7 @@ const NAV_GROUPS: NavGroup[] = [
     category: "Ferramentas",
     items: [
       { id: "api_keys", label: "Chaves API", icon: Key },
+      { id: "dev_environment", label: "Ambiente Dev", icon: Code2 },
       { id: "teams", label: "Equipes e Membros", icon: Users },
       { id: "tickets", label: "Tickets de Suporte", icon: Ticket },
     ],
@@ -626,6 +628,11 @@ export function AccountWorkspace({
       eyebrow: "Ferramentas",
       title: "Chaves de API",
       subtitle: "Crie e revogue chaves para integrar o Flowdesk com sistemas externos.",
+    },
+    dev_environment: {
+      eyebrow: "Ferramentas internas",
+      title: "Ambiente Dev",
+      subtitle: "Solicite credenciamento de IP, acompanhe grants e use o CLI oficial para Test Variables.",
     },
     teams: {
       eyebrow: "Ferramentas",

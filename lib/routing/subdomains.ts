@@ -4,6 +4,7 @@ export type CanonicalHost =
   | "config"
   | "status"
   | "dashboard"
+  | "admin"
   | "servers"
   | "pay";
 export type WorkspaceArea =
@@ -11,6 +12,7 @@ export type WorkspaceArea =
   | "config"
   | "status"
   | "dashboard"
+  | "admin"
   | "servers"
   | "account";
 type CanonicalRoutingFallbackOptions = {
@@ -68,6 +70,9 @@ const CANONICAL_HOST_CONFIG: Record<CanonicalHost, CanonicalHostConfig> = {
   dashboard: {
     subdomain: "fdesk",
   },
+  admin: {
+    subdomain: "admin",
+  },
   servers: {
     subdomain: "fdesk",
     legacySubdomains: ["servers"],
@@ -96,6 +101,11 @@ const WORKSPACE_AREA_CONFIG: Record<WorkspaceArea, WorkspaceAreaConfig> = {
   dashboard: {
     canonicalHost: "dashboard",
     internalBasePath: "/dashboard",
+    externalBasePath: "/",
+  },
+  admin: {
+    canonicalHost: "admin",
+    internalBasePath: "/admin",
     externalBasePath: "/",
   },
   servers: {
@@ -563,6 +573,8 @@ export function detectWorkspaceAreaFromRequestHost(request: RequestLike) {
       return "status";
     case "dashboard":
       return "dashboard";
+    case "admin":
+      return "admin";
     case "servers":
       return "servers";
     default:
@@ -591,6 +603,8 @@ export function detectWorkspaceAreaFromExternalPath(
         return "servers";
       }
       return "dashboard";
+    case "admin":
+      return "admin";
     case "servers":
       if (normalizedPathname === "/account" || normalizedPathname.startsWith("/account/")) {
         return "account";
