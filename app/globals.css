@@ -676,16 +676,7 @@ html.lenis body {
 }
 
 .flowdesk-servers-ui :where(.flowdesk-server-surface)::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 38%),
-    radial-gradient(circle at top right, rgba(255, 255, 255, 0.035), transparent 34%);
-  opacity: 0.76;
+  content: none;
 }
 
 .flowdesk-servers-ui :where(.flowdesk-server-input:focus, textarea:focus, select:focus) {
