@@ -69,11 +69,15 @@ async function AdminLayoutContent({
     );
   }
 
-  await touchAdminSession({
-    authSessionId: profile.session.id,
-    authUserId: profile.session.user.id,
-    staffProfileId: profile.staffProfile.id,
-  });
+  try {
+    await touchAdminSession({
+      authSessionId: profile.session.id,
+      authUserId: profile.session.user.id,
+      staffProfileId: profile.staffProfile.id,
+    });
+  } catch (error) {
+    console.error("[Admin] Failed to touch admin session:", error);
+  }
 
   return (
     <AdminShell
