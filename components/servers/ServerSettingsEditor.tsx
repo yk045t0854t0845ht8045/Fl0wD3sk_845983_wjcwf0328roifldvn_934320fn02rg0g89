@@ -31,6 +31,10 @@ import { TicketMessageBuilder } from "@/components/servers/TicketMessageBuilder"
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
 import { serversScale } from "@/components/servers/serversScale";
 import {
+  SalesCategoriesListPanel,
+  SalesCategoryCreatePanel,
+} from "@/components/servers/sales/SalesCategoriesPanel";
+import {
   getServerDashboardSettings,
   invalidateCachedServerDashboardSettings,
   readCachedServerDashboardSettings,
@@ -73,6 +77,7 @@ type ServerSettingsSection =
   | "message"
   | "sales_overview"
   | "sales_categories"
+  | "sales_category_create"
   | "sales_products"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
@@ -453,6 +458,7 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     ServerSettingsSection,
     | "sales_overview"
     | "sales_categories"
+    | "sales_category_create"
     | "sales_products"
     | "sales_payment_methods"
     | "sales_coupons_gifts"
@@ -470,6 +476,12 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     title: "Categorias",
     description:
       "Organize os grupos que vao separar produtos, ofertas e vitrines dentro do servidor.",
+  },
+  sales_category_create: {
+    tag: "Vendas",
+    title: "Adicionar categoria",
+    description:
+      "Crie uma colecao de vendas preparada para o bot e para a futura vitrine web.",
   },
   sales_products: {
     tag: "Vendas",
@@ -2207,6 +2219,7 @@ export function ServerSettingsEditor({
         message: "server_manage_tickets_message",
         sales_overview: "server_manage_tickets_overview",
         sales_categories: "server_manage_tickets_overview",
+        sales_category_create: "server_manage_tickets_overview",
         sales_products: "server_manage_tickets_overview",
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
@@ -3585,9 +3598,11 @@ export function ServerSettingsEditor({
   const isSalesSection =
     settingsSection === "sales_overview" ||
     settingsSection === "sales_categories" ||
+    settingsSection === "sales_category_create" ||
     settingsSection === "sales_products" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts";
+  const isSalesSettingsSection = settingsSection === "sales_overview";
   const salesPlaceholderContent = isSalesSection && settingsSection !== "sales_overview"
     ? SALES_PLACEHOLDER_CONTENT[settingsSection]
     : null;
@@ -3992,8 +4007,10 @@ export function ServerSettingsEditor({
     ? hasLoadedAntiLinkDraft
     : isAutoRoleSection
       ? hasLoadedAutoRoleDraft
-    : isSalesSection
+    : isSalesSettingsSection
       ? hasLoadedSalesDraft
+    : isSalesSection
+      ? true
     : isSecurityLogsSection
       ? hasLoadedSecurityLogsDraft
     : isWelcomeSection
@@ -4003,8 +4020,10 @@ export function ServerSettingsEditor({
     ? hasAntiLinkUnsavedChanges
     : isAutoRoleSection
       ? hasAutoRoleUnsavedChanges || autoRoleSyncExistingMembers
-    : isSalesSection
+    : isSalesSettingsSection
       ? hasSalesUnsavedChanges
+    : isSalesSection
+      ? false
     : isSecurityLogsSection
       ? hasSecurityLogsUnsavedChanges
     : isWelcomeSection
@@ -4020,8 +4039,10 @@ export function ServerSettingsEditor({
         ? savedAntiLinkSettingsDraft
         : isAutoRoleSection
           ? savedAutoRoleSettingsDraft
-        : isSalesSection
+        : isSalesSettingsSection
           ? savedSalesSettingsDraft
+        : isSalesSection
+          ? null
         : isSecurityLogsSection
           ? savedSecurityLogsDraft
         : isWelcomeSection
@@ -4041,7 +4062,7 @@ export function ServerSettingsEditor({
       ? canSaveAntiLink
       : isAutoRoleSection
         ? canSaveAutoRole
-      : isSalesSection
+      : isSalesSettingsSection
         ? canSaveSales
       : isSecurityLogsSection
         ? canSaveSecurityLogs
@@ -5023,7 +5044,7 @@ export function ServerSettingsEditor({
         savedAutoRoleSettingsDraft.assignmentDelayMinutes,
       );
       setAutoRoleSyncExistingMembers(false);
-    } else if (isSalesSection && savedSalesSettingsDraft) {
+    } else if (isSalesSettingsSection && savedSalesSettingsDraft) {
       setSalesEnabled(savedSalesSettingsDraft.enabled);
       setSalesCartsCategoryId(savedSalesSettingsDraft.cartsCategoryId);
       setSalesPaymentApprovedLogChannelId(
@@ -5080,7 +5101,7 @@ export function ServerSettingsEditor({
     canResetSettings,
     isAntiLinkSection,
     isAutoRoleSection,
-    isSalesSection,
+    isSalesSettingsSection,
     isSecurityLogsSection,
     isWelcomeSection,
     savedAntiLinkSettingsDraft,
@@ -5186,7 +5207,7 @@ export function ServerSettingsEditor({
         }
 
         setSavedSecurityLogsDraft(currentSecurityLogsDraft);
-      } else if (isSalesSection) {
+      } else if (isSalesSettingsSection) {
         const response = await fetch("/api/auth/me/guilds/sales-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -5465,7 +5486,7 @@ export function ServerSettingsEditor({
     guildId,
     isAntiLinkSection,
     isAutoRoleSection,
-    isSalesSection,
+    isSalesSettingsSection,
     isSecurityLogsSection,
     isTicketSection,
     isWelcomeSection,
@@ -5901,6 +5922,16 @@ export function ServerSettingsEditor({
                       onAction={() => {
                         _onTabChange?.("settings");
                       }} 
+                    />
+                  ) : settingsSection === "sales_categories" ? (
+                    <SalesCategoriesListPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_category_create" ? (
+                    <SalesCategoryCreatePanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
                     />
                   ) : settingsSection === "sales_overview" ? (
                     <div className="space-y-[14px]">

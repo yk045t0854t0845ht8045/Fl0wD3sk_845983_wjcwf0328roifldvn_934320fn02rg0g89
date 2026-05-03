@@ -110,6 +110,7 @@ type ServerSettingsSection =
   | "message"
   | "sales_overview"
   | "sales_categories"
+  | "sales_category_create"
   | "sales_products"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
@@ -502,7 +503,7 @@ function parseWorkspaceRoute(pathname: string | null): {
     }
 
     if (
-      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
+      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
         comparablePathname,
       )
     ) {
@@ -536,7 +537,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const salesSectionMatch = normalizedPathname.match(
-    /^\/servers\/(\d{10,25})\/sales\/(overview|categories|products|payment-methods|coupons-gifts)\/?$/,
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create)?|products|payment-methods|coupons-gifts)\/?$/,
   );
   if (salesSectionMatch) {
     const salesSection = salesSectionMatch[2];
@@ -546,6 +547,8 @@ function parseWorkspaceRoute(pathname: string | null): {
       settingsSection:
         salesSection === "categories"
           ? "sales_categories"
+          : salesSection === "categories/create"
+            ? "sales_category_create"
           : salesSection === "products"
             ? "sales_products"
             : salesSection === "payment-methods"
@@ -2512,6 +2515,7 @@ export function ServersWorkspace({
     selectedEditorTabForConfig === "settings" &&
     (selectedSettingsSectionForConfig === "sales_overview" ||
       selectedSettingsSectionForConfig === "sales_categories" ||
+      selectedSettingsSectionForConfig === "sales_category_create" ||
       selectedSettingsSectionForConfig === "sales_products" ||
       selectedSettingsSectionForConfig === "sales_payment_methods" ||
       selectedSettingsSectionForConfig === "sales_coupons_gifts");
@@ -2618,6 +2622,9 @@ export function ServersWorkspace({
     }
     if (settingsSection === "sales_categories") {
       return `/servers/${encodedGuildId}/sales/categories/`;
+    }
+    if (settingsSection === "sales_category_create") {
+      return `/servers/${encodedGuildId}/sales/categories/create/`;
     }
     if (settingsSection === "sales_products") {
       return `/servers/${encodedGuildId}/sales/products/`;
@@ -3232,6 +3239,7 @@ export function ServersWorkspace({
       section === "ticket_ai" ||
       section === "sales_overview" ||
       section === "sales_categories" ||
+      section === "sales_category_create" ||
       section === "sales_products" ||
       section === "sales_payment_methods" ||
       section === "sales_coupons_gifts"
@@ -3630,7 +3638,10 @@ export function ServersWorkspace({
                         Boolean(
                           item.tab &&
                             selectedEditorTabForConfig === item.tab &&
-                            selectedSettingsSectionForConfig === item.settingsSection &&
+                            (selectedSettingsSectionForConfig === item.settingsSection ||
+                              (item.settingsSection === "sales_categories" &&
+                                selectedSettingsSectionForConfig ===
+                                  "sales_category_create")) &&
                             isEditingServer,
                         );
 
