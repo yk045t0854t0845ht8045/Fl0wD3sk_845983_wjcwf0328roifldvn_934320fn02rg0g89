@@ -425,19 +425,24 @@ export async function fetchGuildSummaryByBot(guildId: string): Promise<BotGuildS
   }
 }
 
-export async function fetchGuildChannelsByBot(guildId: string) {
+export async function fetchGuildChannelsByBot(
+  guildId: string,
+  options: { forceFresh?: boolean } = {},
+) {
   const botToken = resolveBotToken();
   if (!botToken) {
     throw new Error("DISCORD_BOT_TOKEN nao configurado no ambiente do site.");
   }
 
-  const freshCached = readBotResourceCache(
-    botGuildChannelsCache,
-    guildId,
-    BOT_RESOURCE_FRESH_TTL_MS,
-  );
-  if (freshCached) {
-    return freshCached;
+  if (!options.forceFresh) {
+    const freshCached = readBotResourceCache(
+      botGuildChannelsCache,
+      guildId,
+      BOT_RESOURCE_FRESH_TTL_MS,
+    );
+    if (freshCached) {
+      return freshCached;
+    }
   }
 
   const staleCached = readBotResourceCache(

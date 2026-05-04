@@ -32,16 +32,18 @@ function buildFallbackDescription(input: {
 }) {
   if (input.kind === "category") {
     return [
-      `**${input.title}** organiza os produtos desta colecao para uma compra simples e segura.`,
-      "Use esta area para destacar beneficios, regras de entrega, disponibilidade e qualquer observacao importante para o cliente.",
-      "Mantenha a descricao clara para facilitar a escolha dentro do Discord e da futura vitrine web.",
+      `## ${input.title}`,
+      "**Visao geral:** esta categoria reune opcoes selecionadas para facilitar a escolha e manter a compra organizada.",
+      "**Como funciona:** confira os produtos disponiveis, leia os detalhes de cada item e finalize o pedido pelo carrinho quando estiver pronto.",
+      "**Observacoes:** prazos, regras de entrega e disponibilidade podem variar por produto; revise as informacoes antes de confirmar.",
     ].join("\n\n");
   }
 
   return [
-    `**${input.title}** foi preparado para uma entrega rapida, organizada e segura pela Flowdesk.`,
-    "Destaque aqui o que o cliente recebe, prazos, requisitos e qualquer regra de uso ou garantia aplicavel ao produto.",
-    "Finalize com uma chamada objetiva para compra, sem prometer beneficios que nao estejam configurados.",
+    `## ${input.title}`,
+    "**O que voce recebe:** descreva aqui o item, acesso, beneficio ou conteudo entregue ao cliente.",
+    "**Entrega e uso:** informe requisitos, prazo estimado, cuidados importantes e regras para ativacao ou recebimento.",
+    "**Antes de comprar:** revise os detalhes, disponibilidade e quantidade desejada antes de adicionar ao carrinho.",
   ].join("\n\n");
 }
 
@@ -157,7 +159,7 @@ export async function POST(request: Request) {
           {
             role: "system",
             content:
-              "Voce escreve descricoes comerciais em portugues do Brasil para lojas Discord. Use markdown simples, tom profissional, claro e sem exagero.",
+              "Voce escreve descricoes comerciais em portugues do Brasil para lojas Discord. Use markdown simples compativel com Discord: #, ##, ###, **negrito**, _italico_, listas e tabelas curtas quando ajudarem. Tom profissional, claro e sem exagero.",
           },
           {
             role: "user",
@@ -167,7 +169,7 @@ export async function POST(request: Request) {
               currentDescription
                 ? `Descricao atual para melhorar: ${currentDescription}`
                 : "Nao ha descricao atual.",
-              "Gere uma descricao pronta para uso com 2 ou 3 paragrafos curtos. Inclua beneficios, regras/entrega e uma chamada discreta. Nao invente preco, estoque ou garantia especifica.",
+              "Gere uma descricao pronta para uso em padrao consistente. Use um titulo ##, 2 ou 3 blocos curtos com rotulos em negrito, e lista se ficar mais claro. Inclua beneficios, regras/entrega e chamada discreta. Nao invente preco, estoque ou garantia especifica.",
             ].join("\n"),
           },
         ],

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -10,10 +11,12 @@ import {
   Barcode,
   Check,
   ChevronDown,
-  CircleDollarSign,
   CirclePlus,
+  FileImage,
+  Grid2X2,
   Hash,
   ImagePlus,
+  List,
   Search as SearchIcon,
   Package,
   PackageSearch,
@@ -21,6 +24,7 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  WandSparkles,
   Tag,
   Upload,
   X,
@@ -41,6 +45,7 @@ import {
   readClientCache,
   writeClientCache,
 } from "@/lib/sales/clientCache";
+import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 
 type ProductStatus = "active" | "draft" | "archived";
 type ProductDiscordPublicationMode = "online_only" | "channel";
@@ -202,6 +207,15 @@ function formatMoney(value: number) {
   }).format(value || 0);
 }
 
+function parseMoneyInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/[^\d,.-]/g, "").replace(",", ".");
+  if (!/\d/.test(normalized)) return null;
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function sanitizeSku(value: string) {
   return value
     .normalize("NFD")
@@ -243,37 +257,108 @@ function fileToDataUrl(file: File) {
   });
 }
 
-function InlineSwitch({
-  checked,
-  onChange,
-  label,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  disabled?: boolean;
-}) {
+function slugifyProductPath(value: string) {
   return (
-    <button
-      type="button"
-      onClick={onChange}
-      disabled={disabled}
-      className="flowdesk-server-button inline-flex items-center gap-[10px] text-[13px] text-[#AFAFAF] disabled:cursor-not-allowed disabled:opacity-45"
-    >
-      {label}
-      <span
-        className={`flex h-[22px] w-[40px] items-center rounded-full border p-[2px] transition ${
-          checked ? "border-[#EDEDED] bg-[#EDEDED]" : "border-[#303030] bg-[#151515]"
-        }`}
-      >
-        <span
-          className={`h-[16px] w-[16px] rounded-full transition ${
-            checked ? "translate-x-[16px] bg-[#070707]" : "translate-x-0 bg-[#777]"
-          }`}
-        />
-      </span>
-    </button>
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 72) || "novo-produto"
+  );
+}
+
+function plainTextPreview(value: string, maxLength = 156) {
+  const plain = value
+    .replace(/!\[[^\]]*]\([^)]+\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/[*_`#>|-]+/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return "Descricao do produto aparecera aqui conforme os dados forem preenchidos.";
+  return plain.length > maxLength ? `${plain.slice(0, maxLength - 3).trim()}...` : plain;
+}
+
+const MEDIA_FILE_MAX_BYTES = 3 * 1024 * 1024;
+
+type MediaLibraryItem = {
+  id: string;
+  url: string;
+  name: string;
+  typeLabel: string;
+  sizeLabel: string;
+  sizeBucket: "small" | "medium" | "large" | "unknown";
+  usedCount: number;
+  productNames: string[];
+};
+
+function getMediaTypeLabel(url: string) {
+  const dataMatch = url.match(/^data:image\/([^;]+);/i);
+  if (dataMatch?.[1]) return dataMatch[1].toUpperCase().replace("JPEG", "JPG");
+  const extensionMatch = url.split(/[?#]/)[0]?.match(/\.([a-z0-9]+)$/i);
+  return extensionMatch?.[1]?.toUpperCase() || "IMG";
+}
+
+function estimateDataUrlBytes(url: string) {
+  const base64 = url.includes(",") ? url.slice(url.indexOf(",") + 1) : "";
+  if (!base64) return null;
+  return Math.max(0, Math.floor((base64.length * 3) / 4));
+}
+
+function formatFileSize(bytes: number | null) {
+  if (!bytes || bytes <= 0) return "Tamanho n/d";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function getSizeBucket(bytes: number | null): MediaLibraryItem["sizeBucket"] {
+  if (!bytes) return "unknown";
+  if (bytes < 512 * 1024) return "small";
+  if (bytes <= MEDIA_FILE_MAX_BYTES) return "medium";
+  return "large";
+}
+
+function buildMediaLibraryItems(
+  products: SalesProduct[],
+  currentMediaUrls: string[],
+) {
+  const items = new Map<string, MediaLibraryItem>();
+
+  const addUrl = (url: string, productName: string | null, index: number) => {
+    if (!url) return;
+    const bytes = estimateDataUrlBytes(url);
+    const existing = items.get(url);
+    if (existing) {
+      existing.usedCount += productName ? 1 : 0;
+      if (productName && !existing.productNames.includes(productName)) {
+        existing.productNames.push(productName);
+      }
+      return;
+    }
+
+    const typeLabel = getMediaTypeLabel(url);
+    const productNames = productName ? [productName] : [];
+    items.set(url, {
+      id: `${index}-${url.slice(0, 42)}`,
+      url,
+      name: productName ? `${productName} ${index + 1}` : `Midia atual ${index + 1}`,
+      typeLabel,
+      sizeLabel: formatFileSize(bytes),
+      sizeBucket: getSizeBucket(bytes),
+      usedCount: productName ? 1 : 0,
+      productNames,
+    });
+  };
+
+  products.forEach((product) => {
+    product.mediaUrls?.forEach((url, index) => addUrl(url, product.title, index));
+  });
+  currentMediaUrls.forEach((url, index) => addUrl(url, null, index));
+
+  return Array.from(items.values()).sort(
+    (left, right) => right.usedCount - left.usedCount || left.name.localeCompare(right.name, "pt-BR"),
   );
 }
 
@@ -723,37 +808,42 @@ function ProductTagsInput({
     !availableSuggestions.some((tag) => sameTag(tag, query));
 
   return (
-    <div ref={rootRef} className={open ? "relative z-[140]" : "relative"}>
+    <div ref={rootRef} className={open ? "relative z-[260]" : "relative"}>
+      <div className="mb-[8px] flex items-center justify-between">
+        <label className="text-[12px] font-semibold text-[#AFAFAF]">Tags</label>
+        <button
+          type="button"
+          onClick={() => {
+            if (!disabled) setOpen((current) => !current);
+          }}
+          disabled={disabled}
+          aria-label="Adicionar tag"
+          className="flowdesk-server-button inline-flex h-[24px] w-[24px] items-center justify-center rounded-[8px] text-[#9A9A9A] transition hover:bg-[#151515] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <CirclePlus className="h-[16px] w-[16px]" />
+        </button>
+      </div>
       <div
-        className={`min-h-[42px] rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[10px] py-[7px] transition ${
+        className={`min-h-[42px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[10px] py-[8px] transition ${
           open ? "border-[#4A4A4A]" : ""
         } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
         onClick={() => {
-          if (!disabled) setOpen(true);
+          if (!disabled && !value.length) setOpen(true);
         }}
       >
-        <div className="flex flex-wrap items-center gap-[6px]">
-          {value.map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex max-w-full items-center gap-[6px] rounded-[11px] border border-[#2A2A2A] bg-[#171717] px-[9px] py-[5px] text-[12px] text-[#E7E7E7]"
-            >
-              <span className="max-w-[170px] truncate">{tag}</span>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  removeTag(tag);
-                }}
-                disabled={disabled}
-                aria-label={`Remover tag ${tag}`}
-                className="text-[#8A8A8A] transition hover:text-white"
+        {value.length ? (
+          <div className="flex flex-wrap gap-[6px]">
+            {value.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex max-w-full items-center rounded-[10px] bg-[#202020] px-[9px] py-[5px] text-[12px] leading-none text-[#DADADA]"
               >
-                <X className="h-[12px] w-[12px]" />
-              </button>
-            </span>
-          ))}
-          <div className="flex min-w-[160px] flex-1 items-center gap-[8px]">
+                <span className="max-w-[170px] truncate">{tag}</span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-[8px]">
             <SearchIcon className="h-[15px] w-[15px] text-[#777]" />
             <input
               value={query}
@@ -766,8 +856,6 @@ function ProductTagsInput({
                 if (event.key === "Enter" || event.key === ",") {
                   event.preventDefault();
                   addTag(query);
-                } else if (event.key === "Backspace" && !query && value.length) {
-                  removeTag(value[value.length - 1]);
                 } else if (event.key === "Escape") {
                   setOpen(false);
                 }
@@ -781,14 +869,33 @@ function ProductTagsInput({
                 }, 120);
               }}
               disabled={disabled}
-              placeholder={value.length ? "Adicionar tag" : "Pesquisar ou adicionar tags"}
-              className="h-[26px] min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
+              placeholder="Pesquisar ou adicionar tags"
+              className="h-[24px] min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
             />
           </div>
-        </div>
+        )}
       </div>
       {open && !disabled ? (
-        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[160] overflow-hidden rounded-[18px] border border-[#222] bg-[#080808] shadow-[0_24px_70px_rgba(0,0,0,0.52)]">
+        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[calc(100%+8px)] z-[320] overflow-hidden rounded-[18px] border border-[#222] bg-[#080808] shadow-[0_24px_70px_rgba(0,0,0,0.52)]">
+          {value.length ? (
+            <div className="flex items-center gap-[8px] border-b border-[#171717] px-[12px] py-[11px]">
+              <SearchIcon className="h-[15px] w-[15px] text-[#777]" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === ",") {
+                    event.preventDefault();
+                    addTag(query);
+                  }
+                  if (event.key === "Escape") setOpen(false);
+                }}
+                autoFocus
+                placeholder="Pesquisar ou adicionar tags"
+                className="h-[26px] min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
+              />
+            </div>
+          ) : null}
           <div className="thin-scrollbar max-h-[318px] overflow-y-auto p-[8px]">
             {canAddQuery ? (
               <button
@@ -814,7 +921,7 @@ function ProductTagsInput({
                     key={tag}
                     type="button"
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => addTag(tag)}
+                  onClick={() => addTag(tag)}
                     className="flex w-full items-center gap-[9px] rounded-[13px] px-[11px] py-[9px] text-left text-[13px] text-[#D8D8D8] transition hover:bg-[#141414]"
                   >
                     <span className="h-[18px] w-[18px] rounded-[5px] border border-[#666]" />
@@ -849,6 +956,465 @@ function ProductTagsInput({
   );
 }
 
+function SmartTextPicker({
+  label,
+  value,
+  onChange,
+  suggestions,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  suggestions: string[];
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState(value);
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setQuery(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointer(event: MouseEvent) {
+      if (
+        rootRef.current &&
+        event.target instanceof Node &&
+        !rootRef.current.contains(event.target)
+      ) {
+        const nextValue = normalizeTag(query);
+        if (nextValue) onChange(nextValue);
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointer);
+    return () => document.removeEventListener("mousedown", handlePointer);
+  }, [onChange, open, query]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const cleanSuggestions = useMemo(
+    () =>
+      suggestions
+        .map(normalizeTag)
+        .filter(Boolean)
+        .filter((item, index, list) => list.findIndex((entry) => sameTag(entry, item)) === index),
+    [suggestions],
+  );
+  const filteredSuggestions = useMemo(
+    () =>
+      normalizedQuery
+        ? cleanSuggestions.filter((item) => item.toLowerCase().includes(normalizedQuery))
+        : cleanSuggestions.slice(0, 8),
+    [cleanSuggestions, normalizedQuery],
+  );
+  const canAddQuery =
+    Boolean(normalizeTag(query)) &&
+    !cleanSuggestions.some((item) => sameTag(item, query));
+
+  const commitValue = useCallback(
+    (nextValue: string) => {
+      const normalized = normalizeTag(nextValue);
+      onChange(normalized);
+      setQuery(normalized);
+      setOpen(false);
+    },
+    [onChange],
+  );
+
+  return (
+    <div ref={rootRef} className={open ? "relative z-[260]" : "relative"}>
+      <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
+        {label}
+      </label>
+      <div
+        className={`flex h-[42px] items-center gap-[8px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[12px] transition ${
+          open ? "border-[#4A4A4A]" : ""
+        } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
+      >
+        <SearchIcon className="h-[15px] w-[15px] text-[#777]" />
+        <input
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitValue(query);
+            }
+            if (event.key === "Escape") setOpen(false);
+          }}
+          disabled={disabled}
+          placeholder={label}
+          className="min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
+        />
+        {query ? (
+          <button
+            type="button"
+            aria-label={`Limpar ${label}`}
+            onClick={() => {
+              setQuery("");
+              onChange("");
+              setOpen(false);
+            }}
+            disabled={disabled}
+            className="text-[#888] transition hover:text-white"
+          >
+            <X className="h-[15px] w-[15px]" />
+          </button>
+        ) : null}
+      </div>
+      {open && !disabled ? (
+        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[calc(100%+8px)] z-[320] overflow-hidden rounded-[16px] border border-[#222] bg-[#080808] shadow-[0_22px_64px_rgba(0,0,0,0.5)]">
+          <div className="border-b border-[#171717] px-[12px] py-[9px] text-[12px] font-semibold text-[#777]">
+            {filteredSuggestions.length} resultado{filteredSuggestions.length === 1 ? "" : "s"}
+          </div>
+          <div className="p-[7px]">
+            {filteredSuggestions.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => commitValue(item)}
+                className="flex w-full items-center gap-[9px] rounded-[12px] px-[10px] py-[9px] text-left text-[13px] font-semibold text-[#DCDCDC] transition hover:bg-[#141414]"
+              >
+                <Check className="h-[15px] w-[15px] text-[#CFCFCF]" />
+                {item}
+              </button>
+            ))}
+            {canAddQuery ? (
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => commitValue(query)}
+                className="mt-[3px] flex w-full items-center gap-[9px] rounded-[12px] px-[10px] py-[9px] text-left text-[13px] font-semibold text-[#EDEDED] transition hover:bg-[#141414]"
+              >
+                <CirclePlus className="h-[15px] w-[15px]" />
+                Adicionar "{normalizeTag(query)}"
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProductMediaLibraryModal({
+  open,
+  items,
+  selectedUrls,
+  onClose,
+  onConfirm,
+  onUpload,
+  disabled,
+}: {
+  open: boolean;
+  items: MediaLibraryItem[];
+  selectedUrls: string[];
+  onClose: () => void;
+  onConfirm: (urls: string[]) => void;
+  onUpload: (files: FileList | null | undefined) => Promise<void>;
+  disabled?: boolean;
+}) {
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+  const [query, setQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [sizeFilter, setSizeFilter] = useState("all");
+  const [usedFilter, setUsedFilter] = useState("all");
+  const [productFilter, setProductFilter] = useState("all");
+  const [draftSelection, setDraftSelection] = useState<string[]>([]);
+
+  useBodyScrollLock(open);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setDraftSelection([]);
+    setQuery("");
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [onClose, open]);
+
+  const selectedSet = useMemo(() => new Set(selectedUrls), [selectedUrls]);
+  const draftSet = useMemo(() => new Set(draftSelection), [draftSelection]);
+  const typeOptions = useMemo(
+    () => Array.from(new Set(items.map((item) => item.typeLabel))).sort(),
+    [items],
+  );
+  const productOptions = useMemo(
+    () =>
+      Array.from(new Set(items.flatMap((item) => item.productNames))).sort((left, right) =>
+        left.localeCompare(right, "pt-BR"),
+      ),
+    [items],
+  );
+  const filteredItems = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return items.filter((item) => {
+      if (typeFilter !== "all" && item.typeLabel !== typeFilter) return false;
+      if (sizeFilter !== "all" && item.sizeBucket !== sizeFilter) return false;
+      if (usedFilter === "used" && item.usedCount <= 0) return false;
+      if (usedFilter === "unused" && item.usedCount > 0) return false;
+      if (productFilter !== "all" && !item.productNames.includes(productFilter)) return false;
+      if (!normalizedQuery) return true;
+      return `${item.name} ${item.typeLabel} ${item.productNames.join(" ")}`
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [items, productFilter, query, sizeFilter, typeFilter, usedFilter]);
+
+  const toggleUrl = useCallback((url: string) => {
+    setDraftSelection((current) =>
+      current.includes(url) ? current.filter((item) => item !== url) : [...current, url],
+    );
+  }, []);
+
+  const confirmSelection = useCallback(() => {
+    const nextUrls = draftSelection.filter((url) => !selectedSet.has(url));
+    onConfirm(nextUrls);
+  }, [draftSelection, onConfirm, selectedSet]);
+
+  if (!open || !isMounted) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] bg-[rgba(0,0,0,0.68)] backdrop-blur-[3px]">
+      <button
+        type="button"
+        aria-label="Fechar seletor de midias"
+        className="absolute inset-0 h-full w-full cursor-default"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="product-media-library-title"
+        className="flowdesk-scale-in-soft absolute left-1/2 top-1/2 flex h-[min(88vh,780px)] w-[min(1180px,calc(100vw-28px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[24px] border border-[#202020] bg-[#090909] shadow-[0_34px_120px_rgba(0,0,0,0.62)]"
+      >
+        <div className="flex items-center justify-between gap-[16px] border-b border-[#171717] px-[20px] py-[18px] sm:px-[24px]">
+          <div className="min-w-0">
+            <h3 id="product-media-library-title" className="text-[18px] font-semibold text-[#F1F1F1]">
+              Selecionar arquivo
+            </h3>
+            <p className="mt-[5px] text-[12px] text-[#777]">
+              Reutilize midias ja enviadas ou adicione novas imagens ate 3 MB.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar modal"
+            className="flowdesk-server-button flex h-[38px] w-[38px] items-center justify-center rounded-[13px] text-[#8A8A8A] transition hover:bg-[#111] hover:text-white"
+          >
+            <X className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+
+        <div className="border-b border-[#151515] px-[20px] py-[16px] sm:px-[24px]">
+          <div className="flex flex-col gap-[12px] lg:flex-row lg:items-center lg:justify-between">
+            <div className="relative w-full lg:max-w-[560px]">
+              <SearchIcon className="pointer-events-none absolute left-[14px] top-1/2 h-[16px] w-[16px] -translate-y-1/2 text-[#777]" />
+              <ServerTextInput
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Pesquisar arquivos"
+                className="h-[42px] pl-[40px] text-[13px]"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-[8px]">
+              <ServerButton size="sm" className="h-[38px]">
+                Classificar
+              </ServerButton>
+              <div className="inline-flex rounded-[13px] border border-[#242424] bg-[#0D0D0D] p-[3px]">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("grid")}
+                  aria-label="Visualizar em grade"
+                  className={`flex h-[30px] w-[34px] items-center justify-center rounded-[10px] transition ${
+                    viewMode === "grid" ? "bg-[#1A1A1A] text-white" : "text-[#777] hover:text-white"
+                  }`}
+                >
+                  <Grid2X2 className="h-[15px] w-[15px]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                  aria-label="Visualizar em lista"
+                  className={`flex h-[30px] w-[34px] items-center justify-center rounded-[10px] transition ${
+                    viewMode === "list" ? "bg-[#1A1A1A] text-white" : "text-[#777] hover:text-white"
+                  }`}
+                >
+                  <List className="h-[15px] w-[15px]" />
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="mt-[12px] flex flex-wrap gap-[8px]">
+            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
+              <option value="all">Tipo de arquivo</option>
+              {typeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+            <select value={sizeFilter} onChange={(event) => setSizeFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
+              <option value="all">Tamanho do arquivo</option>
+              <option value="small">Ate 512 KB</option>
+              <option value="medium">Ate 3 MB</option>
+              <option value="large">Acima de 3 MB</option>
+              <option value="unknown">Sem tamanho</option>
+            </select>
+            <select value={usedFilter} onChange={(event) => setUsedFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
+              <option value="all">Usado em</option>
+              <option value="used">Usado</option>
+              <option value="unused">Nao usado</option>
+            </select>
+            <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
+              <option value="all">Produto</option>
+              {productOptions.map((product) => <option key={product} value={product}>{product}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-[20px] py-[18px] thin-scrollbar sm:px-[24px]">
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(event) => void onUpload(event.target.files)}
+          />
+          <div
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void onUpload(event.dataTransfer.files);
+            }}
+            className="flex min-h-[142px] flex-col items-center justify-center rounded-[18px] border border-dashed border-[#343434] bg-[#0C0C0C] px-[16px] text-center"
+          >
+            <div className="flex flex-wrap items-center justify-center gap-[10px]">
+              <ServerButton onClick={() => uploadInputRef.current?.click()} disabled={disabled}>
+                <Upload className="h-[15px] w-[15px]" />
+                Adicionar midia
+              </ServerButton>
+              <ServerButton disabled title="Em breve" className="border-[#2D2440] text-[#8F79FF]">
+                <WandSparkles className="h-[15px] w-[15px]" />
+                Gerar imagem
+              </ServerButton>
+            </div>
+            <p className="mt-[12px] text-[13px] text-[#777]">
+              Arraste e solte imagens aqui ou selecione arquivos do seu computador.
+            </p>
+          </div>
+
+          {filteredItems.length ? (
+            viewMode === "grid" ? (
+              <div className="mt-[22px] grid grid-cols-2 gap-x-[18px] gap-y-[22px] sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+                {filteredItems.map((item) => {
+                  const isSelected = draftSet.has(item.url);
+                  const isAlreadyUsed = selectedSet.has(item.url);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        if (!isAlreadyUsed) toggleUrl(item.url);
+                      }}
+                      disabled={isAlreadyUsed}
+                      className={`group text-center transition ${isAlreadyUsed ? "opacity-45" : ""}`}
+                    >
+                      <span className={`relative block aspect-square overflow-hidden rounded-[16px] border bg-[#101010] p-[6px] transition ${
+                        isSelected ? "border-[#EDEDED]" : "border-[#242424] group-hover:border-[#454545]"
+                      }`}>
+                        <span className={`absolute left-[9px] top-[9px] z-10 h-[18px] w-[18px] rounded-[5px] border ${
+                          isSelected ? "border-white bg-white" : "border-[#D8D8D8] bg-[rgba(0,0,0,0.35)]"
+                        }`}>
+                          {isSelected ? <Check className="h-[16px] w-[16px] text-[#080808]" /> : null}
+                        </span>
+                        <img src={item.url} alt="" className="h-full w-full rounded-[12px] object-cover" />
+                      </span>
+                      <span className="mt-[9px] block truncate text-[13px] text-[#DCDCDC]">{item.name}</span>
+                      <span className="mt-[3px] block text-[12px] text-[#777]">{item.typeLabel} - {item.sizeLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-[18px] overflow-hidden rounded-[18px] border border-[#1D1D1D]">
+                {filteredItems.map((item) => {
+                  const isSelected = draftSet.has(item.url);
+                  const isAlreadyUsed = selectedSet.has(item.url);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        if (!isAlreadyUsed) toggleUrl(item.url);
+                      }}
+                      disabled={isAlreadyUsed}
+                      className="flex w-full items-center gap-[12px] border-b border-[#151515] bg-[#0B0B0B] px-[14px] py-[12px] text-left last:border-b-0 hover:bg-[#101010] disabled:opacity-45"
+                    >
+                      <span className={`flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border ${isSelected ? "border-white bg-white" : "border-[#777]"}`}>
+                        {isSelected ? <Check className="h-[15px] w-[15px] text-[#080808]" /> : null}
+                      </span>
+                      <img src={item.url} alt="" className="h-[48px] w-[48px] rounded-[12px] object-cover" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-semibold text-[#EDEDED]">{item.name}</span>
+                        <span className="mt-[4px] block truncate text-[12px] text-[#777]">
+                          {item.productNames.join(", ") || "Sem produto vinculado"}
+                        </span>
+                      </span>
+                      <span className="text-[12px] text-[#AFAFAF]">{item.typeLabel}</span>
+                      <span className="hidden text-[12px] text-[#777] sm:block">{item.sizeLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            <div className="px-[22px] py-[46px] text-center">
+              <FileImage className="mx-auto h-[42px] w-[42px] text-[#444]" />
+              <p className="mt-[16px] text-[14px] font-semibold text-[#DCDCDC]">Nenhuma midia encontrada.</p>
+              <p className="mt-[6px] text-[13px] text-[#777]">Envie uma imagem ou ajuste os filtros para continuar.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-[10px] border-t border-[#171717] px-[20px] py-[16px] sm:px-[24px]">
+          <ServerButton onClick={onClose}>Cancelar</ServerButton>
+          <ServerButton
+            variant="primary"
+            onClick={confirmSelection}
+            disabled={!draftSelection.some((url) => !selectedSet.has(url))}
+          >
+            Concluido
+          </ServerButton>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function SalesProductCreatePanel({
   guildId,
   readOnly = false,
@@ -862,6 +1428,7 @@ export function SalesProductCreatePanel({
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const [categories, setCategories] = useState<SalesCategory[]>([]);
   const [discordChannels, setDiscordChannels] = useState<DiscordChannel[]>([]);
+  const [libraryProducts, setLibraryProducts] = useState<SalesProduct[]>([]);
   const [isLoadingProduct, setIsLoadingProduct] = useState(mode === "edit");
   const [isLoadingCategories, setIsLoadingCategories] = useState(true);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
@@ -872,10 +1439,10 @@ export function SalesProductCreatePanel({
   const [categoryId, setCategoryId] = useState("");
   const [priceAmount, setPriceAmount] = useState("");
   const [compareAtPriceAmount, setCompareAtPriceAmount] = useState("");
-  const [unitPriceAmount, setUnitPriceAmount] = useState("");
-  const [chargeTaxes, setChargeTaxes] = useState(true);
-  const [costPerItemAmount, setCostPerItemAmount] = useState("");
-  const [inventoryTracked, setInventoryTracked] = useState(true);
+  const [, setUnitPriceAmount] = useState("");
+  const [, setChargeTaxes] = useState(true);
+  const [, setCostPerItemAmount] = useState("");
+  const [, setInventoryTracked] = useState(true);
   const [stockQuantity, setStockQuantity] = useState("0");
   const [sku, setSku] = useState("");
   const [skuEdited, setSkuEdited] = useState(false);
@@ -889,6 +1456,7 @@ export function SalesProductCreatePanel({
   const [discordChannelId, setDiscordChannelId] = useState("");
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isMediaLibraryOpen, setIsMediaLibraryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const mediaUrlsRef = useRef<string[]>([]);
 
@@ -954,22 +1522,20 @@ export function SalesProductCreatePanel({
 
       if (!persistentCached) setIsLoadingChannels(true);
       try {
-        const nextChannels = await coalescedClientFetch(
-          getChannelsCacheKey(guildId),
-          async () => {
-            const response = await fetch(
-              `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
-              { credentials: "include", cache: "no-store" },
-            );
-            const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
-            if (!response.ok || !payload.ok) return [];
-            return payload.channels?.text || [];
-          },
+        const response = await fetch(
+          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}&fresh=1&t=${Date.now()}`,
+          { credentials: "include", cache: "no-store" },
         );
+        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+        const nextChannels = response.ok && payload.ok ? payload.channels?.text || [] : [];
         if (!cancelled) {
-          setDiscordChannels(nextChannels);
-          writeCache(channelsCache, guildId, nextChannels);
-          writeClientCache(getChannelsCacheKey(guildId), nextChannels);
+          if (nextChannels.length || !persistentCached) {
+            setDiscordChannels(nextChannels);
+          }
+          if (nextChannels.length) {
+            writeCache(channelsCache, guildId, nextChannels);
+            writeClientCache(getChannelsCacheKey(guildId), nextChannels);
+          }
         }
       } catch {
         if (!cancelled && !persistentCached) setDiscordChannels([]);
@@ -1110,6 +1676,53 @@ export function SalesProductCreatePanel({
   }, [guildId, mode, productCode]);
 
   useEffect(() => {
+    if (!isMediaLibraryOpen) return;
+    let cancelled = false;
+
+    async function loadMediaLibraryProducts() {
+      const cached =
+        readCache(productsListCache, guildId) ||
+        readClientCache<SalesProduct[]>(getProductsCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
+      if (cached) {
+        setLibraryProducts(cached);
+        writeCache(productsListCache, guildId, cached);
+      }
+
+      try {
+        const nextProducts = await coalescedClientFetch(
+          getProductsCacheKey(guildId),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.message || "Erro ao carregar midias existentes.");
+            }
+            return payload.products || [];
+          },
+        );
+        if (cancelled) return;
+        setLibraryProducts(nextProducts);
+        writeCache(productsListCache, guildId, nextProducts);
+        writeClientCache(getProductsCacheKey(guildId), nextProducts);
+      } catch (error) {
+        if (!cancelled && !cached) {
+          setStatusMessage(
+            error instanceof Error ? error.message : "Erro ao carregar midias existentes.",
+          );
+        }
+      }
+    }
+
+    void loadMediaLibraryProducts();
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId, isMediaLibraryOpen]);
+
+  useEffect(() => {
     mediaUrlsRef.current = mediaUrls;
   }, [mediaUrls]);
 
@@ -1163,14 +1776,61 @@ export function SalesProductCreatePanel({
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
       .map(([tag]) => tag);
   }, [categories, guildId, manufacturer, productType, tags]);
+  const productTypeSuggestions = useMemo(() => {
+    const values = new Map<string, number>();
+    productsListCache.get(guildId)?.data.forEach((product) => {
+      const normalized = normalizeTag(product.productType || "");
+      if (normalized) values.set(normalized, (values.get(normalized) || 0) + 1);
+    });
+    categories.forEach((category) => {
+      const normalized = normalizeTag(category.title);
+      if (normalized) values.set(normalized, (values.get(normalized) || 0) + 1);
+    });
+    if (productType) values.set(productType, (values.get(productType) || 0) + 3);
+    return Array.from(values.entries())
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
+      .map(([item]) => item);
+  }, [categories, guildId, productType]);
+  const manufacturerSuggestions = useMemo(() => {
+    const values = new Map<string, number>();
+    productsListCache.get(guildId)?.data.forEach((product) => {
+      const normalized = normalizeTag(product.manufacturer || "");
+      if (normalized) values.set(normalized, (values.get(normalized) || 0) + 1);
+    });
+    if (manufacturer) values.set(manufacturer, (values.get(manufacturer) || 0) + 3);
+    return Array.from(values.entries())
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
+      .map(([item]) => item);
+  }, [guildId, manufacturer]);
+  const mediaLibraryItems = useMemo(
+    () => buildMediaLibraryItems(libraryProducts, mediaUrls),
+    [libraryProducts, mediaUrls],
+  );
+  const searchPreview = useMemo(() => {
+    const displayTitle = title.trim() || "Novo produto";
+    const brand = manufacturer.trim() || "flowdesk.store";
+    const slugSource = [title, productType, tags.join(" ")].filter(Boolean).join(" ");
+    return {
+      brand,
+      title: displayTitle,
+      url: `https://loja.flowdesk.app/products/${slugifyProductPath(slugSource || displayTitle)}`,
+      description: plainTextPreview(description),
+      price: `${formatMoney(Number(priceAmount.replace(",", ".")) || 0)} BRL`,
+    };
+  }, [description, manufacturer, priceAmount, productType, tags, title]);
 
   const isEditMode = mode === "edit";
   const isFormLoading = isLoadingProduct || isLoadingCategories;
   const controlsDisabled = isFormLoading || isSaving || readOnly;
   const hasDiscordPublicationTarget =
     discordPublicationMode === "online_only" || Boolean(discordChannelId);
+  const hasRequiredCategory = Boolean(categoryId);
+  const parsedPriceAmount = parseMoneyInput(priceAmount);
+  const hasRequiredPrice = parsedPriceAmount !== null;
   const canSave =
     title.trim().length >= 2 &&
+    hasRequiredCategory &&
+    hasRequiredPrice &&
     hasDiscordPublicationTarget &&
     !isSaving &&
     !isFormLoading &&
@@ -1185,6 +1845,11 @@ export function SalesProductCreatePanel({
       file.type.startsWith("image/"),
     );
     if (!imageFiles.length) return;
+    const oversizedFile = imageFiles.find((file) => file.size > MEDIA_FILE_MAX_BYTES);
+    if (oversizedFile) {
+      setStatusMessage(`A imagem ${oversizedFile.name} ultrapassa o limite de 3 MB.`);
+      return;
+    }
 
     try {
       const encodedImages = await Promise.all(imageFiles.map(fileToDataUrl));
@@ -1197,6 +1862,19 @@ export function SalesProductCreatePanel({
     }
   }, []);
 
+  const addExistingMedia = useCallback((urls: string[]) => {
+    if (!urls.length) return;
+    setMediaUrls((current) => {
+      const next = [...current];
+      urls.forEach((url) => {
+        if (url && !next.includes(url)) next.push(url);
+      });
+      return next.slice(0, 8);
+    });
+    setStatusMessage(null);
+    setIsMediaLibraryOpen(false);
+  }, []);
+
   const removeMedia = useCallback((url: string) => {
     setMediaUrls((current) => current.filter((item) => item !== url));
     revokeObjectUrl(url);
@@ -1204,11 +1882,17 @@ export function SalesProductCreatePanel({
 
   const handleSave = useCallback(async () => {
     if (!canSave) {
-      setStatusMessage(
-        title.trim().length < 2
-          ? "Informe um titulo para salvar o produto."
-          : "Escolha Somente online ou selecione um canal Discord antes de salvar.",
-      );
+      if (title.trim().length < 2) {
+        setStatusMessage("Informe um titulo para salvar o produto.");
+      } else if (!hasRequiredCategory) {
+        setStatusMessage("Escolha uma categoria para salvar o produto.");
+      } else if (!hasRequiredPrice) {
+        setStatusMessage("Informe um preco valido para salvar o produto. Pode ser 0, mas nao pode ficar vazio.");
+      } else {
+        setStatusMessage(
+          "Escolha Somente online ou selecione um canal Discord antes de salvar.",
+        );
+      }
       return;
     }
 
@@ -1230,10 +1914,10 @@ export function SalesProductCreatePanel({
           mediaUrls,
           priceAmount,
           compareAtPriceAmount,
-          unitPriceAmount,
-          chargeTaxes,
-          costPerItemAmount,
-          inventoryTracked,
+          unitPriceAmount: null,
+          chargeTaxes: false,
+          costPerItemAmount: null,
+          inventoryTracked: true,
           stockQuantity,
           sku,
           barcode,
@@ -1269,14 +1953,13 @@ export function SalesProductCreatePanel({
     barcodeMode,
     canSave,
     categoryId,
-    chargeTaxes,
     compareAtPriceAmount,
-    costPerItemAmount,
     description,
     discordChannelId,
     discordPublicationMode,
     guildId,
-    inventoryTracked,
+    hasRequiredCategory,
+    hasRequiredPrice,
     isEditMode,
     manufacturer,
     mediaUrls,
@@ -1290,7 +1973,6 @@ export function SalesProductCreatePanel({
     stockQuantity,
     tags,
     title,
-    unitPriceAmount,
   ]);
 
   return (
@@ -1377,7 +2059,18 @@ export function SalesProductCreatePanel({
             />
 
             <div className="mt-[22px]">
-              <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Midias</h4>
+              <div className="flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between">
+                <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Midias</h4>
+                <ServerButton
+                  onClick={() => setIsMediaLibraryOpen(true)}
+                  disabled={controlsDisabled}
+                  size="sm"
+                  className="h-[38px] self-start sm:self-auto"
+                >
+                  <FileImage className="h-[15px] w-[15px]" />
+                  Selecionar existente
+                </ServerButton>
+              </div>
               <input
                 ref={mediaInputRef}
                 type="file"
@@ -1456,7 +2149,7 @@ export function SalesProductCreatePanel({
                 />
               </div>
               <p className="mt-[9px] text-[13px] leading-[1.45] text-[#7B7B7B]">
-                Define filtros, colecoes e organizacao para canais de venda.
+                Obrigatoria para organizar o produto e permitir a publicacao correta.
               </p>
             </div>
           </ServerSurface>
@@ -1478,42 +2171,15 @@ export function SalesProductCreatePanel({
                   disabled={controlsDisabled}
                 />
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-[10px] border-t border-[#171717] p-[18px] sm:p-[20px]">
-              <ServerTextInput
-                value={unitPriceAmount}
-                onChange={(event) => setUnitPriceAmount(event.target.value)}
-                placeholder="Preco unitario"
-                className="h-[38px] max-w-[180px] text-[13px]"
-                disabled={controlsDisabled}
-              />
-              <PillToggle
-                active={chargeTaxes}
-                onClick={() => setChargeTaxes((current) => !current)}
-                disabled={controlsDisabled}
-              >
-                Cobrar tributos {chargeTaxes ? "Sim" : "Nao"}
-              </PillToggle>
-              <ServerTextInput
-                value={costPerItemAmount}
-                onChange={(event) => setCostPerItemAmount(event.target.value)}
-                placeholder="Custo por item"
-                className="h-[38px] max-w-[170px] text-[13px]"
-                disabled={controlsDisabled}
-              />
-              <CircleDollarSign className="ml-auto h-[17px] w-[17px] text-[#777]" />
+              <p className="mt-[10px] text-[12px] leading-[1.45] text-[#7B7B7B]">
+                Obrigatorio. Use 0 quando o produto nao tiver cobranca imediata.
+              </p>
             </div>
           </ServerSurface>
 
           <ServerSurface className="overflow-hidden">
-            <div className="flex items-center justify-between gap-[16px] p-[18px] sm:p-[22px]">
+            <div className="p-[18px] sm:p-[22px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Estoque</h4>
-              <InlineSwitch
-                checked={inventoryTracked}
-                onChange={() => setInventoryTracked((current) => !current)}
-                label="Estoque rastreado"
-                disabled={controlsDisabled}
-              />
             </div>
             <div className="mx-[18px] mb-[18px] overflow-hidden rounded-[18px] border border-[#202020] sm:mx-[22px] sm:mb-[20px]">
               <div className="grid grid-cols-2 bg-[#101010] px-[14px] py-[10px] text-[12px] font-semibold text-[#BDBDBD]">
@@ -1580,6 +2246,35 @@ export function SalesProductCreatePanel({
               </div>
             </div>
           </ServerSurface>
+
+          <ServerSurface className="p-[18px] sm:p-[22px]">
+            <div className="flex items-start justify-between gap-[16px]">
+              <div>
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">
+                  Listagem em mecanismos de pesquisa
+                </h4>
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Previa aproximada de como o produto pode aparecer em buscas da loja.
+                </p>
+              </div>
+              <Pencil className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
+            </div>
+            <div className="mt-[18px] rounded-[18px] border border-[#202020] bg-[#0C0C0C] p-[16px]">
+              <p className="truncate text-[13px] text-[#D8D8D8]">{searchPreview.brand}</p>
+              <p className="mt-[5px] truncate text-[13px] text-[#8A8A8A]">
+                {searchPreview.url.replace("https://", "").split("/").join(" › ")}
+              </p>
+              <p className="mt-[12px] text-[20px] leading-[1.25] font-medium text-[#8AB6FF]">
+                {searchPreview.title}
+              </p>
+              <p className="mt-[10px] line-clamp-2 text-[14px] leading-[1.55] text-[#BDBDBD]">
+                {searchPreview.description}
+              </p>
+              <p className="mt-[10px] text-[14px] font-semibold text-[#DCDCDC]">
+                {searchPreview.price}
+              </p>
+            </div>
+          </ServerSurface>
         </div>
 
         <aside className="space-y-[18px]">
@@ -1615,7 +2310,7 @@ export function SalesProductCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="relative z-[20] p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[180] p-[18px] sm:p-[20px]">
             <div className="flex items-center gap-[8px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Organizacao do produto
@@ -1623,18 +2318,24 @@ export function SalesProductCreatePanel({
               <BadgeCheck className="h-[16px] w-[16px] text-[#8A8A8A]" />
             </div>
             <div className="mt-[16px] space-y-[12px]">
-              <ServerTextInput
+              <SmartTextPicker
+                label="Tipo"
                 value={productType}
-                onChange={(event) => setProductType(event.target.value)}
-                placeholder="Tipo"
-                className="h-[42px]"
+                onChange={(nextValue) => {
+                  setProductType(nextValue);
+                  setStatusMessage(null);
+                }}
+                suggestions={productTypeSuggestions}
                 disabled={controlsDisabled}
               />
-              <ServerTextInput
+              <SmartTextPicker
+                label="Fabricante"
                 value={manufacturer}
-                onChange={(event) => setManufacturer(event.target.value)}
-                placeholder="Fabricante"
-                className="h-[42px]"
+                onChange={(nextValue) => {
+                  setManufacturer(nextValue);
+                  setStatusMessage(null);
+                }}
+                suggestions={manufacturerSuggestions}
                 disabled={controlsDisabled}
               />
               <ProductTagsInput
@@ -1726,6 +2427,15 @@ export function SalesProductCreatePanel({
         </aside>
       </div>
       )}
+      <ProductMediaLibraryModal
+        open={isMediaLibraryOpen}
+        items={mediaLibraryItems}
+        selectedUrls={mediaUrls}
+        onClose={() => setIsMediaLibraryOpen(false)}
+        onConfirm={addExistingMedia}
+        onUpload={addMediaFiles}
+        disabled={controlsDisabled}
+      />
     </div>
   );
 }

@@ -36,6 +36,51 @@ function trimDiscordText(value: string, maxLength = MAX_DISCORD_TEXT) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
 }
 
+function markdownTableToCodeBlock(block: string) {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2 || !lines.every((line) => line.includes("|"))) return block;
+  if (!/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(lines[1])) return block;
+
+  const rows = lines
+    .filter((_, index) => index !== 1)
+    .map((line) =>
+      line
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
+        .split("|")
+        .map((cell) => cell.trim().replace(/\s+/g, " ")),
+    );
+  const columnCount = Math.max(...rows.map((row) => row.length));
+  const widths = Array.from({ length: columnCount }, (_, columnIndex) =>
+    Math.min(
+      28,
+      Math.max(...rows.map((row) => (row[columnIndex] || "").length), 3),
+    ),
+  );
+  const renderRow = (row: string[]) =>
+    widths
+      .map((width, columnIndex) => (row[columnIndex] || "").slice(0, width).padEnd(width, " "))
+      .join(" | ")
+      .trimEnd();
+  const separator = widths.map((width) => "-".repeat(width)).join("-+-");
+
+  return ["```", renderRow(rows[0] || []), separator, ...rows.slice(1).map(renderRow), "```"].join("\n");
+}
+
+function normalizeDescriptionForDiscord(value: string) {
+  return value
+    .split(/\n{2,}/)
+    .map(markdownTableToCodeBlock)
+    .join("\n\n")
+    .replace(/<u>([\s\S]*?)<\/u>/gi, "__$1__")
+    .replace(/<mark(?:\s+data-color="#[0-9a-fA-F]{6}")?>([\s\S]*?)<\/mark>/gi, "**$1**")
+    .replace(/<\/?(?:u|mark)[^>]*>/gi, "")
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "[$1]($2)");
+}
+
 function buildTextDisplay(content: string): JsonRecord {
   return {
     type: COMPONENT_TYPE.TEXT_DISPLAY,
@@ -45,7 +90,7 @@ function buildTextDisplay(content: string): JsonRecord {
 
 function buildProductMarkdown(input: SalesProductDiscordPayloadInput) {
   const description = input.description.trim()
-    ? input.description.trim()
+    ? normalizeDescriptionForDiscord(input.description.trim())
     : "Produto disponivel para compra neste servidor.";
 
   return [
@@ -86,7 +131,7 @@ function buildDisabledInfoButtons(input: SalesProductDiscordPayloadInput): JsonR
 export function buildSalesProductDiscordPayload(
   input: SalesProductDiscordPayloadInput,
 ) {
-  const firstImage = input.mediaUrls?.find((url) => /^https?:\/\//i.test(url));
+  const firstImage = input.mediaUrls?.find((url) => /^(https?:\/\/|attachment:\/\/)/i.test(url));
   const components: JsonRecord[] = [
     {
       type: COMPONENT_TYPE.CONTAINER,
@@ -124,18 +169,6 @@ export function buildSalesProductDiscordPayload(
       ],
     },
   ];
-
-  const galleryItems = (input.mediaUrls || [])
-    .filter((url) => /^https?:\/\//i.test(url))
-    .slice(1, 5)
-    .map((url) => ({ media: { url } }));
-
-  if (galleryItems.length) {
-    components.splice(1, 0, {
-      type: COMPONENT_TYPE.MEDIA_GALLERY,
-      items: galleryItems,
-    });
-  }
 
   return {
     flags: MESSAGE_FLAG_IS_COMPONENTS_V2,

@@ -685,22 +685,20 @@ export function SalesCategoryCreatePanel({
     async function loadChannels() {
       if (!cached) setIsLoadingChannels(true);
       try {
-        const nextChannels = await coalescedClientFetch(
-          getChannelsCacheKey(guildId),
-          async () => {
-            const response = await fetch(
-              `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
-              { credentials: "include", cache: "no-store" },
-            );
-            const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
-            if (!response.ok || !payload.ok) return [];
-            return payload.channels?.text || [];
-          },
+        const response = await fetch(
+          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}&fresh=1&t=${Date.now()}`,
+          { credentials: "include", cache: "no-store" },
         );
+        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+        const nextChannels = response.ok && payload.ok ? payload.channels?.text || [] : [];
         if (!cancelled) {
-          setDiscordChannels(nextChannels);
-          writeCache(categoryChannelsCache, guildId, nextChannels);
-          writeClientCache(getChannelsCacheKey(guildId), nextChannels);
+          if (nextChannels.length || !cached) {
+            setDiscordChannels(nextChannels);
+          }
+          if (nextChannels.length) {
+            writeCache(categoryChannelsCache, guildId, nextChannels);
+            writeClientCache(getChannelsCacheKey(guildId), nextChannels);
+          }
         }
       } catch {
         if (!cancelled && !cached) setDiscordChannels([]);
@@ -734,20 +732,36 @@ export function SalesCategoryCreatePanel({
   );
 
   const handleImageFile = useCallback(
-    (file: File | null | undefined) => {
+    async (file: File | null | undefined) => {
       if (!file) return;
       if (!file.type.startsWith("image/")) {
         setStatusMessage("Envie uma imagem valida para a categoria.");
         return;
       }
+      if (file.size > 3 * 1024 * 1024) {
+        setStatusMessage(`A imagem ${file.name} ultrapassa o limite de 3 MB.`);
+        return;
+      }
 
-      const nextPreviewUrl = URL.createObjectURL(file);
-      setImagePreviewUrl((current) => {
-        revokeObjectUrl(current);
-        return nextPreviewUrl;
-      });
-      setImageName(file.name);
-      setStatusMessage(null);
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () =>
+            resolve(typeof reader.result === "string" ? reader.result : "");
+          reader.onerror = () => reject(new Error("Nao foi possivel ler a imagem."));
+          reader.readAsDataURL(file);
+        });
+        setImagePreviewUrl((current) => {
+          revokeObjectUrl(current);
+          return dataUrl;
+        });
+        setImageName(file.name);
+        setStatusMessage(null);
+      } catch (error) {
+        setStatusMessage(
+          error instanceof Error ? error.message : "Nao foi possivel carregar a imagem.",
+        );
+      }
     },
     [],
   );
@@ -1144,7 +1158,7 @@ export function SalesCategoryCreatePanel({
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(event) => handleImageFile(event.target.files?.[0])}
+              onChange={(event) => void handleImageFile(event.target.files?.[0])}
             />
             <div
               role="button"
@@ -1161,7 +1175,7 @@ export function SalesCategoryCreatePanel({
               }}
               onDrop={(event) => {
                 event.preventDefault();
-                handleImageFile(event.dataTransfer.files?.[0]);
+                void handleImageFile(event.dataTransfer.files?.[0]);
               }}
               className="flowdesk-server-button relative mt-[18px] flex min-h-[166px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[18px] border border-dashed border-[#363636] bg-[#0D0D0D] px-[16px] text-center transition hover:border-[#585858] hover:bg-[#111]"
             >
