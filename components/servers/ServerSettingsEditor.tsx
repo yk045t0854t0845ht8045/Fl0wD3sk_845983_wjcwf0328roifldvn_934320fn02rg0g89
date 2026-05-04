@@ -88,6 +88,7 @@ type ServerSettingsSection =
   | "sales_products"
   | "sales_product_create"
   | "sales_product_edit"
+  | "sales_stock"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -472,6 +473,7 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     | "sales_products"
     | "sales_product_create"
     | "sales_product_edit"
+    | "sales_stock"
     | "sales_payment_methods"
     | "sales_coupons_gifts"
   >,
@@ -518,6 +520,12 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     title: "Editar produto",
     description:
       "Atualize preco, midias, estoque e descricao sem tirar a loja do fluxo.",
+  },
+  sales_stock: {
+    tag: "Vendas",
+    title: "Estoque",
+    description:
+      "Acompanhe futuramente saldo, reservas e movimentacoes dos produtos da loja.",
   },
   sales_payment_methods: {
     tag: "Vendas",
@@ -2254,6 +2262,7 @@ export function ServerSettingsEditor({
         sales_products: "server_manage_tickets_overview",
         sales_product_create: "server_manage_tickets_overview",
         sales_product_edit: "server_manage_tickets_overview",
+        sales_stock: "server_manage_tickets_overview",
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
@@ -3636,6 +3645,7 @@ export function ServerSettingsEditor({
     settingsSection === "sales_products" ||
     settingsSection === "sales_product_create" ||
     settingsSection === "sales_product_edit" ||
+    settingsSection === "sales_stock" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts";
   const isSalesSettingsSection = settingsSection === "sales_overview";

@@ -11,8 +11,10 @@ import {
   Check,
   ChevronDown,
   CircleDollarSign,
+  CirclePlus,
   Hash,
   ImagePlus,
+  Search as SearchIcon,
   Package,
   PackageSearch,
   Pencil,
@@ -33,6 +35,12 @@ import {
   ServerTextInput,
 } from "@/components/servers/ServerUi";
 import { SalesDescriptionEditor } from "@/components/servers/sales/SalesDescriptionEditor";
+import {
+  coalescedClientFetch,
+  invalidateClientCache,
+  readClientCache,
+  writeClientCache,
+} from "@/lib/sales/clientCache";
 
 type ProductStatus = "active" | "draft" | "archived";
 type ProductDiscordPublicationMode = "online_only" | "channel";
@@ -118,7 +126,8 @@ const discordPublicationLabel: Record<ProductDiscordPublicationMode, string> = {
   online_only: "Somente online",
   channel: "Canal Discord",
 };
-const SALES_PRODUCTS_CACHE_TTL_MS = 45_000;
+const SALES_PRODUCTS_CACHE_TTL_MS = 5 * 60_000;
+const SALES_PRODUCTS_STALE_TTL_MS = 24 * 60 * 60_000;
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -149,6 +158,24 @@ function invalidateProductCaches(guildId: string) {
   for (const key of productDetailCache.keys()) {
     if (key.startsWith(`${guildId}:`)) productDetailCache.delete(key);
   }
+  invalidateClientCache(`flowdesk_sales_products:${guildId}`);
+  invalidateClientCache(`flowdesk_sales_product:${guildId}:`);
+}
+
+function getProductsCacheKey(guildId: string) {
+  return `flowdesk_sales_products:${guildId}`;
+}
+
+function getProductCacheKey(guildId: string, productCode: string) {
+  return `flowdesk_sales_product:${guildId}:${productCode}`;
+}
+
+function getCategoriesCacheKey(guildId: string) {
+  return `flowdesk_sales_product_categories:${guildId}`;
+}
+
+function getChannelsCacheKey(guildId: string) {
+  return `flowdesk_sales_channels:${guildId}`;
 }
 
 function getProductsPath(guildId: string) {
@@ -390,35 +417,46 @@ export function SalesProductsListPanel({
 
   const loadProducts = useCallback(async () => {
     const cached = readCache(productsListCache, guildId);
-    if (cached) {
-      setProducts(cached);
+    const persistentCached =
+      cached || readClientCache<SalesProduct[]>(getProductsCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
+    if (persistentCached) {
+      setProducts(persistentCached);
+      writeCache(productsListCache, guildId, persistentCached);
       setIsLoading(false);
       setErrorMessage(null);
-      return;
+    } else {
+      setIsLoading(true);
     }
-
-    setIsLoading(true);
     setErrorMessage(null);
 
     try {
-      const response = await fetch(
-        `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}`,
-        { credentials: "include", cache: "no-store" },
+      const nextProducts = await coalescedClientFetch(
+        getProductsCacheKey(guildId),
+        async () => {
+          const response = await fetch(
+            `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}`,
+            { credentials: "include", cache: "no-store" },
+          );
+          const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || "Erro ao carregar produtos.");
+          }
+          return payload.products || [];
+        },
       );
-      const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "Erro ao carregar produtos.");
-      }
-      const nextProducts = payload.products || [];
       setProducts(nextProducts);
       writeCache(productsListCache, guildId, nextProducts);
+      writeClientCache(getProductsCacheKey(guildId), nextProducts);
       nextProducts.forEach((product) => {
         writeCache(productDetailCache, `${guildId}:${product.code}`, product);
+        writeClientCache(getProductCacheKey(guildId, product.code), product);
       });
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Erro ao carregar produtos.",
-      );
+      if (!persistentCached) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Erro ao carregar produtos.",
+        );
+      }
     } finally {
       setIsLoading(false);
     }
@@ -599,6 +637,218 @@ function ProductEditorSkeleton() {
   );
 }
 
+function normalizeTag(value: string) {
+  return value.trim().replace(/\s+/g, " ").slice(0, 32);
+}
+
+function sameTag(left: string, right: string) {
+  return left.localeCompare(right, "pt-BR", { sensitivity: "base" }) === 0;
+}
+
+function ProductTagsInput({
+  value,
+  onChange,
+  suggestions,
+  disabled,
+}: {
+  value: string[];
+  onChange: (tags: string[]) => void;
+  suggestions: string[];
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointer(event: MouseEvent) {
+      if (
+        rootRef.current &&
+        event.target instanceof Node &&
+        !rootRef.current.contains(event.target)
+      ) {
+        const nextTag = normalizeTag(query);
+        if (nextTag) addTag(nextTag);
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointer);
+    return () => document.removeEventListener("mousedown", handlePointer);
+  }, [open, query]);
+
+  const addTag = useCallback(
+    (rawTag: string) => {
+      const nextTag = normalizeTag(rawTag);
+      if (!nextTag || value.some((tag) => sameTag(tag, nextTag))) {
+        setQuery("");
+        return;
+      }
+      onChange([...value, nextTag]);
+      setQuery("");
+      setOpen(true);
+    },
+    [onChange, value],
+  );
+
+  const removeTag = useCallback(
+    (tagToRemove: string) => {
+      onChange(value.filter((tag) => !sameTag(tag, tagToRemove)));
+    },
+    [onChange, value],
+  );
+
+  const availableSuggestions = useMemo(
+    () =>
+      suggestions
+        .filter((tag) => !value.some((selected) => sameTag(selected, tag)))
+        .filter((tag, index, list) => list.findIndex((item) => sameTag(item, tag)) === index),
+    [suggestions, value],
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredSuggestions = useMemo(
+    () =>
+      normalizedQuery
+        ? availableSuggestions.filter((tag) => tag.toLowerCase().includes(normalizedQuery))
+        : availableSuggestions,
+    [availableSuggestions, normalizedQuery],
+  );
+  const frequentSuggestions = filteredSuggestions.slice(0, 5);
+  const otherSuggestions = filteredSuggestions.slice(5);
+  const canAddQuery =
+    Boolean(normalizeTag(query)) &&
+    !value.some((tag) => sameTag(tag, query)) &&
+    !availableSuggestions.some((tag) => sameTag(tag, query));
+
+  return (
+    <div ref={rootRef} className={open ? "relative z-[140]" : "relative"}>
+      <div
+        className={`min-h-[42px] rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[10px] py-[7px] transition ${
+          open ? "border-[#4A4A4A]" : ""
+        } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
+        onClick={() => {
+          if (!disabled) setOpen(true);
+        }}
+      >
+        <div className="flex flex-wrap items-center gap-[6px]">
+          {value.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex max-w-full items-center gap-[6px] rounded-[11px] border border-[#2A2A2A] bg-[#171717] px-[9px] py-[5px] text-[12px] text-[#E7E7E7]"
+            >
+              <span className="max-w-[170px] truncate">{tag}</span>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  removeTag(tag);
+                }}
+                disabled={disabled}
+                aria-label={`Remover tag ${tag}`}
+                className="text-[#8A8A8A] transition hover:text-white"
+              >
+                <X className="h-[12px] w-[12px]" />
+              </button>
+            </span>
+          ))}
+          <div className="flex min-w-[160px] flex-1 items-center gap-[8px]">
+            <SearchIcon className="h-[15px] w-[15px] text-[#777]" />
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setOpen(true);
+              }}
+              onFocus={() => setOpen(true)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === ",") {
+                  event.preventDefault();
+                  addTag(query);
+                } else if (event.key === "Backspace" && !query && value.length) {
+                  removeTag(value[value.length - 1]);
+                } else if (event.key === "Escape") {
+                  setOpen(false);
+                }
+              }}
+              onBlur={() => {
+                window.setTimeout(() => {
+                  if (rootRef.current?.contains(document.activeElement)) return;
+                  const nextTag = normalizeTag(query);
+                  if (nextTag) addTag(nextTag);
+                  setOpen(false);
+                }, 120);
+              }}
+              disabled={disabled}
+              placeholder={value.length ? "Adicionar tag" : "Pesquisar ou adicionar tags"}
+              className="h-[26px] min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
+            />
+          </div>
+        </div>
+      </div>
+      {open && !disabled ? (
+        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[160] overflow-hidden rounded-[18px] border border-[#222] bg-[#080808] shadow-[0_24px_70px_rgba(0,0,0,0.52)]">
+          <div className="thin-scrollbar max-h-[318px] overflow-y-auto p-[8px]">
+            {canAddQuery ? (
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => addTag(query)}
+                className="flex w-full items-center gap-[9px] rounded-[13px] px-[11px] py-[10px] text-left text-[13px] font-semibold text-[#F1F1F1] transition hover:bg-[#141414]"
+              >
+                <CirclePlus className="h-[16px] w-[16px]" />
+                Adicionar "{normalizeTag(query)}"
+              </button>
+            ) : null}
+            {!canAddQuery && !filteredSuggestions.length ? (
+              <p className="px-[11px] py-[10px] text-[13px] text-[#777]">0 resultado</p>
+            ) : null}
+            {frequentSuggestions.length ? (
+              <div className={canAddQuery ? "mt-[8px]" : ""}>
+                <p className="px-[11px] pb-[6px] pt-[4px] text-[12px] font-semibold text-[#8A8A8A]">
+                  Usados com frequencia
+                </p>
+                {frequentSuggestions.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => addTag(tag)}
+                    className="flex w-full items-center gap-[9px] rounded-[13px] px-[11px] py-[9px] text-left text-[13px] text-[#D8D8D8] transition hover:bg-[#141414]"
+                  >
+                    <span className="h-[18px] w-[18px] rounded-[5px] border border-[#666]" />
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {otherSuggestions.length ? (
+              <div className="mt-[8px]">
+                <p className="px-[11px] pb-[6px] pt-[4px] text-[12px] font-semibold text-[#8A8A8A]">
+                  Outras tags
+                </p>
+                {otherSuggestions.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => addTag(tag)}
+                    className="flex w-full items-center gap-[9px] rounded-[13px] px-[11px] py-[9px] text-left text-[13px] text-[#D8D8D8] transition hover:bg-[#141414]"
+                  >
+                    <span className="h-[18px] w-[18px] rounded-[5px] border border-[#666]" />
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function SalesProductCreatePanel({
   guildId,
   readOnly = false,
@@ -633,7 +883,7 @@ export function SalesProductCreatePanel({
   const [barcode, setBarcode] = useState(generateBarcode("flowdesk"));
   const [productType, setProductType] = useState("");
   const [manufacturer, setManufacturer] = useState("");
-  const [tagsText, setTagsText] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [discordPublicationMode, setDiscordPublicationMode] =
     useState<ProductDiscordPublicationMode>("online_only");
   const [discordChannelId, setDiscordChannelId] = useState("");
@@ -647,26 +897,36 @@ export function SalesProductCreatePanel({
 
     async function loadCategories() {
       const cached = readCache(categoriesCache, guildId);
-      if (cached) {
-        setCategories(cached);
+      const persistentCached =
+        cached ||
+        readClientCache<SalesCategory[]>(getCategoriesCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
+      if (persistentCached) {
+        setCategories(persistentCached);
+        writeCache(categoriesCache, guildId, persistentCached);
         setIsLoadingCategories(false);
-        return;
       }
 
-      setIsLoadingCategories(true);
+      if (!persistentCached) setIsLoadingCategories(true);
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}`,
-          { credentials: "include", cache: "no-store" },
+        const nextCategories = await coalescedClientFetch(
+          getCategoriesCacheKey(guildId),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as CategoriesResponse;
+            if (!response.ok || !payload.ok) return [];
+            return payload.categories || [];
+          },
         );
-        const payload = (await response.json().catch(() => ({}))) as CategoriesResponse;
-        if (!cancelled && response.ok && payload.ok) {
-          const nextCategories = payload.categories || [];
+        if (!cancelled) {
           setCategories(nextCategories);
           writeCache(categoriesCache, guildId, nextCategories);
+          writeClientCache(getCategoriesCacheKey(guildId), nextCategories);
         }
       } catch {
-        if (!cancelled) setCategories([]);
+        if (!cancelled && !persistentCached) setCategories([]);
       } finally {
         if (!cancelled) setIsLoadingCategories(false);
       }
@@ -683,26 +943,36 @@ export function SalesProductCreatePanel({
 
     async function loadChannels() {
       const cached = readCache(channelsCache, guildId);
-      if (cached) {
-        setDiscordChannels(cached);
+      const persistentCached =
+        cached ||
+        readClientCache<DiscordChannel[]>(getChannelsCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
+      if (persistentCached) {
+        setDiscordChannels(persistentCached);
+        writeCache(channelsCache, guildId, persistentCached);
         setIsLoadingChannels(false);
-        return;
       }
 
-      setIsLoadingChannels(true);
+      if (!persistentCached) setIsLoadingChannels(true);
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
-          { credentials: "include", cache: "no-store" },
+        const nextChannels = await coalescedClientFetch(
+          getChannelsCacheKey(guildId),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+            if (!response.ok || !payload.ok) return [];
+            return payload.channels?.text || [];
+          },
         );
-        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
-        if (!cancelled && response.ok && payload.ok) {
-          const nextChannels = payload.channels?.text || [];
+        if (!cancelled) {
           setDiscordChannels(nextChannels);
           writeCache(channelsCache, guildId, nextChannels);
+          writeClientCache(getChannelsCacheKey(guildId), nextChannels);
         }
       } catch {
-        if (!cancelled) setDiscordChannels([]);
+        if (!cancelled && !persistentCached) setDiscordChannels([]);
       } finally {
         if (!cancelled) setIsLoadingChannels(false);
       }
@@ -728,7 +998,12 @@ export function SalesProductCreatePanel({
 
     async function loadProduct() {
       const cacheKey = `${guildId}:${safeProductCode}`;
-      const cached = readCache(productDetailCache, cacheKey);
+      const cached =
+        readCache(productDetailCache, cacheKey) ||
+        readClientCache<SalesProduct>(
+          getProductCacheKey(guildId, safeProductCode),
+          SALES_PRODUCTS_STALE_TTL_MS,
+        );
       if (cached) {
         setTitle(cached.title);
         setDescription(cached.description || "");
@@ -752,33 +1027,39 @@ export function SalesProductCreatePanel({
         setBarcode(cached.barcode || generateBarcode(cached.title));
         setProductType(cached.productType || "");
         setManufacturer(cached.manufacturer || "");
-        setTagsText((cached.tags || []).join(", "));
+        setTags(cached.tags || []);
         setDiscordPublicationMode(
           cached.discordPublicationMode === "channel" ? "channel" : "online_only",
         );
         setDiscordChannelId(cached.discordChannelId || "");
         setPublishedVirtualStore(cached.publishedVirtualStore !== false);
+        writeCache(productDetailCache, cacheKey, cached);
         setIsLoadingProduct(false);
-        return;
       }
 
-      setIsLoadingProduct(true);
+      if (!cached) setIsLoadingProduct(true);
       setStatusMessage(null);
 
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}&productCode=${encodeURIComponent(safeProductCode)}`,
-          { credentials: "include", cache: "no-store" },
-        );
-        const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
+        const product = await coalescedClientFetch(
+          getProductCacheKey(guildId, safeProductCode),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}&productCode=${encodeURIComponent(safeProductCode)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
 
-        if (!response.ok || !payload.ok || !payload.product) {
-          throw new Error(payload.message || "Produto nao encontrado.");
-        }
+            if (!response.ok || !payload.ok || !payload.product) {
+              throw new Error(payload.message || "Produto nao encontrado.");
+            }
+
+            return payload.product;
+          },
+        );
 
         if (cancelled) return;
 
-        const product = payload.product;
         setTitle(product.title);
         setDescription(product.description || "");
         setStatus(product.status);
@@ -801,18 +1082,21 @@ export function SalesProductCreatePanel({
         setBarcode(product.barcode || generateBarcode(product.title));
         setProductType(product.productType || "");
         setManufacturer(product.manufacturer || "");
-        setTagsText((product.tags || []).join(", "));
+        setTags(product.tags || []);
         setDiscordPublicationMode(
           product.discordPublicationMode === "channel" ? "channel" : "online_only",
         );
         setDiscordChannelId(product.discordChannelId || "");
         setPublishedVirtualStore(product.publishedVirtualStore !== false);
         writeCache(productDetailCache, `${guildId}:${safeProductCode}`, product);
+        writeClientCache(getProductCacheKey(guildId, safeProductCode), product);
       } catch (error) {
         if (cancelled) return;
-        setStatusMessage(
-          error instanceof Error ? error.message : "Erro ao carregar produto.",
-        );
+        if (!cached) {
+          setStatusMessage(
+            error instanceof Error ? error.message : "Erro ao carregar produto.",
+          );
+        }
       } finally {
         if (!cancelled) setIsLoadingProduct(false);
       }
@@ -855,6 +1139,30 @@ export function SalesProductCreatePanel({
       >,
     [discordChannels],
   );
+  const tagSuggestions = useMemo(() => {
+    const counts = new Map<string, number>();
+    const add = (tag: string | null | undefined, weight = 1) => {
+      const normalized = normalizeTag(tag || "");
+      if (!normalized) return;
+      const existingKey =
+        Array.from(counts.keys()).find((item) => sameTag(item, normalized)) || normalized;
+      counts.set(existingKey, (counts.get(existingKey) || 0) + weight);
+    };
+
+    tags.forEach((tag) => add(tag, 4));
+    if (productType) add(productType, 2);
+    if (manufacturer) add(manufacturer, 2);
+    categories.forEach((category) => add(category.title, 1));
+    productsListCache.get(guildId)?.data.forEach((product) => {
+      product.tags?.forEach((tag) => add(tag, 3));
+      add(product.productType, 1);
+      add(product.manufacturer, 1);
+    });
+
+    return Array.from(counts.entries())
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
+      .map(([tag]) => tag);
+  }, [categories, guildId, manufacturer, productType, tags]);
 
   const isEditMode = mode === "edit";
   const isFormLoading = isLoadingProduct || isLoadingCategories;
@@ -932,10 +1240,7 @@ export function SalesProductCreatePanel({
           barcodeMode,
           productType,
           manufacturer,
-          tags: tagsText
-            .split(",")
-            .map((tag) => tag.trim())
-            .filter(Boolean),
+          tags,
           themeModel: "default",
           discordPublicationMode,
           discordChannelId:
@@ -983,7 +1288,7 @@ export function SalesProductCreatePanel({
     sku,
     status,
     stockQuantity,
-    tagsText,
+    tags,
     title,
     unitPriceAmount,
   ]);
@@ -1332,11 +1637,13 @@ export function SalesProductCreatePanel({
                 className="h-[42px]"
                 disabled={controlsDisabled}
               />
-              <ServerTextInput
-                value={tagsText}
-                onChange={(event) => setTagsText(event.target.value)}
-                placeholder="Tags separadas por virgula"
-                className="h-[42px]"
+              <ProductTagsInput
+                value={tags}
+                onChange={(nextTags) => {
+                  setTags(nextTags);
+                  setStatusMessage(null);
+                }}
+                suggestions={tagSuggestions}
                 disabled={controlsDisabled}
               />
             </div>

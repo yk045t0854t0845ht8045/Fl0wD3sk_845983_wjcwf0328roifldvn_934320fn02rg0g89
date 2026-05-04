@@ -30,6 +30,12 @@ import {
   ServerTextInput,
 } from "@/components/servers/ServerUi";
 import { SalesDescriptionEditor } from "@/components/servers/sales/SalesDescriptionEditor";
+import {
+  coalescedClientFetch,
+  invalidateClientCache,
+  readClientCache,
+  writeClientCache,
+} from "@/lib/sales/clientCache";
 
 type SalesCategory = {
   id: string;
@@ -104,7 +110,8 @@ const discordPublicationLabel = {
   channel: "Categoria Discord",
 } as const;
 const productSortOptions = ["Mais relevantes", "Mais recentes", "A-Z"] as const;
-const CATEGORY_PRODUCTS_CACHE_TTL_MS = 45_000;
+const CATEGORY_PRODUCTS_CACHE_TTL_MS = 5 * 60_000;
+const CATEGORY_STALE_TTL_MS = 24 * 60 * 60_000;
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -113,6 +120,8 @@ type CacheEntry<T> = {
 
 const categoryProductsCache = new Map<string, CacheEntry<SalesCategoryProduct[]>>();
 const categoryChannelsCache = new Map<string, CacheEntry<DiscordChannel[]>>();
+const categoriesListCache = new Map<string, CacheEntry<SalesCategory[]>>();
+const categoryDetailCache = new Map<string, CacheEntry<SalesCategory>>();
 
 function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
   const entry = cache.get(key);
@@ -126,6 +135,31 @@ function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
 
 function writeCache<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T) {
   cache.set(key, { data, expiresAt: Date.now() + CATEGORY_PRODUCTS_CACHE_TTL_MS });
+}
+
+function getCategoriesCacheKey(guildId: string) {
+  return `flowdesk_sales_categories:${guildId}`;
+}
+
+function getCategoryCacheKey(guildId: string, categoryCode: string) {
+  return `flowdesk_sales_category:${guildId}:${categoryCode}`;
+}
+
+function getCategoryProductsCacheKey(guildId: string, categoryId: string) {
+  return `flowdesk_sales_category_products:${guildId}:${categoryId}`;
+}
+
+function getChannelsCacheKey(guildId: string) {
+  return `flowdesk_sales_channels:${guildId}`;
+}
+
+function invalidateCategoryCaches(guildId: string) {
+  categoriesListCache.delete(guildId);
+  for (const key of categoryDetailCache.keys()) {
+    if (key.startsWith(`${guildId}:`)) categoryDetailCache.delete(key);
+  }
+  invalidateClientCache(`flowdesk_sales_categories:${guildId}`);
+  invalidateClientCache(`flowdesk_sales_category:${guildId}:`);
 }
 
 function getCategoriesPath(guildId: string) {
@@ -170,26 +204,50 @@ export function SalesCategoriesListPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadCategories = useCallback(async () => {
-    setIsLoading(true);
+    const cached =
+      readCache(categoriesListCache, guildId) ||
+      readClientCache<SalesCategory[]>(getCategoriesCacheKey(guildId), CATEGORY_STALE_TTL_MS);
+    if (cached) {
+      setCategories(cached);
+      writeCache(categoriesListCache, guildId, cached);
+      setIsLoading(false);
+      setErrorMessage(null);
+    } else {
+      setIsLoading(true);
+    }
     setErrorMessage(null);
 
     try {
-      const response = await fetch(
-        `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}`,
-        {
-          credentials: "include",
-          cache: "no-store",
+      const nextCategories = await coalescedClientFetch(
+        getCategoriesCacheKey(guildId),
+        async () => {
+          const response = await fetch(
+            `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}`,
+            {
+              credentials: "include",
+              cache: "no-store",
+            },
+          );
+          const payload = (await response.json().catch(() => ({}))) as SalesCategoriesResponse;
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || "Erro ao carregar categorias.");
+          }
+          return payload.categories || [];
         },
       );
-      const payload = (await response.json().catch(() => ({}))) as SalesCategoriesResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "Erro ao carregar categorias.");
-      }
-      setCategories(payload.categories || []);
+      setCategories(nextCategories);
+      writeCache(categoriesListCache, guildId, nextCategories);
+      writeClientCache(getCategoriesCacheKey(guildId), nextCategories);
+      nextCategories.forEach((category) => {
+        writeCache(categoryDetailCache, `${guildId}:${category.code}`, category);
+        writeClientCache(getCategoryCacheKey(guildId, category.code), category);
+      });
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Erro ao carregar categorias.",
-      );
+      if (!cached) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Erro ao carregar categorias.",
+        );
+      }
     } finally {
       setIsLoading(false);
     }
@@ -439,26 +497,57 @@ export function SalesCategoryCreatePanel({
     let cancelled = false;
 
     async function loadCategory() {
-      setIsLoadingCategory(true);
+      const cacheKey = `${guildId}:${safeCategoryCode}`;
+      const cached =
+        readCache(categoryDetailCache, cacheKey) ||
+        readClientCache<SalesCategory>(
+          getCategoryCacheKey(guildId, safeCategoryCode),
+          CATEGORY_STALE_TTL_MS,
+        );
+      if (cached) {
+        setSelectedCategoryId(cached.id);
+        setTitle(cached.title);
+        setDescription(cached.description || "");
+        setCollectionType(cached.collectionType);
+        setDiscordPublicationMode(
+          cached.discordPublicationMode === "channel" ? "channel" : "online_only",
+        );
+        setDiscordChannelId(cached.discordChannelId || "");
+        setPublishedVirtualStore(cached.publishedVirtualStore);
+        setSeoTitle(cached.seoTitle || cached.title);
+        setSeoDescription(cached.seoDescription || "");
+        setImagePreviewUrl(cached.imageUrl || null);
+        setImageName(cached.imageUrl ? "Imagem atual" : null);
+        writeCache(categoryDetailCache, cacheKey, cached);
+        setIsLoadingCategory(false);
+      } else {
+        setIsLoadingCategory(true);
+      }
       setStatusMessage(null);
 
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}&categoryCode=${encodeURIComponent(safeCategoryCode)}`,
-          {
-            credentials: "include",
-            cache: "no-store",
+        const category = await coalescedClientFetch(
+          getCategoryCacheKey(guildId, safeCategoryCode),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/sales-categories?guildId=${encodeURIComponent(guildId)}&categoryCode=${encodeURIComponent(safeCategoryCode)}`,
+              {
+                credentials: "include",
+                cache: "no-store",
+              },
+            );
+            const payload = (await response.json().catch(() => ({}))) as SalesCategoryCreateResponse;
+
+            if (!response.ok || !payload.ok || !payload.category) {
+              throw new Error(payload.message || "Categoria nao encontrada.");
+            }
+
+            return payload.category;
           },
         );
-        const payload = (await response.json().catch(() => ({}))) as SalesCategoryCreateResponse;
-
-        if (!response.ok || !payload.ok || !payload.category) {
-          throw new Error(payload.message || "Categoria nao encontrada.");
-        }
 
         if (cancelled) return;
 
-        const category = payload.category;
         setSelectedCategoryId(category.id);
         setTitle(category.title);
         setDescription(category.description || "");
@@ -472,11 +561,15 @@ export function SalesCategoryCreatePanel({
         setSeoDescription(category.seoDescription || "");
         setImagePreviewUrl(category.imageUrl || null);
         setImageName(category.imageUrl ? "Imagem atual" : null);
+        writeCache(categoryDetailCache, cacheKey, category);
+        writeClientCache(getCategoryCacheKey(guildId, safeCategoryCode), category);
       } catch (error) {
         if (cancelled) return;
-        setStatusMessage(
-          error instanceof Error ? error.message : "Erro ao carregar categoria.",
-        );
+        if (!cached) {
+          setStatusMessage(
+            error instanceof Error ? error.message : "Erro ao carregar categoria.",
+          );
+        }
       } finally {
         if (!cancelled) setIsLoadingCategory(false);
       }
@@ -496,38 +589,49 @@ export function SalesCategoryCreatePanel({
     }
 
     const cacheKey = `${guildId}:${selectedCategoryId}`;
-    const cached = readCache(categoryProductsCache, cacheKey);
+    const persistentKey = getCategoryProductsCacheKey(guildId, selectedCategoryId);
+    const cached =
+      readCache(categoryProductsCache, cacheKey) ||
+      readClientCache<SalesCategoryProduct[]>(persistentKey, CATEGORY_STALE_TTL_MS);
     if (cached) {
       setCategoryProducts(cached);
+      writeCache(categoryProductsCache, cacheKey, cached);
       setIsLoadingCategoryProducts(false);
-      return;
     }
 
     let cancelled = false;
 
     async function loadCategoryProducts() {
-      setIsLoadingCategoryProducts(true);
+      if (!cached) setIsLoadingCategoryProducts(true);
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}&categoryId=${encodeURIComponent(selectedCategoryId)}`,
-          { credentials: "include", cache: "no-store" },
+        const nextProducts = await coalescedClientFetch(
+          persistentKey,
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}&categoryId=${encodeURIComponent(selectedCategoryId)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as SalesCategoryProductsResponse;
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.message || "Erro ao carregar produtos da categoria.");
+            }
+            return payload.products || [];
+          },
         );
-        const payload = (await response.json().catch(() => ({}))) as SalesCategoryProductsResponse;
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.message || "Erro ao carregar produtos da categoria.");
-        }
         if (cancelled) return;
-        const nextProducts = payload.products || [];
         setCategoryProducts(nextProducts);
         writeCache(categoryProductsCache, cacheKey, nextProducts);
+        writeClientCache(persistentKey, nextProducts);
       } catch (error) {
         if (cancelled) return;
-        setStatusMessage(
-          error instanceof Error
-            ? error.message
-            : "Erro ao carregar produtos da categoria.",
-        );
-        setCategoryProducts([]);
+        if (!cached) {
+          setStatusMessage(
+            error instanceof Error
+              ? error.message
+              : "Erro ao carregar produtos da categoria.",
+          );
+          setCategoryProducts([]);
+        }
       } finally {
         if (!cancelled) setIsLoadingCategoryProducts(false);
       }
@@ -567,30 +671,39 @@ export function SalesCategoryCreatePanel({
   }, [isDiscordMenuOpen]);
 
   useEffect(() => {
-    const cached = readCache(categoryChannelsCache, guildId);
+    const cached =
+      readCache(categoryChannelsCache, guildId) ||
+      readClientCache<DiscordChannel[]>(getChannelsCacheKey(guildId), CATEGORY_STALE_TTL_MS);
     if (cached) {
       setDiscordChannels(cached);
+      writeCache(categoryChannelsCache, guildId, cached);
       setIsLoadingChannels(false);
-      return;
     }
 
     let cancelled = false;
 
     async function loadChannels() {
-      setIsLoadingChannels(true);
+      if (!cached) setIsLoadingChannels(true);
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
-          { credentials: "include", cache: "no-store" },
+        const nextChannels = await coalescedClientFetch(
+          getChannelsCacheKey(guildId),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+            if (!response.ok || !payload.ok) return [];
+            return payload.channels?.text || [];
+          },
         );
-        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
-        if (!cancelled && response.ok && payload.ok) {
-          const nextChannels = payload.channels?.text || [];
+        if (!cancelled) {
           setDiscordChannels(nextChannels);
           writeCache(categoryChannelsCache, guildId, nextChannels);
+          writeClientCache(getChannelsCacheKey(guildId), nextChannels);
         }
       } catch {
-        if (!cancelled) setDiscordChannels([]);
+        if (!cancelled && !cached) setDiscordChannels([]);
       } finally {
         if (!cancelled) setIsLoadingChannels(false);
       }
@@ -718,6 +831,7 @@ export function SalesCategoryCreatePanel({
         throw new Error(payload.message || "Erro ao salvar categoria.");
       }
 
+      invalidateCategoryCaches(guildId);
       router.push(getCategoriesPath(guildId));
       router.refresh();
     } catch (error) {
@@ -1089,7 +1203,7 @@ export function SalesCategoryCreatePanel({
             ) : null}
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[20px]">
+          <ServerSurface className="relative z-[140] p-[18px] sm:p-[20px]">
             <div className="flex items-center justify-between gap-[12px]">
               <label className="block text-[14px] font-semibold text-[#E2E2E2]">
                 Categoria Discord
@@ -1112,7 +1226,7 @@ export function SalesCategoryCreatePanel({
                 />
               </button>
               {isDiscordMenuOpen ? (
-                <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[120] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+                <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[260] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
                   {(Object.entries(discordPublicationLabel) as Array<["online_only" | "channel", string]>).map(([value, label]) => {
                     const isSelected = value === discordPublicationMode;
                     return (
