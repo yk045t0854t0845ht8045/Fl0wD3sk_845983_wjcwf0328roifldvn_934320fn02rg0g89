@@ -282,6 +282,10 @@ export function SalesDescriptionEditor({
   placeholder: string;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const historyRef = useRef<{ past: string[]; future: string[] }>({
+    past: [],
+    future: [],
+  });
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
@@ -290,6 +294,59 @@ export function SalesDescriptionEditor({
   const safeHighlightColor = useMemo(
     () => (isHexColor(highlightColor) ? highlightColor : "#F5D04C"),
     [highlightColor],
+  );
+
+  const restoreTextareaSelection = useCallback((position: number) => {
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const safePosition = Math.max(0, Math.min(position, textarea.value.length));
+      textarea.focus();
+      textarea.setSelectionRange(safePosition, safePosition);
+    });
+  }, []);
+
+  const commitEditorValue = useCallback(
+    (nextValue: string, options: { remember?: boolean; selectionPosition?: number } = {}) => {
+      const clippedValue = nextValue.slice(0, maxLength);
+      if (clippedValue === value) return;
+
+      if (options.remember !== false) {
+        const history = historyRef.current;
+        if (history.past[history.past.length - 1] !== value) {
+          history.past = [...history.past, value].slice(-80);
+        }
+        history.future = [];
+      }
+
+      onChange(clippedValue);
+      if (typeof options.selectionPosition === "number") {
+        restoreTextareaSelection(options.selectionPosition);
+      }
+    },
+    [maxLength, onChange, restoreTextareaSelection, value],
+  );
+
+  const undoEditorValue = useCallback(
+    (direction: "undo" | "redo") => {
+      const history = historyRef.current;
+      const source = direction === "undo" ? history.past : history.future;
+      if (!source.length) return false;
+
+      const nextValue = source[source.length - 1];
+      if (direction === "undo") {
+        history.past = source.slice(0, -1);
+        history.future = [value, ...history.future].slice(0, 80);
+      } else {
+        history.future = source.slice(1);
+        history.past = [...history.past, value].slice(-80);
+      }
+
+      onChange(nextValue);
+      restoreTextareaSelection(nextValue.length);
+      return true;
+    },
+    [onChange, restoreTextareaSelection, value],
   );
 
   const applyFormat = useCallback(
@@ -355,19 +412,16 @@ export function SalesDescriptionEditor({
         replacement = `\`${source}\``;
       }
 
-      const nextValue = `${value.slice(0, start)}${replacement}${value.slice(end)}`.slice(
-        0,
-        maxLength,
-      );
-      onChange(nextValue);
+      const nextValue = `${value.slice(0, start)}${replacement}${value.slice(end)}`;
+      const selectionStart = Math.min(start + replacement.length, maxLength);
+      commitEditorValue(nextValue, { selectionPosition: selectionStart });
 
       window.requestAnimationFrame(() => {
         textareaRef.current?.focus();
-        const selectionStart = start + replacement.length;
         textareaRef.current?.setSelectionRange(selectionStart, selectionStart);
       });
     },
-    [disabled, maxLength, onChange, safeHighlightColor, value],
+    [commitEditorValue, disabled, maxLength, safeHighlightColor, value],
   );
 
   const generateDescription = useCallback(async () => {
@@ -394,7 +448,9 @@ export function SalesDescriptionEditor({
         throw new Error(payload.message || "Falha ao gerar descricao com IA.");
       }
 
-      onChange(payload.description.slice(0, maxLength));
+      commitEditorValue(payload.description, {
+        selectionPosition: payload.description.slice(0, maxLength).length,
+      });
     } catch (error) {
       setAiMessage(
         error instanceof Error ? error.message : "Falha ao gerar descricao com IA.",
@@ -402,7 +458,7 @@ export function SalesDescriptionEditor({
     } finally {
       setIsGenerating(false);
     }
-  }, [disabled, guildId, isGenerating, kind, maxLength, onChange, title, value]);
+  }, [commitEditorValue, disabled, guildId, isGenerating, kind, maxLength, title, value]);
 
   return (
     <div className="mt-[10px] overflow-hidden rounded-[16px] border border-[#252525] bg-[#0D0D0D]">
@@ -513,12 +569,23 @@ export function SalesDescriptionEditor({
       <textarea
         ref={textareaRef}
         value={value}
-        onChange={(event) => onChange(event.target.value.slice(0, maxLength))}
+        onChange={(event) => commitEditorValue(event.target.value)}
+        onKeyDown={(event) => {
+          const key = event.key.toLowerCase();
+          const isModifier = event.ctrlKey || event.metaKey;
+          if (!isModifier || event.altKey) return;
+
+          if (key === "z" && !event.shiftKey) {
+            if (undoEditorValue("undo")) event.preventDefault();
+          } else if (key === "y" || (key === "z" && event.shiftKey)) {
+            if (undoEditorValue("redo")) event.preventDefault();
+          }
+        }}
         maxLength={maxLength}
         rows={9}
         disabled={disabled}
         placeholder={placeholder}
-        className="min-h-[224px] w-full resize-y bg-transparent px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none placeholder:text-[#5D5D5D] disabled:cursor-not-allowed disabled:opacity-60"
+        className="flowdesk-description-textarea min-h-[224px] w-full resize-y bg-transparent px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none placeholder:text-[#5D5D5D] focus:bg-transparent disabled:cursor-not-allowed disabled:opacity-60"
       />
       {aiMessage ? (
         <div className="border-t border-[#241A12] bg-[#130D08] px-[14px] py-[10px] text-[12px] text-[#EFB47B]">
