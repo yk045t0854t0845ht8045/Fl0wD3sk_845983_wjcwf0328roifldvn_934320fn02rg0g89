@@ -2522,7 +2522,9 @@ export function DashboardWorkspace({
         ) : null}
       </div>
 
-      {renderProfileCard(profileRef)}
+      <div className="mt-auto shrink-0 pt-[14px]">
+        {renderProfileCard(profileRef)}
+      </div>
     </div>
   );
 

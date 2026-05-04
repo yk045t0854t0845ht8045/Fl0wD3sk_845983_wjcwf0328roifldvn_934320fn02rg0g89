@@ -118,6 +118,38 @@ const discordPublicationLabel: Record<ProductDiscordPublicationMode, string> = {
   online_only: "Somente online",
   channel: "Canal Discord",
 };
+const SALES_PRODUCTS_CACHE_TTL_MS = 45_000;
+
+type CacheEntry<T> = {
+  expiresAt: number;
+  data: T;
+};
+
+const productsListCache = new Map<string, CacheEntry<SalesProduct[]>>();
+const productDetailCache = new Map<string, CacheEntry<SalesProduct>>();
+const categoriesCache = new Map<string, CacheEntry<SalesCategory[]>>();
+const channelsCache = new Map<string, CacheEntry<DiscordChannel[]>>();
+
+function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function writeCache<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T) {
+  cache.set(key, { data, expiresAt: Date.now() + SALES_PRODUCTS_CACHE_TTL_MS });
+}
+
+function invalidateProductCaches(guildId: string) {
+  productsListCache.delete(guildId);
+  for (const key of productDetailCache.keys()) {
+    if (key.startsWith(`${guildId}:`)) productDetailCache.delete(key);
+  }
+}
 
 function getProductsPath(guildId: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/products/`;
@@ -171,6 +203,17 @@ function generateBarcode(seed: string) {
 
 function revokeObjectUrl(url: string | null) {
   if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.onerror = () => reject(new Error("Nao foi possivel ler a imagem."));
+    reader.readAsDataURL(file);
+  });
 }
 
 function InlineSwitch({
@@ -239,14 +282,29 @@ function SelectMenu<T extends string>({
   options,
   onChange,
   disabled,
+  maxVisibleItems,
 }: {
   value: T;
   options: Array<[T, string]>;
   onChange: (value: T) => void;
   disabled?: boolean;
+  maxVisibleItems?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [openDirection, setOpenDirection] = useState<"down" | "up">("down");
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const resolveOpenDirection = useCallback(() => {
+    const bounds = menuRef.current?.getBoundingClientRect();
+    if (!bounds) return "down";
+    const availableBelow = window.innerHeight - bounds.bottom;
+    const availableAbove = bounds.top;
+    const estimatedHeight =
+      Math.min(options.length, maxVisibleItems || options.length) * 42 + 16;
+    return availableBelow < estimatedHeight && availableAbove > availableBelow
+      ? "up"
+      : "down";
+  }, [maxVisibleItems, options.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -269,7 +327,10 @@ function SelectMenu<T extends string>({
     <div ref={menuRef} className={open ? "relative z-[220]" : "relative z-[1]"}>
       <button
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (!open) setOpenDirection(resolveOpenDirection());
+          setOpen((current) => !current);
+        }}
         disabled={disabled}
         className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] transition hover:border-[#444] disabled:cursor-not-allowed disabled:opacity-55"
       >
@@ -279,7 +340,19 @@ function SelectMenu<T extends string>({
         />
       </button>
       {open ? (
-        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[120] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+        <div
+          className={`flowdesk-scale-in-soft absolute left-0 right-0 z-[120] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)] ${
+            openDirection === "up" ? "bottom-[50px]" : "top-[50px]"
+          }`}
+        >
+          <div
+            className="thin-scrollbar overflow-y-auto pr-[2px]"
+            style={
+              maxVisibleItems
+                ? { maxHeight: `${maxVisibleItems * 42 + 10}px` }
+                : undefined
+            }
+          >
           {options.map(([option, label]) => (
             <button
               key={option}
@@ -298,6 +371,7 @@ function SelectMenu<T extends string>({
               {option === value ? <Check className="h-[15px] w-[15px]" /> : null}
             </button>
           ))}
+          </div>
         </div>
       ) : null}
     </div>
@@ -315,6 +389,14 @@ export function SalesProductsListPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadProducts = useCallback(async () => {
+    const cached = readCache(productsListCache, guildId);
+    if (cached) {
+      setProducts(cached);
+      setIsLoading(false);
+      setErrorMessage(null);
+      return;
+    }
+
     setIsLoading(true);
     setErrorMessage(null);
 
@@ -327,7 +409,12 @@ export function SalesProductsListPanel({
       if (!response.ok || !payload.ok) {
         throw new Error(payload.message || "Erro ao carregar produtos.");
       }
-      setProducts(payload.products || []);
+      const nextProducts = payload.products || [];
+      setProducts(nextProducts);
+      writeCache(productsListCache, guildId, nextProducts);
+      nextProducts.forEach((product) => {
+        writeCache(productDetailCache, `${guildId}:${product.code}`, product);
+      });
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Erro ao carregar produtos.",
@@ -561,6 +648,13 @@ export function SalesProductCreatePanel({
     let cancelled = false;
 
     async function loadCategories() {
+      const cached = readCache(categoriesCache, guildId);
+      if (cached) {
+        setCategories(cached);
+        setIsLoadingCategories(false);
+        return;
+      }
+
       setIsLoadingCategories(true);
       try {
         const response = await fetch(
@@ -569,7 +663,9 @@ export function SalesProductCreatePanel({
         );
         const payload = (await response.json().catch(() => ({}))) as CategoriesResponse;
         if (!cancelled && response.ok && payload.ok) {
-          setCategories(payload.categories || []);
+          const nextCategories = payload.categories || [];
+          setCategories(nextCategories);
+          writeCache(categoriesCache, guildId, nextCategories);
         }
       } catch {
         if (!cancelled) setCategories([]);
@@ -588,6 +684,13 @@ export function SalesProductCreatePanel({
     let cancelled = false;
 
     async function loadChannels() {
+      const cached = readCache(channelsCache, guildId);
+      if (cached) {
+        setDiscordChannels(cached);
+        setIsLoadingChannels(false);
+        return;
+      }
+
       setIsLoadingChannels(true);
       try {
         const response = await fetch(
@@ -596,7 +699,9 @@ export function SalesProductCreatePanel({
         );
         const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
         if (!cancelled && response.ok && payload.ok) {
-          setDiscordChannels(payload.channels?.text || []);
+          const nextChannels = payload.channels?.text || [];
+          setDiscordChannels(nextChannels);
+          writeCache(channelsCache, guildId, nextChannels);
         }
       } catch {
         if (!cancelled) setDiscordChannels([]);
@@ -624,6 +729,43 @@ export function SalesProductCreatePanel({
     let cancelled = false;
 
     async function loadProduct() {
+      const cacheKey = `${guildId}:${safeProductCode}`;
+      const cached = readCache(productDetailCache, cacheKey);
+      if (cached) {
+        setTitle(cached.title);
+        setDescription(cached.description || "");
+        setStatus(cached.status);
+        setCategoryId(cached.categoryId || "");
+        setMediaUrls(cached.mediaUrls || []);
+        setPriceAmount(String(cached.priceAmount || ""));
+        setCompareAtPriceAmount(
+          cached.compareAtPriceAmount ? String(cached.compareAtPriceAmount) : "",
+        );
+        setUnitPriceAmount(cached.unitPriceAmount ? String(cached.unitPriceAmount) : "");
+        setChargeTaxes(cached.chargeTaxes !== false);
+        setCostPerItemAmount(
+          cached.costPerItemAmount ? String(cached.costPerItemAmount) : "",
+        );
+        setInventoryTracked(cached.inventoryTracked);
+        setStockQuantity(String(cached.stockQuantity || 0));
+        setSku(cached.sku || "");
+        setSkuEdited(true);
+        setBarcodeMode(cached.barcodeMode === "manual" ? "manual" : "auto");
+        setBarcode(cached.barcode || generateBarcode(cached.title));
+        setProductType(cached.productType || "");
+        setManufacturer(cached.manufacturer || "");
+        setTagsText((cached.tags || []).join(", "));
+        setDiscordPublicationMode(
+          cached.discordPublicationMode === "channel" ? "channel" : "online_only",
+        );
+        setDiscordChannelId(cached.discordChannelId || "");
+        setPublishedVirtualStore(cached.publishedVirtualStore !== false);
+        setPublishedPointOfSale(cached.publishedPointOfSale !== false);
+        setPublishedPinterest(cached.publishedPinterest === true);
+        setIsLoadingProduct(false);
+        return;
+      }
+
       setIsLoadingProduct(true);
       setStatusMessage(null);
 
@@ -645,6 +787,7 @@ export function SalesProductCreatePanel({
         setDescription(product.description || "");
         setStatus(product.status);
         setCategoryId(product.categoryId || "");
+        setMediaUrls(product.mediaUrls || []);
         setPriceAmount(String(product.priceAmount || ""));
         setCompareAtPriceAmount(
           product.compareAtPriceAmount ? String(product.compareAtPriceAmount) : "",
@@ -670,6 +813,7 @@ export function SalesProductCreatePanel({
         setPublishedVirtualStore(product.publishedVirtualStore !== false);
         setPublishedPointOfSale(product.publishedPointOfSale !== false);
         setPublishedPinterest(product.publishedPinterest === true);
+        writeCache(productDetailCache, `${guildId}:${safeProductCode}`, product);
       } catch (error) {
         if (cancelled) return;
         setStatusMessage(
@@ -719,7 +863,7 @@ export function SalesProductCreatePanel({
   );
 
   const isEditMode = mode === "edit";
-  const isFormLoading = isLoadingProduct || isLoadingCategories || isLoadingChannels;
+  const isFormLoading = isLoadingProduct || isLoadingCategories;
   const controlsDisabled = isFormLoading || isSaving || readOnly;
   const hasDiscordPublicationTarget =
     discordPublicationMode === "online_only" || Boolean(discordChannelId);
@@ -734,20 +878,21 @@ export function SalesProductCreatePanel({
     router.push(getProductsPath(guildId));
   }, [guildId, router]);
 
-  const addMediaFiles = useCallback((files: FileList | null | undefined) => {
+  const addMediaFiles = useCallback(async (files: FileList | null | undefined) => {
     const imageFiles = Array.from(files || []).filter((file) =>
       file.type.startsWith("image/"),
     );
     if (!imageFiles.length) return;
 
-    setMediaUrls((current) => {
-      const next = [
-        ...current,
-        ...imageFiles.map((file) => URL.createObjectURL(file)),
-      ].slice(0, 8);
-      return next;
-    });
-    setStatusMessage(null);
+    try {
+      const encodedImages = await Promise.all(imageFiles.map(fileToDataUrl));
+      setMediaUrls((current) => [...current, ...encodedImages.filter(Boolean)].slice(0, 8));
+      setStatusMessage(null);
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Nao foi possivel carregar a imagem.",
+      );
+    }
   }, []);
 
   const removeMedia = useCallback((url: string) => {
@@ -780,7 +925,7 @@ export function SalesProductCreatePanel({
           description,
           categoryId: categoryId || null,
           status,
-          mediaUrls: [],
+          mediaUrls,
           priceAmount,
           compareAtPriceAmount,
           unitPriceAmount,
@@ -811,6 +956,7 @@ export function SalesProductCreatePanel({
         throw new Error(payload.message || "Erro ao salvar produto.");
       }
       router.push(getProductsPath(guildId));
+      invalidateProductCaches(guildId);
       router.refresh();
     } catch (error) {
       setStatusMessage(
@@ -834,6 +980,7 @@ export function SalesProductCreatePanel({
     inventoryTracked,
     isEditMode,
     manufacturer,
+    mediaUrls,
     priceAmount,
     productType,
     productCode,
@@ -941,7 +1088,7 @@ export function SalesProductCreatePanel({
                 multiple
                 disabled={controlsDisabled}
                 className="hidden"
-                onChange={(event) => addMediaFiles(event.target.files)}
+                onChange={(event) => void addMediaFiles(event.target.files)}
               />
               {mediaUrls.length ? (
                 <div className="mt-[14px] grid grid-cols-2 gap-[10px] sm:grid-cols-3 lg:grid-cols-4">
@@ -983,7 +1130,7 @@ export function SalesProductCreatePanel({
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => {
                     event.preventDefault();
-                    addMediaFiles(event.dataTransfer.files);
+                    void addMediaFiles(event.dataTransfer.files);
                   }}
                   className="flowdesk-server-button mt-[14px] flex min-h-[150px] w-full flex-col items-center justify-center rounded-[18px] border border-dashed border-[#363636] bg-[#0D0D0D] px-[16px] text-center transition hover:border-[#585858] hover:bg-[#111]"
                   disabled={controlsDisabled}
@@ -1252,7 +1399,8 @@ export function SalesProductCreatePanel({
                     setDiscordChannelId(nextChannelId);
                     setStatusMessage(null);
                   }}
-                  disabled={controlsDisabled}
+                  disabled={controlsDisabled || isLoadingChannels}
+                  maxVisibleItems={6}
                 />
                 <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">
                   Ao criar ou atualizar, o painel envia ou edita o embed nesse canal automaticamente.

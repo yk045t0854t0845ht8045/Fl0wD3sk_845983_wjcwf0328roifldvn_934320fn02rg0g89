@@ -11,6 +11,7 @@ const COMPONENT_TYPE = {
 
 const BUTTON_STYLE = {
   PRIMARY: 1,
+  SECONDARY: 2,
   SUCCESS: 3,
 } as const;
 
@@ -24,8 +25,6 @@ type SalesProductDiscordPayloadInput = {
   title: string;
   description: string;
   priceLabel: string;
-  categoryTitle?: string | null;
-  sku?: string | null;
   stockQuantity?: number | null;
   mediaUrls?: string[];
   paymentReady?: boolean;
@@ -52,16 +51,36 @@ function buildProductMarkdown(input: SalesProductDiscordPayloadInput) {
   return [
     `## ${input.title.trim() || "Produto"}`,
     trimDiscordText(description, 1200),
-    "",
-    `**Valor:** ${input.priceLabel}`,
-    input.categoryTitle ? `**Categoria:** ${input.categoryTitle}` : "",
-    input.sku ? `**SKU:** ${input.sku}` : "",
-    typeof input.stockQuantity === "number"
-      ? `**Estoque:** ${Math.max(0, input.stockQuantity)}`
-      : "",
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildDisabledInfoButtons(input: SalesProductDiscordPayloadInput): JsonRecord {
+  const stockLabel =
+    typeof input.stockQuantity === "number"
+      ? `Estoque: ${Math.max(0, input.stockQuantity)}`
+      : "Estoque: consultar";
+
+  return {
+    type: COMPONENT_TYPE.ACTION_ROW,
+    components: [
+      {
+        type: COMPONENT_TYPE.BUTTON,
+        custom_id: `sales:product:price:${input.productCode}`,
+        style: BUTTON_STYLE.SECONDARY,
+        label: `Valor: ${input.priceLabel}`,
+        disabled: true,
+      },
+      {
+        type: COMPONENT_TYPE.BUTTON,
+        custom_id: `sales:product:stock:${input.productCode}`,
+        style: BUTTON_STYLE.SECONDARY,
+        label: stockLabel,
+        disabled: true,
+      },
+    ],
+  };
 }
 
 export function buildSalesProductDiscordPayload(
@@ -88,11 +107,7 @@ export function buildSalesProductDiscordPayload(
           divider: true,
           spacing: 1,
         },
-        buildTextDisplay(
-          input.paymentReady
-            ? "-# Ao adicionar ao carrinho, o bot valida estoque e pagamento antes de criar o checkout."
-            : "-# Carrinho ainda indisponivel: configure um metodo de pagamento para ativar compras.",
-        ),
+        buildDisabledInfoButtons(input),
       ],
     },
     {

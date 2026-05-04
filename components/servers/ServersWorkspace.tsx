@@ -3589,7 +3589,7 @@ export function ServersWorkspace({
         <SidebarSearchShortcutIcon />
       </div>
 
-      <div className="mt-[14px] flex-1 overflow-y-auto pr-[2px]">
+      <div className="mt-[14px] min-h-0 flex-1 overflow-y-auto pr-[2px] thin-scrollbar">
         {filteredProjectsSidebarItems.length ||
         filteredTicketSidebarItems.length ||
         filteredEntryExitSidebarItems.length ||
@@ -3985,7 +3985,7 @@ export function ServersWorkspace({
         )}
       </div>
 
-      <div ref={profileDropdownRef} className="mt-[14px]">
+      <div ref={profileDropdownRef} className="mt-auto shrink-0 pt-[14px]">
         <div className="relative">
           {isProfileMenuOpen ? (
             <div className="absolute inset-x-0 bottom-[calc(100%+10px)] z-[140] overflow-hidden rounded-[22px] border border-[#151515] bg-[#070707] p-[12px] shadow-[0_26px_80px_rgba(0,0,0,0.54)]">

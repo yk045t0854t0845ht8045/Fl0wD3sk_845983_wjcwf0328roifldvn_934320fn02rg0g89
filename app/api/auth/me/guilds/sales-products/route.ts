@@ -23,6 +23,8 @@ import {
 const PRODUCT_TITLE_MAX_LENGTH = 120;
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
 const PRODUCT_TEXT_MAX_LENGTH = 120;
+const PRODUCT_MEDIA_MAX_ITEMS = 8;
+const PRODUCT_MEDIA_MAX_LENGTH = 1_500_000;
 const PRODUCT_SELECT =
   "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
 const GUILD_TEXT = 0;
@@ -124,6 +126,15 @@ function normalizeStringArray(value: unknown, maxItems: number, maxLength: numbe
     .map((item) => getTrimmedText(item, maxLength))
     .filter(Boolean)
     .slice(0, maxItems);
+}
+
+function normalizeMediaUrls(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => /^https?:\/\//i.test(item) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(item))
+    .filter((item) => item.length <= PRODUCT_MEDIA_MAX_LENGTH)
+    .slice(0, PRODUCT_MEDIA_MAX_ITEMS);
 }
 
 function isMissingSalesProductsTable(error: unknown) {
@@ -495,8 +506,6 @@ async function syncSalesProductDiscordMessage(input: {
     title: input.product.title,
     description: input.product.description || "",
     priceLabel: formatProductPrice(input.product.price_amount),
-    categoryTitle: input.category?.title || null,
-    sku: input.product.sku,
     stockQuantity: input.product.stock_quantity,
     mediaUrls: Array.isArray(input.product.media_urls)
       ? input.product.media_urls.filter(
@@ -576,6 +585,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const guildId = (url.searchParams.get("guildId") || "").trim();
     const productCode = normalizeProductCode(url.searchParams.get("productCode"));
+    const categoryId = getTrimmedText(url.searchParams.get("categoryId"), 60);
 
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
@@ -609,11 +619,17 @@ export async function GET(request: Request) {
       );
     }
 
-    const result = await supabase
+    let query = supabase
       .from("guild_sales_products")
       .select(PRODUCT_SELECT)
       .eq("guild_id", guildId)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    if (categoryId && isUuid(categoryId)) {
+      query = query.eq("category_id", categoryId);
+    }
+
+    const result = await query
       .limit(200);
 
     if (result.error) {
@@ -661,7 +677,7 @@ export async function PATCH(request: Request) {
       PRODUCT_DESCRIPTION_MAX_LENGTH,
     );
     const categoryId = getTrimmedText(rawBody.categoryId, 60);
-    const mediaUrls = normalizeStringArray(rawBody.mediaUrls, 8, 700);
+    const mediaUrls = normalizeMediaUrls(rawBody.mediaUrls);
     const tags = normalizeStringArray(rawBody.tags, 12, 36);
     const status = normalizeStatus(rawBody.status);
     const themeModel = normalizeThemeModel(rawBody.themeModel);
@@ -862,7 +878,7 @@ export async function POST(request: Request) {
       PRODUCT_DESCRIPTION_MAX_LENGTH,
     );
     const categoryId = getTrimmedText(rawBody.categoryId, 60);
-    const mediaUrls = normalizeStringArray(rawBody.mediaUrls, 8, 700);
+    const mediaUrls = normalizeMediaUrls(rawBody.mediaUrls);
     const tags = normalizeStringArray(rawBody.tags, 12, 36);
     const status = normalizeStatus(rawBody.status);
     const themeModel = normalizeThemeModel(rawBody.themeModel);
