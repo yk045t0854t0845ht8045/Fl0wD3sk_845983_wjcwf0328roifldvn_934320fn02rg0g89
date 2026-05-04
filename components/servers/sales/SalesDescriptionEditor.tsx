@@ -5,11 +5,17 @@ import {
   Bold,
   ChevronDown,
   Code2,
+  Eye,
   ImagePlus,
   Italic,
   Link2,
+  List,
   MoreHorizontal,
+  Paintbrush,
+  PlayCircle,
   Sparkles,
+  Table2,
+  Underline,
 } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { ServerButton } from "@/components/servers/ServerUi";
@@ -164,7 +170,7 @@ export function SalesDescriptionEditor({
   const [aiMessage, setAiMessage] = useState<string | null>(null);
 
   const applyFormat = useCallback(
-    (format: "paragraph" | "bold" | "italic" | "link" | "image" | "code") => {
+    (format: "paragraph" | "bold" | "italic" | "underline" | "link" | "image" | "video" | "table" | "list" | "code" | "highlight") => {
       if (disabled) return;
 
       const textarea = textareaRef.current;
@@ -176,6 +182,8 @@ export function SalesDescriptionEditor({
           ? "texto do link"
           : format === "image"
             ? "descricao da imagem"
+            : format === "video"
+              ? "video"
             : format === "code"
               ? "codigo"
               : "texto";
@@ -191,10 +199,23 @@ export function SalesDescriptionEditor({
         replacement = `**${source}**`;
       } else if (format === "italic") {
         replacement = `_${source}_`;
+      } else if (format === "underline") {
+        replacement = `<u>${source}</u>`;
+      } else if (format === "highlight") {
+        replacement = `<mark>${source}</mark>`;
       } else if (format === "link") {
         replacement = `[${source}](https://exemplo.com)`;
       } else if (format === "image") {
         replacement = `![${source}](https://exemplo.com/imagem.png)`;
+      } else if (format === "video") {
+        replacement = `[${source}](https://exemplo.com/video.mp4)`;
+      } else if (format === "table") {
+        replacement = `| Item | Detalhe |\n| --- | --- |\n| ${source} |  |\n`;
+      } else if (format === "list") {
+        replacement = source
+          .split("\n")
+          .map((line) => `- ${line.replace(/^[-*]\s+/, "")}`)
+          .join("\n");
       } else if (format === "code") {
         replacement = `\`${source}\``;
       }
@@ -265,21 +286,40 @@ export function SalesDescriptionEditor({
         <IconButton label="Italico" onClick={() => applyFormat("italic")} disabled={disabled}>
           <Italic className="h-[16px] w-[16px]" />
         </IconButton>
+        <IconButton label="Sublinhado" onClick={() => applyFormat("underline")} disabled={disabled}>
+          <Underline className="h-[16px] w-[16px]" />
+        </IconButton>
+        <IconButton label="Destaque" onClick={() => applyFormat("highlight")} disabled={disabled}>
+          <Paintbrush className="h-[16px] w-[16px]" />
+        </IconButton>
+        <span className="mx-[4px] h-[24px] w-px bg-[#252525]" />
+        <IconButton label="Lista" onClick={() => applyFormat("list")} disabled={disabled}>
+          <List className="h-[16px] w-[16px]" />
+        </IconButton>
         <IconButton label="Link" onClick={() => applyFormat("link")} disabled={disabled}>
           <Link2 className="h-[16px] w-[16px]" />
         </IconButton>
         <IconButton label="Imagem" onClick={() => applyFormat("image")} disabled={disabled}>
           <ImagePlus className="h-[16px] w-[16px]" />
         </IconButton>
+        <IconButton label="Video" onClick={() => applyFormat("video")} disabled={disabled}>
+          <PlayCircle className="h-[16px] w-[16px]" />
+        </IconButton>
+        <IconButton label="Tabela" onClick={() => applyFormat("table")} disabled={disabled}>
+          <Table2 className="h-[16px] w-[16px]" />
+        </IconButton>
+        <IconButton label="Mais opcoes" disabled={disabled}>
+          <MoreHorizontal className="h-[16px] w-[16px]" />
+        </IconButton>
         <IconButton label="Codigo" onClick={() => applyFormat("code")} disabled={disabled}>
           <Code2 className="h-[16px] w-[16px]" />
         </IconButton>
         <IconButton
-          label={isPreviewOpen ? "Ocultar previa" : "Mostrar previa"}
+          label={isPreviewOpen ? "Ocultar preview" : "Mostrar preview"}
           onClick={() => setIsPreviewOpen((current) => !current)}
           disabled={disabled}
         >
-          <MoreHorizontal className="h-[16px] w-[16px]" />
+          <Eye className="h-[16px] w-[16px]" />
         </IconButton>
         <ServerButton
           onClick={() => void generateDescription()}

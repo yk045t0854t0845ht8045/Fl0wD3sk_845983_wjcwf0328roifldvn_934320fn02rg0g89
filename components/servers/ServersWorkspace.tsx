@@ -116,6 +116,7 @@ type ServerSettingsSection =
   | "sales_products"
   | "sales_product_create"
   | "sales_product_edit"
+  | "sales_stock"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -273,6 +274,14 @@ const SALES_SIDEBAR_ITEMS: SidebarItem[] = [
     settingsSection: "sales_products",
     requiredPermission: "server_manage_tickets_overview",
     searchAliases: ["vendas", "produtos", "itens", "estoque"],
+  },
+  {
+    label: "Estoque",
+    kind: "sales",
+    tab: "settings",
+    settingsSection: "sales_stock",
+    requiredPermission: "server_manage_tickets_overview",
+    searchAliases: ["vendas", "estoque", "inventario", "quantidade"],
   },
   {
     label: "Métodos de Pagamento",
@@ -507,7 +516,7 @@ function parseWorkspaceRoute(pathname: string | null): {
     }
 
     if (
-      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
+      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|stock|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
         comparablePathname,
       )
     ) {
@@ -541,7 +550,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const salesSectionMatch = normalizedPathname.match(
-    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)\/?$/,
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock|payment-methods|coupons-gifts)\/?$/,
   );
   if (salesSectionMatch) {
     const salesSection = salesSectionMatch[2];
@@ -561,6 +570,8 @@ function parseWorkspaceRoute(pathname: string | null): {
             ? "sales_product_create"
           : salesSection.startsWith("products/edit/")
             ? "sales_product_edit"
+          : salesSection === "stock"
+            ? "sales_stock"
             : salesSection === "payment-methods"
               ? "sales_payment_methods"
               : salesSection === "coupons-gifts"
@@ -629,7 +640,7 @@ function isServersWorkspacePath(pathname: string) {
     return true;
   }
 
-  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
+  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|stock|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
     pathname,
   );
 }
@@ -2551,6 +2562,7 @@ export function ServersWorkspace({
       selectedSettingsSectionForConfig === "sales_products" ||
       selectedSettingsSectionForConfig === "sales_product_create" ||
       selectedSettingsSectionForConfig === "sales_product_edit" ||
+      selectedSettingsSectionForConfig === "sales_stock" ||
       selectedSettingsSectionForConfig === "sales_payment_methods" ||
       selectedSettingsSectionForConfig === "sales_coupons_gifts");
   const isEntryExitGroupActive =
@@ -2671,6 +2683,9 @@ export function ServersWorkspace({
     }
     if (settingsSection === "sales_product_edit") {
       return `/servers/${encodedGuildId}/sales/products/`;
+    }
+    if (settingsSection === "sales_stock") {
+      return `/servers/${encodedGuildId}/sales/stock/`;
     }
     if (settingsSection === "sales_payment_methods") {
       return `/servers/${encodedGuildId}/sales/payment-methods/`;
@@ -3287,6 +3302,7 @@ export function ServersWorkspace({
       section === "sales_products" ||
       section === "sales_product_create" ||
       section === "sales_product_edit" ||
+      section === "sales_stock" ||
       section === "sales_payment_methods" ||
       section === "sales_coupons_gifts"
     ) {
