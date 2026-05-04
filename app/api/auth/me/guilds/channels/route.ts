@@ -31,6 +31,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const guildId = (url.searchParams.get("guildId") || "").trim();
+    const forceFresh = url.searchParams.get("fresh") === "1";
 
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
@@ -87,7 +88,7 @@ export async function GET(request: Request) {
       );
     }
 
-    const rawChannels = await fetchGuildChannelsByBot(guildId);
+    const rawChannels = await fetchGuildChannelsByBot(guildId, { forceFresh });
     if (!rawChannels) {
       return applyNoStoreHeaders(
         NextResponse.json(
@@ -150,4 +151,3 @@ export async function GET(request: Request) {
     );
   }
 }
-

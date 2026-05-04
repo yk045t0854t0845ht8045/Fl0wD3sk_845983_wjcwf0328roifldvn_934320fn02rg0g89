@@ -99,6 +99,17 @@ function toMoney(value: unknown) {
   return Number.isFinite(parsed) ? Math.max(0, Number(parsed.toFixed(2))) : 0;
 }
 
+function hasRequiredMoneyInput(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0;
+  }
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().replace(/[^\d,.-]/g, "").replace(",", ".");
+  if (!normalized || !/\d/.test(normalized)) return false;
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) && parsed >= 0;
+}
+
 function toOptionalMoney(value: unknown) {
   const amount = toMoney(value);
   return amount > 0 ? amount : null;
@@ -197,9 +208,15 @@ async function requestDiscordWithBot<T>({
         method,
         headers: {
           Authorization: `Bot ${botToken}`,
-          ...(body ? { "Content-Type": "application/json" } : {}),
+          ...(body && !(body instanceof FormData)
+            ? { "Content-Type": "application/json" }
+            : {}),
         },
-        body: body ? JSON.stringify(body) : undefined,
+        body: body
+          ? body instanceof FormData
+            ? body
+            : JSON.stringify(body)
+          : undefined,
         cache: "no-store",
       });
 
@@ -234,6 +251,51 @@ async function requestDiscordWithBot<T>({
   }
 
   throw lastError || new Error(`Falha ao ${resourceLabel}.`);
+}
+
+function dataUrlToDiscordFile(dataUrl: string) {
+  const match = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i);
+  if (!match) return null;
+
+  const mimeType = match[1].toLowerCase();
+  const extension =
+    mimeType.includes("png")
+      ? "png"
+      : mimeType.includes("webp")
+        ? "webp"
+        : mimeType.includes("gif")
+          ? "gif"
+          : "jpg";
+  const binary = Buffer.from(match[2], "base64");
+  if (!binary.length || binary.length > PRODUCT_MEDIA_MAX_LENGTH) return null;
+
+  return {
+    filename: `product-image.${extension}`,
+    blob: new Blob([binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength)], {
+      type: mimeType,
+    }),
+  };
+}
+
+function dataUrlToAttachmentUrl(dataUrl: string) {
+  const file = dataUrlToDiscordFile(dataUrl);
+  return file ? `attachment://${file.filename}` : null;
+}
+
+function buildDiscordRequestBody(payload: unknown, mediaUrls: unknown) {
+  const firstMediaUrl = Array.isArray(mediaUrls)
+    ? mediaUrls.find(
+        (item): item is string => typeof item === "string" && item.trim().length > 0,
+      )
+    : "";
+  const file = firstMediaUrl ? dataUrlToDiscordFile(firstMediaUrl) : null;
+
+  if (!file) return payload;
+
+  const formData = new FormData();
+  formData.append("payload_json", JSON.stringify(payload));
+  formData.append("files[0]", file.blob, file.filename);
+  return formData;
 }
 
 function normalizeProductCode(value: unknown) {
@@ -501,19 +563,34 @@ async function syncSalesProductDiscordMessage(input: {
   }
 
   const productCode = buildProductCode(input.product.id);
+  const mediaUrls = Array.isArray(input.product.media_urls)
+    ? input.product.media_urls.filter(
+        (item): item is string => typeof item === "string",
+      )
+    : [];
+  const firstDataImageIndex = mediaUrls.findIndex((url) =>
+    /^data:image\/[a-z0-9.+-]+;base64,/i.test(url),
+  );
+  const attachmentUrl =
+    firstDataImageIndex >= 0 ? dataUrlToAttachmentUrl(mediaUrls[firstDataImageIndex]) : null;
+  const payloadMediaUrls =
+    firstDataImageIndex >= 0
+      ? [
+          ...mediaUrls.slice(0, firstDataImageIndex),
+          attachmentUrl || "",
+          ...mediaUrls.slice(firstDataImageIndex + 1),
+        ].filter(Boolean)
+      : mediaUrls;
   const payload = buildSalesProductDiscordPayload({
     productCode,
     title: input.product.title,
     description: input.product.description || "",
     priceLabel: formatProductPrice(input.product.price_amount),
     stockQuantity: input.product.stock_quantity,
-    mediaUrls: Array.isArray(input.product.media_urls)
-      ? input.product.media_urls.filter(
-          (item): item is string => typeof item === "string",
-        )
-      : [],
+    mediaUrls: payloadMediaUrls,
     paymentReady: false,
   });
+  const discordBody = buildDiscordRequestBody(payload, input.product.media_urls);
 
   const storedMessageId = input.product.discord_message_id || "";
   const storedMessage = storedMessageId
@@ -534,14 +611,14 @@ async function syncSalesProductDiscordMessage(input: {
       ? await requestDiscordWithBot<{ id: string }>({
           url: `https://discord.com/api/v10/channels/${channelId}/messages/${managedMessage.id}`,
           method: "PATCH",
-          body: payload,
+          body: discordBody,
           botToken,
           resourceLabel: "atualizar o embed do produto",
         })
       : await requestDiscordWithBot<{ id: string }>({
           url: `https://discord.com/api/v10/channels/${channelId}/messages`,
           method: "POST",
-          body: payload,
+          body: discordBody,
           botToken,
           resourceLabel: "enviar o embed do produto",
         });
@@ -715,6 +792,27 @@ export async function PATCH(request: Request) {
     }
 
     const safeCategoryId = categoryId && isUuid(categoryId) ? categoryId : null;
+    if (!safeCategoryId) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Escolha uma categoria para salvar o produto." },
+          { status: 400 },
+        ),
+      );
+    }
+    if (!hasRequiredMoneyInput(rawBody.priceAmount)) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Informe um preco valido para salvar o produto. Pode ser 0, mas nao pode ficar vazio.",
+          },
+          { status: 400 },
+        ),
+      );
+    }
+
     const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
     if (!access.ok) return applyNoStoreHeaders(access.response);
 
@@ -907,6 +1005,27 @@ export async function POST(request: Request) {
     }
 
     const safeCategoryId = categoryId && isUuid(categoryId) ? categoryId : null;
+    if (!safeCategoryId) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Escolha uma categoria para salvar o produto." },
+          { status: 400 },
+        ),
+      );
+    }
+    if (!hasRequiredMoneyInput(rawBody.priceAmount)) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Informe um preco valido para salvar o produto. Pode ser 0, mas nao pode ficar vazio.",
+          },
+          { status: 400 },
+        ),
+      );
+    }
+
     const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
     if (!access.ok) return applyNoStoreHeaders(access.response);
 

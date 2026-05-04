@@ -20,6 +20,7 @@ const CATEGORY_TITLE_MAX_LENGTH = 90;
 const CATEGORY_DESCRIPTION_MAX_LENGTH = 1200;
 const SEO_TITLE_MAX_LENGTH = 90;
 const SEO_DESCRIPTION_MAX_LENGTH = 180;
+const CATEGORY_IMAGE_MAX_LENGTH = 1_500_000;
 const CATEGORY_SELECT =
   "id, guild_id, title, description, collection_type, image_url, theme_model, discord_publication_mode, discord_channel_id, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at";
 const GUILD_TEXT = 0;
@@ -49,6 +50,15 @@ type GuildSalesCategoryRecord = {
 function getTrimmedText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, maxLength);
+}
+
+function normalizeImageUrl(value: unknown) {
+  const imageUrl = getTrimmedText(value, CATEGORY_IMAGE_MAX_LENGTH);
+  if (!imageUrl) return null;
+  if (/^https?:\/\//i.test(imageUrl) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(imageUrl)) {
+    return imageUrl;
+  }
+  return null;
 }
 
 function normalizeCollectionType(value: unknown) {
@@ -353,7 +363,7 @@ export async function POST(request: Request) {
       rawBody.discordPublicationMode,
     );
     const discordChannelId = getTrimmedText(rawBody.discordChannelId, 25);
-    const imageUrl = getTrimmedText(rawBody.imageUrl, 500) || null;
+    const imageUrl = normalizeImageUrl(rawBody.imageUrl);
     const publishedVirtualStore = rawBody.publishedVirtualStore !== false;
     const publishedPointOfSale = false;
 
@@ -461,7 +471,7 @@ export async function PATCH(request: Request) {
       rawBody.discordPublicationMode,
     );
     const discordChannelId = getTrimmedText(rawBody.discordChannelId, 25);
-    const imageUrl = getTrimmedText(rawBody.imageUrl, 500) || null;
+    const imageUrl = normalizeImageUrl(rawBody.imageUrl);
     const publishedVirtualStore = rawBody.publishedVirtualStore !== false;
     const publishedPointOfSale = false;
 

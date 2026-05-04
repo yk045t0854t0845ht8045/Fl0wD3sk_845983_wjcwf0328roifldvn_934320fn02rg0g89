@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bold,
   ChevronDown,
@@ -28,10 +28,21 @@ type AiDescriptionResponse = {
   description?: string;
 };
 
+function isHexColor(value: string) {
+  return /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function stripBlockMarkdown(value: string) {
+  return value
+    .replace(/^#{1,3}\s+/gm, "")
+    .replace(/^>\s+/gm, "")
+    .replace(/^[-*]\s+/gm, "");
+}
+
 function renderInlineMarkdown(value: string) {
   const parts: ReactNode[] = [];
   const pattern =
-    /(!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|_([^_]+)_|`([^`]+)`)/g;
+    /(!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|<u>(.*?)<\/u>|<mark(?:\s+data-color="(#[0-9a-fA-F]{6})")?>(.*?)<\/mark>|\*\*([^*]+)\*\*|_([^_]+)_|`([^`]+)`)/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
 
@@ -54,20 +65,37 @@ function renderInlineMarkdown(value: string) {
       );
     } else if (match[6] !== undefined) {
       parts.push(
-        <strong key={`bold-${match.index}`} className="font-semibold text-[#F4F4F4]">
-          {match[6]}
-        </strong>,
-      );
-    } else if (match[7] !== undefined) {
-      parts.push(
-        <em key={`italic-${match.index}`} className="italic text-[#DFDFDF]">
-          {match[7]}
-        </em>,
+        <span key={`underline-${match.index}`} className="underline decoration-[#EDEDED] underline-offset-4">
+          {renderInlineMarkdown(match[6])}
+        </span>,
       );
     } else if (match[8] !== undefined) {
+      const color = isHexColor(match[7] || "") ? match[7] : "#F5D04C";
+      parts.push(
+        <mark
+          key={`mark-${match.index}`}
+          className="rounded-[5px] px-[4px] py-[1px] font-medium text-[#080808]"
+          style={{ backgroundColor: color }}
+        >
+          {renderInlineMarkdown(match[8])}
+        </mark>,
+      );
+    } else if (match[9] !== undefined) {
+      parts.push(
+        <strong key={`bold-${match.index}`} className="font-semibold text-[#F4F4F4]">
+          {renderInlineMarkdown(match[9])}
+        </strong>,
+      );
+    } else if (match[10] !== undefined) {
+      parts.push(
+        <em key={`italic-${match.index}`} className="italic text-[#DFDFDF]">
+          {renderInlineMarkdown(match[10])}
+        </em>,
+      );
+    } else if (match[11] !== undefined) {
       parts.push(
         <code key={`code-${match.index}`} className="rounded-[7px] bg-[#151515] px-[5px] py-[2px] text-[12px] text-[#F1F1F1]">
-          {match[8]}
+          {match[11]}
         </code>,
       );
     }
@@ -80,6 +108,27 @@ function renderInlineMarkdown(value: string) {
   }
 
   return parts.length ? parts : value;
+}
+
+function parseMarkdownTable(block: string) {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2 || !lines.every((line) => line.includes("|"))) return null;
+  if (!/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(lines[1])) return null;
+
+  const rows = lines.map((line) =>
+    line
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim()),
+  );
+  return {
+    headers: rows[0],
+    rows: rows.slice(2),
+  };
 }
 
 function MarkdownPreview({ value }: { value: string }) {
@@ -96,6 +145,39 @@ function MarkdownPreview({ value }: { value: string }) {
   return (
     <div className="space-y-[10px]">
       {trimmed.split(/\n{2,}/).map((block, index) => {
+        const table = parseMarkdownTable(block);
+        if (table) {
+          return (
+            <div
+              key={`${index}-${block}`}
+              className="overflow-hidden rounded-[12px] border border-[#242424]"
+            >
+              <table className="w-full border-collapse text-left text-[12px] text-[#CFCFCF]">
+                <thead className="bg-[#151515] text-[#F1F1F1]">
+                  <tr>
+                    {table.headers.map((header, headerIndex) => (
+                      <th key={`${header}-${headerIndex}`} className="border-r border-[#252525] px-[10px] py-[8px] last:border-r-0">
+                        {renderInlineMarkdown(header)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {table.rows.map((row, rowIndex) => (
+                    <tr key={`${rowIndex}-${row.join("|")}`} className="border-t border-[#202020]">
+                      {table.headers.map((_, cellIndex) => (
+                        <td key={cellIndex} className="border-r border-[#202020] px-[10px] py-[8px] last:border-r-0">
+                          {renderInlineMarkdown(row[cellIndex] || "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+
         if (block.startsWith("```") && block.endsWith("```")) {
           return (
             <pre
@@ -104,6 +186,41 @@ function MarkdownPreview({ value }: { value: string }) {
             >
               {block.replace(/^```\n?/, "").replace(/\n?```$/, "")}
             </pre>
+          );
+        }
+
+        const headingMatch = block.match(/^(#{1,3})\s+([\s\S]+)$/);
+        if (headingMatch) {
+          const level = headingMatch[1].length;
+          const HeadingTag = (`h${level}` as "h1" | "h2" | "h3");
+          const sizeClass =
+            level === 1
+              ? "text-[22px] leading-[1.25]"
+              : level === 2
+                ? "text-[18px] leading-[1.35]"
+                : "text-[15px] leading-[1.45]";
+          return (
+            <HeadingTag
+              key={`${index}-${block}`}
+              className={`break-words font-semibold text-[#F1F1F1] ${sizeClass}`}
+            >
+              {renderInlineMarkdown(headingMatch[2])}
+            </HeadingTag>
+          );
+        }
+
+        if (/^[-*]\s+/m.test(block)) {
+          return (
+            <ul key={`${index}-${block}`} className="space-y-[6px] pl-[18px] text-[13px] leading-[1.6] text-[#CFCFCF]">
+              {block.split("\n").map((line, lineIndex) => {
+                const item = line.replace(/^[-*]\s+/, "").trim();
+                return item ? (
+                  <li key={`${lineIndex}-${line}`} className="list-disc pl-[2px]">
+                    {renderInlineMarkdown(item)}
+                  </li>
+                ) : null;
+              })}
+            </ul>
           );
         }
 
@@ -168,9 +285,15 @@ export function SalesDescriptionEditor({
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [highlightColor, setHighlightColor] = useState("#F5D04C");
+
+  const safeHighlightColor = useMemo(
+    () => (isHexColor(highlightColor) ? highlightColor : "#F5D04C"),
+    [highlightColor],
+  );
 
   const applyFormat = useCallback(
-    (format: "paragraph" | "bold" | "italic" | "underline" | "link" | "image" | "video" | "table" | "list" | "code" | "highlight") => {
+    (format: "paragraph" | "heading1" | "heading2" | "heading3" | "bold" | "italic" | "underline" | "link" | "image" | "video" | "table" | "list" | "code" | "highlight") => {
       if (disabled) return;
 
       const textarea = textareaRef.current;
@@ -191,10 +314,22 @@ export function SalesDescriptionEditor({
       let replacement = source;
 
       if (format === "paragraph") {
-        replacement = source
-          .replace(/^#{1,6}\s+/gm, "")
-          .replace(/^>\s+/gm, "")
-          .replace(/^[-*]\s+/gm, "");
+        replacement = stripBlockMarkdown(source);
+      } else if (format === "heading1") {
+        replacement = stripBlockMarkdown(source)
+          .split("\n")
+          .map((line) => (line.trim() ? `# ${line.trim()}` : line))
+          .join("\n");
+      } else if (format === "heading2") {
+        replacement = stripBlockMarkdown(source)
+          .split("\n")
+          .map((line) => (line.trim() ? `## ${line.trim()}` : line))
+          .join("\n");
+      } else if (format === "heading3") {
+        replacement = stripBlockMarkdown(source)
+          .split("\n")
+          .map((line) => (line.trim() ? `### ${line.trim()}` : line))
+          .join("\n");
       } else if (format === "bold") {
         replacement = `**${source}**`;
       } else if (format === "italic") {
@@ -202,7 +337,7 @@ export function SalesDescriptionEditor({
       } else if (format === "underline") {
         replacement = `<u>${source}</u>`;
       } else if (format === "highlight") {
-        replacement = `<mark>${source}</mark>`;
+        replacement = `<mark data-color="${safeHighlightColor}">${source}</mark>`;
       } else if (format === "link") {
         replacement = `[${source}](https://exemplo.com)`;
       } else if (format === "image") {
@@ -232,7 +367,7 @@ export function SalesDescriptionEditor({
         textareaRef.current?.setSelectionRange(selectionStart, selectionStart);
       });
     },
-    [disabled, maxLength, onChange, value],
+    [disabled, maxLength, onChange, safeHighlightColor, value],
   );
 
   const generateDescription = useCallback(async () => {
@@ -280,6 +415,33 @@ export function SalesDescriptionEditor({
         >
           Paragrafo <ChevronDown className="ml-[6px] inline h-[14px] w-[14px]" />
         </button>
+        <button
+          type="button"
+          onClick={() => applyFormat("heading1")}
+          disabled={disabled}
+          className="flowdesk-server-button h-[36px] rounded-[10px] px-[9px] text-[13px] font-semibold text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
+          title="Titulo grande"
+        >
+          H1
+        </button>
+        <button
+          type="button"
+          onClick={() => applyFormat("heading2")}
+          disabled={disabled}
+          className="flowdesk-server-button h-[36px] rounded-[10px] px-[9px] text-[13px] font-semibold text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
+          title="Titulo medio"
+        >
+          H2
+        </button>
+        <button
+          type="button"
+          onClick={() => applyFormat("heading3")}
+          disabled={disabled}
+          className="flowdesk-server-button h-[36px] rounded-[10px] px-[9px] text-[13px] font-semibold text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
+          title="Titulo pequeno"
+        >
+          H3
+        </button>
         <IconButton label="Negrito" onClick={() => applyFormat("bold")} disabled={disabled}>
           <Bold className="h-[16px] w-[16px]" />
         </IconButton>
@@ -292,6 +454,23 @@ export function SalesDescriptionEditor({
         <IconButton label="Destaque" onClick={() => applyFormat("highlight")} disabled={disabled}>
           <Paintbrush className="h-[16px] w-[16px]" />
         </IconButton>
+        <label
+          className="flowdesk-server-button inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#101010] transition hover:border-[#353535] hover:bg-[#161616]"
+          title="Cor do destaque"
+        >
+          <span
+            className="h-[16px] w-[16px] rounded-full border border-[rgba(255,255,255,0.28)]"
+            style={{ backgroundColor: safeHighlightColor }}
+          />
+          <input
+            type="color"
+            value={safeHighlightColor}
+            onChange={(event) => setHighlightColor(event.target.value)}
+            disabled={disabled}
+            className="sr-only"
+            aria-label="Cor do destaque"
+          />
+        </label>
         <span className="mx-[4px] h-[24px] w-px bg-[#252525]" />
         <IconButton label="Lista" onClick={() => applyFormat("list")} disabled={disabled}>
           <List className="h-[16px] w-[16px]" />
