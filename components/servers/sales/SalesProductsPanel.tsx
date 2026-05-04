@@ -744,6 +744,7 @@ function ProductTagsInput({
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -814,7 +815,10 @@ function ProductTagsInput({
         <button
           type="button"
           onClick={() => {
-            if (!disabled) setOpen((current) => !current);
+            if (!disabled) {
+              setOpen(true);
+              window.requestAnimationFrame(() => inputRef.current?.focus());
+            }
           }}
           disabled={disabled}
           aria-label="Adicionar tag"
@@ -824,78 +828,73 @@ function ProductTagsInput({
         </button>
       </div>
       <div
-        className={`min-h-[42px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[10px] py-[8px] transition ${
+        className={`min-h-[42px] cursor-text rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[10px] py-[8px] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#4A4A4A] ${
           open ? "border-[#4A4A4A]" : ""
         } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
         onClick={() => {
-          if (!disabled && !value.length) setOpen(true);
+          if (!disabled) {
+            setOpen(true);
+            inputRef.current?.focus();
+          }
         }}
       >
-        {value.length ? (
-          <div className="flex flex-wrap gap-[6px]">
-            {value.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex max-w-full items-center rounded-[10px] bg-[#202020] px-[9px] py-[5px] text-[12px] leading-none text-[#DADADA]"
+        <div className="flex flex-wrap items-center gap-[6px]">
+          {value.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex max-w-full items-center gap-[6px] rounded-[10px] bg-[#202020] px-[9px] py-[5px] text-[12px] leading-none text-[#DADADA]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <span className="max-w-[170px] truncate">{tag}</span>
+              <button
+                type="button"
+                aria-label={`Remover tag ${tag}`}
+                onClick={() => removeTag(tag)}
+                disabled={disabled}
+                className="text-[#8A8A8A] transition hover:text-white disabled:cursor-not-allowed"
               >
-                <span className="max-w-[170px] truncate">{tag}</span>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <div className="flex items-center gap-[8px]">
-            <SearchIcon className="h-[15px] w-[15px] text-[#777]" />
-            <input
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setOpen(true);
-              }}
-              onFocus={() => setOpen(true)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === ",") {
-                  event.preventDefault();
-                  addTag(query);
-                } else if (event.key === "Escape") {
-                  setOpen(false);
-                }
-              }}
-              onBlur={() => {
-                window.setTimeout(() => {
-                  if (rootRef.current?.contains(document.activeElement)) return;
-                  const nextTag = normalizeTag(query);
-                  if (nextTag) addTag(nextTag);
-                  setOpen(false);
-                }, 120);
-              }}
-              disabled={disabled}
-              placeholder="Pesquisar ou adicionar tags"
-              className="h-[24px] min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
-            />
-          </div>
-        )}
+                <X className="h-[12px] w-[12px]" />
+              </button>
+            </span>
+          ))}
+          <span className="flex min-w-[150px] flex-1 items-center gap-[8px]">
+          {!value.length ? <SearchIcon className="h-[15px] w-[15px] text-[#777]" /> : null}
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === ",") {
+                event.preventDefault();
+                addTag(query);
+              } else if (event.key === "Backspace" && !query && value.length) {
+                event.preventDefault();
+                removeTag(value[value.length - 1]);
+              } else if (event.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+            onBlur={() => {
+              window.setTimeout(() => {
+                if (rootRef.current?.contains(document.activeElement)) return;
+                const nextTag = normalizeTag(query);
+                if (nextTag) addTag(nextTag);
+                setOpen(false);
+              }, 120);
+            }}
+            disabled={disabled}
+            placeholder={value.length ? "Adicionar tag" : "Pesquisar ou adicionar tags"}
+            className="flowdesk-server-input-plain h-[24px] min-w-0 flex-1 appearance-none rounded-none border-0 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666] focus:bg-transparent active:bg-transparent"
+          />
+          </span>
+        </div>
       </div>
       {open && !disabled ? (
         <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[calc(100%+8px)] z-[320] overflow-hidden rounded-[18px] border border-[#222] bg-[#080808] shadow-[0_24px_70px_rgba(0,0,0,0.52)]">
-          {value.length ? (
-            <div className="flex items-center gap-[8px] border-b border-[#171717] px-[12px] py-[11px]">
-              <SearchIcon className="h-[15px] w-[15px] text-[#777]" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === ",") {
-                    event.preventDefault();
-                    addTag(query);
-                  }
-                  if (event.key === "Escape") setOpen(false);
-                }}
-                autoFocus
-                placeholder="Pesquisar ou adicionar tags"
-                className="h-[26px] min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
-              />
-            </div>
-          ) : null}
           <div className="thin-scrollbar max-h-[318px] overflow-y-auto p-[8px]">
             {canAddQuery ? (
               <button
@@ -1032,7 +1031,7 @@ function SmartTextPicker({
         {label}
       </label>
       <div
-        className={`flex h-[42px] items-center gap-[8px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[12px] transition ${
+        className={`flex h-[42px] items-center gap-[8px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[12px] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#4A4A4A] ${
           open ? "border-[#4A4A4A]" : ""
         } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
       >
@@ -1053,7 +1052,7 @@ function SmartTextPicker({
           }}
           disabled={disabled}
           placeholder={label}
-          className="min-w-0 flex-1 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666]"
+          className="flowdesk-server-input-plain min-w-0 flex-1 appearance-none rounded-none border-0 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666] focus:bg-transparent active:bg-transparent"
         />
         {query ? (
           <button
@@ -1271,26 +1270,48 @@ function ProductMediaLibraryModal({
             </div>
           </div>
           <div className="mt-[12px] flex flex-wrap gap-[8px]">
-            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
-              <option value="all">Tipo de arquivo</option>
-              {typeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
-            </select>
-            <select value={sizeFilter} onChange={(event) => setSizeFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
-              <option value="all">Tamanho do arquivo</option>
-              <option value="small">Ate 512 KB</option>
-              <option value="medium">Ate 3 MB</option>
-              <option value="large">Acima de 3 MB</option>
-              <option value="unknown">Sem tamanho</option>
-            </select>
-            <select value={usedFilter} onChange={(event) => setUsedFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
-              <option value="all">Usado em</option>
-              <option value="used">Usado</option>
-              <option value="unused">Nao usado</option>
-            </select>
-            <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)} className="h-[34px] rounded-[12px] border border-[#232323] bg-[#0C0C0C] px-[11px] text-[12px] text-[#CFCFCF] outline-none">
-              <option value="all">Produto</option>
-              {productOptions.map((product) => <option key={product} value={product}>{product}</option>)}
-            </select>
+            <div className="min-w-[150px]">
+              <SelectMenu
+                value={typeFilter}
+                onChange={setTypeFilter}
+                maxVisibleItems={6}
+                options={[["all", "Tipo de arquivo"], ...typeOptions.map((type) => [type, type] as [string, string])]}
+              />
+            </div>
+            <div className="min-w-[160px]">
+              <SelectMenu
+                value={sizeFilter}
+                onChange={setSizeFilter}
+                maxVisibleItems={5}
+                options={[
+                  ["all", "Tamanho do arquivo"],
+                  ["small", "Ate 512 KB"],
+                  ["medium", "Ate 3 MB"],
+                  ["large", "Acima de 3 MB"],
+                  ["unknown", "Sem tamanho"],
+                ]}
+              />
+            </div>
+            <div className="min-w-[128px]">
+              <SelectMenu
+                value={usedFilter}
+                onChange={setUsedFilter}
+                maxVisibleItems={4}
+                options={[
+                  ["all", "Usado em"],
+                  ["used", "Usado"],
+                  ["unused", "Nao usado"],
+                ]}
+              />
+            </div>
+            <div className="min-w-[150px]">
+              <SelectMenu
+                value={productFilter}
+                onChange={setProductFilter}
+                maxVisibleItems={6}
+                options={[["all", "Produto"], ...productOptions.map((product) => [product, product] as [string, string])]}
+              />
+            </div>
           </div>
         </div>
 
@@ -1764,18 +1785,16 @@ export function SalesProductCreatePanel({
 
     tags.forEach((tag) => add(tag, 4));
     if (productType) add(productType, 2);
-    if (manufacturer) add(manufacturer, 2);
     categories.forEach((category) => add(category.title, 1));
     productsListCache.get(guildId)?.data.forEach((product) => {
       product.tags?.forEach((tag) => add(tag, 3));
       add(product.productType, 1);
-      add(product.manufacturer, 1);
     });
 
     return Array.from(counts.entries())
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
       .map(([tag]) => tag);
-  }, [categories, guildId, manufacturer, productType, tags]);
+  }, [categories, guildId, productType, tags]);
   const productTypeSuggestions = useMemo(() => {
     const values = new Map<string, number>();
     productsListCache.get(guildId)?.data.forEach((product) => {
@@ -1813,7 +1832,7 @@ export function SalesProductCreatePanel({
     return {
       brand,
       title: displayTitle,
-      url: `https://loja.flowdesk.app/products/${slugifyProductPath(slugSource || displayTitle)}`,
+      url: `https://shop.flwdesk.com/products/${slugifyProductPath(slugSource || displayTitle)}`,
       description: plainTextPreview(description),
       price: `${formatMoney(Number(priceAmount.replace(",", ".")) || 0)} BRL`,
     };

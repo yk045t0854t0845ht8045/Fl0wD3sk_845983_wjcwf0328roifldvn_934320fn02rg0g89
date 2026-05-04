@@ -683,6 +683,28 @@ html.lenis body {
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.035);
 }
 
+.flowdesk-servers-ui :where(.flowdesk-description-textarea:focus, .flowdesk-description-textarea:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-input-plain) {
+  box-shadow: none;
+  caret-color: #f1f1f1;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-input-plain:focus, .flowdesk-server-input-plain:active) {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-server-input-plain:-webkit-autofill) {
+  -webkit-text-fill-color: #ededed;
+  box-shadow: 0 0 0 1000px #0d0d0d inset;
+  caret-color: #f1f1f1;
+  transition: background-color 999999s ease-in-out 0s;
+}
+
 .flowdesk-servers-ui
   :where(
     [class*="rounded-[24px]"][class*="border"],
