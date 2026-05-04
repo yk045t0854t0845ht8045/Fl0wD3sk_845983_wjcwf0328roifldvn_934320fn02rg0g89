@@ -59,6 +59,24 @@ type SalesCategoryCreateResponse = {
   category?: SalesCategory;
 };
 
+type SalesCategoryProduct = {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  mediaUrls: string[];
+  priceAmount: number;
+  stockQuantity: number;
+  sku: string;
+  status: "active" | "draft" | "archived";
+};
+
+type SalesCategoryProductsResponse = {
+  ok: boolean;
+  message?: string;
+  products?: SalesCategoryProduct[];
+};
+
 type SalesCategoriesPanelProps = {
   guildId: string;
   readOnly?: boolean;
@@ -73,6 +91,28 @@ const themeModelOptions = Object.entries(themeModelLabel) as Array<
   [SalesCategory["themeModel"], string]
 >;
 const productSortOptions = ["Mais relevantes", "Mais recentes", "A-Z"] as const;
+const CATEGORY_PRODUCTS_CACHE_TTL_MS = 45_000;
+
+type CacheEntry<T> = {
+  expiresAt: number;
+  data: T;
+};
+
+const categoryProductsCache = new Map<string, CacheEntry<SalesCategoryProduct[]>>();
+
+function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function writeCache<T>(cache: Map<string, CacheEntry<T>>, key: string, data: T) {
+  cache.set(key, { data, expiresAt: Date.now() + CATEGORY_PRODUCTS_CACHE_TTL_MS });
+}
 
 function getCategoriesPath(guildId: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/categories/`;
@@ -281,6 +321,13 @@ export function SalesCategoriesListPanel({
   );
 }
 
+function formatMoney(value: number) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value || 0);
+}
+
 function CategoryEditorSkeleton() {
   return (
     <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
@@ -346,9 +393,12 @@ export function SalesCategoryCreatePanel({
   const [seoTitle, setSeoTitle] = useState("");
   const [seoDescription, setSeoDescription] = useState("");
   const [productQuery, setProductQuery] = useState("");
+  const [categoryProducts, setCategoryProducts] = useState<SalesCategoryProduct[]>([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [imageName, setImageName] = useState<string | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isLoadingCategory, setIsLoadingCategory] = useState(mode === "edit");
+  const [isLoadingCategoryProducts, setIsLoadingCategoryProducts] = useState(mode === "edit");
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
   const [productSortIndex, setProductSortIndex] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
@@ -393,6 +443,7 @@ export function SalesCategoryCreatePanel({
         if (cancelled) return;
 
         const category = payload.category;
+        setSelectedCategoryId(category.id);
         setTitle(category.title);
         setDescription(category.description || "");
         setCollectionType(category.collectionType);
@@ -419,6 +470,57 @@ export function SalesCategoryCreatePanel({
       cancelled = true;
     };
   }, [categoryCode, guildId, mode]);
+
+  useEffect(() => {
+    if (mode !== "edit" || !selectedCategoryId) {
+      setIsLoadingCategoryProducts(false);
+      return;
+    }
+
+    const cacheKey = `${guildId}:${selectedCategoryId}`;
+    const cached = readCache(categoryProductsCache, cacheKey);
+    if (cached) {
+      setCategoryProducts(cached);
+      setIsLoadingCategoryProducts(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCategoryProducts() {
+      setIsLoadingCategoryProducts(true);
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}&categoryId=${encodeURIComponent(selectedCategoryId)}`,
+          { credentials: "include", cache: "no-store" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as SalesCategoryProductsResponse;
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.message || "Erro ao carregar produtos da categoria.");
+        }
+        if (cancelled) return;
+        const nextProducts = payload.products || [];
+        setCategoryProducts(nextProducts);
+        writeCache(categoryProductsCache, cacheKey, nextProducts);
+      } catch (error) {
+        if (cancelled) return;
+        setStatusMessage(
+          error instanceof Error
+            ? error.message
+            : "Erro ao carregar produtos da categoria.",
+        );
+        setCategoryProducts([]);
+      } finally {
+        if (!cancelled) setIsLoadingCategoryProducts(false);
+      }
+    }
+
+    void loadCategoryProducts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId, mode, selectedCategoryId]);
 
   useEffect(() => {
     if (!isThemeMenuOpen) return;
@@ -482,13 +584,24 @@ export function SalesCategoryCreatePanel({
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
-  const handleProductSearch = useCallback(() => {
-    const normalizedQuery = productQuery.trim();
-    setStatusMessage(
-      normalizedQuery
-        ? `Ainda nao ha produtos com "${normalizedQuery}" nesta colecao.`
-        : "Digite o nome de um produto para pesquisar nesta colecao.",
+  const filteredCategoryProducts = useMemo(() => {
+    const normalizedQuery = productQuery.trim().toLowerCase();
+    const sortedProducts = [...categoryProducts].sort((a, b) => {
+      if (productSortIndex === 1) return b.id.localeCompare(a.id);
+      if (productSortIndex === 2) return a.title.localeCompare(b.title, "pt-BR");
+      return Number(b.status === "active") - Number(a.status === "active");
+    });
+    if (!normalizedQuery) return sortedProducts;
+    return sortedProducts.filter((product) =>
+      `${product.title} ${product.description} ${product.sku}`
+        .toLowerCase()
+        .includes(normalizedQuery),
     );
+  }, [categoryProducts, productQuery, productSortIndex]);
+
+  const handleProductSearch = useCallback(() => {
+    if (!productQuery.trim()) return;
+    setStatusMessage(null);
   }, [productQuery]);
 
   const cycleProductSort = useCallback(() => {
@@ -721,15 +834,71 @@ export function SalesCategoryCreatePanel({
                 </ServerButton>
               </div>
             </div>
-            <div className="max-h-[320px] overflow-y-auto border-t border-[#171717] px-[22px] py-[42px] text-center">
-              <PackageSearch className="mx-auto h-[42px] w-[42px] text-[#4E4E4E]" />
-              <p className="mt-[18px] text-[14px] font-medium text-[#D9D9D9]">
-                Nao ha produtos nesta colecao.
-              </p>
-              <p className="mt-[5px] text-[13px] text-[#777]">
-                Pesquise ou navegue para adicionar produtos.
-              </p>
-            </div>
+            {isLoadingCategoryProducts ? (
+              <div className="space-y-[1px] border-t border-[#171717] bg-[#171717]">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center gap-[12px] bg-[#0B0B0B] px-[18px] py-[14px] sm:px-[22px]"
+                  >
+                    <div className="h-[42px] w-[42px] animate-pulse rounded-[14px] bg-[#171717]" />
+                    <div className="min-w-0 flex-1 space-y-[8px]">
+                      <div className="h-[12px] w-[180px] animate-pulse rounded-full bg-[#171717]" />
+                      <div className="h-[10px] w-[260px] max-w-full animate-pulse rounded-full bg-[#151515]" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : filteredCategoryProducts.length ? (
+              <div className="max-h-[340px] divide-y divide-[#171717] overflow-y-auto border-t border-[#171717] thin-scrollbar">
+                {filteredCategoryProducts.map((product) => (
+                  <article
+                    key={product.id}
+                    className="flex items-center gap-[12px] px-[18px] py-[14px] transition hover:bg-[#0E0E0E] sm:px-[22px]"
+                  >
+                    {product.mediaUrls[0] ? (
+                      <Image
+                        src={product.mediaUrls[0]}
+                        alt=""
+                        width={72}
+                        height={72}
+                        unoptimized
+                        className="h-[42px] w-[42px] shrink-0 rounded-[14px] object-cover"
+                      />
+                    ) : (
+                      <span className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-[14px] bg-[#F4F4F4] text-[#070707]">
+                        <ShoppingBag className="h-[18px] w-[18px]" />
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-semibold text-[#F1F1F1]">
+                        {product.title}
+                      </p>
+                      <p className="mt-[4px] truncate text-[12px] text-[#777]">
+                        {formatMoney(product.priceAmount)} - {product.sku || "SKU automatico"}
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-[#232323] bg-[#111] px-[9px] py-[6px] text-[11px] text-[#BDBDBD]">
+                      {product.stockQuantity} un.
+                    </span>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="max-h-[320px] overflow-y-auto border-t border-[#171717] px-[22px] py-[42px] text-center">
+                <PackageSearch className="mx-auto h-[42px] w-[42px] text-[#4E4E4E]" />
+                <p className="mt-[18px] text-[14px] font-medium text-[#D9D9D9]">
+                  {categoryProducts.length
+                    ? "Nenhum produto encontrado."
+                    : "Nao ha produtos nesta colecao."}
+                </p>
+                <p className="mt-[5px] text-[13px] text-[#777]">
+                  {categoryProducts.length
+                    ? "Ajuste a pesquisa para ver os produtos vinculados."
+                    : "Ao vincular produtos a esta categoria, eles aparecem aqui."}
+                </p>
+              </div>
+            )}
           </ServerSurface>
 
           <ServerSurface className="p-[18px] sm:p-[22px]">
