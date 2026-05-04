@@ -782,8 +782,8 @@ export async function PATCH(request: Request) {
               discord_sync_error: null,
             }),
         published_virtual_store: rawBody.publishedVirtualStore !== false,
-        published_point_of_sale: rawBody.publishedPointOfSale !== false,
-        published_pinterest: rawBody.publishedPinterest === true,
+        published_point_of_sale: false,
+        published_pinterest: false,
       })
       .eq("id", product.id)
       .eq("guild_id", guildId)
@@ -960,8 +960,8 @@ export async function POST(request: Request) {
         discord_sync_status: "idle",
         discord_sync_error: null,
         published_virtual_store: rawBody.publishedVirtualStore !== false,
-        published_point_of_sale: rawBody.publishedPointOfSale !== false,
-        published_pinterest: rawBody.publishedPinterest === true,
+        published_point_of_sale: false,
+        published_pinterest: false,
         configured_by_user_id: access.context.authUserId,
       })
       .select(PRODUCT_SELECT)

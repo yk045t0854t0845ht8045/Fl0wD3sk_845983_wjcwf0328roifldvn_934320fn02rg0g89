@@ -638,8 +638,6 @@ export function SalesProductCreatePanel({
     useState<ProductDiscordPublicationMode>("online_only");
   const [discordChannelId, setDiscordChannelId] = useState("");
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
-  const [publishedPointOfSale, setPublishedPointOfSale] = useState(true);
-  const [publishedPinterest, setPublishedPinterest] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const mediaUrlsRef = useRef<string[]>([]);
@@ -760,8 +758,6 @@ export function SalesProductCreatePanel({
         );
         setDiscordChannelId(cached.discordChannelId || "");
         setPublishedVirtualStore(cached.publishedVirtualStore !== false);
-        setPublishedPointOfSale(cached.publishedPointOfSale !== false);
-        setPublishedPinterest(cached.publishedPinterest === true);
         setIsLoadingProduct(false);
         return;
       }
@@ -811,8 +807,6 @@ export function SalesProductCreatePanel({
         );
         setDiscordChannelId(product.discordChannelId || "");
         setPublishedVirtualStore(product.publishedVirtualStore !== false);
-        setPublishedPointOfSale(product.publishedPointOfSale !== false);
-        setPublishedPinterest(product.publishedPinterest === true);
         writeCache(productDetailCache, `${guildId}:${safeProductCode}`, product);
       } catch (error) {
         if (cancelled) return;
@@ -947,8 +941,8 @@ export function SalesProductCreatePanel({
           discordChannelId:
             discordPublicationMode === "channel" ? discordChannelId : null,
           publishedVirtualStore,
-          publishedPointOfSale,
-          publishedPinterest,
+          publishedPointOfSale: false,
+          publishedPinterest: false,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
@@ -984,8 +978,6 @@ export function SalesProductCreatePanel({
     priceAmount,
     productType,
     productCode,
-    publishedPinterest,
-    publishedPointOfSale,
     publishedVirtualStore,
     router,
     sku,
@@ -1314,20 +1306,6 @@ export function SalesProductCreatePanel({
                 disabled={controlsDisabled}
               >
                 Loja virtual
-              </PillToggle>
-              <PillToggle
-                active={publishedPointOfSale}
-                onClick={() => setPublishedPointOfSale((current) => !current)}
-                disabled={controlsDisabled}
-              >
-                Ponto de venda
-              </PillToggle>
-              <PillToggle
-                active={publishedPinterest}
-                onClick={() => setPublishedPinterest((current) => !current)}
-                disabled={controlsDisabled}
-              >
-                Pinterest
               </PillToggle>
             </div>
           </ServerSurface>
