@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   Globe2,
+  Hash,
   LayoutGrid,
   ListFilter,
   PackageSearch,
@@ -38,6 +39,8 @@ type SalesCategory = {
   collectionType: "manual" | "smart";
   imageUrl?: string | null;
   themeModel: "default" | "compact" | "featured";
+  discordPublicationMode?: "online_only" | "channel";
+  discordChannelId?: string;
   publishedVirtualStore: boolean;
   publishedPointOfSale: boolean;
   seoTitle?: string;
@@ -82,14 +85,24 @@ type SalesCategoriesPanelProps = {
   readOnly?: boolean;
 };
 
-const themeModelLabel: Record<SalesCategory["themeModel"], string> = {
-  default: "Colecao padrao",
-  compact: "Grade compacta",
-  featured: "Destaque editorial",
+type DiscordChannel = {
+  id: string;
+  name: string;
+  type: number;
 };
-const themeModelOptions = Object.entries(themeModelLabel) as Array<
-  [SalesCategory["themeModel"], string]
->;
+
+type ChannelsResponse = {
+  ok: boolean;
+  message?: string;
+  channels?: {
+    text?: DiscordChannel[];
+  };
+};
+
+const discordPublicationLabel = {
+  online_only: "Somente online",
+  channel: "Categoria Discord",
+} as const;
 const productSortOptions = ["Mais relevantes", "Mais recentes", "A-Z"] as const;
 const CATEGORY_PRODUCTS_CACHE_TTL_MS = 45_000;
 
@@ -99,6 +112,7 @@ type CacheEntry<T> = {
 };
 
 const categoryProductsCache = new Map<string, CacheEntry<SalesCategoryProduct[]>>();
+const categoryChannelsCache = new Map<string, CacheEntry<DiscordChannel[]>>();
 
 function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
   const entry = cache.get(key);
@@ -381,15 +395,16 @@ export function SalesCategoryCreatePanel({
 }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const discordMenuRef = useRef<HTMLDivElement | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [collectionType, setCollectionType] =
     useState<SalesCategory["collectionType"]>("manual");
-  const [themeModel, setThemeModel] =
-    useState<SalesCategory["themeModel"]>("default");
+  const [discordPublicationMode, setDiscordPublicationMode] =
+    useState<"online_only" | "channel">("online_only");
+  const [discordChannelId, setDiscordChannelId] = useState("");
+  const [discordChannels, setDiscordChannels] = useState<DiscordChannel[]>([]);
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
-  const [publishedPointOfSale, setPublishedPointOfSale] = useState(false);
   const [seoTitle, setSeoTitle] = useState("");
   const [seoDescription, setSeoDescription] = useState("");
   const [productQuery, setProductQuery] = useState("");
@@ -399,7 +414,8 @@ export function SalesCategoryCreatePanel({
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isLoadingCategory, setIsLoadingCategory] = useState(mode === "edit");
   const [isLoadingCategoryProducts, setIsLoadingCategoryProducts] = useState(mode === "edit");
-  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+  const [isLoadingChannels, setIsLoadingChannels] = useState(true);
+  const [isDiscordMenuOpen, setIsDiscordMenuOpen] = useState(false);
   const [productSortIndex, setProductSortIndex] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -447,9 +463,11 @@ export function SalesCategoryCreatePanel({
         setTitle(category.title);
         setDescription(category.description || "");
         setCollectionType(category.collectionType);
-        setThemeModel(category.themeModel);
+        setDiscordPublicationMode(
+          category.discordPublicationMode === "channel" ? "channel" : "online_only",
+        );
+        setDiscordChannelId(category.discordChannelId || "");
         setPublishedVirtualStore(category.publishedVirtualStore);
-        setPublishedPointOfSale(category.publishedPointOfSale);
         setSeoTitle(category.seoTitle || category.title);
         setSeoDescription(category.seoDescription || "");
         setImagePreviewUrl(category.imageUrl || null);
@@ -523,20 +541,20 @@ export function SalesCategoryCreatePanel({
   }, [guildId, mode, selectedCategoryId]);
 
   useEffect(() => {
-    if (!isThemeMenuOpen) return;
+    if (!isDiscordMenuOpen) return;
 
     function handleOutsideClick(event: MouseEvent) {
       if (
-        themeMenuRef.current &&
+        discordMenuRef.current &&
         event.target instanceof Node &&
-        !themeMenuRef.current.contains(event.target)
+        !discordMenuRef.current.contains(event.target)
       ) {
-        setIsThemeMenuOpen(false);
+        setIsDiscordMenuOpen(false);
       }
     }
 
     function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setIsThemeMenuOpen(false);
+      if (event.key === "Escape") setIsDiscordMenuOpen(false);
     }
 
     document.addEventListener("mousedown", handleOutsideClick);
@@ -546,15 +564,61 @@ export function SalesCategoryCreatePanel({
       document.removeEventListener("mousedown", handleOutsideClick);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [isThemeMenuOpen]);
+  }, [isDiscordMenuOpen]);
+
+  useEffect(() => {
+    const cached = readCache(categoryChannelsCache, guildId);
+    if (cached) {
+      setDiscordChannels(cached);
+      setIsLoadingChannels(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadChannels() {
+      setIsLoadingChannels(true);
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}`,
+          { credentials: "include", cache: "no-store" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+        if (!cancelled && response.ok && payload.ok) {
+          const nextChannels = payload.channels?.text || [];
+          setDiscordChannels(nextChannels);
+          writeCache(categoryChannelsCache, guildId, nextChannels);
+        }
+      } catch {
+        if (!cancelled) setDiscordChannels([]);
+      } finally {
+        if (!cancelled) setIsLoadingChannels(false);
+      }
+    }
+
+    void loadChannels();
+    return () => {
+      cancelled = true;
+    };
+  }, [guildId]);
 
   const goBack = useCallback(() => {
     router.push(getCategoriesPath(guildId));
   }, [guildId, router]);
 
   const isEditMode = mode === "edit";
+  const hasDiscordPublicationTarget =
+    discordPublicationMode === "online_only" || Boolean(discordChannelId);
   const canSave =
-    title.trim().length >= 2 && !isSaving && !isLoadingCategory && !readOnly;
+    title.trim().length >= 2 &&
+    hasDiscordPublicationTarget &&
+    !isSaving &&
+    !isLoadingCategory &&
+    !readOnly;
+  const discordChannelOptions = useMemo(
+    () => [["", "Escolha um canal Discord"], ...discordChannels.map((channel) => [channel.id, `#${channel.name}`])] as Array<[string, string]>,
+    [discordChannels],
+  );
 
   const handleImageFile = useCallback(
     (file: File | null | undefined) => {
@@ -610,7 +674,11 @@ export function SalesCategoryCreatePanel({
 
   const handleSave = useCallback(async () => {
     if (!canSave) {
-      setStatusMessage("Informe um titulo para salvar a categoria.");
+      setStatusMessage(
+        title.trim().length < 2
+          ? "Informe um titulo para salvar a categoria."
+          : "Escolha Somente online ou selecione um canal Discord antes de salvar.",
+      );
       return;
     }
 
@@ -630,9 +698,12 @@ export function SalesCategoryCreatePanel({
           title,
           description,
           collectionType,
-          themeModel,
+          themeModel: "default",
+          discordPublicationMode,
+          discordChannelId:
+            discordPublicationMode === "channel" ? discordChannelId : null,
           publishedVirtualStore,
-          publishedPointOfSale,
+          publishedPointOfSale: false,
           seoTitle,
           seoDescription,
           imageUrl:
@@ -661,15 +732,15 @@ export function SalesCategoryCreatePanel({
     categoryCode,
     collectionType,
     description,
+    discordChannelId,
+    discordPublicationMode,
     guildId,
     imagePreviewUrl,
     isEditMode,
-    publishedPointOfSale,
     publishedVirtualStore,
     router,
     seoDescription,
     seoTitle,
-    themeModel,
     title,
   ]);
 
@@ -702,7 +773,7 @@ export function SalesCategoryCreatePanel({
           </ServerButton>
           <ServerButton
             aria-busy={isSaving}
-            disabled={readOnly || title.trim().length < 2 || isSaving || isLoadingCategory}
+            disabled={!canSave}
             onClick={() => void handleSave()}
             variant="primary"
             className="min-w-[172px]"
@@ -939,39 +1010,17 @@ export function SalesCategoryCreatePanel({
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Publicacao
               </h4>
-              <button
-                type="button"
-                onClick={() => {
-                  setPublishedVirtualStore(true);
-                  setPublishedPointOfSale(true);
-                  setStatusMessage("Categoria marcada para todos os canais de venda.");
-                }}
-                className="text-[13px] font-semibold text-[#F1F1F1] transition hover:text-white"
-              >
-                Gerenciar
-              </button>
+              <Globe2 className="h-[17px] w-[17px] text-[#8A8A8A]" />
             </div>
-            <div className="mt-[18px] space-y-[12px]">
-              <label className="flex items-center gap-[10px] text-[14px] text-[#CFCFCF]">
-                <input
-                  type="checkbox"
-                  checked={publishedVirtualStore}
-                  onChange={(event) => setPublishedVirtualStore(event.target.checked)}
-                  className="h-[15px] w-[15px] accent-[#F1F1F1]"
-                />
-                Loja virtual
-                <Globe2 className="ml-auto h-[16px] w-[16px] text-[#747474]" />
-              </label>
-              <label className="flex items-center gap-[10px] text-[14px] text-[#CFCFCF]">
-                <input
-                  type="checkbox"
-                  checked={publishedPointOfSale}
-                  onChange={(event) => setPublishedPointOfSale(event.target.checked)}
-                  className="h-[15px] w-[15px] accent-[#F1F1F1]"
-                />
-                Ponto de venda e Pinterest
-              </label>
-            </div>
+            <label className="mt-[16px] flex items-center gap-[10px] text-[14px] text-[#CFCFCF]">
+              <input
+                type="checkbox"
+                checked={publishedVirtualStore}
+                onChange={(event) => setPublishedVirtualStore(event.target.checked)}
+                className="h-[15px] w-[15px] accent-[#F1F1F1]"
+              />
+              Loja virtual
+            </label>
           </ServerSurface>
 
           <ServerSurface className="relative z-[40] p-[18px] sm:p-[20px]">
@@ -1041,32 +1090,39 @@ export function SalesCategoryCreatePanel({
           </ServerSurface>
 
           <ServerSurface className="p-[18px] sm:p-[20px]">
-            <label className="block text-[14px] font-semibold text-[#E2E2E2]">
-              Modelo de tema
-            </label>
-            <div ref={themeMenuRef} className="relative mt-[12px]">
+            <div className="flex items-center justify-between gap-[12px]">
+              <label className="block text-[14px] font-semibold text-[#E2E2E2]">
+                Categoria Discord
+              </label>
+              <Hash className="h-[16px] w-[16px] text-[#8A8A8A]" />
+            </div>
+            <p className="mt-[10px] text-[13px] leading-[1.5] text-[#7B7B7B]">
+              Escolha se essa categoria fica apenas online ou vinculada a um canal Discord.
+            </p>
+            <div ref={discordMenuRef} className="relative mt-[12px]">
               <button
                 type="button"
-                onClick={() => setIsThemeMenuOpen((current) => !current)}
+                onClick={() => setIsDiscordMenuOpen((current) => !current)}
                 className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] outline-none transition hover:border-[#4A4A4A]"
-                aria-expanded={isThemeMenuOpen}
+                aria-expanded={isDiscordMenuOpen}
               >
-                {themeModelLabel[themeModel]}
+                {discordPublicationLabel[discordPublicationMode]}
                 <ChevronDown
-                  className={`h-[16px] w-[16px] text-[#777] transition ${isThemeMenuOpen ? "rotate-180" : ""}`}
+                  className={`h-[16px] w-[16px] text-[#777] transition ${isDiscordMenuOpen ? "rotate-180" : ""}`}
                 />
               </button>
-              {isThemeMenuOpen ? (
+              {isDiscordMenuOpen ? (
                 <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[120] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
-                  {themeModelOptions.map(([value, label]) => {
-                    const isSelected = value === themeModel;
+                  {(Object.entries(discordPublicationLabel) as Array<["online_only" | "channel", string]>).map(([value, label]) => {
+                    const isSelected = value === discordPublicationMode;
                     return (
                       <button
                         key={value}
                         type="button"
                         onClick={() => {
-                          setThemeModel(value);
-                          setIsThemeMenuOpen(false);
+                          setDiscordPublicationMode(value);
+                          if (value === "online_only") setDiscordChannelId("");
+                          setIsDiscordMenuOpen(false);
                         }}
                         className={`flex w-full items-center justify-between rounded-[13px] px-[12px] py-[10px] text-left text-[13px] transition ${
                           isSelected
@@ -1082,6 +1138,24 @@ export function SalesCategoryCreatePanel({
                 </div>
               ) : null}
             </div>
+            {discordPublicationMode === "channel" ? (
+              <div className="mt-[10px]">
+                <div className="relative">
+                  <select
+                    value={discordChannelId}
+                    onChange={(event) => setDiscordChannelId(event.target.value)}
+                    disabled={isLoadingChannels || readOnly || isSaving}
+                    className="h-[42px] w-full rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-[13px] text-[#EDEDED] outline-none disabled:cursor-not-allowed disabled:opacity-55"
+                  >
+                    {discordChannelOptions.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : null}
           </ServerSurface>
 
           <ServerSurface className="relative z-0 overflow-hidden">

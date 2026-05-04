@@ -2575,7 +2575,7 @@ export function DashboardWorkspace({
           }`}
         >
           <div className={`${sidebarShellClass} h-full rounded-none border-y-0 border-l-0 border-r-[#151515]`}>
-            <LandingReveal delay={24} duration={240}>
+            <LandingReveal delay={24} duration={240} className="h-full">
               {renderSidebarContent(desktopTeamMenuRef, desktopProfileMenuRef)}
             </LandingReveal>
           </div>

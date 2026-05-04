@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
+  fetchGuildChannelsByBot,
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
@@ -20,7 +21,9 @@ const CATEGORY_DESCRIPTION_MAX_LENGTH = 1200;
 const SEO_TITLE_MAX_LENGTH = 90;
 const SEO_DESCRIPTION_MAX_LENGTH = 180;
 const CATEGORY_SELECT =
-  "id, guild_id, title, description, collection_type, image_url, theme_model, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at";
+  "id, guild_id, title, description, collection_type, image_url, theme_model, discord_publication_mode, discord_channel_id, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at";
+const GUILD_TEXT = 0;
+const GUILD_ANNOUNCEMENT = 5;
 
 type GuildSalesCategoryRecord = {
   id: string;
@@ -30,6 +33,8 @@ type GuildSalesCategoryRecord = {
   collection_type: string;
   image_url: string | null;
   theme_model: string;
+  discord_publication_mode: string | null;
+  discord_channel_id: string | null;
   published_virtual_store: boolean;
   published_point_of_sale: boolean;
   seo_title: string | null;
@@ -52,6 +57,14 @@ function normalizeCollectionType(value: unknown) {
 
 function normalizeThemeModel(value: unknown) {
   return value === "compact" || value === "featured" ? value : "default";
+}
+
+function normalizeDiscordPublicationMode(value: unknown) {
+  return value === "channel" ? "channel" : "online_only";
+}
+
+function isValidTextChannelType(type?: number) {
+  return type === GUILD_TEXT || type === GUILD_ANNOUNCEMENT;
 }
 
 function isMissingSalesCategoriesTable(error: unknown) {
@@ -90,6 +103,9 @@ function buildCategoryResponse(record: GuildSalesCategoryRecord) {
       record.theme_model === "compact" || record.theme_model === "featured"
         ? record.theme_model
         : "default",
+    discordPublicationMode:
+      record.discord_publication_mode === "channel" ? "channel" : "online_only",
+    discordChannelId: record.discord_channel_id || "",
     publishedVirtualStore: record.published_virtual_store,
     publishedPointOfSale: record.published_point_of_sale,
     seoTitle: record.seo_title || "",
@@ -177,6 +193,60 @@ async function ensureGuildAccess(
     context: {
       authUserId: sessionData.authSession.user.id,
     },
+  };
+}
+
+async function validateDiscordPublicationInput(input: {
+  guildId: string;
+  mode: string;
+  channelId: string;
+}) {
+  if (input.mode !== "channel") {
+    return {
+      ok: true as const,
+      channelId: null as string | null,
+    };
+  }
+
+  if (!isGuildId(input.channelId)) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        {
+          ok: false,
+          message:
+            "Selecione um canal Discord ou use a opcao Somente online antes de salvar.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+
+  const rawChannels = await fetchGuildChannelsByBot(input.guildId);
+  if (!rawChannels) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, message: "Bot nao possui acesso aos canais deste servidor." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const channel = rawChannels.find((item) => item.id === input.channelId);
+  if (!channel || !isValidTextChannelType(channel.type)) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { ok: false, message: "Canal Discord invalido para a categoria." },
+        { status: 400 },
+      ),
+    };
+  }
+
+  return {
+    ok: true as const,
+    channelId: input.channelId,
   };
 }
 
@@ -279,9 +349,13 @@ export async function POST(request: Request) {
     );
     const collectionType = normalizeCollectionType(rawBody.collectionType);
     const themeModel = normalizeThemeModel(rawBody.themeModel);
+    const discordPublicationMode = normalizeDiscordPublicationMode(
+      rawBody.discordPublicationMode,
+    );
+    const discordChannelId = getTrimmedText(rawBody.discordChannelId, 25);
     const imageUrl = getTrimmedText(rawBody.imageUrl, 500) || null;
     const publishedVirtualStore = rawBody.publishedVirtualStore !== false;
-    const publishedPointOfSale = rawBody.publishedPointOfSale === true;
+    const publishedPointOfSale = false;
 
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
@@ -304,6 +378,15 @@ export async function POST(request: Request) {
     const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
     if (!access.ok) return applyNoStoreHeaders(access.response);
 
+    const discordPublication = await validateDiscordPublicationInput({
+      guildId,
+      mode: discordPublicationMode,
+      channelId: discordChannelId,
+    });
+    if (!discordPublication.ok) {
+      return applyNoStoreHeaders(discordPublication.response);
+    }
+
     const supabase = getSupabaseAdminClientOrThrow();
     const result = await supabase
       .from("guild_sales_categories")
@@ -314,6 +397,8 @@ export async function POST(request: Request) {
         collection_type: collectionType,
         image_url: imageUrl,
         theme_model: themeModel,
+        discord_publication_mode: discordPublicationMode,
+        discord_channel_id: discordPublication.channelId,
         published_virtual_store: publishedVirtualStore,
         published_point_of_sale: publishedPointOfSale,
         seo_title: seoTitle || title,
@@ -372,9 +457,13 @@ export async function PATCH(request: Request) {
     );
     const collectionType = normalizeCollectionType(rawBody.collectionType);
     const themeModel = normalizeThemeModel(rawBody.themeModel);
+    const discordPublicationMode = normalizeDiscordPublicationMode(
+      rawBody.discordPublicationMode,
+    );
+    const discordChannelId = getTrimmedText(rawBody.discordChannelId, 25);
     const imageUrl = getTrimmedText(rawBody.imageUrl, 500) || null;
     const publishedVirtualStore = rawBody.publishedVirtualStore !== false;
-    const publishedPointOfSale = rawBody.publishedPointOfSale === true;
+    const publishedPointOfSale = false;
 
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
@@ -416,6 +505,15 @@ export async function PATCH(request: Request) {
       );
     }
 
+    const discordPublication = await validateDiscordPublicationInput({
+      guildId,
+      mode: discordPublicationMode,
+      channelId: discordChannelId,
+    });
+    if (!discordPublication.ok) {
+      return applyNoStoreHeaders(discordPublication.response);
+    }
+
     const supabase = getSupabaseAdminClientOrThrow();
     const result = await supabase
       .from("guild_sales_categories")
@@ -425,6 +523,8 @@ export async function PATCH(request: Request) {
         collection_type: collectionType,
         image_url: imageUrl,
         theme_model: themeModel,
+        discord_publication_mode: discordPublicationMode,
+        discord_channel_id: discordPublication.channelId,
         published_virtual_store: publishedVirtualStore,
         published_point_of_sale: publishedPointOfSale,
         seo_title: seoTitle || title,
