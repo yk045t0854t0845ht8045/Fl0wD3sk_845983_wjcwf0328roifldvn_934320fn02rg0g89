@@ -8,7 +8,7 @@ import {
   getEffectiveDashboardPermissions,
   type TeamRolePermission,
 } from "@/lib/teams/userTeams";
-import { sanitizeErrorMessage } from "@/lib/security/errors";
+import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
 import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
@@ -32,6 +32,11 @@ import { validateSalesMercadoPagoAccessToken } from "@/lib/sales/mercadoPago";
 
 const PAYMENT_METHODS_SELECT =
   "method_key, provider, payment_rail, display_name, status, credentials_configured, environment, last_health_status, last_health_error, updated_at";
+const PAYMENT_METHODS_BASE_SELECT =
+  "method_key, provider, payment_rail, display_name, status, credentials_configured, environment, updated_at";
+const PAYMENT_METHODS_MIN_SELECT = "method_key, status";
+const MISSING_SECURE_CREDENTIAL_MESSAGE =
+  "Credenciais seguras ausentes. Reative o PIX e salve novamente o Access Token do Mercado Pago.";
 
 type AccessResult =
   | {
@@ -123,23 +128,237 @@ function resolveCredentialField(
   return getTrimmedText(rawBody[field], maxLength);
 }
 
-async function loadRows(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
+function getSupabaseErrorInfo(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  return {
+    code: typeof record.code === "string" ? record.code : "",
+    message: typeof record.message === "string" ? record.message.toLowerCase() : "",
+  };
+}
+
+function isMissingPaymentMethodsTable(error: unknown) {
+  const { code, message } = getSupabaseErrorInfo(error);
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("guild_sales_payment_methods") &&
+      (message.includes("relation") || message.includes("table")) &&
+      (message.includes("does not exist") ||
+        message.includes("not found") ||
+        message.includes("could not find")))
+  );
+}
+
+function isMissingPaymentMethodsColumn(error: unknown) {
+  const { code, message } = getSupabaseErrorInfo(error);
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("schema cache") ||
+    message.includes("column")
+  );
+}
+
+function normalizePaymentMethodRow(row: Partial<SalesPaymentMethodRow>) {
+  return {
+    method_key: row.method_key,
+    provider: row.provider ?? null,
+    payment_rail: row.payment_rail ?? null,
+    display_name: row.display_name ?? null,
+    status: row.status ?? null,
+    credentials_configured: row.credentials_configured ?? null,
+    environment: row.environment ?? null,
+    last_health_status: row.last_health_status ?? null,
+    last_health_error: row.last_health_error ?? null,
+    updated_at: row.updated_at ?? null,
+  } as SalesPaymentMethodRow;
+}
+
+async function selectRowsWithFallback(guildId: string, selectColumns: string) {
+  return getSupabaseAdminClientOrThrow()
     .from("guild_sales_payment_methods")
-    .select(PAYMENT_METHODS_SELECT)
+    .select(selectColumns)
     .eq("guild_id", guildId)
-    .returns<SalesPaymentMethodRow[]>();
+    .returns<Partial<SalesPaymentMethodRow>[]>();
+}
+
+async function loadRows(guildId: string): Promise<SalesPaymentMethodRow[]> {
+  let result = await selectRowsWithFallback(guildId, PAYMENT_METHODS_SELECT);
 
   if (result.error) {
-    const message = result.error.message.toLowerCase();
-    if (result.error.code === "42P01" || message.includes("guild_sales_payment_methods")) {
+    if (isMissingPaymentMethodsTable(result.error)) {
       return [];
     }
+    if (isMissingPaymentMethodsColumn(result.error)) {
+      result = await selectRowsWithFallback(guildId, PAYMENT_METHODS_BASE_SELECT);
+    }
+  }
+
+  if (result.error && isMissingPaymentMethodsColumn(result.error)) {
+    result = await selectRowsWithFallback(guildId, PAYMENT_METHODS_MIN_SELECT);
+  }
+
+  if (result.error) {
+    if (isMissingPaymentMethodsTable(result.error)) return [];
     throw new Error(result.error.message);
   }
 
-  return result.data || [];
+  return reconcileRowsWithSecureVault(guildId, (result.data || []).map(normalizePaymentMethodRow));
+}
+
+async function reconcileRowsWithSecureVault(
+  guildId: string,
+  rows: SalesPaymentMethodRow[],
+): Promise<SalesPaymentMethodRow[]> {
+  const mercadoPagoRow = rows.find((row) => row.method_key === "mercado_pago");
+  let accessToken = "";
+  let publicKey = "";
+  let environment = mercadoPagoRow?.environment || "production";
+
+  try {
+    const snapshot =
+      await readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>({
+        guildId,
+        moduleKey: "sales_payment_methods",
+      });
+    accessToken = snapshot?.payload?.mercadoPago?.accessToken?.trim() || "";
+    publicKey = snapshot?.payload?.mercadoPago?.publicKey?.trim() || "";
+    environment = normalizeSalesPaymentEnvironment(
+      snapshot?.payload?.mercadoPago?.environment || environment,
+    );
+  } catch (error) {
+    console.warn("[sales-payment-methods] secure vault read failed", {
+      guildId,
+      error: extractAuditErrorMessage(error),
+    });
+  }
+
+  if (!mercadoPagoRow) {
+    if (!accessToken) return rows;
+    return [
+      ...rows,
+      {
+        method_key: "mercado_pago",
+        provider: "mercado_pago",
+        payment_rail: "pix",
+        display_name: "Mercado Pago",
+        status: "active",
+        credentials_configured: true,
+        environment,
+        last_health_status: "unchecked",
+        last_health_error: "",
+        updated_at: null,
+      },
+    ] as SalesPaymentMethodRow[];
+  }
+
+  if (accessToken) {
+    if (mercadoPagoRow.credentials_configured !== true) {
+      const repairResult = await getSupabaseAdminClientOrThrow()
+        .from("guild_sales_payment_methods")
+        .update({
+          credentials_configured: true,
+          environment,
+          public_key_fingerprint: createSecretFingerprint(publicKey),
+          access_token_fingerprint: createSecretFingerprint(accessToken),
+          last_health_status:
+            mercadoPagoRow.last_health_status === "failed"
+              ? "unchecked"
+              : mercadoPagoRow.last_health_status || "unchecked",
+          last_health_error:
+            mercadoPagoRow.last_health_status === "failed"
+              ? ""
+              : mercadoPagoRow.last_health_error || "",
+        })
+        .eq("guild_id", guildId)
+        .eq("method_key", "mercado_pago");
+      if (repairResult.error) {
+        console.warn("[sales-payment-methods] secure credential repair failed", {
+          guildId,
+          error: extractAuditErrorMessage(repairResult.error),
+        });
+      }
+    }
+
+    return rows.map((row) =>
+      row.method_key === "mercado_pago"
+        ? {
+            ...row,
+            credentials_configured: true,
+            environment,
+            last_health_status:
+              row.last_health_status === "failed"
+                ? "unchecked"
+                : row.last_health_status,
+            last_health_error:
+              row.last_health_status === "failed" ? "" : row.last_health_error,
+          }
+        : row,
+    ) as SalesPaymentMethodRow[];
+  }
+
+  if (
+    mercadoPagoRow.credentials_configured === true ||
+    mercadoPagoRow.status === "active"
+  ) {
+    const cleanupResult = await getSupabaseAdminClientOrThrow()
+      .from("guild_sales_payment_methods")
+      .update({
+        status: "disabled",
+        credentials_configured: false,
+        last_health_status: "failed",
+        last_health_error: MISSING_SECURE_CREDENTIAL_MESSAGE,
+      })
+      .eq("guild_id", guildId)
+      .eq("method_key", "mercado_pago");
+    if (cleanupResult.error) {
+      console.warn("[sales-payment-methods] stale secure credential cleanup failed", {
+        guildId,
+        error: extractAuditErrorMessage(cleanupResult.error),
+      });
+    }
+  }
+
+  return rows.map((row) =>
+    row.method_key === "mercado_pago"
+      ? {
+          ...row,
+          status: "disabled" as const,
+          credentials_configured: false,
+          last_health_status: "failed" as const,
+          last_health_error: MISSING_SECURE_CREDENTIAL_MESSAGE,
+        }
+      : row,
+  ) as SalesPaymentMethodRow[];
+}
+
+function resolveSalesPaymentMethodsError(error: unknown, fallback: string) {
+  const message = extractAuditErrorMessage(error, fallback);
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("schema cache") ||
+    normalized.includes("column") ||
+    normalized.includes("does not exist") ||
+    normalized.includes("guild_settings_secure_snapshots") ||
+    normalized.includes("guild_sales_payment_methods")
+  ) {
+    return "Banco de vendas em producao desatualizado. Aplique as migrations 101 e 115 e tente novamente.";
+  }
+
+  if (
+    normalized.includes("nao autenticado") ||
+    normalized.includes("permissao") ||
+    normalized.includes("discord") ||
+    normalized.includes("mercado pago") ||
+    normalized.includes("access token") ||
+    normalized.includes("cofre seguro")
+  ) {
+    return message;
+  }
+
+  return sanitizeErrorMessage(error, fallback);
 }
 
 export async function GET(request: Request) {
@@ -167,7 +386,10 @@ export async function GET(request: Request) {
       NextResponse.json(
         {
           ok: false,
-          message: sanitizeErrorMessage(error, "Erro ao carregar metodos de pagamento."),
+          message: resolveSalesPaymentMethodsError(
+            error,
+            "Erro ao carregar metodos de pagamento.",
+          ),
         },
         { status: 500 },
       ),
@@ -328,7 +550,7 @@ export async function POST(request: Request) {
       );
     }
 
-    await writeServerSettingsVaultSnapshot({
+    const vaultWriteResult = await writeServerSettingsVaultSnapshot({
       guildId,
       moduleKey: "sales_payment_methods",
       configuredByUserId: access.context.authUserId,
@@ -342,6 +564,36 @@ export async function POST(request: Request) {
         },
       } satisfies SalesPaymentMethodsSecureSnapshot,
     });
+    if (!vaultWriteResult) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Nao foi possivel salvar as credenciais no cofre seguro. Aplique a migration 101 antes de ativar PIX em producao.",
+          },
+          { status: 500 },
+        ),
+      );
+    }
+
+    const verification =
+      await readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>({
+        guildId,
+        moduleKey: "sales_payment_methods",
+      });
+    if (!verification?.payload?.mercadoPago?.accessToken?.trim()) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message:
+              "As credenciais foram enviadas, mas nao puderam ser confirmadas no cofre seguro. Revise a chave de criptografia e salve novamente.",
+          },
+          { status: 500 },
+        ),
+      );
+    }
 
     const result = await supabase
       .from("guild_sales_payment_methods")
@@ -381,7 +633,10 @@ export async function POST(request: Request) {
       NextResponse.json(
         {
           ok: false,
-          message: sanitizeErrorMessage(error, "Erro ao salvar metodo de pagamento."),
+          message: resolveSalesPaymentMethodsError(
+            error,
+            "Erro ao salvar metodo de pagamento.",
+          ),
         },
         { status: 500 },
       ),
