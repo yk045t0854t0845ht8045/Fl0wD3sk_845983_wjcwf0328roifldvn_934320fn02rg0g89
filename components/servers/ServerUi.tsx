@@ -171,3 +171,30 @@ export function ServerEmptyState({
     </div>
   );
 }
+
+export function ServerDiscordRelinkState({
+  description = "Sua autorizacao do Discord expirou ou foi revogada. Para proteger o servidor, precisamos confirmar novamente sua conta antes de carregar estas configuracoes.",
+}: {
+  description?: string;
+}) {
+  const handleRelink = () => {
+    const next =
+      typeof window === "undefined"
+        ? "/servers"
+        : `${window.location.pathname}${window.location.search}`;
+    window.location.href = `/discord/link/start?next=${encodeURIComponent(next)}`;
+  };
+
+  return (
+    <ServerEmptyState
+      icon={<span className="text-[20px] font-bold">DC</span>}
+      title="Revincule o Discord"
+      description={description}
+      action={
+        <ServerButton onClick={handleRelink} variant="primary">
+          Revincular Discord
+        </ServerButton>
+      }
+    />
+  );
+}

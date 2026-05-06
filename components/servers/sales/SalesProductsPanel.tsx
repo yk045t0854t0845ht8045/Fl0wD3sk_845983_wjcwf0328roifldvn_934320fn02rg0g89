@@ -32,6 +32,7 @@ import {
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   ServerButton,
+  ServerDiscordRelinkState,
   ServerEmptyState,
   ServerIconFrame,
   ServerSectionHeading,
@@ -97,6 +98,8 @@ type DiscordChannel = {
 
 type ProductsResponse = {
   ok: boolean;
+  code?: string;
+  reauthRequired?: boolean;
   message?: string;
   products?: SalesProduct[];
   product?: SalesProduct;
@@ -550,6 +553,7 @@ export function SalesProductsListPanel({
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [needsDiscordRelink, setNeedsDiscordRelink] = useState(false);
 
   const loadProducts = useCallback(async () => {
     const cached = readCache(productsListCache, guildId);
@@ -564,6 +568,7 @@ export function SalesProductsListPanel({
       setIsLoading(true);
     }
     setErrorMessage(null);
+    setNeedsDiscordRelink(false);
 
     try {
       const nextProducts = await coalescedClientFetch(
@@ -575,6 +580,9 @@ export function SalesProductsListPanel({
           );
           const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
           if (!response.ok || !payload.ok) {
+            if (payload.reauthRequired || payload.code === "DISCORD_RELINK_REQUIRED") {
+              setNeedsDiscordRelink(true);
+            }
             throw new Error(payload.message || "Erro ao carregar produtos.");
           }
           return payload.products || [];
@@ -663,6 +671,8 @@ export function SalesProductsListPanel({
               </div>
             ))}
           </div>
+        ) : needsDiscordRelink ? (
+          <ServerDiscordRelinkState />
         ) : errorMessage ? (
           <div className="px-[22px] py-[32px] text-center">
             <p className="text-[14px] font-medium text-[#E5E5E5]">

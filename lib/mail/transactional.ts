@@ -61,6 +61,7 @@ type SalesEmailDelivery = {
   productTitle?: string | null;
   deliveryMethod?: string | null;
   status?: string | null;
+  message?: string | null;
 };
 
 type SalesEmailSettings = {
@@ -234,10 +235,17 @@ function buildSalesDeliveriesSummary(deliveries: SalesEmailDelivery[]) {
             ? "Email"
             : "Area segura Flowdesk";
       const status = delivery.status === "failed" ? "pendente" : "liberada";
-      return `${title}: ${status} por ${method}`;
+      const emailDeliveryMessage =
+        delivery.deliveryMethod === "email" &&
+        delivery.status !== "failed" &&
+        typeof delivery.message === "string" &&
+        delivery.message.trim()
+          ? ` - ${delivery.message.trim()}`
+          : "";
+      return `${title}: ${status} por ${method}${emailDeliveryMessage}`;
     })
     .join(" | ")
-    .slice(0, 900);
+    .slice(0, 1800);
 }
 
 function resolveBillingLabel(order: PaymentEmailOrder) {

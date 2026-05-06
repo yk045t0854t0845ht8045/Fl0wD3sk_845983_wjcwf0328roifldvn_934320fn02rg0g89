@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
+  isDiscordRelinkRequiredError,
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
@@ -50,6 +51,19 @@ type AccessResult =
       response: NextResponse;
     };
 
+function buildDiscordRelinkResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "DISCORD_RELINK_REQUIRED",
+      reauthRequired: true,
+      message:
+        "Sua conexao com o Discord expirou ou foi revogada. Revincule sua conta Discord para continuar gerenciando este servidor.",
+    },
+    { status: 401 },
+  );
+}
+
 function getTrimmedText(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
@@ -58,7 +72,15 @@ async function ensureGuildAccess(
   guildId: string,
   requiredPermission: TeamRolePermission,
 ): Promise<AccessResult> {
-  const sessionData = await resolveSessionAccessToken();
+  let sessionData;
+  try {
+    sessionData = await resolveSessionAccessToken();
+  } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      return { ok: false, response: buildDiscordRelinkResponse() };
+    }
+    throw error;
+  }
   if (!sessionData?.authSession || !sessionData.accessToken) {
     return {
       ok: false,
@@ -75,13 +97,21 @@ async function ensureGuildAccess(
       guildId,
     });
 
-  const accessibleGuild = await assertUserAdminInGuildOrNull(
-    {
-      authSession: sessionData.authSession,
-      accessToken: sessionData.accessToken,
-    },
-    guildId,
-  );
+  let accessibleGuild;
+  try {
+    accessibleGuild = await assertUserAdminInGuildOrNull(
+      {
+        authSession: sessionData.authSession,
+        accessToken: sessionData.accessToken,
+      },
+      guildId,
+    );
+  } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      return { ok: false, response: buildDiscordRelinkResponse() };
+    }
+    throw error;
+  }
 
   const hasFullAccess = dashboardPerms === "full";
   const hasSpecificPerm =
@@ -126,6 +156,45 @@ function resolveCredentialField(
     return typeof currentValue === "string" ? currentValue.trim() : "";
   }
   return getTrimmedText(rawBody[field], maxLength);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function hasMercadoPagoAccessToken(
+  value: SalesPaymentMethodsSecureSnapshot | null | undefined,
+) {
+  return Boolean(value?.mercadoPago?.accessToken?.trim());
+}
+
+async function confirmSalesPaymentVaultSnapshot(input: {
+  guildId: string;
+  localPayload?: unknown;
+}) {
+  const localPayload = input.localPayload as SalesPaymentMethodsSecureSnapshot | null | undefined;
+  if (hasMercadoPagoAccessToken(localPayload)) {
+    return true;
+  }
+
+  const delays = [120, 360, 800];
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    const verification =
+      await readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>({
+        guildId: input.guildId,
+        moduleKey: "sales_payment_methods",
+      });
+    if (hasMercadoPagoAccessToken(verification?.payload)) {
+      return true;
+    }
+    if (attempt < delays.length) {
+      await sleep(delays[attempt]);
+    }
+  }
+
+  return false;
 }
 
 function getSupabaseErrorInfo(error: unknown) {
@@ -577,18 +646,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const verification =
-      await readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>({
-        guildId,
-        moduleKey: "sales_payment_methods",
-      });
-    if (!verification?.payload?.mercadoPago?.accessToken?.trim()) {
+    const vaultConfirmed = await confirmSalesPaymentVaultSnapshot({
+      guildId,
+      localPayload: vaultWriteResult.payload,
+    });
+    if (!vaultConfirmed) {
       return applyNoStoreHeaders(
         NextResponse.json(
           {
             ok: false,
             message:
-              "As credenciais foram enviadas, mas nao puderam ser confirmadas no cofre seguro. Revise a chave de criptografia e salve novamente.",
+              "Nao foi possivel confirmar as credenciais no cofre seguro agora. Tente salvar novamente em alguns instantes; se persistir, revise FLOWSECURE_MASTER_KEY em producao.",
           },
           { status: 500 },
         ),

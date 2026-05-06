@@ -54,6 +54,13 @@ export class DiscordRateLimitError extends Error {
   }
 }
 
+export class DiscordRelinkRequiredError extends Error {
+  constructor(message = "Revincule sua conta Discord para continuar.") {
+    super(message);
+    this.name = "DiscordRelinkRequiredError";
+  }
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -176,6 +183,11 @@ export async function fetchDiscordGuilds(accessToken: string) {
 
     if (!response.ok) {
       const text = await response.text();
+      if (response.status === 401 || response.status === 403) {
+        throw new DiscordRelinkRequiredError(
+          "Sua autorizacao do Discord expirou ou foi revogada. Revincule sua conta Discord para continuar.",
+        );
+      }
       throw new Error(`Falha ao buscar servidores do Discord: ${text}`);
     }
 

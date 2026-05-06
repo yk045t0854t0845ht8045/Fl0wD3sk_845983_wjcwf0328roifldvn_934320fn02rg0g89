@@ -48,10 +48,10 @@ function renderOtpCodeField(code: string) {
         max-width:320px;
         margin:0 auto;
         padding:18px 20px;
-        border:1px solid #D7E0EB;
+        border:1px solid #262B33;
         border-radius:20px;
-        background-color:#F8FAFC;
-        color:#0F172A;
+        background-color:#101318;
+        color:#F8FAFC;
         font-family:'SFMono-Regular','Roboto Mono','Menlo','Consolas','Liberation Mono',monospace;
         font-size:${fontSize}px;
         line-height:1.2;
@@ -190,11 +190,11 @@ function buildLoginOtpEmailHtml(input: {
       <head>
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <meta name="color-scheme" content="light only" />
-        <meta name="supported-color-schemes" content="light only" />
+        <meta name="color-scheme" content="dark only" />
+        <meta name="supported-color-schemes" content="dark only" />
         <title>Flowdesk | Codigo de verificacao</title>
       </head>
-      <body style="margin:0;padding:0;background-color:#EEF3F8;">
+      <body style="margin:0;padding:0;background-color:#05070A;">
         <div
           style="
             display:none;
@@ -205,7 +205,7 @@ function buildLoginOtpEmailHtml(input: {
             mso-hide:all;
             font-size:1px;
             line-height:1px;
-            color:#EEF3F8;
+            color:#05070A;
           "
         >
           Seu codigo de verificacao Flowdesk e ${safeCode}. Ele expira em ${safeExpiresLabel}.
@@ -216,7 +216,7 @@ function buildLoginOtpEmailHtml(input: {
           cellspacing="0"
           border="0"
           width="100%"
-          style="width:100%;border-collapse:collapse;background-color:#EEF3F8;"
+          style="width:100%;border-collapse:collapse;background-color:#05070A;"
         >
           <tr>
             <td align="center" style="padding:32px 16px;">
@@ -247,7 +247,7 @@ function buildLoginOtpEmailHtml(input: {
                             font-weight:700;
                             letter-spacing:0.22em;
                             text-transform:uppercase;
-                            color:#111827;
+                            color:#F8FAFC;
                           "
                         >
                           Flowdesk
@@ -258,7 +258,7 @@ function buildLoginOtpEmailHtml(input: {
                             font-family:Arial,Helvetica,sans-serif;
                             font-size:12px;
                             line-height:18px;
-                            color:#5B6472;
+                            color:#9CA3AF;
                           "
                         >
                           Acesso protegido
@@ -270,11 +270,11 @@ function buildLoginOtpEmailHtml(input: {
                 <tr>
                   <td
                     style="
-                      background-color:#FFFFFF;
-                      border:1px solid #D8E1EC;
+                      background-color:#0B0F14;
+                      border:1px solid #222936;
                       border-radius:28px;
                       overflow:hidden;
-                      box-shadow:0 20px 60px rgba(15,23,42,0.08);
+                      box-shadow:0 20px 60px rgba(0,0,0,0.34);
                     "
                   >
                     <table
@@ -295,7 +295,7 @@ function buildLoginOtpEmailHtml(input: {
                               line-height:1.12;
                               font-weight:700;
                               letter-spacing:-0.03em;
-                              color:#0F172A;
+                              color:#F8FAFC;
                             "
                           >
                             Confirme esta tentativa de acesso
@@ -306,7 +306,7 @@ function buildLoginOtpEmailHtml(input: {
                               font-family:Arial,Helvetica,sans-serif;
                               font-size:16px;
                               line-height:1.75;
-                              color:#475569;
+                              color:#CBD5E1;
                             "
                           >
                             Use o codigo temporario abaixo para concluir a entrada no painel com seguranca.
@@ -342,9 +342,9 @@ function buildLoginOtpEmailHtml(input: {
                             style="
                               width:100%;
                               border-collapse:separate;
-                              border:1px solid #E2E8F0;
+                              border:1px solid #222936;
                               border-radius:20px;
-                              background-color:#F8FAFC;
+                              background-color:#101318;
                             "
                           >
                             <tr>
@@ -356,7 +356,7 @@ function buildLoginOtpEmailHtml(input: {
                                     line-height:16px;
                                     letter-spacing:0.08em;
                                     text-transform:uppercase;
-                                    color:#64748B;
+                                    color:#94A3B8;
                                   "
                                 >
                                   Validade
@@ -368,7 +368,7 @@ function buildLoginOtpEmailHtml(input: {
                                     font-size:15px;
                                     line-height:22px;
                                     font-weight:700;
-                                    color:#0F172A;
+                                    color:#F8FAFC;
                                   "
                                 >
                                   ${safeExpiresLabel}
@@ -382,7 +382,7 @@ function buildLoginOtpEmailHtml(input: {
                                     line-height:16px;
                                     letter-spacing:0.08em;
                                     text-transform:uppercase;
-                                    color:#64748B;
+                                    color:#94A3B8;
                                   "
                                 >
                                   Uso unico
@@ -394,7 +394,7 @@ function buildLoginOtpEmailHtml(input: {
                                     font-size:15px;
                                     line-height:22px;
                                     font-weight:700;
-                                    color:#0F172A;
+                                    color:#F8FAFC;
                                   "
                                 >
                                   Somente nesta tentativa
@@ -415,13 +415,13 @@ function buildLoginOtpEmailHtml(input: {
                             style="
                               width:100%;
                               border-collapse:separate;
-                              border:1px solid #E2E8F0;
+                              border:1px solid #222936;
                               border-radius:20px;
-                              background-color:#FFFFFF;
+                              background-color:#0B0F14;
                             "
                           >
                             <tr>
-                              <td style="padding:16px 18px;border-bottom:1px solid #EDF2F7;">
+                              <td style="padding:16px 18px;border-bottom:1px solid #1D2430;">
                                 <div
                                   style="
                                     font-family:Arial,Helvetica,sans-serif;
@@ -429,7 +429,7 @@ function buildLoginOtpEmailHtml(input: {
                                     line-height:16px;
                                     letter-spacing:0.08em;
                                     text-transform:uppercase;
-                                    color:#64748B;
+                                    color:#94A3B8;
                                   "
                                 >
                                   Conta
@@ -441,7 +441,7 @@ function buildLoginOtpEmailHtml(input: {
                                     font-size:15px;
                                     line-height:22px;
                                     font-weight:700;
-                                    color:#0F172A;
+                                    color:#F8FAFC;
                                   "
                                 >
                                   ${safeMaskedRecipient}
@@ -457,7 +457,7 @@ function buildLoginOtpEmailHtml(input: {
                                     line-height:16px;
                                     letter-spacing:0.08em;
                                     text-transform:uppercase;
-                                    color:#64748B;
+                                    color:#94A3B8;
                                   "
                                 >
                                   Solicitado em
@@ -469,7 +469,7 @@ function buildLoginOtpEmailHtml(input: {
                                     font-size:15px;
                                     line-height:22px;
                                     font-weight:700;
-                                    color:#0F172A;
+                                    color:#F8FAFC;
                                   "
                                 >
                                   ${safeRequestedAtLabel}
@@ -490,8 +490,8 @@ function buildLoginOtpEmailHtml(input: {
                             style="
                               width:100%;
                               border-collapse:separate;
-                              background-color:#F9FBFF;
-                              border:1px solid #E4EAF3;
+                              background-color:#101318;
+                              border:1px solid #222936;
                               border-radius:18px;
                             "
                           >
@@ -503,7 +503,7 @@ function buildLoginOtpEmailHtml(input: {
                                     font-size:14px;
                                     line-height:20px;
                                     font-weight:700;
-                                    color:#0F172A;
+                                    color:#F8FAFC;
                                   "
                                 >
                                   Dica de seguranca
@@ -514,7 +514,7 @@ function buildLoginOtpEmailHtml(input: {
                                     font-family:Arial,Helvetica,sans-serif;
                                     font-size:14px;
                                     line-height:1.7;
-                                    color:#475569;
+                                    color:#CBD5E1;
                                   "
                                 >
                                   A Flowdesk nunca solicita este codigo por chat, telefone ou DM. Se voce nao iniciou este acesso, ignore esta mensagem.
@@ -532,7 +532,7 @@ function buildLoginOtpEmailHtml(input: {
                               font-family:Arial,Helvetica,sans-serif;
                               font-size:13px;
                               line-height:1.8;
-                              color:#64748B;
+                              color:#94A3B8;
                             "
                           >
                             Este email foi enviado automaticamente para confirmar um acesso seguro ao seu painel.
@@ -550,7 +550,7 @@ function buildLoginOtpEmailHtml(input: {
                       font-family:Arial,Helvetica,sans-serif;
                       font-size:12px;
                       line-height:1.7;
-                      color:#6B7280;
+                      color:#9CA3AF;
                     "
                   >
                     Flowdesk Security
@@ -858,17 +858,17 @@ function renderTransactionalSections(
       cellspacing="0"
       border="0"
       width="100%"
-      style="width:100%;border-collapse:separate;border:1px solid #E2E8F0;border-radius:20px;background-color:#F8FAFC;margin-top:22px;"
+      style="width:100%;border-collapse:separate;border:1px solid #222936;border-radius:20px;background-color:#101318;margin-top:22px;"
     >
       ${visibleSections
         .map(
           (section, index) => `
             <tr>
-              <td style="padding:15px 18px;${index > 0 ? "border-top:1px solid #EDF2F7;" : ""}">
-                <div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:16px;letter-spacing:0.08em;text-transform:uppercase;color:#64748B;">
+              <td style="padding:15px 18px;${index > 0 ? "border-top:1px solid #1D2430;" : ""}">
+                <div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:16px;letter-spacing:0.08em;text-transform:uppercase;color:#94A3B8;">
                   ${escapeHtml(section.label)}
                 </div>
-                <div style="margin-top:6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;font-weight:700;color:#0F172A;">
+                <div style="margin-top:6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;font-weight:700;color:#F8FAFC;">
                   ${escapeHtml(String(section.value))}
                 </div>
               </td>
@@ -889,14 +889,14 @@ function renderTransactionalAction(
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
       <tr>
         <td
-          bgcolor="#0F172A"
-          style="border-radius:16px;background-color:#0F172A;"
+          bgcolor="#F8FAFC"
+          style="border-radius:16px;background-color:#F8FAFC;"
         >
           <a
             href="${escapeHtml(action.href)}"
             target="_blank"
             rel="noopener noreferrer"
-            style="display:inline-block;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:700;color:#FFFFFF;text-decoration:none;border-radius:16px;"
+            style="display:inline-block;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:700;color:#05070A;text-decoration:none;border-radius:16px;"
           >
             ${escapeHtml(action.label)}
           </a>
@@ -930,15 +930,15 @@ function buildTransactionalEmailHtml(input: {
       <head>
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <meta name="color-scheme" content="light only" />
-        <meta name="supported-color-schemes" content="light only" />
+        <meta name="color-scheme" content="dark only" />
+        <meta name="supported-color-schemes" content="dark only" />
         <title>Flowdesk</title>
       </head>
-      <body style="margin:0;padding:0;background-color:#EEF3F8;">
-        <div style="display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#EEF3F8;">
+      <body style="margin:0;padding:0;background-color:#05070A;">
+        <div style="display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#05070A;">
           ${safePreheader}
         </div>
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#EEF3F8;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#05070A;">
           <tr>
             <td align="center" style="padding:32px 16px;">
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:640px;border-collapse:separate;">
@@ -946,10 +946,10 @@ function buildTransactionalEmailHtml(input: {
                   <td style="padding:0 8px 16px 8px;">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
                       <tr>
-                        <td style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:#111827;">
+                        <td style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:#F8FAFC;">
                           Flowdesk
                         </td>
-                        <td align="right" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#5B6472;">
+                        <td align="right" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#9CA3AF;">
                           ${safeBadgeLabel}
                         </td>
                       </tr>
@@ -957,19 +957,19 @@ function buildTransactionalEmailHtml(input: {
                   </td>
                 </tr>
                 <tr>
-                  <td style="background-color:#FFFFFF;border:1px solid #D8E1EC;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(15,23,42,0.08);">
+                  <td style="background-color:#0B0F14;border:1px solid #222936;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.34);">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
                       <tr>
                         <td style="padding:36px 40px 34px 40px;">
-                          <h1 style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:32px;line-height:1.15;font-weight:700;color:#0F172A;">
+                          <h1 style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:32px;line-height:1.15;font-weight:700;color:#F8FAFC;">
                             ${safeTitle}
                           </h1>
-                          <p style="margin:14px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.75;color:#475569;">
+                          <p style="margin:14px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.75;color:#CBD5E1;">
                             ${safeIntro}
                           </p>
                           ${renderTransactionalSections(input.sections)}
                           ${renderTransactionalAction(input.action)}
-                          <p style="margin:24px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.8;color:#64748B;">
+                          <p style="margin:24px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.8;color:#94A3B8;">
                             ${safeFooter}
                           </p>
                         </td>
@@ -978,7 +978,7 @@ function buildTransactionalEmailHtml(input: {
                   </td>
                 </tr>
                 <tr>
-                  <td align="center" style="padding:16px 20px 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.7;color:#6B7280;">
+                  <td align="center" style="padding:16px 20px 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.7;color:#9CA3AF;">
                     Flowdesk
                   </td>
                 </tr>

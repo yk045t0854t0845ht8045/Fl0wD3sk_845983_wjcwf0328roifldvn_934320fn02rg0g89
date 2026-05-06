@@ -19,6 +19,7 @@ import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import {
   ServerButton,
+  ServerDiscordRelinkState,
   ServerEmptyState,
   ServerSectionHeading,
   ServerSurface,
@@ -53,6 +54,8 @@ type PaymentMethod = {
 
 type MethodsResponse = {
   ok: boolean;
+  code?: string;
+  reauthRequired?: boolean;
   message?: string;
   detail?: string;
   methods?: PaymentMethod[];
@@ -358,12 +361,14 @@ export function SalesPaymentMethodsPanel({
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "disabled">("all");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [needsDiscordRelink, setNeedsDiscordRelink] = useState(false);
   const [editingMethod, setEditingMethod] = useState<PaymentMethod | null>(null);
   const [savingMethodKey, setSavingMethodKey] = useState<PaymentMethodKey | null>(null);
 
   const loadMethods = useCallback(async () => {
     setIsLoading(true);
     setErrorMessage(null);
+    setNeedsDiscordRelink(false);
     try {
       const response = await fetch(
         `/api/auth/me/guilds/sales-payment-methods?guildId=${encodeURIComponent(guildId)}`,
@@ -371,6 +376,9 @@ export function SalesPaymentMethodsPanel({
       );
       const payload = (await response.json().catch(() => ({}))) as MethodsResponse;
       if (!response.ok || !payload.ok) {
+        if (payload.reauthRequired || payload.code === "DISCORD_RELINK_REQUIRED") {
+          setNeedsDiscordRelink(true);
+        }
         throw new Error(payload.message || "Erro ao carregar metodos.");
       }
       setMethods(payload.methods || []);
@@ -498,6 +506,8 @@ export function SalesPaymentMethodsPanel({
               />
             ))}
           </div>
+        ) : needsDiscordRelink ? (
+          <ServerDiscordRelinkState />
         ) : errorMessage ? (
           <ServerEmptyState
             icon={<WalletCards className="h-[24px] w-[24px]" />}

@@ -43,8 +43,12 @@ type SalesCartRecord = {
   delivered_at: string | null;
   customer_email?: string | null;
   customer_name?: string | null;
+  delivery_started_at?: string | null;
+  delivery_lock_error?: string | null;
   receipt_email_sent_at?: string | null;
   receipt_email_error?: string | null;
+  discord_notification_sent_at?: string | null;
+  discord_notification_error?: string | null;
 };
 
 type SalesCartItemRecord = {
@@ -97,6 +101,7 @@ type SalesSettingsReceiptRecord = {
 type SalesCartDeliveryRecord = {
   id: string;
   product_id: string;
+  stock_item_id?: string | null;
   cart_item_id: string | null;
   unit_index: number | null;
   idempotency_key: string | null;
@@ -158,8 +163,12 @@ const BASE_CART_COLUMNS = [
 const OPTIONAL_CART_COLUMNS = [
   "customer_email",
   "customer_name",
+  "delivery_started_at",
+  "delivery_lock_error",
   "receipt_email_sent_at",
   "receipt_email_error",
+  "discord_notification_sent_at",
+  "discord_notification_error",
 ];
 
 const CART_BASE_SELECT = BASE_CART_COLUMNS.join(", ");
@@ -181,6 +190,7 @@ const PRODUCT_PAYMENT_SELECT = [
 const BASE_DELIVERY_COLUMNS = [
   "id",
   "product_id",
+  "stock_item_id",
   "delivery_method",
   "status",
   "delivery_payload",
@@ -225,8 +235,12 @@ function withOptionalCartDefaults(cart: SalesCartRecord) {
     ...cart,
     customer_email: cart.customer_email ?? null,
     customer_name: cart.customer_name ?? null,
+    delivery_started_at: cart.delivery_started_at ?? null,
+    delivery_lock_error: cart.delivery_lock_error ?? "",
     receipt_email_sent_at: cart.receipt_email_sent_at ?? null,
     receipt_email_error: cart.receipt_email_error ?? "",
+    discord_notification_sent_at: cart.discord_notification_sent_at ?? null,
+    discord_notification_error: cart.discord_notification_error ?? "",
   };
 }
 
@@ -587,7 +601,9 @@ function isMissingSalesStockItemsRuntimeSchema(error: {
 }
 
 async function loadAvailableStockQuantities(guildId: string, productIds: string[]) {
-  if (!productIds.length) return new Map<string, number>();
+  if (!productIds.length) {
+    return { quantities: new Map<string, number>(), reliable: true };
+  }
 
   const result = await getSupabaseAdminClientOrThrow()
     .from("guild_sales_stock_items")
@@ -598,7 +614,7 @@ async function loadAvailableStockQuantities(guildId: string, productIds: string[
 
   if (result.error) {
     if (isMissingSalesStockItemsRuntimeSchema(result.error)) {
-      return new Map<string, number>();
+      return { quantities: new Map<string, number>(), reliable: false };
     }
     throw new Error(result.error.message);
   }
@@ -615,7 +631,7 @@ async function loadAvailableStockQuantities(guildId: string, productIds: string[
       (quantities.get(productId) || 0) + Math.max(0, Number(row.quantity || 0)),
     );
   }
-  return quantities;
+  return { quantities, reliable: true };
 }
 
 async function repairProductStockQuantity(input: {
@@ -655,7 +671,7 @@ async function loadProductsForCartItems(items: SalesCartItemRecord[]) {
 
 async function refreshCartItemsForPayment(runtime: Awaited<ReturnType<typeof loadSalesCartRuntime>>) {
   const productsById = await loadProductsForCartItems(runtime.items);
-  const availableStockByProductId = await loadAvailableStockQuantities(
+  const stockAvailability = await loadAvailableStockQuantities(
     runtime.cart.guild_id,
     Array.from(productsById.keys()),
   );
@@ -673,14 +689,20 @@ async function refreshCartItemsForPayment(runtime: Awaited<ReturnType<typeof loa
 
     const quantity = normalizeQuantity(item.quantity);
     const storedStockQuantity = Number(product.stock_quantity || 0);
-    const stockItemsQuantity = availableStockByProductId.get(product.id) || 0;
-    const stockQuantity = Math.max(storedStockQuantity, stockItemsQuantity);
+    const stockItemsQuantity = stockAvailability.quantities.get(product.id) || 0;
+    const stockQuantity = stockAvailability.reliable
+      ? stockItemsQuantity
+      : storedStockQuantity;
     if (product.inventory_tracked !== false && stockQuantity < quantity) {
       throw new Error(
         `Estoque insuficiente para ${product.title || "produto"}. Disponivel: ${stockQuantity}.`,
       );
     }
-    if (product.inventory_tracked !== false && stockItemsQuantity !== storedStockQuantity) {
+    if (
+      product.inventory_tracked !== false &&
+      stockAvailability.reliable &&
+      stockItemsQuantity !== storedStockQuantity
+    ) {
       await repairProductStockQuantity({
         guildId: runtime.cart.guild_id,
         productId: product.id,
@@ -982,11 +1004,17 @@ async function settleSalesCartDeliveries(
   }
 
   const existingRows = await loadSalesCartDeliveryRows(runtime.cart.id);
-  const existingKeys = new Set(
-    existingRows
-      .map((row) => row.idempotency_key || "")
-      .filter((key) => key.trim().length > 0),
-  );
+  const existingKeys = new Set<string>();
+  const retryFailedRowsByKey = new Map<string, SalesCartDeliveryRecord>();
+  for (const row of existingRows) {
+    const key = row.idempotency_key || "";
+    if (!key.trim()) continue;
+    if (row.status === "failed" && !row.stock_item_id) {
+      retryFailedRowsByKey.set(key, row);
+      continue;
+    }
+    existingKeys.add(key);
+  }
   const legacyCountByProduct = new Map<string, number>();
   for (const row of existingRows) {
     if (row.idempotency_key) continue;
@@ -997,6 +1025,7 @@ async function settleSalesCartDeliveries(
   }
 
   const rowsToInsert: Array<Record<string, unknown>> = [];
+  const deliveryUpdates: Array<Promise<unknown>> = [];
   const stockChangedProductIds = new Set<string>();
   const productsById = await loadProductsForCartItems(runtime.items);
 
@@ -1014,8 +1043,9 @@ async function settleSalesCartDeliveries(
         continue;
       }
 
+      const retryRow = retryFailedRowsByKey.get(idempotencyKey) || null;
       if (product?.inventory_tracked === false) {
-        rowsToInsert.push({
+        const deliveredRow = {
           cart_id: runtime.cart.id,
           guild_id: runtime.cart.guild_id,
           auth_user_id: runtime.cart.auth_user_id,
@@ -1032,7 +1062,26 @@ async function settleSalesCartDeliveries(
             message:
               "Pagamento aprovado. Este produto nao controla estoque unitario; acesse sua entrega pelo Flowdesk ou pelo suporte do servidor.",
           },
-        });
+        };
+        if (retryRow) {
+          deliveryUpdates.push(
+            Promise.resolve(
+              getSupabaseAdminClientOrThrow()
+                .from("guild_sales_order_deliveries")
+                .update({
+                  stock_item_id: null,
+                  delivery_method: deliveredRow.delivery_method,
+                  status: deliveredRow.status,
+                  delivery_payload: deliveredRow.delivery_payload,
+                })
+                .eq("id", retryRow.id),
+            ).then((result) => {
+              if (result.error) throw new Error(result.error.message);
+            }),
+          );
+        } else {
+          rowsToInsert.push(deliveredRow);
+        }
         continue;
       }
 
@@ -1041,6 +1090,9 @@ async function settleSalesCartDeliveries(
         productId: item.product_id,
       });
       if (!delivery) {
+        if (retryRow) {
+          continue;
+        }
         rowsToInsert.push({
           cart_id: runtime.cart.id,
           guild_id: runtime.cart.guild_id,
@@ -1063,7 +1115,7 @@ async function settleSalesCartDeliveries(
       }
       stockChangedProductIds.add(item.product_id);
 
-      rowsToInsert.push({
+      const deliveredRow = {
         cart_id: runtime.cart.id,
         guild_id: runtime.cart.guild_id,
         auth_user_id: runtime.cart.auth_user_id,
@@ -1079,8 +1131,31 @@ async function settleSalesCartDeliveries(
           productTitle: getProductTitle(item),
           message: delivery.message,
         },
-      });
+      };
+      if (retryRow) {
+        deliveryUpdates.push(
+          Promise.resolve(
+            getSupabaseAdminClientOrThrow()
+              .from("guild_sales_order_deliveries")
+              .update({
+                stock_item_id: deliveredRow.stock_item_id,
+                delivery_method: deliveredRow.delivery_method,
+                status: deliveredRow.status,
+                delivery_payload: deliveredRow.delivery_payload,
+              })
+              .eq("id", retryRow.id),
+          ).then((result) => {
+            if (result.error) throw new Error(result.error.message);
+          }),
+        );
+      } else {
+        rowsToInsert.push(deliveredRow);
+      }
     }
+  }
+
+  if (deliveryUpdates.length) {
+    await Promise.all(deliveryUpdates);
   }
 
   if (rowsToInsert.length) {
@@ -1116,6 +1191,26 @@ async function settleSalesCartDeliveries(
   }
 
   return loadSalesCartDeliveries(runtime.cart.id);
+}
+
+async function acquireSalesCartDeliveryLock(cartId: string) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .rpc("acquire_guild_sales_cart_delivery_lock", {
+      p_cart_id: cartId,
+    });
+
+  if (result.error) {
+    const message = result.error.message.toLowerCase();
+    if (
+      result.error.code === "42883" ||
+      message.includes("acquire_guild_sales_cart_delivery_lock")
+    ) {
+      return true;
+    }
+    throw new Error(result.error.message);
+  }
+
+  return Boolean(result.data);
 }
 
 function resolvePaidAt(providerPayment: SalesMercadoPagoPayment) {
@@ -1256,6 +1351,7 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
       : resolvedStatus === "pending"
         ? "payment_pending"
         : resolvedStatus;
+  const retryingFailedDelivery = resolvedStatus === "approved" && cart.status === "delivery_failed";
 
   const syncedCart = await updateSalesCartAndSelect(cart.id, {
     status: cartStatus,
@@ -1267,6 +1363,15 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     provider_payload: providerPayment,
     payment_expires_at: providerPayment.date_of_expiration || cart.payment_expires_at,
     paid_at: resolvedStatus === "approved" ? resolvePaidAt(providerPayment) : cart.paid_at,
+    delivered_at: retryingFailedDelivery ? null : cart.delivered_at,
+    delivery_started_at: retryingFailedDelivery ? null : cart.delivery_started_at,
+    delivery_lock_error: retryingFailedDelivery ? "" : cart.delivery_lock_error,
+    receipt_email_sent_at: retryingFailedDelivery ? null : cart.receipt_email_sent_at,
+    receipt_email_error: retryingFailedDelivery ? "" : cart.receipt_email_error,
+    discord_notification_sent_at: retryingFailedDelivery
+      ? null
+      : cart.discord_notification_sent_at,
+    discord_notification_error: retryingFailedDelivery ? "" : cart.discord_notification_error,
   });
   await recordSalesOrderEvent({
     cart: syncedCart,
@@ -1292,6 +1397,16 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
   if (resolvedStatus !== "approved") {
     return {
       ...nextRuntime,
+      deliveries: await loadSalesCartDeliveries(cart.id),
+    };
+  }
+
+  const lockAcquired = await acquireSalesCartDeliveryLock(cart.id);
+  if (!lockAcquired) {
+    const latestRuntime = await loadSalesCartRuntime(cart.id);
+    return {
+      ...latestRuntime,
+      payment: buildPaymentResponse(latestRuntime.cart),
       deliveries: await loadSalesCartDeliveries(cart.id),
     };
   }

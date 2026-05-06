@@ -1,6 +1,7 @@
 import { authConfig } from "@/lib/auth/config";
 import {
   DiscordRateLimitError,
+  DiscordRelinkRequiredError,
   fetchDiscordGuilds,
   type DiscordGuild,
   refreshDiscordToken,
@@ -77,6 +78,26 @@ const botGuildMemberSummaryCache = new Map<
 
 export function isGuildId(value: string) {
   return /^\d{10,25}$/.test(value);
+}
+
+export function isDiscordRelinkRequiredError(error: unknown) {
+  if (error instanceof DiscordRelinkRequiredError) return true;
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const name = typeof record.name === "string" ? record.name : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+  return (
+    name === "DiscordRelinkRequiredError" ||
+    (message.includes("discord") &&
+      (message.includes("401") ||
+        message.includes("unauthorized") ||
+        message.includes("renovar token") ||
+        message.includes("expirou") ||
+        message.includes("revogada") ||
+        message.includes("revincule"))) ||
+    message.includes("invalid_grant")
+  );
 }
 
 function isTokenExpired(tokenExpiresAt: string | null) {

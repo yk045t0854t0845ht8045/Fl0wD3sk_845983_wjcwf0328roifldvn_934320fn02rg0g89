@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
   fetchGuildChannelsByBot,
+  isDiscordRelinkRequiredError,
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
@@ -78,6 +79,19 @@ type ProductCategorySnapshot = {
   id: string;
   title: string;
 };
+
+function buildDiscordRelinkResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "DISCORD_RELINK_REQUIRED",
+      reauthRequired: true,
+      message:
+        "Sua conexao com o Discord expirou ou foi revogada. Revincule sua conta Discord para continuar gerenciando este servidor.",
+    },
+    { status: 401 },
+  );
+}
 
 function getTrimmedText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return "";
@@ -451,7 +465,15 @@ async function ensureGuildAccess(
   guildId: string,
   requiredPermission: TeamRolePermission,
 ) {
-  const sessionData = await resolveSessionAccessToken();
+  let sessionData;
+  try {
+    sessionData = await resolveSessionAccessToken();
+  } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      return { ok: false as const, response: buildDiscordRelinkResponse() };
+    }
+    throw error;
+  }
   if (!sessionData?.authSession) {
     return {
       ok: false as const,
@@ -478,13 +500,21 @@ async function ensureGuildAccess(
       guildId,
     });
 
-  const accessibleGuild = await assertUserAdminInGuildOrNull(
-    {
-      authSession: sessionData.authSession,
-      accessToken: sessionData.accessToken,
-    },
-    guildId,
-  );
+  let accessibleGuild;
+  try {
+    accessibleGuild = await assertUserAdminInGuildOrNull(
+      {
+        authSession: sessionData.authSession,
+        accessToken: sessionData.accessToken,
+      },
+      guildId,
+    );
+  } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      return { ok: false as const, response: buildDiscordRelinkResponse() };
+    }
+    throw error;
+  }
 
   const hasFullAccess = dashboardPerms === "full";
   const hasSpecificPerm =
