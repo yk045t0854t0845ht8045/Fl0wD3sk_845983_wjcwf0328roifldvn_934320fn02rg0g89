@@ -23,6 +23,7 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import {
   ServerButton,
+  ServerDiscordRelinkState,
   ServerEmptyState,
   ServerIconFrame,
   ServerSectionHeading,
@@ -76,12 +77,16 @@ type StockItem = StockFormState & {
 
 type ProductsResponse = {
   ok: boolean;
+  code?: string;
+  reauthRequired?: boolean;
   message?: string;
   products?: SalesProduct[];
 };
 
 type StockResponse = {
   ok: boolean;
+  code?: string;
+  reauthRequired?: boolean;
   message?: string;
   items?: StockItem[];
   item?: StockItem;
@@ -657,6 +662,7 @@ export function SalesStockPanel({
   const [isSaving, setIsSaving] = useState(false);
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [needsDiscordRelink, setNeedsDiscordRelink] = useState(false);
   const routeProductCode = getStockProductCodeFromPath(pathname);
 
   const selectedProduct = useMemo(
@@ -711,6 +717,7 @@ export function SalesStockPanel({
   const loadProducts = useCallback(async () => {
     setIsLoadingProducts(true);
     setStatusMessage(null);
+    setNeedsDiscordRelink(false);
     try {
       const response = await fetch(
         `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}`,
@@ -718,6 +725,9 @@ export function SalesStockPanel({
       );
       const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
       if (!response.ok || !payload.ok) {
+        if (payload.reauthRequired || payload.code === "DISCORD_RELINK_REQUIRED") {
+          setNeedsDiscordRelink(true);
+        }
         throw new Error(payload.message || "Erro ao carregar produtos.");
       }
       setProducts(payload.products || []);
@@ -738,10 +748,13 @@ export function SalesStockPanel({
           `/api/auth/me/guilds/sales-stock?guildId=${encodeURIComponent(guildId)}&productId=${encodeURIComponent(productId)}`,
           { credentials: "include", cache: "no-store" },
         );
-        const payload = (await response.json().catch(() => ({}))) as StockResponse;
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.message || "Erro ao carregar estoque.");
+      const payload = (await response.json().catch(() => ({}))) as StockResponse;
+      if (!response.ok || !payload.ok) {
+        if (payload.reauthRequired || payload.code === "DISCORD_RELINK_REQUIRED") {
+          setNeedsDiscordRelink(true);
         }
+        throw new Error(payload.message || "Erro ao carregar estoque.");
+      }
         setItems(payload.items || []);
       } catch (error) {
         setStatusMessage(error instanceof Error ? error.message : "Erro ao carregar estoque.");
@@ -1017,7 +1030,11 @@ export function SalesStockPanel({
         </div>
       )}
 
-      {statusMessage ? (
+      {needsDiscordRelink ? (
+        <ServerSurface className="overflow-hidden">
+          <ServerDiscordRelinkState />
+        </ServerSurface>
+      ) : statusMessage ? (
         <div className="rounded-[18px] border border-[#3A2A1E] bg-[#170F09] px-[14px] py-[12px] text-[13px] text-[#F2B27D]">
           {statusMessage}
         </div>

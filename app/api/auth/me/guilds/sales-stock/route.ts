@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
+  isDiscordRelinkRequiredError,
   isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
@@ -96,6 +97,19 @@ type StockRecord = Record<string, unknown> & {
   created_at: string;
   updated_at: string;
 };
+
+function buildDiscordRelinkResponse() {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "DISCORD_RELINK_REQUIRED",
+      reauthRequired: true,
+      message:
+        "Sua conexao com o Discord expirou ou foi revogada. Revincule sua conta Discord para continuar gerenciando este servidor.",
+    },
+    { status: 401 },
+  );
+}
 
 function getTrimmedText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return "";
@@ -350,7 +364,15 @@ function withStockDefaults(record: Partial<StockRecord>) {
 }
 
 async function ensureGuildAccess(guildId: string, requiredPermission: TeamPermission) {
-  const sessionData = await resolveSessionAccessToken();
+  let sessionData;
+  try {
+    sessionData = await resolveSessionAccessToken();
+  } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      return { ok: false as const, response: buildDiscordRelinkResponse() };
+    }
+    throw error;
+  }
   if (!sessionData?.authSession || !sessionData.accessToken) {
     return {
       ok: false as const,
@@ -364,13 +386,21 @@ async function ensureGuildAccess(guildId: string, requiredPermission: TeamPermis
       guildId,
     });
 
-  const accessibleGuild = await assertUserAdminInGuildOrNull(
-    {
-      authSession: sessionData.authSession,
-      accessToken: sessionData.accessToken,
-    },
-    guildId,
-  );
+  let accessibleGuild;
+  try {
+    accessibleGuild = await assertUserAdminInGuildOrNull(
+      {
+        authSession: sessionData.authSession,
+        accessToken: sessionData.accessToken,
+      },
+      guildId,
+    );
+  } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      return { ok: false as const, response: buildDiscordRelinkResponse() };
+    }
+    throw error;
+  }
 
   const hasFullAccess = dashboardPerms === "full";
   const hasSpecificPerm =

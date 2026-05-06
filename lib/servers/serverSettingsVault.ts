@@ -193,8 +193,8 @@ export async function writeServerSettingsVaultSnapshot(input: {
       },
       { onConflict: "guild_id,module_key" },
     )
-    .select("updated_at")
-    .single<{ updated_at: string | null }>();
+    .select("payload_encrypted, updated_at")
+    .single<Pick<ServerSettingsVaultRow, "payload_encrypted" | "updated_at">>();
 
   if (result.error) {
     if (isMissingVaultRelationError(result.error)) {
@@ -203,7 +203,14 @@ export async function writeServerSettingsVaultSnapshot(input: {
     throw new Error(result.error.message);
   }
 
+  const payload = parseVaultPayload({
+    guildId: input.guildId,
+    moduleKey: input.moduleKey,
+    payloadEncrypted: result.data?.payload_encrypted || payloadEncrypted,
+  });
+
   return {
+    payload,
     updatedAt:
       typeof result.data?.updated_at === "string" ? result.data.updated_at : null,
   };
