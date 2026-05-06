@@ -104,6 +104,31 @@ function toFiniteAmount(value: string | number) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isLocalDevRuntime() {
+  return process.env.NODE_ENV !== "production";
+}
+
+function isMissingOptionalLocalTableError(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    message.includes("schema cache") ||
+    message.includes("could not find the table") ||
+    message.includes("relation") ||
+    message.includes("does not exist")
+  );
+}
+
+function shouldFallbackOptionalLocalTable(error: unknown) {
+  return isLocalDevRuntime() && isMissingOptionalLocalTableError(error);
+}
+
 function roundMoney(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 100) / 100;
@@ -290,9 +315,26 @@ async function fetchHistoryFresh(userId: number): Promise<ManagedHistory> {
       .returns<StoredPaymentMethodRecord[]>(),
   ]);
 
-  if (ordersResult.error) throw new Error(ordersResult.error.message);
-  if (hiddenMethodsResult.error) throw new Error(hiddenMethodsResult.error.message);
-  if (storedMethodsResult.error) throw new Error(storedMethodsResult.error.message);
+  if (ordersResult.error) {
+    if (shouldFallbackOptionalLocalTable(ordersResult.error)) {
+      const data: ManagedHistory = { orders: [], methods: [] };
+      historyCache.set(userId, { data, timestamp: Date.now() });
+      return data;
+    }
+    throw new Error(ordersResult.error.message);
+  }
+  if (
+    hiddenMethodsResult.error &&
+    !shouldFallbackOptionalLocalTable(hiddenMethodsResult.error)
+  ) {
+    throw new Error(hiddenMethodsResult.error.message);
+  }
+  if (
+    storedMethodsResult.error &&
+    !shouldFallbackOptionalLocalTable(storedMethodsResult.error)
+  ) {
+    throw new Error(storedMethodsResult.error.message);
+  }
 
   let rawOrders = ordersResult.data || [];
 
@@ -386,11 +428,14 @@ async function fetchHistoryFresh(userId: number): Promise<ManagedHistory> {
       })),
   );
 
+  const hiddenMethodRows = hiddenMethodsResult.error ? [] : hiddenMethodsResult.data || [];
+  const storedMethodRows = storedMethodsResult.error ? [] : storedMethodsResult.data || [];
+
   const hiddenMethodSet = new Set(
-    (hiddenMethodsResult.data || []).map((item) => item.method_id),
+    hiddenMethodRows.map((item) => item.method_id),
   );
 
-  const storedMethods = (storedMethodsResult.data || [])
+  const storedMethods = storedMethodRows
     .map((row) => toSavedMethodFromStoredRecord(row))
     .filter((method): method is NonNullable<typeof method> => Boolean(method));
 

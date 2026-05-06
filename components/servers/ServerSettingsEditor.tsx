@@ -40,6 +40,8 @@ import {
   SalesProductEditPanel,
   SalesProductsListPanel,
 } from "@/components/servers/sales/SalesProductsPanel";
+import { SalesPaymentMethodsPanel } from "@/components/servers/sales/SalesPaymentMethodsPanel";
+import { SalesStockPanel } from "@/components/servers/sales/SalesStockPanel";
 import {
   getServerDashboardSettings,
   invalidateCachedServerDashboardSettings,
@@ -89,6 +91,7 @@ type ServerSettingsSection =
   | "sales_product_create"
   | "sales_product_edit"
   | "sales_stock"
+  | "sales_stock_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -474,6 +477,7 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     | "sales_product_create"
     | "sales_product_edit"
     | "sales_stock"
+    | "sales_stock_edit"
     | "sales_payment_methods"
     | "sales_coupons_gifts"
   >,
@@ -526,6 +530,12 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     title: "Estoque",
     description:
       "Acompanhe futuramente saldo, reservas e movimentacoes dos produtos da loja.",
+  },
+  sales_stock_edit: {
+    tag: "Vendas",
+    title: "Estoque",
+    description:
+      "Gerencie as entregas cadastradas para o produto selecionado.",
   },
   sales_payment_methods: {
     tag: "Vendas",
@@ -2263,6 +2273,7 @@ export function ServerSettingsEditor({
         sales_product_create: "server_manage_tickets_overview",
         sales_product_edit: "server_manage_tickets_overview",
         sales_stock: "server_manage_tickets_overview",
+        sales_stock_edit: "server_manage_tickets_overview",
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
@@ -3646,6 +3657,7 @@ export function ServerSettingsEditor({
     settingsSection === "sales_product_create" ||
     settingsSection === "sales_product_edit" ||
     settingsSection === "sales_stock" ||
+    settingsSection === "sales_stock_edit" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts";
   const isSalesSettingsSection = settingsSection === "sales_overview";
@@ -5996,6 +6008,16 @@ export function ServerSettingsEditor({
                     />
                   ) : settingsSection === "sales_product_edit" ? (
                     <SalesProductEditPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_stock" || settingsSection === "sales_stock_edit" ? (
+                    <SalesStockPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_payment_methods" ? (
+                    <SalesPaymentMethodsPanel
                       guildId={guildId}
                       readOnly={settingsReadOnly}
                     />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bold,
   ChevronDown,
@@ -10,7 +10,6 @@ import {
   Italic,
   Link2,
   List,
-  MoreHorizontal,
   Paintbrush,
   PlayCircle,
   Sparkles,
@@ -26,6 +25,7 @@ type AiDescriptionResponse = {
   ok: boolean;
   message?: string;
   description?: string;
+  retryAfterSeconds?: number;
 };
 
 function isHexColor(value: string) {
@@ -35,8 +35,108 @@ function isHexColor(value: string) {
 function stripBlockMarkdown(value: string) {
   return value
     .replace(/^#{1,3}\s+/gm, "")
+    .replace(/^-#\s+/gm, "")
     .replace(/^>\s+/gm, "")
     .replace(/^[-*]\s+/gm, "");
+}
+
+function findEnclosingMarkRange(
+  value: string,
+  selection: { start: number; end: number },
+) {
+  const pattern = /<mark(?:\s+data-color="#[0-9a-fA-F]{6}")?>([\s\S]*?)<\/mark>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value))) {
+    const fullStart = match.index;
+    const fullEnd = match.index + match[0].length;
+    const openingTag = match[0].match(/^<mark(?:\s+data-color="#[0-9a-fA-F]{6}")?>/)?.[0] || "";
+    const contentStart = fullStart + openingTag.length;
+    const contentEnd = contentStart + match[1].length;
+
+    if (
+      selection.start >= contentStart &&
+      selection.end <= contentEnd &&
+      selection.start < selection.end
+    ) {
+      return {
+        fullStart,
+        fullEnd,
+        contentStart,
+        contentEnd,
+        openingTag,
+        innerText: match[1],
+      };
+    }
+  }
+
+  return null;
+}
+
+function replaceOpeningMarkColor(openingTag: string, color: string) {
+  if (/^<mark\s+data-color="#[0-9a-fA-F]{6}">$/.test(openingTag)) {
+    return openingTag.replace(/data-color="#[0-9a-fA-F]{6}"/, `data-color="${color}"`);
+  }
+
+  return `<mark data-color="${color}">`;
+}
+
+function applyHighlightColorToSelection(
+  value: string,
+  selection: { start: number; end: number },
+  color: string,
+) {
+  if (selection.start < 0 || selection.end <= selection.start) {
+    return null;
+  }
+
+  const safeStart = Math.max(0, Math.min(selection.start, value.length));
+  const safeEnd = Math.max(safeStart, Math.min(selection.end, value.length));
+  if (safeEnd <= safeStart) return null;
+
+  const safeSelection = { start: safeStart, end: safeEnd };
+  const enclosingMark = findEnclosingMarkRange(value, safeSelection);
+  if (enclosingMark) {
+    const nextOpeningTag = replaceOpeningMarkColor(enclosingMark.openingTag, color);
+    const nextValue = `${value.slice(0, enclosingMark.fullStart)}${nextOpeningTag}${enclosingMark.innerText}</mark>${value.slice(enclosingMark.fullEnd)}`;
+    const tagLengthDelta = nextOpeningTag.length - enclosingMark.openingTag.length;
+    return {
+      value: nextValue,
+      selection: {
+        start: safeSelection.start + tagLengthDelta,
+        end: safeSelection.end + tagLengthDelta,
+      },
+      caret: safeSelection.end + tagLengthDelta,
+    };
+  }
+
+  const selected = value.slice(safeStart, safeEnd);
+  const exactMarkMatch = selected.match(/^<mark(?:\s+data-color="#[0-9a-fA-F]{6}")?>([\s\S]*?)<\/mark>$/);
+  if (exactMarkMatch) {
+    const openingTag = selected.match(/^<mark(?:\s+data-color="#[0-9a-fA-F]{6}")?>/)?.[0] || "";
+    const nextOpeningTag = replaceOpeningMarkColor(openingTag, color);
+    const replacement = `${nextOpeningTag}${exactMarkMatch[1]}</mark>`;
+    const tagLengthDelta = nextOpeningTag.length - openingTag.length;
+    return {
+      value: `${value.slice(0, safeStart)}${replacement}${value.slice(safeEnd)}`,
+      selection: {
+        start: safeStart + nextOpeningTag.length,
+        end: safeStart + nextOpeningTag.length + exactMarkMatch[1].length,
+      },
+      caret: safeEnd + tagLengthDelta,
+    };
+  }
+
+  const openingTag = `<mark data-color="${color}">`;
+  const replacement = `${openingTag}${selected}</mark>`;
+  return {
+    value: `${value.slice(0, safeStart)}${replacement}${value.slice(safeEnd)}`,
+    selection: {
+      start: safeStart + openingTag.length,
+      end: safeStart + openingTag.length + selected.length,
+    },
+    caret: safeStart + replacement.length,
+  };
 }
 
 function renderInlineMarkdown(value: string) {
@@ -209,6 +309,18 @@ function MarkdownPreview({ value }: { value: string }) {
           );
         }
 
+        const smallHeadingMatch = block.match(/^-#\s+([\s\S]+)$/);
+        if (smallHeadingMatch) {
+          return (
+            <p
+              key={`${index}-${block}`}
+              className="break-words text-[12px] font-medium leading-[1.45] text-[#AFAFAF]"
+            >
+              {renderInlineMarkdown(smallHeadingMatch[1])}
+            </p>
+          );
+        }
+
         if (/^[-*]\s+/m.test(block)) {
           return (
             <ul key={`${index}-${block}`} className="space-y-[6px] pl-[18px] text-[13px] leading-[1.6] text-[#CFCFCF]">
@@ -242,11 +354,13 @@ function IconButton({
   label,
   onClick,
   disabled,
+  active,
 }: {
   children: ReactNode;
   label: string;
   onClick?: () => void;
   disabled?: boolean;
+  active?: boolean;
 }) {
   return (
     <button
@@ -255,7 +369,11 @@ function IconButton({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="flowdesk-server-button inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#101010] text-[#BDBDBD] transition hover:border-[#353535] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
+      className={`flowdesk-description-tool-button flowdesk-server-button inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border text-[#BDBDBD] transition disabled:cursor-not-allowed disabled:opacity-45 ${
+        active
+          ? "border-[#3A3A3A] bg-[#1A1A1A] text-white"
+          : "border-[#202020] bg-[#101010] hover:border-[#353535] hover:bg-[#161616]"
+      }`}
     >
       {children}
     </button>
@@ -271,6 +389,7 @@ export function SalesDescriptionEditor({
   disabled = false,
   maxLength,
   placeholder,
+  scopeId,
 }: {
   guildId: string;
   kind: DescriptionKind;
@@ -280,21 +399,50 @@ export function SalesDescriptionEditor({
   disabled?: boolean;
   maxLength: number;
   placeholder: string;
+  scopeId?: string;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingHighlightSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const draftScopeRef = useRef<string>("");
   const historyRef = useRef<{ past: string[]; future: string[] }>({
     past: [],
     future: [],
   });
+  if (!draftScopeRef.current) {
+    draftScopeRef.current = `draft:${kind}:${Math.random().toString(36).slice(2)}`;
+  }
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [highlightColor, setHighlightColor] = useState("#F5D04C");
+  const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
+
+  const aiScopeId = useMemo(() => {
+    const explicitScope = scopeId?.trim();
+    if (explicitScope) return explicitScope;
+    return draftScopeRef.current;
+  }, [scopeId]);
 
   const safeHighlightColor = useMemo(
     () => (isHexColor(highlightColor) ? highlightColor : "#F5D04C"),
     [highlightColor],
   );
+
+  useEffect(() => {
+    setCooldownSeconds(0);
+  }, [aiScopeId, guildId, kind]);
+
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return undefined;
+
+    const interval = window.setInterval(() => {
+      setCooldownSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [cooldownSeconds]);
 
   const restoreTextareaSelection = useCallback((position: number) => {
     window.requestAnimationFrame(() => {
@@ -350,7 +498,7 @@ export function SalesDescriptionEditor({
   );
 
   const applyFormat = useCallback(
-    (format: "paragraph" | "heading1" | "heading2" | "heading3" | "bold" | "italic" | "underline" | "link" | "image" | "video" | "table" | "list" | "code" | "highlight") => {
+    (format: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "bold" | "italic" | "underline" | "link" | "image" | "video" | "table" | "list" | "code") => {
       if (disabled) return;
 
       const textarea = textareaRef.current;
@@ -387,14 +535,17 @@ export function SalesDescriptionEditor({
           .split("\n")
           .map((line) => (line.trim() ? `### ${line.trim()}` : line))
           .join("\n");
+      } else if (format === "heading4") {
+        replacement = stripBlockMarkdown(source)
+          .split("\n")
+          .map((line) => (line.trim() ? `-# ${line.trim()}` : line))
+          .join("\n");
       } else if (format === "bold") {
         replacement = `**${source}**`;
       } else if (format === "italic") {
         replacement = `_${source}_`;
       } else if (format === "underline") {
         replacement = `<u>${source}</u>`;
-      } else if (format === "highlight") {
-        replacement = `<mark data-color="${safeHighlightColor}">${source}</mark>`;
       } else if (format === "link") {
         replacement = `[${source}](https://exemplo.com)`;
       } else if (format === "image") {
@@ -421,11 +572,53 @@ export function SalesDescriptionEditor({
         textareaRef.current?.setSelectionRange(selectionStart, selectionStart);
       });
     },
-    [commitEditorValue, disabled, maxLength, safeHighlightColor, value],
+    [commitEditorValue, disabled, maxLength, value],
+  );
+
+  const openHighlightColorPicker = useCallback(() => {
+    if (disabled) return;
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    if (end <= start) {
+      pendingHighlightSelectionRef.current = null;
+      textarea?.focus();
+      return;
+    }
+
+    pendingHighlightSelectionRef.current = {
+      start,
+      end,
+    };
+    colorInputRef.current?.click();
+  }, [disabled, value.length]);
+
+  const applyPickedHighlightColor = useCallback(
+    (color: string) => {
+      const safeColor = isHexColor(color) ? color : "#F5D04C";
+      setHighlightColor(safeColor);
+      const selection = pendingHighlightSelectionRef.current;
+      if (!selection || selection.end <= selection.start) return;
+
+      const result = applyHighlightColorToSelection(value, selection, safeColor);
+      if (!result) return;
+
+      pendingHighlightSelectionRef.current = result.selection;
+      commitEditorValue(result.value, {
+        selectionPosition: result.caret,
+      });
+    },
+    [commitEditorValue, value],
   );
 
   const generateDescription = useCallback(async () => {
     if (disabled || !title.trim() || isGenerating) return;
+    if (cooldownSeconds > 0) {
+      setAiMessage(
+        `Muitas tentativas nesse item. Tente novamente em ${cooldownSeconds}s.`,
+      );
+      return;
+    }
 
     setIsGenerating(true);
     setAiMessage(null);
@@ -438,6 +631,7 @@ export function SalesDescriptionEditor({
         body: JSON.stringify({
           guildId,
           kind,
+          scopeId: aiScopeId,
           title,
           currentDescription: value,
         }),
@@ -445,6 +639,16 @@ export function SalesDescriptionEditor({
       const payload = (await response.json().catch(() => ({}))) as AiDescriptionResponse;
 
       if (!response.ok || !payload.ok || !payload.description) {
+        if (response.status === 429) {
+          const retryAfterSeconds = Math.max(
+            1,
+            Math.ceil(Number(payload.retryAfterSeconds) || 120),
+          );
+          setCooldownSeconds(retryAfterSeconds);
+          throw new Error(
+            `Muitas tentativas nesse item. Tente novamente em ${retryAfterSeconds}s.`,
+          );
+        }
         throw new Error(payload.message || "Falha ao gerar descricao com IA.");
       }
 
@@ -458,46 +662,56 @@ export function SalesDescriptionEditor({
     } finally {
       setIsGenerating(false);
     }
-  }, [commitEditorValue, disabled, guildId, isGenerating, kind, maxLength, title, value]);
+  }, [
+    aiScopeId,
+    commitEditorValue,
+    cooldownSeconds,
+    disabled,
+    guildId,
+    isGenerating,
+    kind,
+    maxLength,
+    title,
+    value,
+  ]);
 
   return (
-    <div className="mt-[10px] overflow-hidden rounded-[16px] border border-[#252525] bg-[#0D0D0D]">
-      <div className="flex flex-wrap items-center gap-[6px] bg-[#111] px-[10px] py-[8px] text-[#BDBDBD]">
-        <button
-          type="button"
-          onClick={() => applyFormat("paragraph")}
-          disabled={disabled}
-          className="flowdesk-server-button rounded-[10px] px-[10px] py-[7px] text-[13px] text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          Paragrafo <ChevronDown className="ml-[6px] inline h-[14px] w-[14px]" />
-        </button>
-        <button
-          type="button"
-          onClick={() => applyFormat("heading1")}
-          disabled={disabled}
-          className="flowdesk-server-button h-[36px] rounded-[10px] px-[9px] text-[13px] font-semibold text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
-          title="Titulo grande"
-        >
-          H1
-        </button>
-        <button
-          type="button"
-          onClick={() => applyFormat("heading2")}
-          disabled={disabled}
-          className="flowdesk-server-button h-[36px] rounded-[10px] px-[9px] text-[13px] font-semibold text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
-          title="Titulo medio"
-        >
-          H2
-        </button>
-        <button
-          type="button"
-          onClick={() => applyFormat("heading3")}
-          disabled={disabled}
-          className="flowdesk-server-button h-[36px] rounded-[10px] px-[9px] text-[13px] font-semibold text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
-          title="Titulo pequeno"
-        >
-          H3
-        </button>
+    <div className="flowdesk-description-editor mt-[10px] overflow-visible rounded-[16px] border border-[#252525] bg-[#0D0D0D]">
+      <div className="flowdesk-description-toolbar flex flex-wrap items-center gap-[6px] rounded-t-[15px] bg-[#111] px-[10px] py-[8px] text-[#BDBDBD]">
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setIsBlockMenuOpen((current) => !current)}
+            disabled={disabled}
+            className="flowdesk-description-tool-button flowdesk-server-button rounded-[10px] px-[10px] py-[7px] text-[13px] text-[#CFCFCF] transition hover:bg-[#191919] disabled:cursor-not-allowed disabled:opacity-45"
+            aria-expanded={isBlockMenuOpen}
+          >
+            Paragrafo <ChevronDown className={`ml-[6px] inline h-[14px] w-[14px] transition ${isBlockMenuOpen ? "rotate-180" : ""}`} />
+          </button>
+          {isBlockMenuOpen ? (
+            <div className="flowdesk-scale-in-soft absolute left-0 top-[42px] z-[80] w-[190px] rounded-[16px] border border-[#202020] bg-[#080808] p-[7px] shadow-[0_22px_60px_rgba(0,0,0,0.5)]">
+              {[
+                ["paragraph", "Paragrafo"],
+                ["heading1", "H1 grande"],
+                ["heading2", "H2 medio"],
+                ["heading3", "H3 pequeno"],
+                ["heading4", "H4 extra pequeno"],
+              ].map(([format, label]) => (
+                <button
+                  key={format}
+                  type="button"
+                  onClick={() => {
+                    applyFormat(format as "paragraph" | "heading1" | "heading2" | "heading3" | "heading4");
+                    setIsBlockMenuOpen(false);
+                  }}
+                  className="flowdesk-description-tool-button flex w-full items-center justify-between rounded-[12px] px-[11px] py-[9px] text-left text-[13px] text-[#CFCFCF] transition hover:bg-[#141414] hover:text-white"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <IconButton label="Negrito" onClick={() => applyFormat("bold")} disabled={disabled}>
           <Bold className="h-[16px] w-[16px]" />
         </IconButton>
@@ -507,26 +721,23 @@ export function SalesDescriptionEditor({
         <IconButton label="Sublinhado" onClick={() => applyFormat("underline")} disabled={disabled}>
           <Underline className="h-[16px] w-[16px]" />
         </IconButton>
-        <IconButton label="Destaque" onClick={() => applyFormat("highlight")} disabled={disabled}>
-          <Paintbrush className="h-[16px] w-[16px]" />
-        </IconButton>
-        <label
-          className="flowdesk-server-button inline-flex h-[36px] w-[36px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#101010] transition hover:border-[#353535] hover:bg-[#161616]"
-          title="Cor do destaque"
-        >
+        <IconButton label="Destaque com cor" onClick={openHighlightColorPicker} disabled={disabled}>
           <span
-            className="h-[16px] w-[16px] rounded-full border border-[rgba(255,255,255,0.28)]"
+            className="grid h-[18px] w-[18px] place-items-center rounded-full border border-[rgba(255,255,255,0.22)]"
             style={{ backgroundColor: safeHighlightColor }}
-          />
-          <input
-            type="color"
-            value={safeHighlightColor}
-            onChange={(event) => setHighlightColor(event.target.value)}
-            disabled={disabled}
-            className="sr-only"
-            aria-label="Cor do destaque"
-          />
-        </label>
+          >
+            <Paintbrush className="h-[12px] w-[12px] text-[#080808]" />
+          </span>
+        </IconButton>
+        <input
+          ref={colorInputRef}
+          type="color"
+          value={safeHighlightColor}
+          onChange={(event) => applyPickedHighlightColor(event.target.value)}
+          disabled={disabled}
+          className="sr-only"
+          aria-label="Cor do destaque"
+        />
         <span className="mx-[4px] h-[24px] w-px bg-[#252525]" />
         <IconButton label="Lista" onClick={() => applyFormat("list")} disabled={disabled}>
           <List className="h-[16px] w-[16px]" />
@@ -543,9 +754,6 @@ export function SalesDescriptionEditor({
         <IconButton label="Tabela" onClick={() => applyFormat("table")} disabled={disabled}>
           <Table2 className="h-[16px] w-[16px]" />
         </IconButton>
-        <IconButton label="Mais opcoes" disabled={disabled}>
-          <MoreHorizontal className="h-[16px] w-[16px]" />
-        </IconButton>
         <IconButton label="Codigo" onClick={() => applyFormat("code")} disabled={disabled}>
           <Code2 className="h-[16px] w-[16px]" />
         </IconButton>
@@ -553,17 +761,18 @@ export function SalesDescriptionEditor({
           label={isPreviewOpen ? "Ocultar preview" : "Mostrar preview"}
           onClick={() => setIsPreviewOpen((current) => !current)}
           disabled={disabled}
+          active={isPreviewOpen}
         >
           <Eye className="h-[16px] w-[16px]" />
         </IconButton>
         <ServerButton
           onClick={() => void generateDescription()}
-          disabled={disabled || !title.trim() || isGenerating}
+          disabled={disabled || !title.trim() || isGenerating || cooldownSeconds > 0}
           size="sm"
           className="ml-auto h-[34px]"
         >
           {isGenerating ? <ButtonLoader size={14} /> : <Sparkles className="h-[15px] w-[15px]" />}
-          IA
+          {cooldownSeconds > 0 ? `${cooldownSeconds}s` : "IA"}
         </ServerButton>
       </div>
       <textarea
@@ -585,7 +794,7 @@ export function SalesDescriptionEditor({
         rows={9}
         disabled={disabled}
         placeholder={placeholder}
-        className="flowdesk-description-textarea min-h-[224px] w-full resize-y bg-transparent px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none placeholder:text-[#5D5D5D] focus:bg-transparent disabled:cursor-not-allowed disabled:opacity-60"
+        className="flowdesk-description-textarea block min-h-[224px] w-full resize-y border-0 bg-transparent bg-none px-[14px] py-[14px] text-[14px] leading-[1.65] text-[#EDEDED] outline-none ring-0 placeholder:text-[#5D5D5D] focus:border-0 focus:bg-transparent focus:bg-none focus:outline-none focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
       />
       {aiMessage ? (
         <div className="border-t border-[#241A12] bg-[#130D08] px-[14px] py-[10px] text-[12px] text-[#EFB47B]">
@@ -593,7 +802,7 @@ export function SalesDescriptionEditor({
         </div>
       ) : null}
       {isPreviewOpen ? (
-        <div className="border-t border-[#171717] bg-[#0A0A0A] px-[14px] py-[14px]">
+        <div className="flowdesk-description-preview bg-[#0A0A0A] px-[14px] py-[14px]">
           <p className="text-[11px] uppercase tracking-[0.16em] text-[#666]">
             Previa da descricao
           </p>

@@ -102,6 +102,7 @@ type ChannelsResponse = {
   message?: string;
   channels?: {
     text?: DiscordChannel[];
+    categories?: DiscordChannel[];
   };
 };
 
@@ -110,6 +111,7 @@ const discordPublicationLabel = {
   channel: "Categoria Discord",
 } as const;
 const productSortOptions = ["Mais relevantes", "Mais recentes", "A-Z"] as const;
+type ProductSortOption = (typeof productSortOptions)[number];
 const CATEGORY_PRODUCTS_CACHE_TTL_MS = 5 * 60_000;
 const CATEGORY_STALE_TTL_MS = 24 * 60 * 60_000;
 
@@ -150,7 +152,7 @@ function getCategoryProductsCacheKey(guildId: string, categoryId: string) {
 }
 
 function getChannelsCacheKey(guildId: string) {
-  return `flowdesk_sales_channels:${guildId}`;
+  return `flowdesk_sales_category_channels:${guildId}`;
 }
 
 function invalidateCategoryCaches(guildId: string) {
@@ -400,6 +402,141 @@ function formatMoney(value: number) {
   }).format(value || 0);
 }
 
+function plainTextPreview(value: string, maxLength = 156) {
+  const plain = value
+    .replace(/!\[[^\]]*]\([^)]+\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/<mark(?:\s+data-color="#[0-9a-fA-F]{6}")?>([\s\S]*?)<\/mark>/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_`#>|-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return "Descricao da categoria aparecera aqui conforme os dados forem preenchidos.";
+  return plain.length > maxLength ? `${plain.slice(0, maxLength - 3).trim()}...` : plain;
+}
+
+function slugifyCategoryPath(value: string) {
+  return (
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 72) || "nova-categoria"
+  );
+}
+
+function SelectMenu<T extends string>({
+  value,
+  options,
+  onChange,
+  disabled,
+  maxVisibleItems,
+}: {
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+  maxVisibleItems?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [openDirection, setOpenDirection] = useState<"down" | "up">("down");
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const resolveOpenDirection = useCallback(() => {
+    const bounds = menuRef.current?.getBoundingClientRect();
+    if (!bounds) return "down";
+    const availableBelow = window.innerHeight - bounds.bottom;
+    const availableAbove = bounds.top;
+    const estimatedHeight =
+      Math.min(options.length, maxVisibleItems || options.length) * 42 + 16;
+    return availableBelow < estimatedHeight && availableAbove > availableBelow
+      ? "up"
+      : "down";
+  }, [maxVisibleItems, options.length]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointer(event: MouseEvent) {
+      if (
+        menuRef.current &&
+        event.target instanceof Node &&
+        !menuRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={menuRef} className={open ? "relative z-[520]" : "relative z-[1]"}>
+      <button
+        type="button"
+        onClick={() => {
+          if (!open) setOpenDirection(resolveOpenDirection());
+          setOpen((current) => !current);
+        }}
+        disabled={disabled}
+        className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] transition hover:border-[#444] disabled:cursor-not-allowed disabled:opacity-55"
+        aria-expanded={open}
+      >
+        {options.find(([option]) => option === value)?.[1] || "Selecionar"}
+        <ChevronDown
+          className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open ? (
+        <div
+          className={`flowdesk-scale-in-soft absolute left-0 right-0 z-[520] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)] ${
+            openDirection === "up" ? "bottom-[50px]" : "top-[50px]"
+          }`}
+        >
+          <div
+            className="thin-scrollbar overflow-y-auto pr-[2px]"
+            style={
+              maxVisibleItems
+                ? { maxHeight: `${maxVisibleItems * 42 + 10}px` }
+                : undefined
+            }
+          >
+            {options.map(([option, label]) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => {
+                  onChange(option);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between rounded-[13px] px-[12px] py-[10px] text-left text-[13px] transition ${
+                  option === value
+                    ? "bg-[#151515] text-[#F1F1F1]"
+                    : "text-[#AFAFAF] hover:bg-[#111] hover:text-white"
+                }`}
+              >
+                {label}
+                {option === value ? <Check className="h-[15px] w-[15px]" /> : null}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CategoryEditorSkeleton() {
   return (
     <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
@@ -463,8 +600,6 @@ export function SalesCategoryCreatePanel({
   const [discordChannelId, setDiscordChannelId] = useState("");
   const [discordChannels, setDiscordChannels] = useState<DiscordChannel[]>([]);
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
-  const [seoTitle, setSeoTitle] = useState("");
-  const [seoDescription, setSeoDescription] = useState("");
   const [productQuery, setProductQuery] = useState("");
   const [categoryProducts, setCategoryProducts] = useState<SalesCategoryProduct[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
@@ -474,7 +609,7 @@ export function SalesCategoryCreatePanel({
   const [isLoadingCategoryProducts, setIsLoadingCategoryProducts] = useState(mode === "edit");
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
   const [isDiscordMenuOpen, setIsDiscordMenuOpen] = useState(false);
-  const [productSortIndex, setProductSortIndex] = useState(0);
+  const [productSort, setProductSort] = useState<ProductSortOption>("Mais relevantes");
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -514,8 +649,6 @@ export function SalesCategoryCreatePanel({
         );
         setDiscordChannelId(cached.discordChannelId || "");
         setPublishedVirtualStore(cached.publishedVirtualStore);
-        setSeoTitle(cached.seoTitle || cached.title);
-        setSeoDescription(cached.seoDescription || "");
         setImagePreviewUrl(cached.imageUrl || null);
         setImageName(cached.imageUrl ? "Imagem atual" : null);
         writeCache(categoryDetailCache, cacheKey, cached);
@@ -557,8 +690,6 @@ export function SalesCategoryCreatePanel({
         );
         setDiscordChannelId(category.discordChannelId || "");
         setPublishedVirtualStore(category.publishedVirtualStore);
-        setSeoTitle(category.seoTitle || category.title);
-        setSeoDescription(category.seoDescription || "");
         setImagePreviewUrl(category.imageUrl || null);
         setImageName(category.imageUrl ? "Imagem atual" : null);
         writeCache(categoryDetailCache, cacheKey, category);
@@ -690,7 +821,7 @@ export function SalesCategoryCreatePanel({
           { credentials: "include", cache: "no-store" },
         );
         const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
-        const nextChannels = response.ok && payload.ok ? payload.channels?.text || [] : [];
+        const nextChannels = response.ok && payload.ok ? payload.channels?.categories || [] : [];
         if (!cancelled) {
           if (nextChannels.length || !cached) {
             setDiscordChannels(nextChannels);
@@ -727,9 +858,14 @@ export function SalesCategoryCreatePanel({
     !isLoadingCategory &&
     !readOnly;
   const discordChannelOptions = useMemo(
-    () => [["", "Escolha um canal Discord"], ...discordChannels.map((channel) => [channel.id, `#${channel.name}`])] as Array<[string, string]>,
+    () => [["", "Escolha uma categoria Discord"], ...discordChannels.map((channel) => [channel.id, channel.name])] as Array<[string, string]>,
     [discordChannels],
   );
+  const productSortMenuOptions = useMemo(
+    () => productSortOptions.map((option) => [option, `Classificar: ${option}`]) as Array<[ProductSortOption, string]>,
+    [],
+  );
+  const categoryProductsCount = categoryProducts.length;
 
   const handleImageFile = useCallback(
     async (file: File | null | undefined) => {
@@ -751,6 +887,10 @@ export function SalesCategoryCreatePanel({
           reader.onerror = () => reject(new Error("Nao foi possivel ler a imagem."));
           reader.readAsDataURL(file);
         });
+        if (dataUrl.length > 4_500_000) {
+          setStatusMessage("A imagem ficou grande demais depois da conversao. Tente uma imagem menor ou comprimida.");
+          return;
+        }
         setImagePreviewUrl((current) => {
           revokeObjectUrl(current);
           return dataUrl;
@@ -778,8 +918,8 @@ export function SalesCategoryCreatePanel({
   const filteredCategoryProducts = useMemo(() => {
     const normalizedQuery = productQuery.trim().toLowerCase();
     const sortedProducts = [...categoryProducts].sort((a, b) => {
-      if (productSortIndex === 1) return b.id.localeCompare(a.id);
-      if (productSortIndex === 2) return a.title.localeCompare(b.title, "pt-BR");
+      if (productSort === "Mais recentes") return b.id.localeCompare(a.id);
+      if (productSort === "A-Z") return a.title.localeCompare(b.title, "pt-BR");
       return Number(b.status === "active") - Number(a.status === "active");
     });
     if (!normalizedQuery) return sortedProducts;
@@ -788,16 +928,23 @@ export function SalesCategoryCreatePanel({
         .toLowerCase()
         .includes(normalizedQuery),
     );
-  }, [categoryProducts, productQuery, productSortIndex]);
+  }, [categoryProducts, productQuery, productSort]);
+
+  const searchPreview = useMemo(() => {
+    const displayTitle = title.trim() || "Nova categoria";
+    return {
+      brand: "flowdesk.store",
+      title: displayTitle,
+      url: `https://shop.flwdesk.com/categories/${slugifyCategoryPath(displayTitle)}`,
+      description: plainTextPreview(description),
+      productsLabel: `${categoryProductsCount} ${categoryProductsCount === 1 ? "produto" : "produtos"}`,
+    };
+  }, [categoryProductsCount, description, title]);
 
   const handleProductSearch = useCallback(() => {
     if (!productQuery.trim()) return;
     setStatusMessage(null);
   }, [productQuery]);
-
-  const cycleProductSort = useCallback(() => {
-    setProductSortIndex((current) => (current + 1) % productSortOptions.length);
-  }, []);
 
   const handleSave = useCallback(async () => {
     if (!canSave) {
@@ -831,8 +978,8 @@ export function SalesCategoryCreatePanel({
             discordPublicationMode === "channel" ? discordChannelId : null,
           publishedVirtualStore,
           publishedPointOfSale: false,
-          seoTitle,
-          seoDescription,
+          seoTitle: title,
+          seoDescription: plainTextPreview(description, 180),
           imageUrl:
             imagePreviewUrl && !imagePreviewUrl.startsWith("blob:")
               ? imagePreviewUrl
@@ -867,8 +1014,6 @@ export function SalesCategoryCreatePanel({
     isEditMode,
     publishedVirtualStore,
     router,
-    seoDescription,
-    seoTitle,
     title,
   ]);
 
@@ -947,6 +1092,11 @@ export function SalesCategoryCreatePanel({
             <SalesDescriptionEditor
               guildId={guildId}
               kind="category"
+              scopeId={
+                mode === "edit" && (selectedCategoryId || categoryCode)
+                  ? `category:${selectedCategoryId || categoryCode}`
+                  : undefined
+              }
               title={title}
               value={description}
               onChange={(nextDescription) => {
@@ -982,7 +1132,11 @@ export function SalesCategoryCreatePanel({
                   key={option.id}
                   type="button"
                   onClick={() => setCollectionType(option.id)}
-                  className="flowdesk-server-button flex w-full items-start gap-[12px] rounded-[16px] border border-transparent p-[2px] text-left transition hover:border-[#222]"
+                  className={`flowdesk-server-button flex w-full items-start gap-[12px] rounded-[16px] border px-[12px] py-[11px] text-left transition ${
+                    collectionType === option.id
+                      ? "border-[#2F2F2F] bg-[#141414]"
+                      : "border-transparent bg-transparent hover:border-[#242424] hover:bg-[#101010]"
+                  }`}
                 >
                   <span
                     className={`mt-[3px] flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-full border ${
@@ -1008,7 +1162,7 @@ export function SalesCategoryCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="overflow-hidden">
+          <ServerSurface className="relative z-[90] overflow-visible">
             <div className="p-[18px] sm:p-[22px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Produtos</h4>
               <div className="mt-[16px] flex flex-col gap-[10px] lg:flex-row lg:items-center">
@@ -1024,13 +1178,14 @@ export function SalesCategoryCreatePanel({
                 <ServerButton onClick={handleProductSearch}>
                   Procurar
                 </ServerButton>
-                <ServerButton
-                  onClick={cycleProductSort}
-                  className="inline-flex h-[42px] items-center justify-between gap-[16px] rounded-[14px] border border-[#252525] px-[15px] text-[13px] text-[#BDBDBD] transition hover:border-[#3A3A3A] hover:bg-[#121212]"
-                >
-                  Classificar: {productSortOptions[productSortIndex]}
-                  <ChevronDown className="h-[15px] w-[15px]" />
-                </ServerButton>
+                <div className="min-w-[210px]">
+                  <SelectMenu
+                    value={productSort}
+                    options={productSortMenuOptions}
+                    onChange={setProductSort}
+                    disabled={readOnly || isSaving}
+                  />
+                </div>
               </div>
             </div>
             {isLoadingCategoryProducts ? (
@@ -1103,31 +1258,29 @@ export function SalesCategoryCreatePanel({
           <ServerSurface className="p-[18px] sm:p-[22px]">
             <div className="flex items-start justify-between gap-[16px]">
               <div>
-                <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
-                  Listagem em mecanismos de pesquisa
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">
+                  Previa no navegador
                 </h4>
-                <p className="mt-[12px] max-w-[680px] text-[13px] leading-[1.6] text-[#8A8A8A]">
-                  Adicione um titulo e uma descricao para preparar como esta
-                  categoria pode aparecer em buscas da futura loja web.
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Visual aproximado da categoria em buscas e na futura loja.
                 </p>
               </div>
-              <Pencil className="h-[18px] w-[18px] shrink-0 text-[#8B8B8B]" />
+              <Pencil className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
             </div>
-            <div className="mt-[16px] grid gap-[10px] lg:grid-cols-2">
-              <ServerTextInput
-                value={seoTitle}
-                onChange={(event) => setSeoTitle(event.target.value)}
-                maxLength={90}
-                placeholder="Titulo para busca"
-                className="h-[42px] text-[13px]"
-              />
-              <ServerTextInput
-                value={seoDescription}
-                onChange={(event) => setSeoDescription(event.target.value)}
-                maxLength={180}
-                placeholder="Descricao para busca"
-                className="h-[42px] text-[13px]"
-              />
+            <div className="mt-[18px] rounded-[18px] border border-[#202020] bg-[#0C0C0C] p-[16px]">
+              <p className="truncate text-[13px] text-[#D8D8D8]">{searchPreview.brand}</p>
+              <p className="mt-[5px] truncate text-[13px] text-[#8A8A8A]">
+                {searchPreview.url.replace("https://", "").split("/").join(" > ")}
+              </p>
+              <p className="mt-[12px] text-[20px] font-medium leading-[1.25] text-[#8AB6FF]">
+                {searchPreview.title}
+              </p>
+              <p className="mt-[10px] line-clamp-2 text-[14px] leading-[1.55] text-[#BDBDBD]">
+                {searchPreview.description}
+              </p>
+              <p className="mt-[10px] text-[13px] font-semibold text-[#DCDCDC]">
+                {searchPreview.productsLabel}
+              </p>
             </div>
           </ServerSurface>
         </div>
@@ -1225,7 +1378,7 @@ export function SalesCategoryCreatePanel({
               <Hash className="h-[16px] w-[16px] text-[#8A8A8A]" />
             </div>
             <p className="mt-[10px] text-[13px] leading-[1.5] text-[#7B7B7B]">
-              Escolha se essa categoria fica apenas online ou vinculada a um canal Discord.
+              Escolha se essa categoria fica apenas online ou vinculada a uma categoria do Discord.
             </p>
             <div ref={discordMenuRef} className="relative mt-[12px]">
               <button
@@ -1269,18 +1422,16 @@ export function SalesCategoryCreatePanel({
             {discordPublicationMode === "channel" ? (
               <div className="mt-[10px]">
                 <div className="relative">
-                  <select
+                  <SelectMenu
                     value={discordChannelId}
-                    onChange={(event) => setDiscordChannelId(event.target.value)}
+                    options={discordChannelOptions}
+                    onChange={(nextChannelId) => {
+                      setDiscordChannelId(nextChannelId);
+                      setStatusMessage(null);
+                    }}
                     disabled={isLoadingChannels || readOnly || isSaving}
-                    className="h-[42px] w-full rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-[13px] text-[#EDEDED] outline-none disabled:cursor-not-allowed disabled:opacity-55"
-                  >
-                    {discordChannelOptions.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
+                    maxVisibleItems={6}
+                  />
                 </div>
               </div>
             ) : null}
@@ -1314,7 +1465,7 @@ export function SalesCategoryCreatePanel({
                       {title.trim() || "Nova categoria"}
                     </p>
                     <p className="mt-[3px] text-[12px] text-[#7B7B7B]">
-                      {collectionType === "smart" ? "Automatica" : "Manual"} - 0 produtos
+                      {collectionType === "smart" ? "Automatica" : "Manual"} - {categoryProductsCount} produtos
                     </p>
                   </div>
                   <X className="ml-auto h-[15px] w-[15px] text-[#666]" />

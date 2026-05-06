@@ -683,9 +683,87 @@ html.lenis body {
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.035);
 }
 
-.flowdesk-servers-ui :where(.flowdesk-description-textarea:focus, .flowdesk-description-textarea:focus-visible) {
-  outline: none;
-  box-shadow: none;
+.flowdesk-servers-ui :where(
+  .flowdesk-server-input,
+  textarea,
+  select
+) {
+  color-scheme: dark;
+  caret-color: #f1f1f1;
+}
+
+.flowdesk-servers-ui :where(
+  .flowdesk-server-input:-webkit-autofill,
+  .flowdesk-server-input:-webkit-autofill:hover,
+  .flowdesk-server-input:-webkit-autofill:focus,
+  textarea:-webkit-autofill,
+  textarea:-webkit-autofill:hover,
+  textarea:-webkit-autofill:focus,
+  select:-webkit-autofill,
+  select:-webkit-autofill:hover,
+  select:-webkit-autofill:focus
+) {
+  -webkit-text-fill-color: #f1f1f1 !important;
+  caret-color: #f1f1f1;
+  border-color: #252525;
+  box-shadow: 0 0 0 1000px #0d0d0d inset !important;
+  -webkit-box-shadow: 0 0 0 1000px #0d0d0d inset !important;
+  background-color: #0d0d0d !important;
+  background-image: none !important;
+  transition:
+    background-color 999999s ease-in-out 0s,
+    color 999999s ease-in-out 0s;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-description-editor) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-description-editor:focus-within) {
+  border-color: #252525 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-description-editor .flowdesk-description-toolbar) {
+  border-bottom: 1px solid #171717;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-description-editor .flowdesk-description-tool-button:focus) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-description-editor .flowdesk-description-tool-button:focus-visible) {
+  outline: none !important;
+  box-shadow: inset 0 0 0 1px rgba(245, 245, 245, 0.13) !important;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-description-preview) {
+  border-top: 1px solid #171717;
+}
+
+.flowdesk-servers-ui :where(
+  .flowdesk-description-textarea,
+  .flowdesk-description-textarea:focus,
+  .flowdesk-description-textarea:focus-visible,
+  .flowdesk-description-textarea:active
+) {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-image: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.flowdesk-servers-ui .flowdesk-description-textarea::-webkit-resizer {
+  background: transparent;
 }
 
 .flowdesk-servers-ui :where(.flowdesk-server-input-plain) {
@@ -696,6 +774,34 @@ html.lenis body {
 .flowdesk-servers-ui :where(.flowdesk-server-input-plain:focus, .flowdesk-server-input-plain:active) {
   background-color: transparent;
   box-shadow: none;
+}
+
+.flowdesk-servers-ui :where(.flowdesk-product-organization-input:focus-within) {
+  border-color: #4a4a4a;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.035);
+}
+
+.flowdesk-servers-ui :where(
+  .flowdesk-product-organization-input button:focus,
+  .flowdesk-product-organization-input button:focus-visible,
+  .flowdesk-product-organization-input [role="button"]:focus,
+  .flowdesk-product-organization-input [role="button"]:focus-visible
+) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.flowdesk-servers-ui :where(
+  .flowdesk-product-organization .flowdesk-server-input-plain,
+  .flowdesk-product-organization .flowdesk-server-input-plain:focus,
+  .flowdesk-product-organization .flowdesk-server-input-plain:focus-visible,
+  .flowdesk-product-organization .flowdesk-server-input-plain:active
+) {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
 }
 
 .flowdesk-servers-ui :where(.flowdesk-server-input-plain:-webkit-autofill) {

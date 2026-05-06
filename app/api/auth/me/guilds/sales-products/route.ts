@@ -483,6 +483,56 @@ async function resolveCategorySnapshot(
   return (result.data as ProductCategorySnapshot | null) || null;
 }
 
+async function hasActiveSalesPaymentMethod(guildId: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_payment_methods")
+    .select("id")
+    .eq("guild_id", guildId)
+    .eq("method_key", "mercado_pago")
+    .eq("status", "active")
+    .eq("credentials_configured", true)
+    .limit(1);
+
+  if (result.error) {
+    const message = result.error.message.toLowerCase();
+    if (result.error.code === "42P01" || message.includes("guild_sales_payment_methods")) {
+      return false;
+    }
+    throw new Error(result.error.message);
+  }
+
+  return Boolean(result.data?.length);
+}
+
+async function refreshCategoryProductCounts(guildId: string, categoryIds: Array<string | null>) {
+  const uniqueCategoryIds = Array.from(
+    new Set(categoryIds.filter((categoryId): categoryId is string => Boolean(categoryId))),
+  );
+  if (!uniqueCategoryIds.length) return;
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  await Promise.all(
+    uniqueCategoryIds.map(async (categoryId) => {
+      const countResult = await supabase
+        .from("guild_sales_products")
+        .select("id", { count: "exact", head: true })
+        .eq("guild_id", guildId)
+        .eq("category_id", categoryId);
+
+      if (countResult.error) throw new Error(countResult.error.message);
+
+      const updateResult = await supabase
+        .from("guild_sales_categories")
+        .update({ products_count: countResult.count || 0 })
+        .eq("guild_id", guildId)
+        .eq("id", categoryId);
+
+      if (updateResult.error) throw new Error(updateResult.error.message);
+    }),
+  );
+}
+
 async function validateDiscordPublicationInput(input: {
   guildId: string;
   mode: string;
@@ -588,7 +638,7 @@ async function syncSalesProductDiscordMessage(input: {
     priceLabel: formatProductPrice(input.product.price_amount),
     stockQuantity: input.product.stock_quantity,
     mediaUrls: payloadMediaUrls,
-    paymentReady: false,
+    paymentReady: await hasActiveSalesPaymentMethod(input.product.guild_id),
   });
   const discordBody = buildDiscordRequestBody(payload, input.product.media_urls);
 
@@ -890,6 +940,7 @@ export async function PATCH(request: Request) {
 
     if (result.error) throw new Error(result.error.message);
     let savedProduct = result.data as GuildSalesProductRecord;
+    await refreshCategoryProductCounts(guildId, [product.category_id, safeCategoryId]);
 
     if (discordPublicationMode === "channel") {
       try {
@@ -1088,6 +1139,7 @@ export async function POST(request: Request) {
 
     if (result.error) throw new Error(result.error.message);
     let savedProduct = result.data as GuildSalesProductRecord;
+    await refreshCategoryProductCounts(guildId, [safeCategoryId]);
 
     if (discordPublicationMode === "channel") {
       try {

@@ -14,7 +14,6 @@ import {
   CirclePlus,
   FileImage,
   Grid2X2,
-  Hash,
   ImagePlus,
   List,
   Search as SearchIcon,
@@ -22,6 +21,7 @@ import {
   PackageSearch,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   SlidersHorizontal,
   WandSparkles,
@@ -139,6 +139,12 @@ type CacheEntry<T> = {
   data: T;
 };
 
+type ProductOrganizationUsage = {
+  productTypes: Record<string, number>;
+  manufacturers: Record<string, number>;
+  tags: Record<string, number>;
+};
+
 const productsListCache = new Map<string, CacheEntry<SalesProduct[]>>();
 const productDetailCache = new Map<string, CacheEntry<SalesProduct>>();
 const categoriesCache = new Map<string, CacheEntry<SalesCategory[]>>();
@@ -165,6 +171,9 @@ function invalidateProductCaches(guildId: string) {
   }
   invalidateClientCache(`flowdesk_sales_products:${guildId}`);
   invalidateClientCache(`flowdesk_sales_product:${guildId}:`);
+  invalidateClientCache(`flowdesk_sales_categories:${guildId}`);
+  invalidateClientCache(`flowdesk_sales_category:${guildId}:`);
+  invalidateClientCache(`flowdesk_sales_product_categories:${guildId}`);
 }
 
 function getProductsCacheKey(guildId: string) {
@@ -181,6 +190,48 @@ function getCategoriesCacheKey(guildId: string) {
 
 function getChannelsCacheKey(guildId: string) {
   return `flowdesk_sales_channels:${guildId}`;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchDiscordTextChannelsWithRetry(guildId: string, attempts = 3) {
+  let lastMessage = "Erro ao carregar canais Discord.";
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetch(
+      `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}&fresh=1&t=${Date.now()}&attempt=${attempt + 1}`,
+      { credentials: "include", cache: "no-store" },
+    );
+    const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
+
+    if (!response.ok || !payload.ok) {
+      lastMessage = payload.message || lastMessage;
+    } else {
+      const channels = payload.channels?.text || [];
+      if (channels.length || attempt === attempts - 1) return channels;
+      lastMessage = "Nenhum canal de texto encontrado.";
+    }
+
+    if (attempt < attempts - 1) {
+      await wait(450 + attempt * 500);
+    }
+  }
+
+  throw new Error(lastMessage);
+}
+
+function getOrganizationUsageKey(guildId: string) {
+  return `flowdesk_sales_product_organization:${guildId}`;
+}
+
+function emptyOrganizationUsage(): ProductOrganizationUsage {
+  return {
+    productTypes: {},
+    manufacturers: {},
+    tags: {},
+  };
 }
 
 function getProductsPath(guildId: string) {
@@ -730,21 +781,114 @@ function sameTag(left: string, right: string) {
   return left.localeCompare(right, "pt-BR", { sensitivity: "base" }) === 0;
 }
 
+function readOrganizationUsage(guildId: string): ProductOrganizationUsage {
+  if (typeof window === "undefined") return emptyOrganizationUsage();
+
+  try {
+    const raw = window.localStorage.getItem(getOrganizationUsageKey(guildId));
+    if (!raw) return emptyOrganizationUsage();
+    const parsed = JSON.parse(raw) as Partial<ProductOrganizationUsage>;
+    return {
+      productTypes: parsed.productTypes || {},
+      manufacturers: parsed.manufacturers || {},
+      tags: parsed.tags || {},
+    };
+  } catch {
+    return emptyOrganizationUsage();
+  }
+}
+
+function writeOrganizationUsage(guildId: string, usage: ProductOrganizationUsage) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(getOrganizationUsageKey(guildId), JSON.stringify(usage));
+  } catch {
+    // Best-effort local intelligence; product saving must never depend on storage.
+  }
+}
+
+function incrementOrganizationValues(
+  usage: ProductOrganizationUsage,
+  bucket: keyof ProductOrganizationUsage,
+  values: string[],
+) {
+  const nextBucket = { ...usage[bucket] };
+  values.forEach((value) => {
+    const normalized = normalizeTag(value);
+    if (!normalized) return;
+    const existingKey =
+      Object.keys(nextBucket).find((item) => sameTag(item, normalized)) || normalized;
+    nextBucket[existingKey] = (nextBucket[existingKey] || 0) + 1;
+  });
+
+  return {
+    ...usage,
+    [bucket]: nextBucket,
+  };
+}
+
+function addSuggestionCount(
+  counts: Map<string, number>,
+  value: string | null | undefined,
+  weight = 1,
+) {
+  const normalized = normalizeTag(value || "");
+  if (!normalized) return;
+  const existingKey =
+    Array.from(counts.keys()).find((item) => sameTag(item, normalized)) || normalized;
+  counts.set(existingKey, (counts.get(existingKey) || 0) + weight);
+}
+
+function buildOrganizationSuggestions(
+  usageBucket: Record<string, number>,
+  productValues: Array<string | null | undefined>,
+  currentValues: string[],
+) {
+  const counts = new Map<string, number>();
+  Object.entries(usageBucket).forEach(([value, count]) => {
+    addSuggestionCount(counts, value, Math.max(1, count) * 4);
+  });
+  productValues.forEach((value) => addSuggestionCount(counts, value, 2));
+  currentValues.forEach((value) => addSuggestionCount(counts, value, 8));
+
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
+    .map(([item]) => item);
+}
+
 function ProductTagsInput({
   value,
   onChange,
   suggestions,
   disabled,
+  onAddTags,
 }: {
   value: string[];
   onChange: (tags: string[]) => void;
   suggestions: string[];
   disabled?: boolean;
+  onAddTags?: (tags: string[]) => void;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const addTag = useCallback(
+    (rawTag: string) => {
+      const nextTag = normalizeTag(rawTag);
+      if (!nextTag || value.some((tag) => sameTag(tag, nextTag))) {
+        setQuery("");
+        return;
+      }
+      onChange([...value, nextTag]);
+      onAddTags?.([nextTag]);
+      setQuery("");
+      setOpen(true);
+    },
+    [onAddTags, onChange, value],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -763,21 +907,7 @@ function ProductTagsInput({
 
     document.addEventListener("mousedown", handlePointer);
     return () => document.removeEventListener("mousedown", handlePointer);
-  }, [open, query]);
-
-  const addTag = useCallback(
-    (rawTag: string) => {
-      const nextTag = normalizeTag(rawTag);
-      if (!nextTag || value.some((tag) => sameTag(tag, nextTag))) {
-        setQuery("");
-        return;
-      }
-      onChange([...value, nextTag]);
-      setQuery("");
-      setOpen(true);
-    },
-    [onChange, value],
-  );
+  }, [addTag, open, query]);
 
   const removeTag = useCallback(
     (tagToRemove: string) => {
@@ -801,8 +931,8 @@ function ProductTagsInput({
         : availableSuggestions,
     [availableSuggestions, normalizedQuery],
   );
-  const frequentSuggestions = filteredSuggestions.slice(0, 5);
-  const otherSuggestions = filteredSuggestions.slice(5);
+  const frequentSuggestions = filteredSuggestions.slice(0, 6);
+  const otherSuggestions = filteredSuggestions.slice(6);
   const canAddQuery =
     Boolean(normalizeTag(query)) &&
     !value.some((tag) => sameTag(tag, query)) &&
@@ -828,7 +958,7 @@ function ProductTagsInput({
         </button>
       </div>
       <div
-        className={`min-h-[42px] cursor-text rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[10px] py-[8px] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#4A4A4A] ${
+        className={`flowdesk-product-organization-input min-h-[44px] cursor-text rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[14px] py-[9px] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#4A4A4A] ${
           open ? "border-[#4A4A4A]" : ""
         } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
         onClick={() => {
@@ -888,7 +1018,7 @@ function ProductTagsInput({
             }}
             disabled={disabled}
             placeholder={value.length ? "Adicionar tag" : "Pesquisar ou adicionar tags"}
-            className="flowdesk-server-input-plain h-[24px] min-w-0 flex-1 appearance-none rounded-none border-0 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666] focus:bg-transparent active:bg-transparent"
+            className="flowdesk-server-input-plain h-[24px] min-w-0 flex-1 appearance-none rounded-none border-0 bg-transparent text-[14px] text-[#F1F1F1] outline-none placeholder:text-[#646464] focus:bg-transparent active:bg-transparent"
           />
           </span>
         </div>
@@ -904,7 +1034,7 @@ function ProductTagsInput({
                 className="flex w-full items-center gap-[9px] rounded-[13px] px-[11px] py-[10px] text-left text-[13px] font-semibold text-[#F1F1F1] transition hover:bg-[#141414]"
               >
                 <CirclePlus className="h-[16px] w-[16px]" />
-                Adicionar "{normalizeTag(query)}"
+                Adicionar &quot;{normalizeTag(query)}&quot;
               </button>
             ) : null}
             {!canAddQuery && !filteredSuggestions.length ? (
@@ -913,7 +1043,7 @@ function ProductTagsInput({
             {frequentSuggestions.length ? (
               <div className={canAddQuery ? "mt-[8px]" : ""}>
                 <p className="px-[11px] pb-[6px] pt-[4px] text-[12px] font-semibold text-[#8A8A8A]">
-                  Usados com frequencia
+                  Mais usados
                 </p>
                 {frequentSuggestions.map((tag) => (
                   <button
@@ -932,7 +1062,7 @@ function ProductTagsInput({
             {otherSuggestions.length ? (
               <div className="mt-[8px]">
                 <p className="px-[11px] pb-[6px] pt-[4px] text-[12px] font-semibold text-[#8A8A8A]">
-                  Outras tags
+                  Outros
                 </p>
                 {otherSuggestions.map((tag) => (
                   <button
@@ -1011,6 +1141,8 @@ function SmartTextPicker({
         : cleanSuggestions.slice(0, 8),
     [cleanSuggestions, normalizedQuery],
   );
+  const frequentSuggestions = filteredSuggestions.slice(0, 6);
+  const otherSuggestions = filteredSuggestions.slice(6);
   const canAddQuery =
     Boolean(normalizeTag(query)) &&
     !cleanSuggestions.some((item) => sameTag(item, query));
@@ -1031,7 +1163,7 @@ function SmartTextPicker({
         {label}
       </label>
       <div
-        className={`flex h-[42px] items-center gap-[8px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[12px] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#4A4A4A] ${
+        className={`flowdesk-product-organization-input flex h-[44px] items-center gap-[8px] rounded-[14px] border border-[#252525] bg-[#0D0D0D] px-[14px] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#4A4A4A] ${
           open ? "border-[#4A4A4A]" : ""
         } ${disabled ? "cursor-not-allowed opacity-55" : ""}`}
       >
@@ -1052,7 +1184,7 @@ function SmartTextPicker({
           }}
           disabled={disabled}
           placeholder={label}
-          className="flowdesk-server-input-plain min-w-0 flex-1 appearance-none rounded-none border-0 bg-transparent text-[13px] text-[#EDEDED] outline-none placeholder:text-[#666] focus:bg-transparent active:bg-transparent"
+          className="flowdesk-server-input-plain min-w-0 flex-1 appearance-none rounded-none border-0 bg-transparent text-[14px] text-[#F1F1F1] outline-none placeholder:text-[#646464] focus:bg-transparent active:bg-transparent"
         />
         {query ? (
           <button
@@ -1072,22 +1204,48 @@ function SmartTextPicker({
       </div>
       {open && !disabled ? (
         <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[calc(100%+8px)] z-[320] overflow-hidden rounded-[16px] border border-[#222] bg-[#080808] shadow-[0_22px_64px_rgba(0,0,0,0.5)]">
-          <div className="border-b border-[#171717] px-[12px] py-[9px] text-[12px] font-semibold text-[#777]">
-            {filteredSuggestions.length} resultado{filteredSuggestions.length === 1 ? "" : "s"}
-          </div>
           <div className="p-[7px]">
-            {filteredSuggestions.map((item) => (
-              <button
-                key={item}
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => commitValue(item)}
-                className="flex w-full items-center gap-[9px] rounded-[12px] px-[10px] py-[9px] text-left text-[13px] font-semibold text-[#DCDCDC] transition hover:bg-[#141414]"
-              >
-                <Check className="h-[15px] w-[15px] text-[#CFCFCF]" />
-                {item}
-              </button>
-            ))}
+            {frequentSuggestions.length ? (
+              <div>
+                <p className="px-[10px] pb-[6px] pt-[3px] text-[12px] font-semibold text-[#8A8A8A]">
+                  Mais usados
+                </p>
+                {frequentSuggestions.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => commitValue(item)}
+                    className="flex w-full items-center gap-[9px] rounded-[12px] px-[10px] py-[9px] text-left text-[13px] font-semibold text-[#DCDCDC] transition hover:bg-[#141414]"
+                  >
+                    <Check className="h-[15px] w-[15px] text-[#CFCFCF]" />
+                    {item}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {otherSuggestions.length ? (
+              <div className="mt-[7px] border-t border-[#171717] pt-[7px]">
+                <p className="px-[10px] pb-[6px] pt-[3px] text-[12px] font-semibold text-[#8A8A8A]">
+                  Outros
+                </p>
+                {otherSuggestions.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => commitValue(item)}
+                    className="flex w-full items-center gap-[9px] rounded-[12px] px-[10px] py-[9px] text-left text-[13px] font-semibold text-[#DCDCDC] transition hover:bg-[#141414]"
+                  >
+                    <Check className="h-[15px] w-[15px] text-[#CFCFCF]" />
+                    {item}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {!frequentSuggestions.length && !canAddQuery ? (
+              <p className="px-[10px] py-[9px] text-[13px] text-[#777]">0 resultado</p>
+            ) : null}
             {canAddQuery ? (
               <button
                 type="button"
@@ -1096,7 +1254,7 @@ function SmartTextPicker({
                 className="mt-[3px] flex w-full items-center gap-[9px] rounded-[12px] px-[10px] py-[9px] text-left text-[13px] font-semibold text-[#EDEDED] transition hover:bg-[#141414]"
               >
                 <CirclePlus className="h-[15px] w-[15px]" />
-                Adicionar "{normalizeTag(query)}"
+                Adicionar &quot;{normalizeTag(query)}&quot;
               </button>
             ) : null}
           </div>
@@ -1136,13 +1294,17 @@ function ProductMediaLibraryModal({
   useBodyScrollLock(open);
 
   useEffect(() => {
-    setIsMounted(true);
+    const timer = window.setTimeout(() => setIsMounted(true), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
     if (!open) return;
-    setDraftSelection([]);
-    setQuery("");
+    const timer = window.setTimeout(() => {
+      setDraftSelection([]);
+      setQuery("");
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open]);
 
   useEffect(() => {
@@ -1371,6 +1533,7 @@ function ProductMediaLibraryModal({
                         }`}>
                           {isSelected ? <Check className="h-[16px] w-[16px] text-[#080808]" /> : null}
                         </span>
+                        {/* eslint-disable-next-line @next/next/no-img-element -- Media picker previews can be blob/data URLs from local uploads. */}
                         <img src={item.url} alt="" className="h-full w-full rounded-[12px] object-cover" />
                       </span>
                       <span className="mt-[9px] block truncate text-[13px] text-[#DCDCDC]">{item.name}</span>
@@ -1397,6 +1560,7 @@ function ProductMediaLibraryModal({
                       <span className={`flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border ${isSelected ? "border-white bg-white" : "border-[#777]"}`}>
                         {isSelected ? <Check className="h-[15px] w-[15px] text-[#080808]" /> : null}
                       </span>
+                      {/* eslint-disable-next-line @next/next/no-img-element -- Media picker previews can be blob/data URLs from local uploads. */}
                       <img src={item.url} alt="" className="h-[48px] w-[48px] rounded-[12px] object-cover" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-semibold text-[#EDEDED]">{item.name}</span>
@@ -1453,6 +1617,7 @@ export function SalesProductCreatePanel({
   const [isLoadingProduct, setIsLoadingProduct] = useState(mode === "edit");
   const [isLoadingCategories, setIsLoadingCategories] = useState(true);
   const [isLoadingChannels, setIsLoadingChannels] = useState(true);
+  const [channelsMessage, setChannelsMessage] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<ProductStatus>("active");
@@ -1479,7 +1644,27 @@ export function SalesProductCreatePanel({
   const [isSaving, setIsSaving] = useState(false);
   const [isMediaLibraryOpen, setIsMediaLibraryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [organizationUsage, setOrganizationUsage] = useState<ProductOrganizationUsage>(() =>
+    emptyOrganizationUsage(),
+  );
   const mediaUrlsRef = useRef<string[]>([]);
+
+  const rememberOrganizationValues = useCallback(
+    (bucket: keyof ProductOrganizationUsage, values: string[]) => {
+      const cleanValues = values.map(normalizeTag).filter(Boolean);
+      if (!cleanValues.length) return;
+      setOrganizationUsage((current) => {
+        const nextUsage = incrementOrganizationValues(current, bucket, cleanValues);
+        writeOrganizationUsage(guildId, nextUsage);
+        return nextUsage;
+      });
+    },
+    [guildId],
+  );
+
+  useEffect(() => {
+    setOrganizationUsage(readOrganizationUsage(guildId));
+  }, [guildId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1505,7 +1690,9 @@ export function SalesProductCreatePanel({
               { credentials: "include", cache: "no-store" },
             );
             const payload = (await response.json().catch(() => ({}))) as CategoriesResponse;
-            if (!response.ok || !payload.ok) return [];
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.message || "Erro ao carregar categorias.");
+            }
             return payload.categories || [];
           },
         );
@@ -1514,8 +1701,13 @@ export function SalesProductCreatePanel({
           writeCache(categoriesCache, guildId, nextCategories);
           writeClientCache(getCategoriesCacheKey(guildId), nextCategories);
         }
-      } catch {
-        if (!cancelled && !persistentCached) setCategories([]);
+      } catch (error) {
+        if (!cancelled && !persistentCached) {
+          setCategories([]);
+          setStatusMessage(
+            error instanceof Error ? error.message : "Erro ao carregar categorias.",
+          );
+        }
       } finally {
         if (!cancelled) setIsLoadingCategories(false);
       }
@@ -1530,46 +1722,100 @@ export function SalesProductCreatePanel({
   useEffect(() => {
     let cancelled = false;
 
-    async function loadChannels() {
-      const cached = readCache(channelsCache, guildId);
-      const persistentCached =
-        cached ||
-        readClientCache<DiscordChannel[]>(getChannelsCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
-      if (persistentCached) {
-        setDiscordChannels(persistentCached);
-        writeCache(channelsCache, guildId, persistentCached);
-        setIsLoadingChannels(false);
+    async function loadOrganizationProducts() {
+      const cached =
+        readCache(productsListCache, guildId) ||
+        readClientCache<SalesProduct[]>(getProductsCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
+      if (cached) {
+        setLibraryProducts(cached);
+        writeCache(productsListCache, guildId, cached);
       }
 
-      if (!persistentCached) setIsLoadingChannels(true);
       try {
-        const response = await fetch(
-          `/api/auth/me/guilds/channels?guildId=${encodeURIComponent(guildId)}&fresh=1&t=${Date.now()}`,
-          { credentials: "include", cache: "no-store" },
+        const nextProducts = await coalescedClientFetch(
+          getProductsCacheKey(guildId),
+          async () => {
+            const response = await fetch(
+              `/api/auth/me/guilds/sales-products?guildId=${encodeURIComponent(guildId)}`,
+              { credentials: "include", cache: "no-store" },
+            );
+            const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.message || "Erro ao carregar organizacao dos produtos.");
+            }
+            return payload.products || [];
+          },
         );
-        const payload = (await response.json().catch(() => ({}))) as ChannelsResponse;
-        const nextChannels = response.ok && payload.ok ? payload.channels?.text || [] : [];
-        if (!cancelled) {
-          if (nextChannels.length || !persistentCached) {
-            setDiscordChannels(nextChannels);
-          }
-          if (nextChannels.length) {
-            writeCache(channelsCache, guildId, nextChannels);
-            writeClientCache(getChannelsCacheKey(guildId), nextChannels);
-          }
-        }
+        if (cancelled) return;
+        setLibraryProducts(nextProducts);
+        writeCache(productsListCache, guildId, nextProducts);
+        writeClientCache(getProductsCacheKey(guildId), nextProducts);
       } catch {
-        if (!cancelled && !persistentCached) setDiscordChannels([]);
-      } finally {
-        if (!cancelled) setIsLoadingChannels(false);
+        if (!cancelled && !cached) setLibraryProducts([]);
       }
     }
 
-    void loadChannels();
+    void loadOrganizationProducts();
     return () => {
       cancelled = true;
     };
   }, [guildId]);
+
+  const loadDiscordChannels = useCallback(
+    async ({ force = false }: { force?: boolean } = {}) => {
+      const persistentCached =
+        readCache(channelsCache, guildId) ||
+        readClientCache<DiscordChannel[]>(getChannelsCacheKey(guildId), SALES_PRODUCTS_STALE_TTL_MS);
+
+      if (persistentCached?.length && !force) {
+        setDiscordChannels(persistentCached);
+        writeCache(channelsCache, guildId, persistentCached);
+        setIsLoadingChannels(false);
+      } else {
+        setIsLoadingChannels(true);
+      }
+
+      setChannelsMessage(null);
+      try {
+        const nextChannels = await fetchDiscordTextChannelsWithRetry(guildId);
+        setDiscordChannels(nextChannels);
+
+        if (nextChannels.length) {
+          writeCache(channelsCache, guildId, nextChannels);
+          writeClientCache(getChannelsCacheKey(guildId), nextChannels);
+          setChannelsMessage(null);
+        } else {
+          channelsCache.delete(guildId);
+          invalidateClientCache(getChannelsCacheKey(guildId));
+          setChannelsMessage("Nenhum canal de texto foi encontrado neste servidor.");
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Erro ao carregar canais Discord.";
+        if (!persistentCached?.length || force) {
+          setDiscordChannels([]);
+        }
+        setChannelsMessage(message);
+      } finally {
+        setIsLoadingChannels(false);
+      }
+    },
+    [guildId],
+  );
+
+  useEffect(() => {
+    let active = true;
+
+    async function run() {
+      await loadDiscordChannels();
+      if (!active) return;
+    }
+
+    void run();
+    return () => {
+      active = false;
+    };
+  }, [loadDiscordChannels]);
 
   useEffect(() => {
     if (mode !== "edit") return;
@@ -1760,67 +2006,58 @@ export function SalesProductCreatePanel({
   }, [barcodeMode, skuEdited, title]);
 
   const categoryOptions = useMemo(
-    () =>
-      [["", "Escolha uma categoria de produto"], ...categories.map((item) => [item.id, item.title])] as Array<
-        [string, string]
-      >,
-    [categories],
+    () => {
+      const options = [
+        ["", isLoadingCategories ? "Carregando categorias..." : "Escolha uma categoria de produto"],
+        ...categories.map((item) => [item.id, item.title]),
+      ] as Array<[string, string]>;
+
+      if (categoryId && !options.some(([value]) => value === categoryId)) {
+        options.push([categoryId, "Categoria atual"]);
+      }
+
+      return options;
+    },
+    [categories, categoryId, isLoadingCategories],
   );
   const discordChannelOptions = useMemo(
-    () =>
-      [["", "Escolha um canal Discord"], ...discordChannels.map((item) => [item.id, `#${item.name}`])] as Array<
-        [string, string]
-      >,
-    [discordChannels],
+    () => {
+      const placeholder = isLoadingChannels
+        ? "Carregando canais..."
+        : channelsMessage
+          ? "Atualize para carregar canais"
+          : "Escolha um canal Discord";
+      const options = [
+        ["", placeholder],
+        ...discordChannels.map((item) => [item.id, `#${item.name}`]),
+      ] as Array<[string, string]>;
+
+      if (discordChannelId && !options.some(([value]) => value === discordChannelId)) {
+        options.push([discordChannelId, "Canal atual"]);
+      }
+
+      return options;
+    },
+    [channelsMessage, discordChannelId, discordChannels, isLoadingChannels],
   );
   const tagSuggestions = useMemo(() => {
-    const counts = new Map<string, number>();
-    const add = (tag: string | null | undefined, weight = 1) => {
-      const normalized = normalizeTag(tag || "");
-      if (!normalized) return;
-      const existingKey =
-        Array.from(counts.keys()).find((item) => sameTag(item, normalized)) || normalized;
-      counts.set(existingKey, (counts.get(existingKey) || 0) + weight);
-    };
-
-    tags.forEach((tag) => add(tag, 4));
-    if (productType) add(productType, 2);
-    categories.forEach((category) => add(category.title, 1));
-    productsListCache.get(guildId)?.data.forEach((product) => {
-      product.tags?.forEach((tag) => add(tag, 3));
-      add(product.productType, 1);
-    });
-
-    return Array.from(counts.entries())
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
-      .map(([tag]) => tag);
-  }, [categories, guildId, productType, tags]);
+    const productTags = libraryProducts.flatMap((product) => product.tags || []);
+    return buildOrganizationSuggestions(organizationUsage.tags, productTags, tags);
+  }, [libraryProducts, organizationUsage.tags, tags]);
   const productTypeSuggestions = useMemo(() => {
-    const values = new Map<string, number>();
-    productsListCache.get(guildId)?.data.forEach((product) => {
-      const normalized = normalizeTag(product.productType || "");
-      if (normalized) values.set(normalized, (values.get(normalized) || 0) + 1);
-    });
-    categories.forEach((category) => {
-      const normalized = normalizeTag(category.title);
-      if (normalized) values.set(normalized, (values.get(normalized) || 0) + 1);
-    });
-    if (productType) values.set(productType, (values.get(productType) || 0) + 3);
-    return Array.from(values.entries())
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
-      .map(([item]) => item);
-  }, [categories, guildId, productType]);
+    return buildOrganizationSuggestions(
+      organizationUsage.productTypes,
+      libraryProducts.map((product) => product.productType),
+      productType ? [productType] : [],
+    );
+  }, [libraryProducts, organizationUsage.productTypes, productType]);
   const manufacturerSuggestions = useMemo(() => {
-    const values = new Map<string, number>();
-    productsListCache.get(guildId)?.data.forEach((product) => {
-      const normalized = normalizeTag(product.manufacturer || "");
-      if (normalized) values.set(normalized, (values.get(normalized) || 0) + 1);
-    });
-    if (manufacturer) values.set(manufacturer, (values.get(manufacturer) || 0) + 3);
-    return Array.from(values.entries())
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "pt-BR"))
-      .map(([item]) => item);
-  }, [guildId, manufacturer]);
+    return buildOrganizationSuggestions(
+      organizationUsage.manufacturers,
+      libraryProducts.map((product) => product.manufacturer),
+      manufacturer ? [manufacturer] : [],
+    );
+  }, [libraryProducts, manufacturer, organizationUsage.manufacturers]);
   const mediaLibraryItems = useMemo(
     () => buildMediaLibraryItems(libraryProducts, mediaUrls),
     [libraryProducts, mediaUrls],
@@ -1957,6 +2194,9 @@ export function SalesProductCreatePanel({
       if (!response.ok || !payload.ok) {
         throw new Error(payload.message || "Erro ao salvar produto.");
       }
+      rememberOrganizationValues("productTypes", [productType]);
+      rememberOrganizationValues("manufacturers", [manufacturer]);
+      rememberOrganizationValues("tags", tags);
       router.push(getProductsPath(guildId));
       invalidateProductCaches(guildId);
       router.refresh();
@@ -1986,6 +2226,7 @@ export function SalesProductCreatePanel({
     productType,
     productCode,
     publishedVirtualStore,
+    rememberOrganizationValues,
     router,
     sku,
     status,
@@ -2066,6 +2307,7 @@ export function SalesProductCreatePanel({
             <SalesDescriptionEditor
               guildId={guildId}
               kind="product"
+              scopeId={mode === "edit" && productCode ? `product:${productCode}` : undefined}
               title={title}
               value={description}
               onChange={(nextDescription) => {
@@ -2329,7 +2571,7 @@ export function SalesProductCreatePanel({
             </div>
           </ServerSurface>
 
-          <ServerSurface className="relative z-[180] p-[18px] sm:p-[20px]">
+          <ServerSurface className="flowdesk-product-organization relative z-[180] p-[18px] sm:p-[20px]">
             <div className="flex items-center gap-[8px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">
                 Organizacao do produto
@@ -2342,6 +2584,7 @@ export function SalesProductCreatePanel({
                 value={productType}
                 onChange={(nextValue) => {
                   setProductType(nextValue);
+                  rememberOrganizationValues("productTypes", [nextValue]);
                   setStatusMessage(null);
                 }}
                 suggestions={productTypeSuggestions}
@@ -2352,6 +2595,7 @@ export function SalesProductCreatePanel({
                 value={manufacturer}
                 onChange={(nextValue) => {
                   setManufacturer(nextValue);
+                  rememberOrganizationValues("manufacturers", [nextValue]);
                   setStatusMessage(null);
                 }}
                 suggestions={manufacturerSuggestions}
@@ -2363,6 +2607,7 @@ export function SalesProductCreatePanel({
                   setTags(nextTags);
                   setStatusMessage(null);
                 }}
+                onAddTags={(nextTags) => rememberOrganizationValues("tags", nextTags)}
                 suggestions={tagSuggestions}
                 disabled={controlsDisabled}
               />
@@ -2374,7 +2619,20 @@ export function SalesProductCreatePanel({
               <label className="block text-[14px] font-semibold text-[#E2E2E2]">
                 Canal Discord
               </label>
-              <Hash className="h-[16px] w-[16px] text-[#8A8A8A]" />
+              <button
+                type="button"
+                onClick={() => void loadDiscordChannels({ force: true })}
+                disabled={controlsDisabled || isLoadingChannels}
+                className="flowdesk-server-button inline-flex h-[30px] w-[30px] items-center justify-center rounded-[10px] text-[#8A8A8A] transition hover:bg-[#151515] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
+                aria-label="Atualizar canais Discord"
+                title="Atualizar canais Discord"
+              >
+                {isLoadingChannels ? (
+                  <ButtonLoader size={14} />
+                ) : (
+                  <RefreshCw className="h-[15px] w-[15px]" />
+                )}
+              </button>
             </div>
             <p className="mt-[10px] text-[13px] leading-[1.5] text-[#7B7B7B]">
               O bot publica um embed Component V2 com nome, descricao, valor e o botao Adicionar ao carrinho.
@@ -2404,12 +2662,20 @@ export function SalesProductCreatePanel({
                     setDiscordChannelId(nextChannelId);
                     setStatusMessage(null);
                   }}
-                  disabled={controlsDisabled || isLoadingChannels}
+                  disabled={controlsDisabled || isLoadingChannels || (!discordChannels.length && Boolean(channelsMessage))}
                   maxVisibleItems={6}
                 />
-                <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">
-                  Ao criar ou atualizar, o painel envia ou edita o embed nesse canal automaticamente.
-                </p>
+                {channelsMessage ? (
+                  <p className="mt-[9px] text-[12px] leading-[1.45] text-[#EFB47B]">
+                    {channelsMessage} Clique em atualizar para tentar novamente.
+                  </p>
+                ) : (
+                  <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">
+                    {isLoadingChannels
+                      ? "Buscando canais em tempo real no Discord..."
+                      : "Ao criar ou atualizar, o painel envia ou edita o embed nesse canal automaticamente."}
+                  </p>
+                )}
               </div>
             ) : (
               <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">

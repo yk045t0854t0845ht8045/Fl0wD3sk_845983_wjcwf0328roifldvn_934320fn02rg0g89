@@ -16,6 +16,30 @@ import {
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 
 const DESCRIPTION_MAX_LENGTH = 1800;
+const AI_DESCRIPTION_RATE_LIMIT_WINDOW_MS = 2 * 60_000;
+const AI_DESCRIPTION_RATE_LIMIT_MAX_SIMILAR_TITLES = 2;
+
+type AiDescriptionRateLimitEntry = {
+  title: string;
+  createdAt: number;
+};
+
+type AiDescriptionRateLimitBucket = {
+  blockedUntil: number;
+  entries: AiDescriptionRateLimitEntry[];
+};
+
+type AiDescriptionRateLimitStore = Map<string, AiDescriptionRateLimitBucket>;
+
+const rateLimitGlobal = globalThis as typeof globalThis & {
+  __flowdeskSalesDescriptionAiRateLimit?: AiDescriptionRateLimitStore;
+};
+
+const aiDescriptionRateLimitStore =
+  rateLimitGlobal.__flowdeskSalesDescriptionAiRateLimit ||
+  new Map<string, AiDescriptionRateLimitBucket>();
+
+rateLimitGlobal.__flowdeskSalesDescriptionAiRateLimit = aiDescriptionRateLimitStore;
 
 function getTrimmedText(value: unknown, maxLength: number) {
   if (typeof value !== "string") return "";
@@ -24,6 +48,131 @@ function getTrimmedText(value: unknown, maxLength: number) {
 
 function normalizeKind(value: unknown) {
   return value === "category" ? "category" : "product";
+}
+
+function getClientIp(request: Request) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
+  return (
+    request.headers.get("x-real-ip") ||
+    request.headers.get("cf-connecting-ip") ||
+    "unknown"
+  );
+}
+
+function normalizeRateLimitText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getTokenSet(value: string) {
+  return new Set(
+    normalizeRateLimitText(value)
+      .split(" ")
+      .filter((token) => token.length >= 2),
+  );
+}
+
+function areTitlesSimilar(left: string, right: string) {
+  const first = normalizeRateLimitText(left);
+  const second = normalizeRateLimitText(right);
+  if (!first || !second) return false;
+  if (first === second) return true;
+  if (
+    Math.min(first.length, second.length) >= 6 &&
+    (first.includes(second) || second.includes(first))
+  ) {
+    return true;
+  }
+
+  const firstTokens = getTokenSet(first);
+  const secondTokens = getTokenSet(second);
+  if (!firstTokens.size || !secondTokens.size) return false;
+
+  let intersection = 0;
+  for (const token of firstTokens) {
+    if (secondTokens.has(token)) intersection += 1;
+  }
+
+  const union = new Set([...firstTokens, ...secondTokens]).size;
+  return union > 0 && intersection / union >= 0.75;
+}
+
+function normalizeRateLimitScopeId(value: unknown, title: string) {
+  const provided = getTrimmedText(value, 140)
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]/g, "");
+  if (provided.length >= 2) return provided;
+
+  const normalizedTitle = normalizeRateLimitText(title)
+    .replace(/\s+/g, "-")
+    .slice(0, 80);
+  return `draft:${normalizedTitle || "untitled"}`;
+}
+
+function enforceSalesDescriptionAiRateLimit(input: {
+  request: Request;
+  guildId: string;
+  kind: "product" | "category";
+  scopeId: string;
+  title: string;
+}) {
+  const now = Date.now();
+  const clientIp = getClientIp(input.request);
+  const key = [
+    clientIp,
+    input.guildId,
+    input.kind,
+    input.scopeId,
+  ].join(":");
+  const bucket = aiDescriptionRateLimitStore.get(key) || {
+    blockedUntil: 0,
+    entries: [],
+  };
+
+  if (bucket.blockedUntil > now) {
+    return {
+      ok: false as const,
+      retryAfterSeconds: Math.max(1, Math.ceil((bucket.blockedUntil - now) / 1000)),
+    };
+  }
+
+  bucket.entries = bucket.entries.filter(
+    (entry) => now - entry.createdAt < AI_DESCRIPTION_RATE_LIMIT_WINDOW_MS,
+  );
+
+  const similarAttempts = bucket.entries.filter((entry) =>
+    areTitlesSimilar(entry.title, input.title),
+  );
+
+  if (similarAttempts.length >= AI_DESCRIPTION_RATE_LIMIT_MAX_SIMILAR_TITLES) {
+    bucket.blockedUntil = now + AI_DESCRIPTION_RATE_LIMIT_WINDOW_MS;
+    aiDescriptionRateLimitStore.set(key, bucket);
+    return {
+      ok: false as const,
+      retryAfterSeconds: Math.ceil(AI_DESCRIPTION_RATE_LIMIT_WINDOW_MS / 1000),
+    };
+  }
+
+  bucket.entries.push({
+    title: normalizeRateLimitText(input.title),
+    createdAt: now,
+  });
+  bucket.blockedUntil = 0;
+  aiDescriptionRateLimitStore.set(key, bucket);
+
+  return {
+    ok: true as const,
+    remaining: Math.max(
+      0,
+      AI_DESCRIPTION_RATE_LIMIT_MAX_SIMILAR_TITLES - similarAttempts.length - 1,
+    ),
+  };
 }
 
 function buildFallbackDescription(input: {
@@ -122,6 +271,7 @@ export async function POST(request: Request) {
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const kind = normalizeKind(rawBody.kind);
     const title = getTrimmedText(rawBody.title, 120);
+    const scopeId = normalizeRateLimitScopeId(rawBody.scopeId, title);
     const currentDescription = getTrimmedText(
       rawBody.currentDescription,
       DESCRIPTION_MAX_LENGTH,
@@ -147,6 +297,27 @@ export async function POST(request: Request) {
 
     const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
     if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    const rateLimit = enforceSalesDescriptionAiRateLimit({
+      request,
+      guildId,
+      kind,
+      scopeId,
+      title,
+    });
+    if (!rateLimit.ok) {
+      const response = NextResponse.json(
+        {
+          ok: false,
+          message:
+            "Muitas tentativas para esse item. Tente novamente mais tarde.",
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+        { status: 429 },
+      );
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return applyNoStoreHeaders(response);
+    }
 
     try {
       const result = await runFlowAiText({

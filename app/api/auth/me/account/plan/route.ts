@@ -5,6 +5,38 @@ import { resolvePlanDefinition } from "@/lib/plans/catalog";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 
+function isLocalDevRuntime() {
+  return process.env.NODE_ENV !== "production";
+}
+
+function isMissingOptionalLocalTableError(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    message.includes("schema cache") ||
+    message.includes("could not find the table") ||
+    message.includes("relation") ||
+    message.includes("does not exist")
+  );
+}
+
+async function getUserPlanStateForLocalRuntime(userId: number) {
+  try {
+    return await getUserPlanState(userId);
+  } catch (error) {
+    if (isLocalDevRuntime() && isMissingOptionalLocalTableError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function GET() {
   try {
     const sessionData = await resolveSessionAccessToken();
@@ -15,7 +47,7 @@ export async function GET() {
     }
 
     const userId = sessionData.authSession.user.id;
-    const planState = await getUserPlanState(userId);
+    const planState = await getUserPlanStateForLocalRuntime(userId);
 
     const planCode = planState?.plan_code ?? "basic";
     const planDefinition = resolvePlanDefinition(planCode);

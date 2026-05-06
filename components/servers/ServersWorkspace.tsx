@@ -117,6 +117,7 @@ type ServerSettingsSection =
   | "sales_product_create"
   | "sales_product_edit"
   | "sales_stock"
+  | "sales_stock_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"
@@ -516,7 +517,7 @@ function parseWorkspaceRoute(pathname: string | null): {
     }
 
     if (
-      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|stock|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
+      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
         comparablePathname,
       )
     ) {
@@ -550,7 +551,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const salesSectionMatch = normalizedPathname.match(
-    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock|payment-methods|coupons-gifts)\/?$/,
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)\/?$/,
   );
   if (salesSectionMatch) {
     const salesSection = salesSectionMatch[2];
@@ -572,6 +573,8 @@ function parseWorkspaceRoute(pathname: string | null): {
             ? "sales_product_edit"
           : salesSection === "stock"
             ? "sales_stock"
+          : salesSection.startsWith("stock/edit/")
+            ? "sales_stock_edit"
             : salesSection === "payment-methods"
               ? "sales_payment_methods"
               : salesSection === "coupons-gifts"
@@ -640,7 +643,7 @@ function isServersWorkspacePath(pathname: string) {
     return true;
   }
 
-  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|stock|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
+  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
     pathname,
   );
 }
@@ -2684,7 +2687,7 @@ export function ServersWorkspace({
     if (settingsSection === "sales_product_edit") {
       return `/servers/${encodedGuildId}/sales/products/`;
     }
-    if (settingsSection === "sales_stock") {
+    if (settingsSection === "sales_stock" || settingsSection === "sales_stock_edit") {
       return `/servers/${encodedGuildId}/sales/stock/`;
     }
     if (settingsSection === "sales_payment_methods") {
