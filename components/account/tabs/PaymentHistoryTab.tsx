@@ -160,7 +160,7 @@ function buildPaginationItems(totalPages: number, currentPage: number) {
 
 export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { onNavigateTickets?: () => void }) {
   void _onNavigateTickets;
-  const { orders, loading } = usePaymentHistory();
+  const { orders, loading, error } = usePaymentHistory();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "failed">("all");
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
@@ -200,6 +200,16 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
 
   return (
     <div className="mt-[32px] space-y-[24px]">
+      {error ? (
+        <div className="rounded-[18px] border border-[rgba(219,70,70,0.22)] bg-[rgba(42,12,12,0.82)] px-[18px] py-[14px]">
+          <p className="text-[14px] font-medium text-[#F1D3D3]">
+            Nao foi possivel carregar as cobrancas.
+          </p>
+          <p className="mt-[5px] text-[13px] leading-[1.5] text-[#B98787]">
+            {String(error)}
+          </p>
+        </div>
+      ) : null}
       {/* Filter Card */}
       <div className="rounded-[22px] border border-[#141414] bg-[#0A0A0A] p-[20px]">
         <div className="flex flex-col gap-[16px] lg:flex-row lg:items-center lg:justify-between">

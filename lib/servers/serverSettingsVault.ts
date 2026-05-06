@@ -11,6 +11,7 @@ export type ServerSettingsVaultModule =
   | "antilink_settings"
   | "autorole_settings"
   | "sales_settings"
+  | "sales_payment_methods"
   | "security_logs_settings";
 
 type ServerSettingsVaultRow = {

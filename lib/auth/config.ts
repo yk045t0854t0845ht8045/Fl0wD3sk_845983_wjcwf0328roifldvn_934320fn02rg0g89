@@ -218,10 +218,21 @@ function resolveRequestScopedRedirectUri(
     preferFallbackForLocal?: boolean;
   },
 ) {
-  const runtime = resolveHostRuntimeContext(getRequestHostname(request));
+  const hostname = getRequestHostname(request);
+  const runtime = resolveHostRuntimeContext(hostname);
 
   if (runtime.mode === "isolated") {
     return fallbackRedirectUri;
+  }
+
+  if (
+    runtime.mode === "local" &&
+    (hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "0.0.0.0" ||
+      hostname === "::1")
+  ) {
+    return new URL(callbackPathname, `${request.nextUrl.protocol}//${request.nextUrl.host}`).toString();
   }
 
   if (runtime.mode === "local" && options?.preferFallbackForLocal) {

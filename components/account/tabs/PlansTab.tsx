@@ -64,7 +64,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function PlansTab() {
-  const { plan, loading } = usePlanInfo();
+  const { plan, loading, error } = usePlanInfo();
   const router = useRouter();
   const navigateToPlans = () => {
     const target = buildBrowserRoutingTargetFromInternalPath("/servers/plans");
@@ -95,7 +95,14 @@ export function PlansTab() {
         <div className="flex h-[48px] w-[48px] items-center justify-center rounded-full bg-[#111111]">
           <BadgePercent className="text-[#888888] h-[24px] w-[24px]" />
         </div>
-        <p className="mt-[16px] text-[15px] font-medium text-[#E5E5E5]">Nenhum plano encontrado</p>
+        <p className="mt-[16px] text-[15px] font-medium text-[#E5E5E5]">
+          {error ? "Nao foi possivel carregar seu plano" : "Nenhum plano encontrado"}
+        </p>
+        {error ? (
+          <p className="mt-[6px] max-w-[520px] text-[13px] leading-[1.5] text-[#777777]">
+            {String(error)}
+          </p>
+        ) : null}
       </div>
     );
   }

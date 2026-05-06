@@ -20,11 +20,10 @@ const CATEGORY_TITLE_MAX_LENGTH = 90;
 const CATEGORY_DESCRIPTION_MAX_LENGTH = 1200;
 const SEO_TITLE_MAX_LENGTH = 90;
 const SEO_DESCRIPTION_MAX_LENGTH = 180;
-const CATEGORY_IMAGE_MAX_LENGTH = 1_500_000;
+const CATEGORY_IMAGE_MAX_LENGTH = 4_500_000;
 const CATEGORY_SELECT =
   "id, guild_id, title, description, collection_type, image_url, theme_model, discord_publication_mode, discord_channel_id, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at";
-const GUILD_TEXT = 0;
-const GUILD_ANNOUNCEMENT = 5;
+const GUILD_CATEGORY = 4;
 
 type GuildSalesCategoryRecord = {
   id: string;
@@ -73,8 +72,8 @@ function normalizeDiscordPublicationMode(value: unknown) {
   return value === "channel" ? "channel" : "online_only";
 }
 
-function isValidTextChannelType(type?: number) {
-  return type === GUILD_TEXT || type === GUILD_ANNOUNCEMENT;
+function isValidCategoryChannelType(type?: number) {
+  return type === GUILD_CATEGORY;
 }
 
 function isMissingSalesCategoriesTable(error: unknown) {
@@ -100,7 +99,10 @@ function normalizeCategoryCode(value: unknown) {
   return /^flw-[0-9]{8}$/.test(code) ? code : "";
 }
 
-function buildCategoryResponse(record: GuildSalesCategoryRecord) {
+function buildCategoryResponse(
+  record: GuildSalesCategoryRecord,
+  productsCountOverride?: number,
+) {
   return {
     id: record.id,
     code: buildCategoryCode(record.id),
@@ -120,12 +122,49 @@ function buildCategoryResponse(record: GuildSalesCategoryRecord) {
     publishedPointOfSale: record.published_point_of_sale,
     seoTitle: record.seo_title || "",
     seoDescription: record.seo_description || "",
-    productsCount: record.products_count || 0,
+    productsCount: productsCountOverride ?? record.products_count ?? 0,
     active: record.active,
     sortOrder: record.sort_order || 0,
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
+}
+
+async function loadCategoryProductCounts(guildId: string, categoryIds: string[]) {
+  const uniqueCategoryIds = Array.from(new Set(categoryIds.filter(Boolean)));
+  if (!uniqueCategoryIds.length) return new Map<string, number>();
+
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_products")
+    .select("category_id")
+    .eq("guild_id", guildId)
+    .in("category_id", uniqueCategoryIds)
+    .limit(10_000);
+
+  if (result.error) {
+    if (isMissingSalesProductsTable(result.error)) return new Map<string, number>();
+    throw new Error(result.error.message);
+  }
+
+  const counts = new Map<string, number>();
+  (result.data || []).forEach((row) => {
+    const categoryId =
+      row && typeof row === "object" && typeof row.category_id === "string"
+        ? row.category_id
+        : "";
+    if (categoryId) counts.set(categoryId, (counts.get(categoryId) || 0) + 1);
+  });
+  return counts;
+}
+
+function isMissingSalesProductsTable(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+  return code === "42P01" || message.includes("guild_sales_products");
 }
 
 async function findCategoryByCode(guildId: string, categoryCode: string) {
@@ -225,7 +264,7 @@ async function validateDiscordPublicationInput(input: {
         {
           ok: false,
           message:
-            "Selecione um canal Discord ou use a opcao Somente online antes de salvar.",
+            "Selecione uma categoria Discord ou use a opcao Somente online antes de salvar.",
         },
         { status: 400 },
       ),
@@ -244,11 +283,11 @@ async function validateDiscordPublicationInput(input: {
   }
 
   const channel = rawChannels.find((item) => item.id === input.channelId);
-  if (!channel || !isValidTextChannelType(channel.type)) {
+  if (!channel || !isValidCategoryChannelType(channel.type)) {
     return {
       ok: false as const,
       response: NextResponse.json(
-        { ok: false, message: "Canal Discord invalido para a categoria." },
+        { ok: false, message: "Categoria Discord invalida para a categoria da loja." },
         { status: 400 },
       ),
     };
@@ -290,10 +329,11 @@ export async function GET(request: Request) {
         );
       }
 
+      const counts = await loadCategoryProductCounts(guildId, [category.id]);
       return applyNoStoreHeaders(
         NextResponse.json({
           ok: true,
-          category: buildCategoryResponse(category),
+          category: buildCategoryResponse(category, counts.get(category.id) || 0),
         }),
       );
     }
@@ -313,11 +353,17 @@ export async function GET(request: Request) {
       throw new Error(result.error.message);
     }
 
+    const categories = (result.data || []) as GuildSalesCategoryRecord[];
+    const counts = await loadCategoryProductCounts(
+      guildId,
+      categories.map((category) => category.id),
+    );
+
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        categories: ((result.data || []) as GuildSalesCategoryRecord[]).map(
-          buildCategoryResponse,
+        categories: categories.map((category) =>
+          buildCategoryResponse(category, counts.get(category.id) || 0),
         ),
       }),
     );

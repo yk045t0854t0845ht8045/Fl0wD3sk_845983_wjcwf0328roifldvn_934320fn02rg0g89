@@ -16,6 +16,51 @@ import {
   extendSecurityRequestContext,
   logSecurityAuditEventSafe,
 } from "@/lib/security/requestSecurity";
+
+function isLocalDevRuntime() {
+  return process.env.NODE_ENV !== "production";
+}
+
+function isLocalRecoverablePlanError(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    message.includes("schema cache") ||
+    message.includes("could not find the table") ||
+    message.includes("relation") ||
+    message.includes("does not exist") ||
+    message.includes("mercado pago") ||
+    message.includes("provider") ||
+    message.includes("checkout")
+  );
+}
+
+function buildLocalPlanFallback(message: string) {
+  return {
+    ok: true,
+    plan: null,
+    usage: {
+      licensedServersCount: 0,
+      maxLicensedServers: 0,
+      remainingLicensedServers: 0,
+      hasReachedLicensedServersLimit: false,
+      canAddMoreServers: true,
+    },
+    totalLinkedServersCount: 0,
+    isBasicAvailable: true,
+    downgradeEnforcement: null,
+    upgradeRecommendation: null,
+    localFallback: true,
+    message,
+  };
+}
+
 export async function GET(request: Request) {
   const baseRequestContext = createSecurityRequestContext(request);
   const respond = (body: unknown, init?: ResponseInit) =>
@@ -60,10 +105,16 @@ export async function GET(request: Request) {
       return response;
     }
 
-    await ensureUserPaymentDeliveryReady({
-      userId: sessionData.authSession.user.id,
-      source: "plan_state_get",
-    });
+    try {
+      await ensureUserPaymentDeliveryReady({
+        userId: sessionData.authSession.user.id,
+        source: "plan_state_get",
+      });
+    } catch (error) {
+      if (!isLocalDevRuntime() || !isLocalRecoverablePlanError(error)) {
+        throw error;
+      }
+    }
 
     const data = await getManagedPlanStateForUser(sessionData.authSession.user.id);
 
@@ -86,6 +137,14 @@ export async function GET(request: Request) {
     });
 
   } catch (error) {
+    if (isLocalDevRuntime() && isLocalRecoverablePlanError(error)) {
+      return respond(
+        buildLocalPlanFallback(
+          sanitizeErrorMessage(error, "Plano local indisponivel; usando fallback de desenvolvimento."),
+        ),
+      );
+    }
+
     return respond(
       {
         ok: false,

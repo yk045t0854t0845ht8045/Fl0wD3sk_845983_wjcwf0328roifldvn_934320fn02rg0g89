@@ -9,6 +9,7 @@ type ServerSettingsSection =
   | "sales_product_create"
   | "sales_product_edit"
   | "sales_stock"
+  | "sales_stock_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "entry_exit_overview"

@@ -2,20 +2,35 @@ import useSWR from "swr";
 import { useEffect } from "react";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+async function fetcher(url: string) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    credentials: "include",
+  });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(
+      typeof payload?.message === "string"
+        ? payload.message
+        : "Nao foi possivel carregar os dados.",
+    );
+  }
+
+  return payload;
+}
 
 export function usePaymentHistory() {
   const { data, error, isLoading, mutate } = useSWR("/api/auth/me/payments/history", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000, // 10s
-    fallbackData: { ok: true, orders: [], methods: [] },
   });
 
   return {
     orders: data?.orders || [],
     methods: data?.methods || [],
     loading: isLoading,
-    error,
+    error: error instanceof Error ? error.message : error,
     mutate,
   };
 }
@@ -29,7 +44,7 @@ export function usePlanState() {
   return {
     planState: data?.ok ? data : null,
     loading: isLoading,
-    error,
+    error: error instanceof Error ? error.message : error,
     mutate,
   };
 }
@@ -43,7 +58,7 @@ export function useAccountSummary() {
   return {
     summary: data?.ok ? data.summary : null,
     loading: isLoading,
-    error,
+    error: error instanceof Error ? error.message : error,
     mutate,
   };
 }
@@ -57,7 +72,7 @@ export function usePlanInfo() {
   return {
     plan: data?.ok ? data.plan : null,
     loading: isLoading,
-    error,
+    error: error instanceof Error ? error.message : error,
     mutate,
   };
 }
@@ -90,8 +105,7 @@ export function useAccountStatus() {
   return {
     statusData: data?.ok ? data : null,
     loading: isLoading,
-    error,
+    error: error instanceof Error ? error.message : error,
     mutate,
   };
 }
-

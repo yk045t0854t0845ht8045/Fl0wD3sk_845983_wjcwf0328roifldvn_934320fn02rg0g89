@@ -106,7 +106,7 @@ const STATIC_PUBLIC_ROOT_FILE_PATTERN =
   /^\/[^/]+\.(?:png|jpe?g|gif|webp|svg|ico|txt|xml|json|webmanifest|woff2?|ttf|otf)$/i;
 const RATE_LIMIT_ACTIVE_BLOCK_REASON = "active_block";
 const LOCAL_HISTORY_RETENTION_MS = 6 * 60 * 1000;
-const LOCAL_MAX_HITS_PER_IP = 240;
+const LOCAL_MAX_HITS_PER_IP = 720;
 const LOCAL_MAX_IP_BUCKETS = 2_500;
 
 const localHitsByIp = new Map<string, LocalHit[]>();
@@ -157,6 +157,36 @@ function resolveRouteThreshold(
   return Math.max(40, duplicateThreshold * 3);
 }
 
+function resolveDuplicateThreshold(scope: RateLimitTrafficScope) {
+  const baseThreshold = resolveIntegerEnv(
+    "FLOWSECURE_RATE_LIMIT_DUPLICATE_MAX",
+    8,
+  );
+
+  if (scope === "api_read") {
+    return resolveIntegerEnv(
+      "FLOWSECURE_RATE_LIMIT_API_READ_DUPLICATE_MAX",
+      Math.max(48, baseThreshold * 6),
+    );
+  }
+
+  if (scope === "api_mutation") {
+    return resolveIntegerEnv(
+      "FLOWSECURE_RATE_LIMIT_API_MUTATION_DUPLICATE_MAX",
+      Math.max(18, baseThreshold * 3),
+    );
+  }
+
+  if (scope === "other") {
+    return resolveIntegerEnv(
+      "FLOWSECURE_RATE_LIMIT_OTHER_DUPLICATE_MAX",
+      Math.max(24, baseThreshold * 3),
+    );
+  }
+
+  return baseThreshold;
+}
+
 function shouldApplyScopeBurst(scope: RateLimitTrafficScope) {
   return scope === "auth" || scope === "other";
 }
@@ -177,10 +207,18 @@ function isStaticPublicAssetPath(pathname: string) {
 
 function shouldBypassRateLimit(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
+  const method = request.method.toUpperCase();
   const purpose = request.headers.get("purpose")?.trim().toLowerCase();
   const secPurpose = request.headers.get("sec-purpose")?.trim().toLowerCase();
 
-  if (request.method.toUpperCase() === "OPTIONS") {
+  if (method === "OPTIONS") {
+    return true;
+  }
+
+  if (
+    pathname === "/api/auth/me/guilds/sales-products" &&
+    (method === "POST" || method === "PATCH")
+  ) {
     return true;
   }
 
@@ -217,10 +255,7 @@ function shouldBypassRateLimit(request: NextRequest) {
 }
 
 function resolveThresholds(scope: RateLimitTrafficScope): RateLimitThresholds {
-  const duplicateThreshold = resolveIntegerEnv(
-    "FLOWSECURE_RATE_LIMIT_DUPLICATE_MAX",
-    8,
-  );
+  const duplicateThreshold = resolveDuplicateThreshold(scope);
 
   return {
     windowSeconds: resolveIntegerEnv(
@@ -237,16 +272,19 @@ function resolveThresholds(scope: RateLimitTrafficScope): RateLimitThresholds {
       scope === "page"
         ? resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_PAGE_SCOPE_MAX", 40)
         : scope === "api_read"
-          ? resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_API_READ_SCOPE_MAX", 90)
+          ? resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_API_READ_SCOPE_MAX", 240)
           : scope === "api_mutation"
             ? resolveIntegerEnv(
                 "FLOWSECURE_RATE_LIMIT_API_MUTATION_SCOPE_MAX",
-                40,
+                90,
               )
             : scope === "auth"
               ? resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_AUTH_SCOPE_MAX", 20)
               : resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_OTHER_SCOPE_MAX", 60),
-    siteThreshold: resolveIntegerEnv("FLOWSECURE_RATE_LIMIT_SITE_MAX", 160),
+    siteThreshold: resolveIntegerEnv(
+      "FLOWSECURE_RATE_LIMIT_SITE_MAX",
+      scope === "api_read" ? 420 : scope === "api_mutation" ? 240 : 160,
+    ),
     maxBodyBytes: resolveIntegerEnv(
       "FLOWSECURE_RATE_LIMIT_BODY_MAX_BYTES",
       24_576,
@@ -542,16 +580,21 @@ async function inspectRequest(
       secFetchMode === "navigate");
 
   const responseMode: RateLimitResponseMode = isApi ? "json" : "html";
+  const isAuthenticatedDashboardApi = pathname.startsWith("/api/auth/me/");
   const trafficScope: RateLimitTrafficScope =
-    pathname.startsWith("/api/auth/")
-      ? "auth"
-      : isApi && MUTATION_METHODS.has(method)
-        ? "api_mutation"
-        : isApi
-          ? "api_read"
-          : isDocumentNavigation
-            ? "page"
-            : "other";
+    isAuthenticatedDashboardApi && MUTATION_METHODS.has(method)
+      ? "api_mutation"
+      : isAuthenticatedDashboardApi
+        ? "api_read"
+        : pathname.startsWith("/api/auth/")
+          ? "auth"
+          : isApi && MUTATION_METHODS.has(method)
+            ? "api_mutation"
+            : isApi
+              ? "api_read"
+              : isDocumentNavigation
+                ? "page"
+                : "other";
 
   if (trafficScope === "page" && !isPageNavigationRateLimitEnabled()) {
     return null;
@@ -930,6 +973,16 @@ function maskIpAddress(ipAddress: string) {
   return "Hidden";
 }
 
+function formatRetryAfterMessage(seconds: number) {
+  const normalizedSeconds = Math.max(1, Math.trunc(seconds || 60));
+  if (normalizedSeconds < 60) {
+    return `${normalizedSeconds} segundo${normalizedSeconds === 1 ? "" : "s"}`;
+  }
+
+  const minutes = Math.ceil(normalizedSeconds / 60);
+  return `${minutes} minuto${minutes === 1 ? "" : "s"}`;
+}
+
 function resolveBlockedHeadline(reason: string) {
   if (reason === "page_reload_burst" || reason === "route_burst") {
     return "Acesso temporariamente limitado nesta pagina";
@@ -950,6 +1003,7 @@ function buildRateLimitHtml(
   const blockedAt = formatUtcDateTime(decision.blockedUntilIso);
   const headline = resolveBlockedHeadline(decision.reason);
   const retryAfterSeconds = Math.max(1, Math.trunc(decision.retryAfterSeconds || 60));
+  const retryAfterLabel = formatRetryAfterMessage(retryAfterSeconds);
   const maskedIp = maskIpAddress(decision.ipAddress);
   const revealedIp = JSON.stringify(decision.ipAddress);
 
@@ -1167,7 +1221,7 @@ function buildRateLimitHtml(
         <div class="content">
           <h2>${escapeHtml(headline)}</h2>
           <p>O FlowSecure bloqueou temporariamente este IP porque muitas requisicoes foram feitas em pouco tempo para este endereco.</p>
-          <p>Aguarde cerca de <strong>${escapeHtml(String(retryAfterSeconds))} segundos</strong> antes de tentar novamente. Se voce estava apenas atualizando a pagina varias vezes, espere o bloqueio expirar.</p>
+          <p>Aguarde cerca de <strong>${escapeHtml(retryAfterLabel)}</strong> antes de tentar novamente. Se voce estava apenas atualizando a pagina varias vezes, espere o bloqueio expirar.</p>
         </div>
 
         <div class="feedback">
@@ -1231,6 +1285,7 @@ export function buildFlowSecureRateLimitResponse(
 ) {
   const rayId = formatRayId(input.requestId);
   const retryAfterSeconds = Math.max(1, Math.trunc(decision.retryAfterSeconds || 60));
+  const retryAfterLabel = formatRetryAfterMessage(retryAfterSeconds);
   const blockedUntilIso =
     decision.blockedUntilIso ||
     new Date(Date.now() + retryAfterSeconds * 1000).toISOString();
@@ -1242,7 +1297,7 @@ export function buildFlowSecureRateLimitResponse(
             ok: false,
             code: "rate_limited",
             message:
-              "Muitas requisicoes foram detectadas para este IP. Aguarde 1 minuto e tente novamente.",
+              `Muitas requisicoes foram detectadas para este IP. Aguarde ${retryAfterLabel} e tente novamente.`,
             rayId,
             retryAfterSeconds,
             blockedUntil: blockedUntilIso,
