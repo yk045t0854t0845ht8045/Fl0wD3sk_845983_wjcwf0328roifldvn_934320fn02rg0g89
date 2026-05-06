@@ -194,7 +194,7 @@ function buildLoginOtpEmailHtml(input: {
         <meta name="supported-color-schemes" content="dark only" />
         <title>Flowdesk | Codigo de verificacao</title>
       </head>
-      <body style="margin:0;padding:0;background-color:#05070A;">
+      <body style="margin:0;padding:0;background-color:#FFFFFF;">
         <div
           style="
             display:none;
@@ -205,7 +205,7 @@ function buildLoginOtpEmailHtml(input: {
             mso-hide:all;
             font-size:1px;
             line-height:1px;
-            color:#05070A;
+            color:#FFFFFF;
           "
         >
           Seu codigo de verificacao Flowdesk e ${safeCode}. Ele expira em ${safeExpiresLabel}.
@@ -216,7 +216,7 @@ function buildLoginOtpEmailHtml(input: {
           cellspacing="0"
           border="0"
           width="100%"
-          style="width:100%;border-collapse:collapse;background-color:#05070A;"
+          style="width:100%;border-collapse:collapse;background-color:#FFFFFF;"
         >
           <tr>
             <td align="center" style="padding:32px 16px;">
@@ -934,11 +934,11 @@ function buildTransactionalEmailHtml(input: {
         <meta name="supported-color-schemes" content="dark only" />
         <title>Flowdesk</title>
       </head>
-      <body style="margin:0;padding:0;background-color:#05070A;">
-        <div style="display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#05070A;">
+      <body style="margin:0;padding:0;background-color:#FFFFFF;">
+        <div style="display:none;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#FFFFFF;">
           ${safePreheader}
         </div>
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#05070A;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;background-color:#FFFFFF;">
           <tr>
             <td align="center" style="padding:32px 16px;">
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:640px;border-collapse:separate;">

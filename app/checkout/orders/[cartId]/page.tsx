@@ -36,6 +36,78 @@ function methodLabel(value: string) {
   return "Website";
 }
 
+function renderInlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return (
+        <strong key={index} className="font-semibold text-[#F2F2F2]">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function DeliveryMessage({ message }: { message: string }) {
+  const lines = message
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="mt-[16px] rounded-[18px] border border-[#1D1D1D] bg-[#050505] p-[15px] text-left">
+      <div className="space-y-[10px]">
+        {lines.map((line, index) => {
+          if (line.startsWith("### ")) {
+            return (
+              <h4 key={index} className="pt-[4px] text-[14px] font-semibold text-[#F1F1F1]">
+                {renderInlineMarkdown(line.slice(4))}
+              </h4>
+            );
+          }
+          if (line.startsWith("## ")) {
+            return (
+              <h3 key={index} className="text-[17px] font-semibold tracking-[-0.03em] text-[#F4F4F4]">
+                {renderInlineMarkdown(line.slice(3))}
+              </h3>
+            );
+          }
+          if (line.startsWith("# ")) {
+            return (
+              <h2 key={index} className="text-[20px] font-semibold tracking-[-0.04em] text-[#F4F4F4]">
+                {renderInlineMarkdown(line.slice(2))}
+              </h2>
+            );
+          }
+          const fieldMatch = line.match(/^\*\*([^:]+):\*\*\s*(.*)$/);
+          if (fieldMatch) {
+            return (
+              <div
+                key={index}
+                className="grid gap-[4px] rounded-[14px] border border-[#171717] bg-[#080808] px-[12px] py-[10px] sm:grid-cols-[160px_minmax(0,1fr)] sm:gap-[12px]"
+              >
+                <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#858585]">
+                  {fieldMatch[1]}
+                </span>
+                <span className="min-w-0 break-words text-[13px] leading-[1.6] text-[#D7D7D7]">
+                  {fieldMatch[2] || "-"}
+                </span>
+              </div>
+            );
+          }
+          return (
+            <p key={index} className="break-words text-[13px] leading-[1.65] text-[#D7D7D7]">
+              {renderInlineMarkdown(line)}
+            </p>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default async function SalesOrderDeliveryPage({ params }: PageProps) {
   const { cartId } = await params;
   if (!isUuid(cartId)) redirect("/");
@@ -142,9 +214,7 @@ export default async function SalesOrderDeliveryPage({ params }: PageProps) {
                       </p>
                     </div>
                   </div>
-                  <pre className="mt-[16px] whitespace-pre-wrap rounded-[18px] border border-[#1D1D1D] bg-[#050505] p-[15px] text-left text-[13px] leading-[1.65] text-[#D7D7D7]">
-                    {message}
-                  </pre>
+                  <DeliveryMessage message={message} />
                 </article>
               );
             })
