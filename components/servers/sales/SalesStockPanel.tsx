@@ -86,6 +86,8 @@ type StockResponse = {
   items?: StockItem[];
   item?: StockItem;
   stockQuantity?: number;
+  discordSyncStatus?: "idle" | "synced" | "failed";
+  discordSyncError?: string;
 };
 
 type FieldDefinition = {
@@ -841,6 +843,13 @@ export function SalesStockPanel({
           title: editingItemId ? "Estoque atualizado" : "Estoque cadastrado",
         },
       );
+      if (payload.discordSyncStatus === "failed") {
+        notifications.show(
+          payload.discordSyncError ||
+            "O estoque foi salvo, mas o embed do produto no Discord nao sincronizou agora.",
+          { title: "Embed Discord", tone: "default", durationMs: 7200 },
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro ao salvar estoque.";
       notifications.error(message, { title: "Falha no estoque" });
@@ -913,6 +922,13 @@ export function SalesStockPanel({
         if (editingItemId === item.id) cancelEdit();
         setActionItem(null);
         notifications.success("Entrega removida do estoque.", { title: "Estoque atualizado" });
+        if (payload.discordSyncStatus === "failed") {
+          notifications.show(
+            payload.discordSyncError ||
+              "O estoque foi removido, mas o embed do produto no Discord nao sincronizou agora.",
+            { title: "Embed Discord", tone: "default", durationMs: 7200 },
+          );
+        }
       } catch (error) {
         notifications.error(
           error instanceof Error ? error.message : "Erro ao excluir estoque.",

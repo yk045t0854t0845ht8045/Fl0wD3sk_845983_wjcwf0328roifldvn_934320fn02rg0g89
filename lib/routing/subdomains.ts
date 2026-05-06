@@ -139,11 +139,17 @@ export const CANONICAL_PUBLIC_PATH_PREFIXES = [
   "/terms",
   "/affiliates",
   "/payment",
+  "/checkout",
   "/transcripts",
   "/discord",
   "/domains",
 ] as const;
 const DASHBOARD_EMBEDDED_PATH_PREFIXES = ["/domains"] as const;
+const RESERVED_WORKSPACE_SUBDOMAINS = new Set(
+  Object.values(CANONICAL_HOST_CONFIG)
+    .flatMap((config) => [config.subdomain, ...(config.legacySubdomains || [])])
+    .filter((value): value is string => Boolean(value)),
+);
 
 function normalizeHostCandidate(value: string | null | undefined) {
   return value?.split(",")[0]?.trim().toLowerCase() || "";
@@ -214,25 +220,41 @@ function extractHostFromUrl(value: string | null | undefined) {
 }
 
 function normalizeConfiguredHost(value: string | null | undefined) {
-  const host = normalizeHostCandidate(value);
+  const host = normalizeHostCandidate(extractHostFromUrl(value) || value);
   if (!host) return "";
 
   if (LEGACY_PRODUCTION_HOSTS.has(host)) {
     return DEFAULT_PRODUCTION_PUBLIC_HOST;
   }
 
+  const { hostname, port } = parseHost(host);
+  const normalizedHostname = normalizeReservedWorkspaceHostname(hostname);
+  if (normalizedHostname !== hostname) {
+    return `${normalizedHostname}${port ? `:${port}` : ""}`;
+  }
+
   return host;
 }
 
 function normalizeConfiguredHostname(value: string | null | undefined) {
-  const hostname = parseHost(value || "").hostname;
+  const hostname = parseHost(extractHostFromUrl(value) || value || "").hostname;
   if (!hostname) return "";
 
   if (LEGACY_PRODUCTION_HOSTS.has(hostname)) {
     return parseHost(DEFAULT_PRODUCTION_PUBLIC_HOST).hostname;
   }
 
-  return hostname;
+  return normalizeReservedWorkspaceHostname(hostname);
+}
+
+function normalizeReservedWorkspaceHostname(hostname: string) {
+  const parts = hostname.toLowerCase().split(".").filter(Boolean);
+  if (parts.length < 3) return hostname;
+
+  const [subdomain, ...rest] = parts;
+  if (!RESERVED_WORKSPACE_SUBDOMAINS.has(subdomain)) return hostname;
+
+  return `www.${rest.join(".")}`;
 }
 
 function resolveConfiguredProductionBaseDomain() {

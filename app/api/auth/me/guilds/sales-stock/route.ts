@@ -14,6 +14,11 @@ import {
 } from "@/lib/security/http";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
+import {
+  markSalesProductDiscordSyncFailedById,
+  syncSalesProductDiscordMessageById,
+  type SalesProductDiscordSyncStatus,
+} from "@/lib/servers/salesProductDiscordSync";
 
 const STOCK_SELECT = [
   "id",
@@ -299,6 +304,40 @@ async function syncProductStockQuantity(guildId: string, productId: string) {
   return quantity;
 }
 
+async function syncProductStockQuantityAndDiscordEmbed(
+  guildId: string,
+  productId: string,
+) {
+  const stockQuantity = await syncProductStockQuantity(guildId, productId);
+  let discordSyncStatus: SalesProductDiscordSyncStatus = "idle";
+  let discordSyncError = "";
+
+  try {
+    const sync = await syncSalesProductDiscordMessageById({ guildId, productId });
+    discordSyncStatus = sync?.status || "idle";
+    discordSyncError = sync?.error || "";
+  } catch (error) {
+    discordSyncStatus = "failed";
+    discordSyncError = sanitizeErrorMessage(
+      error,
+      "Estoque salvo, mas nao foi possivel atualizar o embed do produto no Discord.",
+    );
+    await markSalesProductDiscordSyncFailedById({
+      guildId,
+      productId,
+      error: discordSyncError,
+    }).catch((markError) => {
+      console.warn("[sales-stock] failed to mark Discord sync error", markError);
+    });
+  }
+
+  return {
+    stockQuantity,
+    discordSyncStatus,
+    discordSyncError,
+  };
+}
+
 async function assertProductBelongsToGuild(guildId: string, productId: string) {
   const supabase = getSupabaseAdminClientOrThrow();
   const { data, error } = await supabase
@@ -406,13 +445,13 @@ export async function POST(request: Request) {
       .single();
 
     if (error) throw new Error(error.message);
-    const stockQuantity = await syncProductStockQuantity(guildId, productId);
+    const stockSync = await syncProductStockQuantityAndDiscordEmbed(guildId, productId);
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
         item: buildStockResponse(data as unknown as StockRecord),
-        stockQuantity,
+        ...stockSync,
       }),
     );
   } catch (error) {
@@ -476,13 +515,13 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const stockQuantity = await syncProductStockQuantity(guildId, productId);
+    const stockSync = await syncProductStockQuantityAndDiscordEmbed(guildId, productId);
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
         item: buildStockResponse(data as unknown as StockRecord),
-        stockQuantity,
+        ...stockSync,
       }),
     );
   } catch (error) {
@@ -528,12 +567,12 @@ export async function DELETE(request: Request) {
       .eq("id", itemId);
 
     if (error) throw new Error(error.message);
-    const stockQuantity = await syncProductStockQuantity(guildId, productId);
+    const stockSync = await syncProductStockQuantityAndDiscordEmbed(guildId, productId);
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        stockQuantity,
+        ...stockSync,
       }),
     );
   } catch (error) {

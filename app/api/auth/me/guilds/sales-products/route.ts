@@ -533,6 +533,32 @@ async function refreshCategoryProductCounts(guildId: string, categoryIds: Array<
   );
 }
 
+async function calculateProductAvailableStockQuantity(
+  guildId: string,
+  productId: string,
+  fallbackQuantity = 0,
+) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_stock_items")
+    .select("quantity")
+    .eq("guild_id", guildId)
+    .eq("product_id", productId)
+    .eq("status", "available");
+
+  if (result.error) {
+    const message = result.error.message.toLowerCase();
+    if (result.error.code === "42P01" || message.includes("guild_sales_stock_items")) {
+      return Math.max(0, Math.floor(Number(fallbackQuantity) || 0));
+    }
+    throw new Error(result.error.message);
+  }
+
+  return (result.data || []).reduce(
+    (total, item) => total + Math.max(0, Number(item.quantity || 0)),
+    0,
+  );
+}
+
 async function validateDiscordPublicationInput(input: {
   guildId: string;
   mode: string;
@@ -910,7 +936,11 @@ export async function PATCH(request: Request) {
         charge_taxes: rawBody.chargeTaxes !== false,
         cost_per_item_amount: toOptionalMoney(rawBody.costPerItemAmount),
         inventory_tracked: rawBody.inventoryTracked !== false,
-        stock_quantity: Math.max(0, Math.floor(Number(rawBody.stockQuantity) || 0)),
+        stock_quantity: await calculateProductAvailableStockQuantity(
+          guildId,
+          product.id,
+          product.stock_quantity || 0,
+        ),
         sku: getTrimmedText(rawBody.sku, PRODUCT_TEXT_MAX_LENGTH),
         barcode: getTrimmedText(rawBody.barcode, PRODUCT_TEXT_MAX_LENGTH),
         barcode_mode: barcodeMode,
@@ -1115,7 +1145,7 @@ export async function POST(request: Request) {
         charge_taxes: rawBody.chargeTaxes !== false,
         cost_per_item_amount: toOptionalMoney(rawBody.costPerItemAmount),
         inventory_tracked: rawBody.inventoryTracked !== false,
-        stock_quantity: Math.max(0, Math.floor(Number(rawBody.stockQuantity) || 0)),
+        stock_quantity: 0,
         sku: getTrimmedText(rawBody.sku, PRODUCT_TEXT_MAX_LENGTH),
         barcode: getTrimmedText(rawBody.barcode, PRODUCT_TEXT_MAX_LENGTH),
         barcode_mode: barcodeMode,
