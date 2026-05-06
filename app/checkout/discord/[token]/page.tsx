@@ -30,6 +30,11 @@ type CheckoutLink = {
   expires_at: string;
 };
 
+function normalizeEmail(value: string | null | undefined) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
+}
+
 function StatePage({
   title,
   description,
@@ -91,6 +96,10 @@ async function loadCheckoutLink(token: string) {
   return result.data || null;
 }
 
+async function getCurrentTimestampMs() {
+  return Date.now();
+}
+
 export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
   const { token } = await params;
   const link = await loadCheckoutLink(token);
@@ -105,7 +114,8 @@ export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
   }
 
   const expiresAtMs = Date.parse(link.expires_at);
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+  const nowMs = await getCurrentTimestampMs();
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
     await getSupabaseAdminClientOrThrow()
       .from("guild_sales_checkout_links")
       .update({ status: "expired" })
@@ -134,6 +144,17 @@ export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
     );
   }
 
+  const customerEmail = normalizeEmail(session.user.email);
+  if (!customerEmail) {
+    return (
+      <StatePage
+        tone="error"
+        title="Email necessario"
+        description="Entre com uma conta Flowdesk que tenha email valido para receber o comprovante e a entrega desta compra."
+      />
+    );
+  }
+
   const supabase = getSupabaseAdminClientOrThrow();
   await supabase
     .from("guild_sales_checkout_links")
@@ -149,6 +170,9 @@ export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
     .update({
       status: "open",
       auth_user_id: session.user.id,
+      customer_email: customerEmail,
+      customer_name:
+        session.user.display_name || session.user.username || "Cliente Flowdesk",
     })
     .eq("id", link.cart_id)
     .in("status", ["link_required", "open"]);

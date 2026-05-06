@@ -39,6 +39,36 @@ type PaymentEmailOrder = {
 
 type PaymentEventPayload = Record<string, unknown>;
 
+type SalesEmailCart = {
+  id: string;
+  guild_id: string;
+  discord_user_id: string;
+  total_amount?: string | number | null;
+  currency?: string | null;
+  paid_at?: string | null;
+  provider_payment_id?: string | null;
+  provider_status?: string | null;
+};
+
+type SalesEmailCartItem = {
+  quantity?: number | null;
+  unit_price_amount?: string | number | null;
+  total_amount?: string | number | null;
+  product_snapshot?: Record<string, unknown> | null;
+};
+
+type SalesEmailDelivery = {
+  productTitle?: string | null;
+  deliveryMethod?: string | null;
+  status?: string | null;
+};
+
+type SalesEmailSettings = {
+  receiptCompanyName?: string | null;
+  receiptCompanyDocument?: string | null;
+  receiptSupportText?: string | null;
+} | null;
+
 const AUTH_USER_EMAIL_SELECT_COLUMNS =
   "id, email, display_name, username";
 
@@ -172,6 +202,42 @@ function resolvePaymentMethodLabel(value: string | null | undefined) {
     default:
       return "Pagamento";
   }
+}
+
+function resolveSalesCartItemTitle(item: SalesEmailCartItem) {
+  const title = item.product_snapshot?.title;
+  return typeof title === "string" && title.trim() ? title.trim() : "Produto";
+}
+
+function buildSalesItemsSummary(items: SalesEmailCartItem[]) {
+  const summary = items
+    .map((item) => {
+      const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+      return `${quantity}x ${resolveSalesCartItemTitle(item)} (${formatCurrency(
+        item.total_amount,
+        "BRL",
+      )})`;
+    })
+    .join(" | ");
+  return summary.slice(0, 900);
+}
+
+function buildSalesDeliveriesSummary(deliveries: SalesEmailDelivery[]) {
+  if (!deliveries.length) return "Entrega em processamento";
+  return deliveries
+    .map((delivery) => {
+      const title = delivery.productTitle?.trim() || "Produto";
+      const method =
+        delivery.deliveryMethod === "discord_dm"
+          ? "Discord DM"
+          : delivery.deliveryMethod === "email"
+            ? "Email"
+            : "Area segura Flowdesk";
+      const status = delivery.status === "failed" ? "pendente" : "liberada";
+      return `${title}: ${status} por ${method}`;
+    })
+    .join(" | ")
+    .slice(0, 900);
 }
 
 function resolveBillingLabel(order: PaymentEmailOrder) {
@@ -429,6 +495,56 @@ export async function sendPaymentApprovedEmailForOrderSafe(order: PaymentEmailOr
   } catch (error) {
     console.warn("[transactional-email] payment-approved failed:", error);
   }
+}
+
+export async function sendSalesPaymentApprovedEmailForCartSafe(input: {
+  user: EmailUser;
+  cart: SalesEmailCart;
+  items: SalesEmailCartItem[];
+  deliveries: SalesEmailDelivery[];
+  orderUrl?: string | null;
+  settings?: SalesEmailSettings;
+}) {
+  const email = normalizeEmail(input.user.email);
+  if (!email) return;
+
+  const orderUrl = buildAbsoluteUrl(input.orderUrl);
+  const companyName = input.settings?.receiptCompanyName?.trim() || "Flowdesk";
+  const companyDocument = input.settings?.receiptCompanyDocument?.trim() || null;
+  const supportText =
+    input.settings?.receiptSupportText?.trim() ||
+    "Guarde este comprovante. Se precisar de ajuda, abra um ticket no servidor onde a compra foi realizada.";
+
+  await sendFlowdeskTransactionalEmail({
+    toEmail: email,
+    type: "sales-payment-approved",
+    subject: `Flowdesk | Compra ${input.cart.id.slice(0, 8)} aprovada`,
+    preheader: "Seu pagamento foi aprovado e a entrega foi liberada.",
+    badgeLabel: "Venda Discord",
+    title: "Pagamento aprovado",
+    intro: `Ola, ${resolveDisplayName(input.user)}. Recebemos a confirmacao do pagamento da sua compra no Discord.`,
+    sections: [
+      { label: "Pedido", value: input.cart.id.slice(0, 8) },
+      { label: "Servidor", value: input.cart.guild_id },
+      { label: "Empresa", value: companyName },
+      { label: "Documento", value: companyDocument },
+      { label: "Valor", value: formatCurrency(input.cart.total_amount, input.cart.currency || "BRL") },
+      { label: "Pagamento", value: input.cart.provider_payment_id || input.cart.provider_status || "Mercado Pago PIX" },
+      { label: "Aprovado em", value: formatDateTime(input.cart.paid_at || new Date().toISOString()) },
+      { label: "Itens", value: buildSalesItemsSummary(input.items) },
+      { label: "Entrega", value: buildSalesDeliveriesSummary(input.deliveries) },
+    ],
+    action: orderUrl
+      ? {
+          label: "ABRIR ENTREGA",
+          href: orderUrl,
+        }
+      : null,
+    footer: supportText,
+  }).catch((error) => {
+    console.warn("[transactional-email] sales-payment-approved failed:", error);
+    throw error;
+  });
 }
 
 export async function sendApiKeyCreatedEmailSafe(input: {

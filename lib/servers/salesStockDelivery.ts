@@ -113,7 +113,6 @@ const labelByKey: Array<[keyof StockDeliveryRecord, string]> = [
   ["link_password", "Senha do link"],
   ["region", "Regiao"],
   ["validity", "Validade"],
-  ["quantity", "Quantidade"],
   ["server", "Servidor"],
   ["buyer_required_id", "ID/Nickname necessario"],
   ["delivery_deadline", "Prazo de entrega"],
@@ -179,11 +178,56 @@ async function refreshProductStockQuantity(guildId: string, productId: string) {
   return quantity;
 }
 
+function isMissingClaimStockFunctionError(error: { code?: string | null; message?: string | null }) {
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return code === "42883" || message.includes("claim_guild_sales_stock_item");
+}
+
+async function claimSalesStockDeliveryViaRpc(input: {
+  guildId: string;
+  productId: string;
+  preferredDeliveryMethod?: DeliveryMethod;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const { data, error } = await supabase.rpc("claim_guild_sales_stock_item", {
+    p_guild_id: input.guildId,
+    p_product_id: input.productId,
+    p_preferred_delivery_method: input.preferredDeliveryMethod || null,
+  });
+
+  if (error) {
+    if (isMissingClaimStockFunctionError(error)) {
+      return undefined;
+    }
+    throw new Error(error.message);
+  }
+
+  const record = (Array.isArray(data) ? data[0] : data) as
+    | StockDeliveryRecord
+    | null
+    | undefined;
+  if (!record) return null;
+
+  const stockQuantity = await refreshProductStockQuantity(input.guildId, input.productId);
+  return {
+    stockItemId: record.id,
+    deliveryMethod: record.delivery_method,
+    message: formatDeliveryMessage(record),
+    stockQuantity,
+  };
+}
+
 export async function claimSalesStockDelivery(input: {
   guildId: string;
   productId: string;
   preferredDeliveryMethod?: DeliveryMethod;
 }) {
+  const rpcClaim = await claimSalesStockDeliveryViaRpc(input);
+  if (rpcClaim !== undefined) {
+    return rpcClaim;
+  }
+
   const supabase = getSupabaseAdminClientOrThrow();
   let query = supabase
     .from("guild_sales_stock_items")
