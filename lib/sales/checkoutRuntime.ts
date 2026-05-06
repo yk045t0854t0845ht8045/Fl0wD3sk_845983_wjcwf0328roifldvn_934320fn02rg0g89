@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { readServerSettingsVaultSnapshot } from "@/lib/servers/serverSettingsVault";
 import { claimSalesStockDelivery } from "@/lib/servers/salesStockDelivery";
+import { sendSalesPaymentApprovedEmailForCartSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   createSalesMercadoPagoPixPayment,
@@ -8,7 +9,10 @@ import {
   resolveSalesMercadoPagoStatus,
   type SalesMercadoPagoPayment,
 } from "@/lib/sales/mercadoPago";
-import type { SalesPaymentMethodsSecureSnapshot } from "@/lib/sales/paymentMethods";
+import {
+  createSecretFingerprint,
+  type SalesPaymentMethodsSecureSnapshot,
+} from "@/lib/sales/paymentMethods";
 
 type SalesCartRecord = {
   id: string;
@@ -32,6 +36,10 @@ type SalesCartRecord = {
   payment_expires_at: string | null;
   paid_at: string | null;
   delivered_at: string | null;
+  customer_email?: string | null;
+  customer_name?: string | null;
+  receipt_email_sent_at?: string | null;
+  receipt_email_error?: string | null;
 };
 
 type SalesCartItemRecord = {
@@ -50,6 +58,46 @@ type SalesAuthUserRecord = {
   email: string | null;
   display_name: string | null;
   username: string | null;
+};
+
+type SalesPaymentMethodRecord = {
+  id: string;
+  provider: string | null;
+  payment_rail: string | null;
+  status: string | null;
+  credentials_configured: boolean | null;
+  environment: string | null;
+  last_health_status: string | null;
+};
+
+type SalesProductPaymentRecord = {
+  id: string;
+  guild_id: string;
+  title: string;
+  sku: string | null;
+  media_urls: unknown;
+  price_amount: string | number | null;
+  inventory_tracked: boolean | null;
+  stock_quantity: number | null;
+  status: string | null;
+  active: boolean | null;
+};
+
+type SalesSettingsReceiptRecord = {
+  receipt_company_name: string | null;
+  receipt_company_document: string | null;
+  receipt_support_text: string | null;
+};
+
+type SalesCartDeliveryRecord = {
+  id: string;
+  product_id: string;
+  cart_item_id: string | null;
+  unit_index: number | null;
+  idempotency_key: string | null;
+  delivery_method: string;
+  status: string;
+  delivery_payload: Record<string, unknown> | null;
 };
 
 export type SalesCartDeliveryResult = {
@@ -100,6 +148,23 @@ const CART_SELECT = [
   "payment_expires_at",
   "paid_at",
   "delivered_at",
+  "customer_email",
+  "customer_name",
+  "receipt_email_sent_at",
+  "receipt_email_error",
+].join(", ");
+
+const PRODUCT_PAYMENT_SELECT = [
+  "id",
+  "guild_id",
+  "title",
+  "sku",
+  "media_urls",
+  "price_amount",
+  "inventory_tracked",
+  "stock_quantity",
+  "status",
+  "active",
 ].join(", ");
 
 function toNumber(value: unknown) {
@@ -143,7 +208,7 @@ function getProductTitle(item: SalesCartItemRecord) {
     : "Produto";
 }
 
-async function getSalesMercadoPagoAccessToken(guildId: string) {
+async function loadSalesMercadoPagoSecureSnapshot(guildId: string) {
   const snapshot =
     await readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>({
       guildId,
@@ -153,24 +218,52 @@ async function getSalesMercadoPagoAccessToken(guildId: string) {
   if (!accessToken) {
     throw new Error("Mercado Pago nao esta configurado para este servidor.");
   }
-  return accessToken;
+  return {
+    accessToken,
+    publicKey: snapshot?.payload?.mercadoPago?.publicKey?.trim() || "",
+    environment: snapshot?.payload?.mercadoPago?.environment || "production",
+  };
 }
 
-async function assertActiveMercadoPago(guildId: string) {
+async function resolveActiveMercadoPagoConfig(guildId: string) {
+  const secure = await loadSalesMercadoPagoSecureSnapshot(guildId);
   const supabase = getSupabaseAdminClientOrThrow();
   const result = await supabase
     .from("guild_sales_payment_methods")
-    .select("id")
+    .select("id, provider, payment_rail, status, credentials_configured, environment, last_health_status")
     .eq("guild_id", guildId)
     .eq("method_key", "mercado_pago")
-    .eq("status", "active")
-    .eq("credentials_configured", true)
-    .limit(1);
+    .maybeSingle<SalesPaymentMethodRecord>();
 
   if (result.error) throw new Error(result.error.message);
-  if (!result.data?.length) {
+  const method = result.data;
+  if (!method || method.status !== "active") {
     throw new Error("PIX via Mercado Pago esta desativado neste servidor.");
   }
+  const provider = method.provider?.trim() || "mercado_pago";
+  const rail = method.payment_rail?.trim() || "pix";
+  if (provider !== "mercado_pago" || rail !== "pix") {
+    throw new Error("Metodo Mercado Pago ativo esta inconsistente. Reative o PIX no painel.");
+  }
+  if (method.last_health_status === "failed") {
+    throw new Error("As credenciais Mercado Pago ativas falharam na ultima validacao.");
+  }
+  if (method.credentials_configured !== true) {
+    const repairResult = await supabase
+      .from("guild_sales_payment_methods")
+      .update({
+        credentials_configured: true,
+        environment: secure.environment,
+        public_key_fingerprint: createSecretFingerprint(secure.publicKey),
+        access_token_fingerprint: createSecretFingerprint(secure.accessToken),
+        last_health_status: "unchecked",
+        last_health_error: "",
+      })
+      .eq("id", method.id);
+    if (repairResult.error) throw new Error(repairResult.error.message);
+  }
+
+  return secure;
 }
 
 export async function loadSalesCartRuntime(cartId: string) {
@@ -233,6 +326,150 @@ async function recalculateCartTotals(cartId: string, items: SalesCartItemRecord[
   return result.data;
 }
 
+function normalizeQuantity(value: unknown) {
+  return Math.max(1, Math.floor(Number(value || 1)));
+}
+
+function readMediaUrls(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function productSnapshotFromRecord(
+  product: SalesProductPaymentRecord,
+  currentSnapshot: Record<string, unknown> | null,
+) {
+  const snapshot = currentSnapshot && typeof currentSnapshot === "object"
+    ? currentSnapshot
+    : {};
+  return {
+    ...snapshot,
+    title: product.title,
+    sku: product.sku || "",
+    priceAmount: toNumber(product.price_amount),
+    stockQuantity: Number(product.stock_quantity || 0),
+    mediaUrls: readMediaUrls(product.media_urls),
+  };
+}
+
+function assertPaymentAllowedForCartStatus(status: string) {
+  if (["cancelled", "expired", "rejected", "delivery_failed"].includes(status)) {
+    throw new Error("Este carrinho nao pode mais gerar pagamento.");
+  }
+}
+
+async function loadProductsForCartItems(items: SalesCartItemRecord[]) {
+  const productIds = Array.from(new Set(items.map((item) => item.product_id)));
+  if (!productIds.length) return new Map<string, SalesProductPaymentRecord>();
+
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_products")
+    .select(PRODUCT_PAYMENT_SELECT)
+    .in("id", productIds)
+    .returns<SalesProductPaymentRecord[]>();
+
+  if (result.error) throw new Error(result.error.message);
+  return new Map((result.data || []).map((product) => [product.id, product]));
+}
+
+async function refreshCartItemsForPayment(runtime: Awaited<ReturnType<typeof loadSalesCartRuntime>>) {
+  const productsById = await loadProductsForCartItems(runtime.items);
+  const updates: Array<Promise<unknown>> = [];
+  const nextItems: SalesCartItemRecord[] = [];
+
+  for (const item of runtime.items) {
+    const product = productsById.get(item.product_id);
+    if (!product || product.guild_id !== runtime.cart.guild_id) {
+      throw new Error("Produto do carrinho nao foi encontrado.");
+    }
+    if (product.status !== "active" || product.active === false) {
+      throw new Error(`Produto indisponivel: ${product.title || item.product_id}.`);
+    }
+
+    const quantity = normalizeQuantity(item.quantity);
+    const stockQuantity = Number(product.stock_quantity || 0);
+    if (product.inventory_tracked !== false && stockQuantity < quantity) {
+      throw new Error(
+        `Estoque insuficiente para ${product.title || "produto"}. Disponivel: ${stockQuantity}.`,
+      );
+    }
+
+    const unitPrice = Number(toNumber(product.price_amount).toFixed(2));
+    if (unitPrice < 0.01) {
+      throw new Error(`Valor invalido para ${product.title || "produto"}.`);
+    }
+
+    const total = Number((unitPrice * quantity).toFixed(2));
+    const nextSnapshot = productSnapshotFromRecord(product, item.product_snapshot);
+    const nextItem = {
+      ...item,
+      quantity,
+      unit_price_amount: unitPrice,
+      total_amount: total,
+      product_snapshot: nextSnapshot,
+    };
+    nextItems.push(nextItem);
+
+    const currentTotal = Number(toNumber(item.total_amount).toFixed(2));
+    const currentUnit = Number(toNumber(item.unit_price_amount).toFixed(2));
+    if (currentUnit !== unitPrice || currentTotal !== total || item.quantity !== quantity) {
+      updates.push(
+        Promise.resolve(
+          getSupabaseAdminClientOrThrow()
+            .from("guild_sales_cart_items")
+            .update({
+              quantity,
+              unit_price_amount: unitPrice,
+              total_amount: total,
+              product_snapshot: nextSnapshot,
+            })
+            .eq("id", item.id),
+        ).then((result) => {
+          if (result.error) throw new Error(result.error.message);
+        }),
+      );
+    }
+  }
+
+  if (updates.length) {
+    await Promise.all(updates);
+  }
+
+  return nextItems;
+}
+
+async function recordSalesOrderEvent(input: {
+  cart: SalesCartRecord;
+  eventType: string;
+  eventKey?: string;
+  payload?: Record<string, unknown>;
+}) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_order_events")
+    .insert({
+      cart_id: input.cart.id,
+      guild_id: input.cart.guild_id,
+      auth_user_id: input.cart.auth_user_id,
+      discord_user_id: input.cart.discord_user_id,
+      event_type: input.eventType,
+      event_key: input.eventKey || "",
+      event_payload: input.payload || {},
+    });
+
+  if (result.error) {
+    const message = result.error.message.toLowerCase();
+    if (
+      result.error.code === "42P01" ||
+      result.error.code === "23505" ||
+      message.includes("guild_sales_order_events")
+    ) {
+      return;
+    }
+    throw new Error(result.error.message);
+  }
+}
+
 function buildPaymentResponse(cart: SalesCartRecord) {
   return {
     providerPaymentId: cart.provider_payment_id,
@@ -256,13 +493,14 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
   if (!items.length) {
     throw new Error("Carrinho vazio.");
   }
-  if (cart.status === "delivered" || cart.status === "paid") {
+  if (cart.status === "delivered" || cart.status === "delivery_failed" || cart.status === "paid") {
     return {
       ...runtime,
       payment: buildPaymentResponse(cart),
       deliveries: await loadSalesCartDeliveries(cart.id),
     };
   }
+  assertPaymentAllowedForCartStatus(cart.status);
   if (cart.provider_payment_id && cart.status === "payment_pending") {
     return {
       ...runtime,
@@ -270,14 +508,14 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
     };
   }
 
-  await assertActiveMercadoPago(cart.guild_id);
-  const accessToken = await getSalesMercadoPagoAccessToken(cart.guild_id);
+  const mercadoPagoConfig = await resolveActiveMercadoPagoConfig(cart.guild_id);
   const email = normalizeEmail(user.email);
   if (!email) {
     throw new Error("A conta Flowdesk vinculada precisa ter um email valido.");
   }
 
-  const updatedCart = await recalculateCartTotals(cart.id, items);
+  const validatedItems = await refreshCartItemsForPayment(runtime);
+  const updatedCart = await recalculateCartTotals(cart.id, validatedItems);
   const amount = toNumber(updatedCart.total_amount);
   if (amount < 0.01) {
     throw new Error("Valor do carrinho invalido para pagamento.");
@@ -286,7 +524,7 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
   const externalReference = `flowdesk-sales:${cart.id}`;
   const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
   const providerPayment = await createSalesMercadoPagoPixPayment({
-    accessToken,
+    accessToken: mercadoPagoConfig.accessToken,
     amount,
     description: `Compra Flowdesk ${cart.id.slice(0, 8)}`,
     payerEmail: email,
@@ -330,16 +568,30 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
       provider_payload: providerPayment,
       payment_expires_at: providerPayment.date_of_expiration || expiresAt,
       paid_at: providerPayment.date_approved || null,
+      customer_email: email,
+      customer_name: user.display_name || user.username || "Cliente Flowdesk",
     })
     .eq("id", cart.id)
     .select(CART_SELECT)
     .single<SalesCartRecord>();
 
   if (updateResult.error) throw new Error(updateResult.error.message);
+  await recordSalesOrderEvent({
+    cart: updateResult.data,
+    eventType: "payment_created",
+    eventKey: `payment_created:${providerPayment.id}`,
+    payload: {
+      provider: "mercado_pago",
+      providerPaymentId: String(providerPayment.id),
+      status: providerStatus,
+      amount,
+    },
+  });
 
   const nextRuntime = {
     ...runtime,
     cart: updateResult.data,
+    items: validatedItems,
     payment: buildPaymentResponse(updateResult.data),
   };
 
@@ -350,15 +602,20 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
   return nextRuntime;
 }
 
-export async function loadSalesCartDeliveries(cartId: string) {
+async function loadSalesCartDeliveryRows(cartId: string) {
   const result = await getSupabaseAdminClientOrThrow()
     .from("guild_sales_order_deliveries")
-    .select("id, product_id, delivery_method, status, delivery_payload")
+    .select("id, product_id, cart_item_id, unit_index, idempotency_key, delivery_method, status, delivery_payload")
     .eq("cart_id", cartId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .returns<SalesCartDeliveryRecord[]>();
   if (result.error) throw new Error(result.error.message);
+  return result.data || [];
+}
 
-  return (result.data || []).map((row) => {
+export async function loadSalesCartDeliveries(cartId: string) {
+  const rows = await loadSalesCartDeliveryRows(cartId);
+  return rows.map((row) => {
     const payload =
       row.delivery_payload && typeof row.delivery_payload === "object"
         ? (row.delivery_payload as Record<string, unknown>)
@@ -378,25 +635,40 @@ export async function loadSalesCartDeliveries(cartId: string) {
 async function settleSalesCartDeliveries(
   runtime: Awaited<ReturnType<typeof loadSalesCartRuntime>>,
 ) {
-  const existing = await loadSalesCartDeliveries(runtime.cart.id);
-  const expectedQuantity = runtime.items.reduce(
-    (sum, item) => sum + Math.max(1, Math.floor(Number(item.quantity || 1))),
-    0,
-  );
-  if (existing.length >= expectedQuantity && expectedQuantity > 0) {
-    return existing;
-  }
-
   if (!runtime.cart.auth_user_id) {
     throw new Error("Carrinho aprovado sem usuario autenticado.");
   }
 
-  const deliveries: SalesCartDeliveryResult[] = [...existing];
+  const existingRows = await loadSalesCartDeliveryRows(runtime.cart.id);
+  const existingKeys = new Set(
+    existingRows
+      .map((row) => row.idempotency_key || "")
+      .filter((key) => key.trim().length > 0),
+  );
+  const legacyCountByProduct = new Map<string, number>();
+  for (const row of existingRows) {
+    if (row.idempotency_key) continue;
+    legacyCountByProduct.set(
+      row.product_id,
+      (legacyCountByProduct.get(row.product_id) || 0) + 1,
+    );
+  }
+
   const rowsToInsert: Array<Record<string, unknown>> = [];
 
   for (const item of runtime.items) {
-    const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+    const quantity = normalizeQuantity(item.quantity);
     for (let index = 0; index < quantity; index += 1) {
+      const idempotencyKey = `${runtime.cart.id}:${item.id}:${index}`;
+      if (existingKeys.has(idempotencyKey)) {
+        continue;
+      }
+      const legacyCount = legacyCountByProduct.get(item.product_id) || 0;
+      if (legacyCount > 0) {
+        legacyCountByProduct.set(item.product_id, legacyCount - 1);
+        continue;
+      }
+
       const delivery = await claimSalesStockDelivery({
         guildId: runtime.cart.guild_id,
         productId: item.product_id,
@@ -408,6 +680,9 @@ async function settleSalesCartDeliveries(
           auth_user_id: runtime.cart.auth_user_id,
           discord_user_id: runtime.cart.discord_user_id,
           product_id: item.product_id,
+          cart_item_id: item.id,
+          unit_index: index,
+          idempotency_key: idempotencyKey,
           stock_item_id: null,
           delivery_method: "flowdesk_link",
           status: "failed",
@@ -426,6 +701,9 @@ async function settleSalesCartDeliveries(
         auth_user_id: runtime.cart.auth_user_id,
         discord_user_id: runtime.cart.discord_user_id,
         product_id: item.product_id,
+        cart_item_id: item.id,
+        unit_index: index,
+        idempotency_key: idempotencyKey,
         stock_item_id: delivery.stockItemId,
         delivery_method: delivery.deliveryMethod,
         status: "delivered",
@@ -441,7 +719,17 @@ async function settleSalesCartDeliveries(
     const insertResult = await getSupabaseAdminClientOrThrow()
       .from("guild_sales_order_deliveries")
       .insert(rowsToInsert);
-    if (insertResult.error) throw new Error(insertResult.error.message);
+    if (insertResult.error && insertResult.error.code !== "23505") {
+      throw new Error(insertResult.error.message);
+    }
+    await recordSalesOrderEvent({
+      cart: runtime.cart,
+      eventType: "delivery_settled",
+      eventKey: "delivery_settled",
+      payload: {
+        inserted: rowsToInsert.length,
+      },
+    });
   }
 
   return loadSalesCartDeliveries(runtime.cart.id);
@@ -449,6 +737,116 @@ async function settleSalesCartDeliveries(
 
 function resolvePaidAt(providerPayment: SalesMercadoPagoPayment) {
   return providerPayment.date_approved || new Date().toISOString();
+}
+
+async function loadSalesReceiptSettings(guildId: string) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_settings")
+    .select("receipt_company_name, receipt_company_document, receipt_support_text")
+    .eq("guild_id", guildId)
+    .maybeSingle<SalesSettingsReceiptRecord>();
+
+  if (result.error) {
+    const message = result.error.message.toLowerCase();
+    if (result.error.code === "42P01" || message.includes("guild_sales_settings")) {
+      return null;
+    }
+    throw new Error(result.error.message);
+  }
+
+  return result.data || null;
+}
+
+function resolveCustomerName(user: SalesAuthUserRecord | null) {
+  return user?.display_name?.trim() || user?.username?.trim() || "Cliente Flowdesk";
+}
+
+async function markSalesReceiptEmailResult(input: {
+  cartId: string;
+  sentAt?: string | null;
+  error?: string | null;
+  customerEmail?: string | null;
+  customerName?: string | null;
+}) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_carts")
+    .update({
+      receipt_email_sent_at: input.sentAt || null,
+      receipt_email_error: input.error || "",
+      customer_email: input.customerEmail || null,
+      customer_name: input.customerName || null,
+    })
+    .eq("id", input.cartId);
+
+  if (result.error) {
+    const message = result.error.message.toLowerCase();
+    if (
+      result.error.code === "42703" ||
+      message.includes("receipt_email_sent_at") ||
+      message.includes("customer_email")
+    ) {
+      return;
+    }
+    throw new Error(result.error.message);
+  }
+}
+
+async function sendSalesCartReceiptEmailSafe(input: {
+  runtime: Awaited<ReturnType<typeof loadSalesCartRuntime>>;
+  cart: SalesCartRecord;
+  deliveries: SalesCartDeliveryResult[];
+}) {
+  const user = input.runtime.user;
+  const email = normalizeEmail(user?.email);
+  if (!user || !email || input.cart.receipt_email_sent_at) return;
+
+  try {
+    const settings = await loadSalesReceiptSettings(input.cart.guild_id);
+    await sendSalesPaymentApprovedEmailForCartSafe({
+      user,
+      cart: input.cart,
+      items: input.runtime.items,
+      deliveries: input.deliveries,
+      orderUrl: buildSalesOrderDeliveryUrl(input.cart.id),
+      settings: settings
+        ? {
+            receiptCompanyName: settings.receipt_company_name,
+            receiptCompanyDocument: settings.receipt_company_document,
+            receiptSupportText: settings.receipt_support_text,
+          }
+        : null,
+    });
+
+    const sentAt = new Date().toISOString();
+    await markSalesReceiptEmailResult({
+      cartId: input.cart.id,
+      sentAt,
+      error: "",
+      customerEmail: email,
+      customerName: resolveCustomerName(user),
+    });
+    await recordSalesOrderEvent({
+      cart: input.cart,
+      eventType: "receipt_email_sent",
+      eventKey: "receipt_email_sent",
+      payload: { sentAt, email },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Falha ao enviar recibo.";
+    await markSalesReceiptEmailResult({
+      cartId: input.cart.id,
+      sentAt: null,
+      error: message.slice(0, 500),
+      customerEmail: email,
+      customerName: resolveCustomerName(user),
+    }).catch(() => null);
+    await recordSalesOrderEvent({
+      cart: input.cart,
+      eventType: "receipt_email_failed",
+      eventKey: `receipt_email_failed:${Date.now()}`,
+      payload: { message },
+    }).catch(() => null);
+  }
 }
 
 export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRuntimeResult> {
@@ -462,9 +860,9 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     };
   }
 
-  const accessToken = await getSalesMercadoPagoAccessToken(cart.guild_id);
+  const mercadoPagoConfig = await loadSalesMercadoPagoSecureSnapshot(cart.guild_id);
   const providerPayment = await fetchSalesMercadoPagoPaymentById({
-    accessToken,
+    accessToken: mercadoPagoConfig.accessToken,
     paymentId: cart.provider_payment_id,
   });
   const resolvedStatus = resolveSalesMercadoPagoStatus(providerPayment.status);
@@ -494,6 +892,20 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     .single<SalesCartRecord>();
 
   if (updateResult.error) throw new Error(updateResult.error.message);
+  await recordSalesOrderEvent({
+    cart: updateResult.data,
+    eventType: "payment_synced",
+    eventKey:
+      resolvedStatus === "approved"
+        ? "payment_approved"
+        : `payment_status:${resolvedStatus}`,
+    payload: {
+      provider: "mercado_pago",
+      providerPaymentId: String(providerPayment.id),
+      status: providerPayment.status || null,
+      resolvedStatus,
+    },
+  });
 
   const nextRuntime = {
     ...runtime,
@@ -524,6 +936,24 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     .select(CART_SELECT)
     .single<SalesCartRecord>();
   if (finalResult.error) throw new Error(finalResult.error.message);
+  await recordSalesOrderEvent({
+    cart: finalResult.data,
+    eventType: "order_finalized",
+    eventKey: "order_finalized",
+    payload: {
+      status: finalStatus,
+      deliveryCount: deliveries.length,
+      failedDeliveryCount: deliveries.filter((delivery) => delivery.status === "failed").length,
+    },
+  });
+  await sendSalesCartReceiptEmailSafe({
+    runtime: {
+      ...runtime,
+      cart: finalResult.data,
+    },
+    cart: finalResult.data,
+    deliveries,
+  });
 
   return {
     ...nextRuntime,

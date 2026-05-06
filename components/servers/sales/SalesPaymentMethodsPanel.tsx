@@ -20,7 +20,6 @@ import { useNotifications } from "@/components/notifications/NotificationsProvid
 import {
   ServerButton,
   ServerEmptyState,
-  ServerIconFrame,
   ServerSectionHeading,
   ServerSurface,
   ServerTextInput,
@@ -120,18 +119,11 @@ function PaymentMethodModal({
   const [publicKey, setPublicKey] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [statementDescriptor, setStatementDescriptor] = useState("FLOWDESK");
-  const [environment, setEnvironment] = useState<"production" | "test">("production");
+  const [environment, setEnvironment] = useState<"production" | "test">(
+    () => method?.environment || "production",
+  );
 
   useBodyScrollLock(Boolean(method));
-
-  useEffect(() => {
-    if (!method) return;
-    setAccessToken("");
-    setPublicKey("");
-    setWebhookSecret("");
-    setStatementDescriptor("FLOWDESK");
-    setEnvironment(method.environment || "production");
-  }, [method]);
 
   useEffect(() => {
     if (!method) return;
@@ -589,6 +581,7 @@ export function SalesPaymentMethodsPanel({
       </ServerSurface>
 
       <PaymentMethodModal
+        key={editingMethod?.methodKey || "closed"}
         method={editingMethod}
         readOnly={readOnly}
         saving={Boolean(editingMethod && savingMethodKey === editingMethod.methodKey)}
