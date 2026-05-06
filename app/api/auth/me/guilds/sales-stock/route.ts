@@ -587,6 +587,7 @@ export async function POST(request: Request) {
     const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const productId = getTrimmedText(rawBody.productId, 60);
+    const duplicateItemId = getTrimmedText(rawBody.duplicateItemId, 60);
 
     if (!isGuildId(guildId) || !isUuid(productId)) {
       return applyNoStoreHeaders(
@@ -605,8 +606,98 @@ export async function POST(request: Request) {
     }
 
     const quantity = Math.max(0, Math.floor(Number(rawBody.quantity) || 1));
-    const fields = readTextFields(rawBody);
     const supabase = getSupabaseAdminClientOrThrow();
+    if (duplicateItemId) {
+      if (!isUuid(duplicateItemId)) {
+        return applyNoStoreHeaders(
+          NextResponse.json({ ok: false, message: "Estoque de origem invalido." }, { status: 400 }),
+        );
+      }
+      const duplicateCount = Math.min(
+        10,
+        Math.max(1, Math.floor(Number(rawBody.duplicateCount) || 1)),
+      );
+      const sourceResult = await supabase
+        .from("guild_sales_stock_items")
+        .select(STOCK_SELECT)
+        .eq("guild_id", guildId)
+        .eq("product_id", productId)
+        .eq("id", duplicateItemId)
+        .maybeSingle();
+      if (sourceResult.error) throw new Error(sourceResult.error.message);
+      if (!sourceResult.data) {
+        return applyNoStoreHeaders(
+          NextResponse.json({ ok: false, message: "Estoque de origem nao encontrado." }, { status: 404 }),
+        );
+      }
+
+      const source = withStockDefaults(sourceResult.data as unknown as Partial<StockRecord>);
+      const rows = Array.from({ length: duplicateCount }).map(() => ({
+        guild_id: guildId,
+        product_id: productId,
+        product_name: source.product_name || product.title,
+        item_type: normalizeItemType(source.item_type),
+        delivery_method: normalizeDeliveryMethod(source.delivery_method),
+        status: "available",
+        quantity: Math.max(1, Math.floor(Number(source.quantity || 1))),
+        category: source.category || "",
+        platform: source.platform || "",
+        provider: source.provider || "",
+        email: source.email || "",
+        login: source.login || "",
+        password: source.password || "",
+        access_type: source.access_type || "",
+        recovery: source.recovery || "",
+        gift_card_name: source.gift_card_name || "",
+        redemption_value: source.redemption_value || "",
+        redemption_code: source.redemption_code || "",
+        access_link: source.access_link || "",
+        link_password: source.link_password || "",
+        region: source.region || "",
+        validity: source.validity || "",
+        server: source.server || "",
+        buyer_required_id: source.buyer_required_id || "",
+        delivery_deadline: source.delivery_deadline || "",
+        service_type: source.service_type || "",
+        required_buyer_info: source.required_buyer_info || "",
+        discord_product_type: source.discord_product_type || "",
+        server_or_bot_link: source.server_or_bot_link || "",
+        token_or_key: source.token_or_key || "",
+        required_permissions: source.required_permissions || "",
+        tool_name: source.tool_name || "",
+        automation_type: source.automation_type || "",
+        software_name: source.software_name || "",
+        software_version: source.software_version || "",
+        operating_system: source.operating_system || "",
+        license_key: source.license_key || "",
+        download_link: source.download_link || "",
+        subscription_duration: source.subscription_duration || "",
+        account_type: source.account_type || "",
+        course_name: source.course_name || "",
+        item_name: source.item_name || "",
+        instructions: source.instructions || "",
+        observations: source.observations || "",
+        payload: source.payload || {},
+        configured_by_user_id: access.context.authUserId,
+      }));
+
+      const duplicateResult = await supabase
+        .from("guild_sales_stock_items")
+        .insert(rows)
+        .select(STOCK_SELECT);
+      if (duplicateResult.error) throw new Error(duplicateResult.error.message);
+      const stockSync = await syncProductStockQuantityAndDiscordEmbed(guildId, productId);
+
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          items: ((duplicateResult.data || []) as unknown as StockRecord[]).map(buildStockResponse),
+          ...stockSync,
+        }),
+      );
+    }
+
+    const fields = readTextFields(rawBody);
     const { data, error } = await supabase
       .from("guild_sales_stock_items")
       .insert({
@@ -669,8 +760,36 @@ export async function PATCH(request: Request) {
     }
 
     const quantity = Math.max(0, Math.floor(Number(rawBody.quantity) || 0));
-    const fields = readTextFields(rawBody);
     const supabase = getSupabaseAdminClientOrThrow();
+    if (rawBody.patchMode === "quantity") {
+      const { data, error } = await supabase
+        .from("guild_sales_stock_items")
+        .update({ quantity })
+        .eq("guild_id", guildId)
+        .eq("product_id", productId)
+        .eq("id", itemId)
+        .select(STOCK_SELECT)
+        .maybeSingle();
+
+      if (error) throw new Error(error.message);
+      if (!data) {
+        return applyNoStoreHeaders(
+          NextResponse.json({ ok: false, message: "Entrega nao encontrada." }, { status: 404 }),
+        );
+      }
+
+      const stockSync = await syncProductStockQuantityAndDiscordEmbed(guildId, productId);
+
+      return applyNoStoreHeaders(
+        NextResponse.json({
+          ok: true,
+          item: buildStockResponse(data as unknown as StockRecord),
+          ...stockSync,
+        }),
+      );
+    }
+
+    const fields = readTextFields(rawBody);
     const { data, error } = await supabase
       .from("guild_sales_stock_items")
       .update({

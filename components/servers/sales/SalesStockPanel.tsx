@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   ArrowLeft,
   Boxes,
   Check,
   ChevronDown,
   Clock3,
+  Copy,
   Eye,
   EyeOff,
   PackageSearch,
@@ -490,6 +491,62 @@ function formatStockDate(value: string) {
   }).format(date);
 }
 
+function StockEditorSkeleton() {
+  return (
+    <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="space-y-[18px]">
+        <ServerSurface className="overflow-hidden">
+          <div className="p-[18px] sm:p-[22px]">
+            <div className="flex flex-col gap-[10px] sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="h-[14px] w-[146px] animate-pulse rounded-full bg-[#1A1A1A]" />
+                <div className="mt-[10px] h-[12px] w-[min(320px,78vw)] max-w-full animate-pulse rounded-full bg-[#111]" />
+              </div>
+              <div className="h-[30px] w-[96px] animate-pulse rounded-full bg-[#101010]" />
+            </div>
+            <div className="mt-[16px] h-[42px] w-full max-w-[420px] animate-pulse rounded-[14px] bg-[#111]" />
+          </div>
+
+          <div className="mx-[18px] mb-[18px] overflow-hidden rounded-[18px] border border-[#202020] sm:mx-[22px] sm:mb-[20px]">
+            <div className="grid grid-cols-[minmax(0,1fr)_96px_110px_44px] items-center gap-[12px] bg-[#101010] px-[14px] py-[10px] max-sm:grid-cols-[minmax(0,1fr)_64px_40px]">
+              <div className="h-[12px] w-[90px] animate-pulse rounded-full bg-[#1A1A1A]" />
+              <div className="ml-auto h-[12px] w-[34px] animate-pulse rounded-full bg-[#1A1A1A]" />
+              <div className="ml-auto h-[12px] w-[54px] animate-pulse rounded-full bg-[#1A1A1A] max-sm:hidden" />
+              <div className="ml-auto h-[12px] w-[28px] animate-pulse rounded-full bg-[#1A1A1A]" />
+            </div>
+            <div className="divide-y divide-[#171717]">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-[minmax(0,1fr)_96px_110px_44px] items-center gap-[12px] px-[14px] py-[13px] max-sm:grid-cols-[minmax(0,1fr)_64px_40px]"
+                >
+                  <div className="min-w-0">
+                    <div className="h-[14px] w-[min(260px,58vw)] max-w-full animate-pulse rounded-full bg-[#151515]" />
+                    <div className="mt-[8px] h-[11px] w-[min(360px,64vw)] max-w-full animate-pulse rounded-full bg-[#101010]" />
+                  </div>
+                  <div className="ml-auto h-[13px] w-[34px] animate-pulse rounded-full bg-[#151515]" />
+                  <div className="ml-auto h-[13px] w-[72px] animate-pulse rounded-full bg-[#151515] max-sm:hidden" />
+                  <div className="ml-auto h-[32px] w-[32px] animate-pulse rounded-[11px] bg-[#101010]" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </ServerSurface>
+      </div>
+
+      <aside className="space-y-[18px]">
+        <ServerSurface className="p-[18px] sm:p-[20px]">
+          <div className="h-[14px] w-[86px] animate-pulse rounded-full bg-[#1A1A1A]" />
+          <div className="mt-[14px] grid grid-cols-2 gap-[10px]">
+            <div className="h-[96px] animate-pulse rounded-[16px] bg-[#101010]" />
+            <div className="h-[96px] animate-pulse rounded-[16px] bg-[#101010]" />
+          </div>
+        </ServerSurface>
+      </aside>
+    </div>
+  );
+}
+
 function getItemMainLabel(item: StockItem) {
   return (
     item.itemName ||
@@ -507,17 +564,28 @@ function getItemMainLabel(item: StockItem) {
 function StockItemActionsModal({
   item,
   deleting,
+  duplicating,
   onClose,
   onEdit,
+  onDuplicate,
   onDelete,
 }: {
   item: StockItem | null;
   deleting: boolean;
+  duplicating: boolean;
   onClose: () => void;
   onEdit: (item: StockItem) => void;
+  onDuplicate: (item: StockItem, count: number) => void;
   onDelete: (item: StockItem) => void;
 }) {
+  const [isDuplicateOpen, setIsDuplicateOpen] = useState(false);
+  const [duplicateCount, setDuplicateCount] = useState(1);
   useBodyScrollLock(Boolean(item));
+
+  useEffect(() => {
+    setIsDuplicateOpen(false);
+    setDuplicateCount(1);
+  }, [item?.id]);
 
   useEffect(() => {
     if (!item) return;
@@ -564,7 +632,7 @@ function StockItemActionsModal({
                       {getItemMainLabel(item)}
                     </h2>
                     <p className="mt-[14px] max-w-[560px] text-[14px] leading-[1.62] text-[#787878]">
-                      Edite os dados desta entrega ou delete o registro do estoque. A quantidade do produto sera atualizada automaticamente.
+                      Edite, duplique ou delete este registro do estoque. A quantidade do produto sera atualizada automaticamente.
                     </p>
                   </div>
                 </div>
@@ -579,11 +647,71 @@ function StockItemActionsModal({
                 </button>
               </div>
 
+              {isDuplicateOpen ? (
+                <div className="mt-[22px] rounded-[22px] border border-[#1C1C1C] bg-[#0B0B0B] p-[16px]">
+                  <div className="flex flex-col gap-[12px] sm:flex-row sm:items-end sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-semibold text-[#EDEDED]">
+                        Duplicar estoque
+                      </p>
+                      <p className="mt-[6px] text-[12px] leading-[1.55] text-[#777]">
+                        Cria copias disponiveis deste mesmo produto. Maximo de 10 por vez.
+                      </p>
+                    </div>
+                    <label className="block w-full sm:w-[150px]">
+                      <span className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
+                        Quantidade
+                      </span>
+                      <ServerTextInput
+                        type="number"
+                        min={1}
+                        max={10}
+                        inputMode="numeric"
+                        value={duplicateCount}
+                        onChange={(event) =>
+                          setDuplicateCount(
+                            Math.min(
+                              10,
+                              Math.max(1, Math.floor(Number(event.target.value) || 1)),
+                            ),
+                          )
+                        }
+                        disabled={deleting || duplicating}
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-[14px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setIsDuplicateOpen(false)}
+                      disabled={deleting || duplicating}
+                      className="inline-flex h-[42px] items-center justify-center rounded-[13px] border border-[#171717] bg-[#0D0D0D] px-[16px] text-[13px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Cancelar duplicacao
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDuplicate(item, duplicateCount)}
+                      disabled={deleting || duplicating}
+                      aria-busy={duplicating}
+                      className="inline-flex h-[42px] items-center justify-center gap-[8px] rounded-[13px] border border-[#242424] bg-[#F1F1F1] px-[16px] text-[13px] font-semibold text-[#080808] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {duplicating ? (
+                        <ButtonLoader size={15} colorClassName="text-[#080808]" />
+                      ) : (
+                        <Copy className="h-[15px] w-[15px]" />
+                      )}
+                      Confirmar
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="mt-[24px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
                 <button
                   type="button"
                   onClick={onClose}
-                  disabled={deleting}
+                  disabled={deleting || duplicating}
                   className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancelar
@@ -592,7 +720,7 @@ function StockItemActionsModal({
                 <button
                   type="button"
                   onClick={() => onEdit(item)}
-                  disabled={deleting}
+                  disabled={deleting || duplicating}
                   className="inline-flex h-[46px] items-center justify-center gap-[8px] rounded-[14px] border border-[#171717] bg-[#101010] px-[18px] text-[14px] font-semibold text-[#EDEDED] transition-colors hover:border-[#2A2A2A] hover:bg-[#151515] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Pencil className="h-[15px] w-[15px]" />
@@ -601,9 +729,19 @@ function StockItemActionsModal({
 
                 <button
                   type="button"
+                  onClick={() => setIsDuplicateOpen(true)}
+                  disabled={deleting || duplicating}
+                  className="inline-flex h-[46px] items-center justify-center gap-[8px] rounded-[14px] border border-[#1F1F1F] bg-[#151515] px-[18px] text-[14px] font-semibold text-[#EDEDED] transition-colors hover:border-[#303030] hover:bg-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Copy className="h-[15px] w-[15px]" />
+                  Duplicar
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => onDelete(item)}
-                  disabled={deleting}
-                  aria-busy={deleting}
+                  disabled={deleting || duplicating}
+                  aria-busy={deleting || duplicating}
                   className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold disabled:cursor-not-allowed disabled:opacity-75"
                 >
                   <span
@@ -643,7 +781,6 @@ export function SalesStockPanel({
   guildId: string;
   readOnly?: boolean;
 }) {
-  const router = useRouter();
   const pathname = usePathname();
   const notifications = useNotifications();
   const [products, setProducts] = useState<SalesProduct[]>([]);
@@ -657,10 +794,13 @@ export function SalesStockPanel({
   const [showPassword, setShowPassword] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const [stockQuery, setStockQuery] = useState("");
+  const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({});
   const [isLoadingProducts, setIsLoadingProducts] = useState(true);
   const [isLoadingItems, setIsLoadingItems] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [savingQuantityItemId, setSavingQuantityItemId] = useState<string | null>(null);
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [duplicatingItemId, setDuplicatingItemId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [needsDiscordRelink, setNeedsDiscordRelink] = useState(false);
   const routeProductCode = getStockProductCodeFromPath(pathname);
@@ -779,12 +919,13 @@ export function SalesStockPanel({
       setFormStatus("available");
       setItems([]);
       setStockQuery("");
+      setQuantityDrafts({});
       void loadStockItems(product.id);
       if (options?.syncUrl !== false) {
-        router.push(getStockEditPath(guildId, product.code));
+        window.history.pushState(null, "", getStockEditPath(guildId, product.code));
       }
     },
-    [guildId, loadStockItems, router],
+    [guildId, loadStockItems],
   );
 
   const selectProduct = useCallback(
@@ -793,7 +934,18 @@ export function SalesStockPanel({
   );
 
   useEffect(() => {
-    if (!routeProductCode || !products.length) return;
+    if (!routeProductCode) {
+      if (selectedProductId) {
+        setSelectedProductId("");
+        setItems([]);
+        setEditingItemId(null);
+        setIsFormOpen(false);
+        setActionItem(null);
+        setForm(createEmptyForm());
+      }
+      return;
+    }
+    if (!products.length) return;
     const routeProduct = products.find((product) => product.code === routeProductCode);
     if (!routeProduct || selectedProductId === routeProduct.id) return;
     openProductStock(routeProduct, { syncUrl: false });
@@ -954,6 +1106,132 @@ export function SalesStockPanel({
     [cancelEdit, editingItemId, guildId, notifications, readOnly, selectedProduct],
   );
 
+  const duplicateStockItem = useCallback(
+    async (item: StockItem, count: number) => {
+      if (!selectedProduct || readOnly) return;
+      const duplicateCount = Math.min(10, Math.max(1, Math.floor(Number(count) || 1)));
+      setDuplicatingItemId(item.id);
+      try {
+        const response = await fetch("/api/auth/me/guilds/sales-stock", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            productId: selectedProduct.id,
+            duplicateItemId: item.id,
+            duplicateCount,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as StockResponse;
+        if (!response.ok || !payload.ok || !payload.items?.length) {
+          throw new Error(payload.message || "Erro ao duplicar estoque.");
+        }
+        setItems((current) => [...(payload.items as StockItem[]), ...current]);
+        setProducts((current) =>
+          current.map((product) =>
+            product.id === selectedProduct.id
+              ? { ...product, stockQuantity: payload.stockQuantity ?? product.stockQuantity }
+              : product,
+          ),
+        );
+        setActionItem(null);
+        notifications.success(
+          `${duplicateCount} copia${duplicateCount === 1 ? "" : "s"} adicionada${duplicateCount === 1 ? "" : "s"} ao estoque.`,
+          { title: "Estoque duplicado" },
+        );
+        if (payload.discordSyncStatus === "failed") {
+          notifications.show(
+            payload.discordSyncError ||
+              "O estoque foi duplicado, mas o embed do produto no Discord nao sincronizou agora.",
+            { title: "Embed Discord", tone: "default", durationMs: 7200 },
+          );
+        }
+      } catch (error) {
+        notifications.error(
+          error instanceof Error ? error.message : "Erro ao duplicar estoque.",
+          { title: "Falha no estoque" },
+        );
+      } finally {
+        setDuplicatingItemId(null);
+      }
+    },
+    [guildId, notifications, readOnly, selectedProduct],
+  );
+
+  const saveStockItemQuantity = useCallback(
+    async (item: StockItem, rawQuantity: string | number) => {
+      if (!selectedProduct || readOnly) return;
+      const nextQuantity = Math.max(0, Math.floor(Number(rawQuantity) || 0));
+      if (nextQuantity === Math.max(0, Number(item.quantity || 0))) {
+        setQuantityDrafts((current) => {
+          const next = { ...current };
+          delete next[item.id];
+          return next;
+        });
+        return;
+      }
+
+      setSavingQuantityItemId(item.id);
+      try {
+        const response = await fetch("/api/auth/me/guilds/sales-stock", {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            guildId,
+            productId: selectedProduct.id,
+            itemId: item.id,
+            patchMode: "quantity",
+            quantity: nextQuantity,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as StockResponse;
+        if (!response.ok || !payload.ok || !payload.item) {
+          throw new Error(payload.message || "Erro ao atualizar quantidade.");
+        }
+
+        setItems((current) =>
+          current.map((entry) => (entry.id === item.id ? (payload.item as StockItem) : entry)),
+        );
+        setProducts((current) =>
+          current.map((product) =>
+            product.id === selectedProduct.id
+              ? { ...product, stockQuantity: payload.stockQuantity ?? product.stockQuantity }
+              : product,
+          ),
+        );
+        setQuantityDrafts((current) => {
+          const next = { ...current };
+          delete next[item.id];
+          return next;
+        });
+        notifications.success("Quantidade atualizada em tempo real.", {
+          title: "Estoque atualizado",
+        });
+        if (payload.discordSyncStatus === "failed") {
+          notifications.show(
+            payload.discordSyncError ||
+              "A quantidade foi salva, mas o embed do produto no Discord nao sincronizou agora.",
+            { title: "Embed Discord", tone: "default", durationMs: 7200 },
+          );
+        }
+      } catch (error) {
+        setQuantityDrafts((current) => ({
+          ...current,
+          [item.id]: String(item.quantity || 0),
+        }));
+        notifications.error(
+          error instanceof Error ? error.message : "Erro ao atualizar quantidade.",
+          { title: "Falha no estoque" },
+        );
+      } finally {
+        setSavingQuantityItemId(null);
+      }
+    },
+    [guildId, notifications, readOnly, selectedProduct],
+  );
+
   const fields = fieldTemplates[form.itemType] || fieldTemplates.digital_services;
 
   return (
@@ -969,7 +1247,7 @@ export function SalesStockPanel({
           <div className="min-w-0">
             <ServerButton
               onClick={() => {
-                router.push(getStockPath(guildId));
+                window.history.pushState(null, "", getStockPath(guildId));
                 setSelectedProductId("");
                 cancelEdit();
               }}
@@ -1099,6 +1377,8 @@ export function SalesStockPanel({
             />
           )}
         </ServerSurface>
+      ) : isLoadingItems && !isFormOpen ? (
+        <StockEditorSkeleton />
       ) : (
         <>
         <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -1294,9 +1574,49 @@ export function SalesStockPanel({
                               {itemTypeOptions.find(([value]) => value === item.itemType)?.[1] || "Estoque"} - {deliveryOptions.find(([value]) => value === item.deliveryMethod)?.[1]} - {formatStockDate(item.updatedAt)}
                             </p>
                           </div>
-                          <span className="text-right text-[13px] font-semibold text-[#DCDCDC]">
-                            {item.quantity}
-                          </span>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min={0}
+                              inputMode="numeric"
+                              value={quantityDrafts[item.id] ?? String(item.quantity || 0)}
+                              onChange={(event) =>
+                                setQuantityDrafts((current) => ({
+                                  ...current,
+                                  [item.id]: event.target.value,
+                                }))
+                              }
+                              onBlur={(event) =>
+                                void saveStockItemQuantity(item, event.currentTarget.value)
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.currentTarget.blur();
+                                }
+                                if (event.key === "Escape") {
+                                  event.currentTarget.value = String(item.quantity || 0);
+                                  setQuantityDrafts((current) => {
+                                    const next = { ...current };
+                                    delete next[item.id];
+                                    return next;
+                                  });
+                                  event.currentTarget.blur();
+                                }
+                              }}
+                              disabled={
+                                readOnly ||
+                                savingQuantityItemId === item.id ||
+                                deletingItemId === item.id
+                              }
+                              aria-label={`Quantidade de ${getItemMainLabel(item)}`}
+                              className="flowdesk-server-input h-[34px] w-full rounded-[11px] border border-[#242424] bg-[#0D0D0D] px-[10px] text-right text-[13px] font-semibold text-[#DCDCDC] outline-none transition focus:border-[#4A4A4A] disabled:cursor-not-allowed disabled:opacity-55"
+                            />
+                            {savingQuantityItemId === item.id ? (
+                              <span className="pointer-events-none absolute left-[8px] top-1/2 -translate-y-1/2">
+                                <ButtonLoader size={12} />
+                              </span>
+                            ) : null}
+                          </div>
                           <span className="text-right text-[12px] font-semibold text-[#AFAFAF] max-sm:hidden">
                             {stockStatusOptions.find(([value]) => value === item.status)?.[1]}
                           </span>
@@ -1354,8 +1674,10 @@ export function SalesStockPanel({
         <StockItemActionsModal
           item={actionItem}
           deleting={Boolean(actionItem && deletingItemId === actionItem.id)}
+          duplicating={Boolean(actionItem && duplicatingItemId === actionItem.id)}
           onClose={() => setActionItem(null)}
           onEdit={startEditItem}
+          onDuplicate={(item, count) => void duplicateStockItem(item, count)}
           onDelete={(item) => void deleteStockItem(item)}
         />
         </>
