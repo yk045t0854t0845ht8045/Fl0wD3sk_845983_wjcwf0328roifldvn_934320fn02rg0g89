@@ -35,6 +35,22 @@ function normalizeEmail(value: string | null | undefined) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
 }
 
+function isMissingOptionalCartColumnError(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("customer_email") ||
+    message.includes("customer_name") ||
+    (message.includes("guild_sales_carts") &&
+      (message.includes("schema cache") || message.includes("column")))
+  );
+}
+
 function StatePage({
   title,
   description,
@@ -130,11 +146,16 @@ export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
   }
 
   const session = await getCurrentAuthSessionFromCookie();
+  const checkoutPath = `/checkout/discord/${encodeURIComponent(token)}`;
   if (!session) {
-    redirect(buildDiscordAuthStartHref(`/checkout/discord/${encodeURIComponent(token)}`));
+    redirect(buildDiscordAuthStartHref(checkoutPath));
   }
 
-  if (!session.user.discord_user_id || session.user.discord_user_id !== link.discord_user_id) {
+  if (!session.user.discord_user_id) {
+    redirect(buildDiscordAuthStartHref(checkoutPath, "link"));
+  }
+
+  if (session.user.discord_user_id !== link.discord_user_id) {
     return (
       <StatePage
         tone="error"
@@ -165,7 +186,7 @@ export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
     })
     .eq("id", link.id);
 
-  await supabase
+  const cartUpdate = await supabase
     .from("guild_sales_carts")
     .update({
       status: "open",
@@ -176,6 +197,19 @@ export default async function DiscordCheckoutLinkPage({ params }: PageProps) {
     })
     .eq("id", link.cart_id)
     .in("status", ["link_required", "open"]);
+  if (cartUpdate.error && isMissingOptionalCartColumnError(cartUpdate.error)) {
+    const fallbackUpdate = await supabase
+      .from("guild_sales_carts")
+      .update({
+        status: "open",
+        auth_user_id: session.user.id,
+      })
+      .eq("id", link.cart_id)
+      .in("status", ["link_required", "open"]);
+    if (fallbackUpdate.error) throw new Error(fallbackUpdate.error.message);
+  } else if (cartUpdate.error) {
+    throw new Error(cartUpdate.error.message);
+  }
 
   return (
     <StatePage

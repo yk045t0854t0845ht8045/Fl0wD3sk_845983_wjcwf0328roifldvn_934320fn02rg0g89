@@ -208,10 +208,16 @@ function PaymentMethodModal({
                   </div>
                 ) : null}
 
+                <div className="rounded-[18px] border border-[#243242] bg-[#091019] px-[15px] py-[13px] text-[13px] leading-[1.6] text-[#AFC7E8]">
+                  Para PIX transparente, o Mercado Pago usa o Access Token da
+                  conta vendedora. Client ID e Client Secret sao credenciais de
+                  app/OAuth e nao entram na geracao direta do PIX.
+                </div>
+
                 <div className="grid gap-[12px] sm:grid-cols-2">
                   <div className="sm:col-span-2">
                     <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                      Access Token
+                      Access Token Mercado Pago
                     </label>
                     <ServerTextInput
                       type="password"
@@ -234,7 +240,7 @@ function PaymentMethodModal({
                       type="password"
                       value={publicKey}
                       onChange={(event) => setPublicKey(event.currentTarget.value)}
-                      placeholder="Opcional para PIX"
+                      placeholder="Opcional para PIX; usado em cartao"
                       autoComplete="new-password"
                       disabled={readOnly || saving}
                     />

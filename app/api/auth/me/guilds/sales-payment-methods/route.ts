@@ -21,6 +21,7 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   buildSalesPaymentMethodsResponse,
   createSecretFingerprint,
+  getSalesMercadoPagoEnvironmentMismatchMessage,
   getSalesPaymentMethodDefinitions,
   normalizeSalesPaymentEnvironment,
   normalizeSalesPaymentMethodKey,
@@ -282,7 +283,25 @@ export async function POST(request: Request) {
         NextResponse.json(
           {
             ok: false,
-            message: "Informe o Access Token do Mercado Pago para ativar PIX.",
+            message:
+              "Informe o Access Token do Mercado Pago para ativar PIX. Client ID e Client Secret nao geram cobranca PIX neste fluxo.",
+          },
+          { status: 400 },
+        ),
+      );
+    }
+
+    const environmentMismatchMessage =
+      getSalesMercadoPagoEnvironmentMismatchMessage({
+        accessToken,
+        environment,
+      });
+    if (environmentMismatchMessage) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          {
+            ok: false,
+            message: environmentMismatchMessage,
           },
           { status: 400 },
         ),
@@ -301,7 +320,7 @@ export async function POST(request: Request) {
           {
             ok: false,
             message:
-              "O Mercado Pago recusou essas credenciais. Confira o Access Token e tente novamente.",
+              "O Mercado Pago recusou essas credenciais. Confira se voce informou o Access Token correto, nao Client ID nem Client Secret.",
             detail: healthError,
           },
           { status: 400 },

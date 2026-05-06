@@ -2174,7 +2174,6 @@ export function SalesProductCreatePanel({
           chargeTaxes: false,
           costPerItemAmount: null,
           inventoryTracked: true,
-          stockQuantity,
           sku,
           barcode,
           barcodeMode,
@@ -2230,7 +2229,6 @@ export function SalesProductCreatePanel({
     router,
     sku,
     status,
-    stockQuantity,
     tags,
     title,
   ]);
@@ -2441,11 +2439,14 @@ export function SalesProductCreatePanel({
           <ServerSurface className="overflow-hidden">
             <div className="p-[18px] sm:p-[22px]">
               <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Estoque</h4>
+              <p className="mt-[8px] text-[12px] leading-[1.45] text-[#7B7B7B]">
+                Quantidade calculada pelo modulo Estoque. Adicione, edite ou remova entregas digitais por la.
+              </p>
             </div>
             <div className="mx-[18px] mb-[18px] overflow-hidden rounded-[18px] border border-[#202020] sm:mx-[22px] sm:mb-[20px]">
               <div className="grid grid-cols-2 bg-[#101010] px-[14px] py-[10px] text-[12px] font-semibold text-[#BDBDBD]">
-                <span>Quantidade</span>
-                <span className="text-right">Quantidade</span>
+                <span>Origem</span>
+                <span className="text-right">Disponivel</span>
               </div>
               <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-[12px] px-[14px] py-[12px]">
                 <span className="truncate text-[14px] text-[#EDEDED]">
@@ -2453,10 +2454,10 @@ export function SalesProductCreatePanel({
                 </span>
                 <ServerTextInput
                   value={stockQuantity}
-                  onChange={(event) => setStockQuantity(event.target.value)}
                   inputMode="numeric"
                   className="h-[40px]"
-                  disabled={controlsDisabled}
+                  disabled
+                  aria-label="Quantidade disponivel calculada pelo estoque"
                 />
               </div>
             </div>

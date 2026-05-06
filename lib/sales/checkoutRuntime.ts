@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { readServerSettingsVaultSnapshot } from "@/lib/servers/serverSettingsVault";
 import { claimSalesStockDelivery } from "@/lib/servers/salesStockDelivery";
+import {
+  markSalesProductDiscordSyncFailedById,
+  syncSalesProductDiscordMessageById,
+} from "@/lib/servers/salesProductDiscordSync";
 import { sendSalesPaymentApprovedEmailForCartSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
@@ -11,6 +15,7 @@ import {
 } from "@/lib/sales/mercadoPago";
 import {
   createSecretFingerprint,
+  getSalesMercadoPagoEnvironmentMismatchMessage,
   type SalesPaymentMethodsSecureSnapshot,
 } from "@/lib/sales/paymentMethods";
 
@@ -126,7 +131,7 @@ export type SalesCartRuntimeResult = {
   deliveries?: SalesCartDeliveryResult[];
 };
 
-const CART_SELECT = [
+const BASE_CART_COLUMNS = [
   "id",
   "guild_id",
   "discord_user_id",
@@ -148,11 +153,17 @@ const CART_SELECT = [
   "payment_expires_at",
   "paid_at",
   "delivered_at",
+];
+
+const OPTIONAL_CART_COLUMNS = [
   "customer_email",
   "customer_name",
   "receipt_email_sent_at",
   "receipt_email_error",
-].join(", ");
+];
+
+const CART_BASE_SELECT = BASE_CART_COLUMNS.join(", ");
+const CART_SELECT = [...BASE_CART_COLUMNS, ...OPTIONAL_CART_COLUMNS].join(", ");
 
 const PRODUCT_PAYMENT_SELECT = [
   "id",
@@ -167,6 +178,23 @@ const PRODUCT_PAYMENT_SELECT = [
   "active",
 ].join(", ");
 
+const BASE_DELIVERY_COLUMNS = [
+  "id",
+  "product_id",
+  "delivery_method",
+  "status",
+  "delivery_payload",
+];
+
+const OPTIONAL_DELIVERY_COLUMNS = [
+  "cart_item_id",
+  "unit_index",
+  "idempotency_key",
+];
+
+const DELIVERY_BASE_SELECT = BASE_DELIVERY_COLUMNS.join(", ");
+const DELIVERY_SELECT = [...BASE_DELIVERY_COLUMNS, ...OPTIONAL_DELIVERY_COLUMNS].join(", ");
+
 function toNumber(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -175,6 +203,71 @@ function toNumber(value: unknown) {
 function normalizeEmail(value: string | null | undefined) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
+}
+
+function isMissingOptionalCartColumnError(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    OPTIONAL_CART_COLUMNS.some((column) => message.includes(column.toLowerCase())) ||
+    (message.includes("guild_sales_carts") &&
+      (message.includes("schema cache") || message.includes("column")))
+  );
+}
+
+function withOptionalCartDefaults(cart: SalesCartRecord) {
+  return {
+    ...cart,
+    customer_email: cart.customer_email ?? null,
+    customer_name: cart.customer_name ?? null,
+    receipt_email_sent_at: cart.receipt_email_sent_at ?? null,
+    receipt_email_error: cart.receipt_email_error ?? "",
+  };
+}
+
+function stripOptionalCartUpdateFields(values: Record<string, unknown>) {
+  const next = { ...values };
+  for (const key of OPTIONAL_CART_COLUMNS) {
+    delete next[key];
+  }
+  return next;
+}
+
+function isMissingOptionalDeliveryColumnError(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    OPTIONAL_DELIVERY_COLUMNS.some((column) => message.includes(column.toLowerCase())) ||
+    (message.includes("guild_sales_order_deliveries") &&
+      (message.includes("schema cache") || message.includes("column")))
+  );
+}
+
+function stripOptionalDeliveryFields(row: Record<string, unknown>) {
+  const next = { ...row };
+  for (const key of OPTIONAL_DELIVERY_COLUMNS) {
+    delete next[key];
+  }
+  return next;
+}
+
+function withOptionalDeliveryDefaults(row: SalesCartDeliveryRecord) {
+  return {
+    ...row,
+    cart_item_id: row.cart_item_id ?? null,
+    unit_index: row.unit_index ?? null,
+    idempotency_key: row.idempotency_key ?? "",
+  };
 }
 
 function resolvePublicBaseUrl() {
@@ -201,6 +294,59 @@ export function buildSalesOrderDeliveryUrl(cartId: string) {
   return `${resolvePublicBaseUrl()}/checkout/orders/${encodeURIComponent(cartId)}`;
 }
 
+async function loadSalesCartRecord(cartId: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_carts")
+    .select(CART_SELECT)
+    .eq("id", cartId)
+    .maybeSingle<SalesCartRecord>();
+
+  if (!result.error) {
+    return result.data ? withOptionalCartDefaults(result.data) : null;
+  }
+  if (!isMissingOptionalCartColumnError(result.error)) {
+    throw new Error(result.error.message);
+  }
+
+  const fallback = await supabase
+    .from("guild_sales_carts")
+    .select(CART_BASE_SELECT)
+    .eq("id", cartId)
+    .maybeSingle<SalesCartRecord>();
+  if (fallback.error) throw new Error(fallback.error.message);
+  return fallback.data ? withOptionalCartDefaults(fallback.data) : null;
+}
+
+async function updateSalesCartAndSelect(
+  cartId: string,
+  values: Record<string, unknown>,
+) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_sales_carts")
+    .update(values)
+    .eq("id", cartId)
+    .select(CART_SELECT)
+    .single<SalesCartRecord>();
+
+  if (!result.error) {
+    return withOptionalCartDefaults(result.data);
+  }
+  if (!isMissingOptionalCartColumnError(result.error)) {
+    throw new Error(result.error.message);
+  }
+
+  const fallback = await supabase
+    .from("guild_sales_carts")
+    .update(stripOptionalCartUpdateFields(values))
+    .eq("id", cartId)
+    .select(CART_BASE_SELECT)
+    .single<SalesCartRecord>();
+  if (fallback.error) throw new Error(fallback.error.message);
+  return withOptionalCartDefaults(fallback.data);
+}
+
 function getProductTitle(item: SalesCartItemRecord) {
   const snapshotTitle = item.product_snapshot?.title;
   return typeof snapshotTitle === "string" && snapshotTitle.trim()
@@ -218,10 +364,20 @@ async function loadSalesMercadoPagoSecureSnapshot(guildId: string) {
   if (!accessToken) {
     throw new Error("Mercado Pago nao esta configurado para este servidor.");
   }
+  const environment = snapshot?.payload?.mercadoPago?.environment || "production";
+  const environmentMismatchMessage =
+    getSalesMercadoPagoEnvironmentMismatchMessage({
+      accessToken,
+      environment,
+    });
+  if (environmentMismatchMessage) {
+    throw new Error(environmentMismatchMessage);
+  }
+
   return {
     accessToken,
     publicKey: snapshot?.payload?.mercadoPago?.publicKey?.trim() || "",
-    environment: snapshot?.payload?.mercadoPago?.environment || "production",
+    environment,
   };
 }
 
@@ -268,14 +424,8 @@ async function resolveActiveMercadoPagoConfig(guildId: string) {
 
 export async function loadSalesCartRuntime(cartId: string) {
   const supabase = getSupabaseAdminClientOrThrow();
-  const cartResult = await supabase
-    .from("guild_sales_carts")
-    .select(CART_SELECT)
-    .eq("id", cartId)
-    .maybeSingle<SalesCartRecord>();
-
-  if (cartResult.error) throw new Error(cartResult.error.message);
-  if (!cartResult.data) throw new Error("Carrinho nao encontrado.");
+  const cart = await loadSalesCartRecord(cartId);
+  if (!cart) throw new Error("Carrinho nao encontrado.");
 
   const itemsResult = await supabase
     .from("guild_sales_cart_items")
@@ -288,18 +438,18 @@ export async function loadSalesCartRuntime(cartId: string) {
   if (itemsResult.error) throw new Error(itemsResult.error.message);
 
   let user: SalesAuthUserRecord | null = null;
-  if (cartResult.data.auth_user_id) {
+  if (cart.auth_user_id) {
     const userResult = await supabase
       .from("auth_users")
       .select("id, email, display_name, username")
-      .eq("id", cartResult.data.auth_user_id)
+      .eq("id", cart.auth_user_id)
       .maybeSingle<SalesAuthUserRecord>();
     if (userResult.error) throw new Error(userResult.error.message);
     user = userResult.data || null;
   }
 
   return {
-    cart: cartResult.data,
+    cart,
     items: itemsResult.data || [],
     user,
   };
@@ -312,18 +462,10 @@ async function recalculateCartTotals(cartId: string, items: SalesCartItemRecord[
     return sum + quantity * unit;
   }, 0);
   const normalizedTotal = Number(total.toFixed(2));
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("guild_sales_carts")
-    .update({
-      subtotal_amount: normalizedTotal,
-      total_amount: normalizedTotal,
-    })
-    .eq("id", cartId)
-    .select(CART_SELECT)
-    .single<SalesCartRecord>();
-  if (result.error) throw new Error(result.error.message);
-  return result.data;
+  return updateSalesCartAndSelect(cartId, {
+    subtotal_amount: normalizedTotal,
+    total_amount: normalizedTotal,
+  });
 }
 
 function normalizeQuantity(value: unknown) {
@@ -552,32 +694,25 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
     resolveSalesMercadoPagoStatus(providerStatus) === "approved"
       ? "paid"
       : "payment_pending";
-  const updateResult = await getSupabaseAdminClientOrThrow()
-    .from("guild_sales_carts")
-    .update({
-      status: nextStatus,
-      selected_payment_method_key: "mercado_pago",
-      provider: "mercado_pago",
-      provider_payment_id: String(providerPayment.id),
-      provider_external_reference: providerPayment.external_reference || externalReference,
-      provider_status: providerStatus,
-      provider_status_detail: providerStatusDetail,
-      provider_qr_code: transactionData?.qr_code || null,
-      provider_qr_base64: transactionData?.qr_code_base64 || null,
-      provider_ticket_url: transactionData?.ticket_url || null,
-      provider_payload: providerPayment,
-      payment_expires_at: providerPayment.date_of_expiration || expiresAt,
-      paid_at: providerPayment.date_approved || null,
-      customer_email: email,
-      customer_name: user.display_name || user.username || "Cliente Flowdesk",
-    })
-    .eq("id", cart.id)
-    .select(CART_SELECT)
-    .single<SalesCartRecord>();
-
-  if (updateResult.error) throw new Error(updateResult.error.message);
+  const updatedPaymentCart = await updateSalesCartAndSelect(cart.id, {
+    status: nextStatus,
+    selected_payment_method_key: "mercado_pago",
+    provider: "mercado_pago",
+    provider_payment_id: String(providerPayment.id),
+    provider_external_reference: providerPayment.external_reference || externalReference,
+    provider_status: providerStatus,
+    provider_status_detail: providerStatusDetail,
+    provider_qr_code: transactionData?.qr_code || null,
+    provider_qr_base64: transactionData?.qr_code_base64 || null,
+    provider_ticket_url: transactionData?.ticket_url || null,
+    provider_payload: providerPayment,
+    payment_expires_at: providerPayment.date_of_expiration || expiresAt,
+    paid_at: providerPayment.date_approved || null,
+    customer_email: email,
+    customer_name: user.display_name || user.username || "Cliente Flowdesk",
+  });
   await recordSalesOrderEvent({
-    cart: updateResult.data,
+    cart: updatedPaymentCart,
     eventType: "payment_created",
     eventKey: `payment_created:${providerPayment.id}`,
     payload: {
@@ -590,9 +725,9 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
 
   const nextRuntime = {
     ...runtime,
-    cart: updateResult.data,
+    cart: updatedPaymentCart,
     items: validatedItems,
-    payment: buildPaymentResponse(updateResult.data),
+    payment: buildPaymentResponse(updatedPaymentCart),
   };
 
   if (nextStatus === "paid") {
@@ -603,14 +738,28 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
 }
 
 async function loadSalesCartDeliveryRows(cartId: string) {
-  const result = await getSupabaseAdminClientOrThrow()
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
     .from("guild_sales_order_deliveries")
-    .select("id, product_id, cart_item_id, unit_index, idempotency_key, delivery_method, status, delivery_payload")
+    .select(DELIVERY_SELECT)
     .eq("cart_id", cartId)
     .order("created_at", { ascending: true })
     .returns<SalesCartDeliveryRecord[]>();
-  if (result.error) throw new Error(result.error.message);
-  return result.data || [];
+  if (!result.error) {
+    return (result.data || []).map(withOptionalDeliveryDefaults);
+  }
+  if (!isMissingOptionalDeliveryColumnError(result.error)) {
+    throw new Error(result.error.message);
+  }
+
+  const fallback = await supabase
+    .from("guild_sales_order_deliveries")
+    .select(DELIVERY_BASE_SELECT)
+    .eq("cart_id", cartId)
+    .order("created_at", { ascending: true })
+    .returns<SalesCartDeliveryRecord[]>();
+  if (fallback.error) throw new Error(fallback.error.message);
+  return (fallback.data || []).map(withOptionalDeliveryDefaults);
 }
 
 export async function loadSalesCartDeliveries(cartId: string) {
@@ -630,6 +779,47 @@ export async function loadSalesCartDeliveries(cartId: string) {
         typeof payload.productTitle === "string" ? payload.productTitle : "Produto",
     } satisfies SalesCartDeliveryResult;
   });
+}
+
+async function syncProductEmbedsAfterStockChange(input: {
+  cart: SalesCartRecord;
+  productIds: Iterable<string>;
+}) {
+  const productIds = Array.from(new Set(Array.from(input.productIds).filter(Boolean)));
+  await Promise.all(
+    productIds.map(async (productId) => {
+      try {
+        const sync = await syncSalesProductDiscordMessageById({
+          guildId: input.cart.guild_id,
+          productId,
+        });
+        if (sync?.status === "synced") {
+          await recordSalesOrderEvent({
+            cart: input.cart,
+            eventType: "product_embed_synced",
+            eventKey: `product_embed_synced:${productId}`,
+            payload: { productId, source: "stock_change" },
+          });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Falha ao atualizar embed do produto.";
+        await markSalesProductDiscordSyncFailedById({
+          guildId: input.cart.guild_id,
+          productId,
+          error: message.slice(0, 500),
+        }).catch(() => null);
+        await recordSalesOrderEvent({
+          cart: input.cart,
+          eventType: "product_embed_sync_failed",
+          eventKey: `product_embed_sync_failed:${productId}:${Date.now()}`,
+          payload: { productId, message },
+        }).catch(() => null);
+      }
+    }),
+  );
 }
 
 async function settleSalesCartDeliveries(
@@ -655,6 +845,7 @@ async function settleSalesCartDeliveries(
   }
 
   const rowsToInsert: Array<Record<string, unknown>> = [];
+  const stockChangedProductIds = new Set<string>();
 
   for (const item of runtime.items) {
     const quantity = normalizeQuantity(item.quantity);
@@ -694,6 +885,7 @@ async function settleSalesCartDeliveries(
         });
         continue;
       }
+      stockChangedProductIds.add(item.product_id);
 
       rowsToInsert.push({
         cart_id: runtime.cart.id,
@@ -716,10 +908,19 @@ async function settleSalesCartDeliveries(
   }
 
   if (rowsToInsert.length) {
-    const insertResult = await getSupabaseAdminClientOrThrow()
+    const supabase = getSupabaseAdminClientOrThrow();
+    const insertResult = await supabase
       .from("guild_sales_order_deliveries")
       .insert(rowsToInsert);
-    if (insertResult.error && insertResult.error.code !== "23505") {
+    if (insertResult.error && isMissingOptionalDeliveryColumnError(insertResult.error)) {
+      const fallbackRows = rowsToInsert.map(stripOptionalDeliveryFields);
+      const fallbackInsert = await supabase
+        .from("guild_sales_order_deliveries")
+        .insert(fallbackRows);
+      if (fallbackInsert.error && fallbackInsert.error.code !== "23505") {
+        throw new Error(fallbackInsert.error.message);
+      }
+    } else if (insertResult.error && insertResult.error.code !== "23505") {
       throw new Error(insertResult.error.message);
     }
     await recordSalesOrderEvent({
@@ -729,6 +930,12 @@ async function settleSalesCartDeliveries(
       payload: {
         inserted: rowsToInsert.length,
       },
+    });
+  }
+  if (stockChangedProductIds.size) {
+    await syncProductEmbedsAfterStockChange({
+      cart: runtime.cart,
+      productIds: stockChangedProductIds,
     });
   }
 
@@ -874,26 +1081,19 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
         ? "payment_pending"
         : resolvedStatus;
 
-  const updateResult = await getSupabaseAdminClientOrThrow()
-    .from("guild_sales_carts")
-    .update({
-      status: cartStatus,
-      provider_status: providerPayment.status || null,
-      provider_status_detail: providerPayment.status_detail || null,
-      provider_qr_code: transactionData?.qr_code || cart.provider_qr_code,
-      provider_qr_base64: transactionData?.qr_code_base64 || cart.provider_qr_base64,
-      provider_ticket_url: transactionData?.ticket_url || cart.provider_ticket_url,
-      provider_payload: providerPayment,
-      payment_expires_at: providerPayment.date_of_expiration || cart.payment_expires_at,
-      paid_at: resolvedStatus === "approved" ? resolvePaidAt(providerPayment) : cart.paid_at,
-    })
-    .eq("id", cart.id)
-    .select(CART_SELECT)
-    .single<SalesCartRecord>();
-
-  if (updateResult.error) throw new Error(updateResult.error.message);
+  const syncedCart = await updateSalesCartAndSelect(cart.id, {
+    status: cartStatus,
+    provider_status: providerPayment.status || null,
+    provider_status_detail: providerPayment.status_detail || null,
+    provider_qr_code: transactionData?.qr_code || cart.provider_qr_code,
+    provider_qr_base64: transactionData?.qr_code_base64 || cart.provider_qr_base64,
+    provider_ticket_url: transactionData?.ticket_url || cart.provider_ticket_url,
+    provider_payload: providerPayment,
+    payment_expires_at: providerPayment.date_of_expiration || cart.payment_expires_at,
+    paid_at: resolvedStatus === "approved" ? resolvePaidAt(providerPayment) : cart.paid_at,
+  });
   await recordSalesOrderEvent({
-    cart: updateResult.data,
+    cart: syncedCart,
     eventType: "payment_synced",
     eventKey:
       resolvedStatus === "approved"
@@ -909,8 +1109,8 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
 
   const nextRuntime = {
     ...runtime,
-    cart: updateResult.data,
-    payment: buildPaymentResponse(updateResult.data),
+    cart: syncedCart,
+    payment: buildPaymentResponse(syncedCart),
   };
 
   if (resolvedStatus !== "approved") {
@@ -922,22 +1122,16 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
 
   const deliveries = await settleSalesCartDeliveries({
     ...runtime,
-    cart: updateResult.data,
+    cart: syncedCart,
   });
   const hasFailedDelivery = deliveries.some((delivery) => delivery.status === "failed");
   const finalStatus = hasFailedDelivery ? "delivery_failed" : "delivered";
-  const finalResult = await getSupabaseAdminClientOrThrow()
-    .from("guild_sales_carts")
-    .update({
-      status: finalStatus,
-      delivered_at: new Date().toISOString(),
-    })
-    .eq("id", cart.id)
-    .select(CART_SELECT)
-    .single<SalesCartRecord>();
-  if (finalResult.error) throw new Error(finalResult.error.message);
+  const finalizedCart = await updateSalesCartAndSelect(cart.id, {
+    status: finalStatus,
+    delivered_at: new Date().toISOString(),
+  });
   await recordSalesOrderEvent({
-    cart: finalResult.data,
+    cart: finalizedCart,
     eventType: "order_finalized",
     eventKey: "order_finalized",
     payload: {
@@ -949,15 +1143,15 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
   await sendSalesCartReceiptEmailSafe({
     runtime: {
       ...runtime,
-      cart: finalResult.data,
+      cart: finalizedCart,
     },
-    cart: finalResult.data,
+    cart: finalizedCart,
     deliveries,
   });
 
   return {
     ...nextRuntime,
-    cart: finalResult.data,
+    cart: finalizedCart,
     deliveries,
   };
 }

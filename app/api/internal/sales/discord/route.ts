@@ -4,7 +4,7 @@ import {
   syncSalesCartPayment,
 } from "@/lib/sales/checkoutRuntime";
 import { applyNoStoreHeaders } from "@/lib/security/http";
-import { sanitizeErrorMessage } from "@/lib/security/errors";
+import { extractAuditErrorMessage } from "@/lib/security/errors";
 
 function resolveInternalSalesToken() {
   return (
@@ -33,6 +33,42 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   );
+}
+
+const SAFE_CHECKOUT_ERROR_FRAGMENTS = [
+  "carrinho",
+  "compra",
+  "login",
+  "flowdesk",
+  "email valido",
+  "produto",
+  "estoque",
+  "valor",
+  "pix",
+  "mercado pago",
+  "credenciais",
+  "pagamento",
+  "metodo",
+  "servidor",
+];
+
+function resolveCheckoutErrorMessage(error: unknown) {
+  const message = extractAuditErrorMessage(error, "Erro interno no checkout de vendas.");
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("schema cache") ||
+    normalized.includes("column") ||
+    normalized.includes("does not exist")
+  ) {
+    return "Checkout de vendas em atualizacao. Rode a migration 116 e tente novamente.";
+  }
+
+  if (SAFE_CHECKOUT_ERROR_FRAGMENTS.some((fragment) => normalized.includes(fragment))) {
+    return message;
+  }
+
+  return "Erro interno no checkout de vendas.";
 }
 
 export async function POST(request: Request) {
@@ -66,11 +102,12 @@ export async function POST(request: Request) {
       NextResponse.json({ ok: false, message: "Acao invalida." }, { status: 400 }),
     );
   } catch (error) {
+    console.error("[internal-sales-discord] checkout failed", error);
     return applyNoStoreHeaders(
       NextResponse.json(
         {
           ok: false,
-          message: sanitizeErrorMessage(error, "Erro interno no checkout de vendas."),
+          message: resolveCheckoutErrorMessage(error),
         },
         { status: 500 },
       ),

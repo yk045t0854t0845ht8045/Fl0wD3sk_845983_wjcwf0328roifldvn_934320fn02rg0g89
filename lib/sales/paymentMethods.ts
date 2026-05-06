@@ -50,6 +50,11 @@ export type SalesPaymentMethodsSecureSnapshot = {
   };
 };
 
+export type SalesMercadoPagoAccessTokenEnvironment =
+  | "production"
+  | "test"
+  | "unknown";
+
 const METHOD_DEFINITIONS: Array<
   Omit<
     SalesPaymentMethodPublic,
@@ -120,6 +125,34 @@ export function normalizeSalesPaymentEnvironment(
   value: unknown,
 ): SalesPaymentEnvironment {
   return value === "test" ? "test" : "production";
+}
+
+export function inferSalesMercadoPagoAccessTokenEnvironment(
+  value: string | null | undefined,
+): SalesMercadoPagoAccessTokenEnvironment {
+  const normalized = typeof value === "string" ? value.trim().toUpperCase() : "";
+  if (normalized.startsWith("TEST-")) return "test";
+  if (normalized.startsWith("APP_USR-")) return "production";
+  return "unknown";
+}
+
+export function getSalesMercadoPagoEnvironmentMismatchMessage(input: {
+  accessToken: string | null | undefined;
+  environment: SalesPaymentEnvironment;
+}) {
+  const tokenEnvironment = inferSalesMercadoPagoAccessTokenEnvironment(
+    input.accessToken,
+  );
+
+  if (tokenEnvironment === "unknown" || tokenEnvironment === input.environment) {
+    return null;
+  }
+
+  if (input.environment === "production") {
+    return "Use um Access Token de producao do Mercado Pago para ativar pagamentos reais. Token TEST nao gera PIX de producao.";
+  }
+
+  return "Use um Access Token de teste do Mercado Pago quando o ambiente estiver em Teste, para evitar cobrancas reais.";
 }
 
 export function normalizeSalesPaymentMethodKey(
