@@ -428,6 +428,24 @@ async function ensureGuildAccess(guildId: string, requiredPermission: TeamPermis
 
 async function syncProductStockQuantity(guildId: string, productId: string) {
   const supabase = getSupabaseAdminClientOrThrow();
+  const rpcResult = await supabase.rpc("sync_guild_sales_product_stock_quantity", {
+    p_guild_id: guildId,
+    p_product_id: productId,
+  });
+
+  if (!rpcResult.error && Number.isFinite(Number(rpcResult.data))) {
+    return Math.max(0, Number(rpcResult.data || 0));
+  }
+
+  const rpcMessage = rpcResult.error?.message?.toLowerCase() || "";
+  if (
+    rpcResult.error &&
+    rpcResult.error.code !== "42883" &&
+    !rpcMessage.includes("sync_guild_sales_product_stock_quantity")
+  ) {
+    throw new Error(rpcResult.error.message);
+  }
+
   const { data, error } = await supabase
     .from("guild_sales_stock_items")
     .select("quantity")
@@ -449,6 +467,15 @@ async function syncProductStockQuantity(guildId: string, productId: string) {
 
   if (update.error) throw new Error(update.error.message);
   return quantity;
+}
+
+function resolveQuantityPatchStatus(
+  currentStatus: StockRecord["status"],
+  quantity: number,
+) {
+  if (quantity > 0 && currentStatus === "delivered") return "available";
+  if (quantity === 0 && currentStatus === "available") return "delivered";
+  return currentStatus;
 }
 
 async function syncProductStockQuantityAndDiscordEmbed(
@@ -762,9 +789,28 @@ export async function PATCH(request: Request) {
     const quantity = Math.max(0, Math.floor(Number(rawBody.quantity) || 0));
     const supabase = getSupabaseAdminClientOrThrow();
     if (rawBody.patchMode === "quantity") {
+      const currentResult = await supabase
+        .from("guild_sales_stock_items")
+        .select("status")
+        .eq("guild_id", guildId)
+        .eq("product_id", productId)
+        .eq("id", itemId)
+        .maybeSingle();
+
+      if (currentResult.error) throw new Error(currentResult.error.message);
+      if (!currentResult.data) {
+        return applyNoStoreHeaders(
+          NextResponse.json({ ok: false, message: "Entrega nao encontrada." }, { status: 404 }),
+        );
+      }
+
+      const nextStatus = resolveQuantityPatchStatus(
+        String(currentResult.data.status || "available") as StockRecord["status"],
+        quantity,
+      );
       const { data, error } = await supabase
         .from("guild_sales_stock_items")
-        .update({ quantity })
+        .update({ quantity, status: nextStatus })
         .eq("guild_id", guildId)
         .eq("product_id", productId)
         .eq("id", itemId)
