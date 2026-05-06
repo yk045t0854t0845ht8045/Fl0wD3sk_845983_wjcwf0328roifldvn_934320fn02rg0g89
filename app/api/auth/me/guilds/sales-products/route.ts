@@ -13,7 +13,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
-import { sanitizeErrorMessage } from "@/lib/security/errors";
+import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   buildSalesProductDiscordPayload,
@@ -25,8 +25,9 @@ const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
 const PRODUCT_TEXT_MAX_LENGTH = 120;
 const PRODUCT_MEDIA_MAX_ITEMS = 8;
 const PRODUCT_MEDIA_MAX_LENGTH = 1_500_000;
-const PRODUCT_SELECT =
-  "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
+const PRODUCT_BASE_SELECT =
+  "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
+const PRODUCT_SELECT = `${PRODUCT_BASE_SELECT}, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error`;
 const GUILD_TEXT = 0;
 const GUILD_ANNOUNCEMENT = 5;
 const DISCORD_RETRY_DELAYS_MS = [180, 420];
@@ -154,7 +155,55 @@ function isMissingSalesProductsTable(error: unknown) {
   const code = typeof record.code === "string" ? record.code : "";
   const message =
     typeof record.message === "string" ? record.message.toLowerCase() : "";
-  return code === "42P01" || message.includes("guild_sales_products");
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("guild_sales_products") &&
+      (message.includes("relation") || message.includes("table")) &&
+      (message.includes("does not exist") ||
+        message.includes("not found") ||
+        message.includes("could not find")))
+  );
+}
+
+function isMissingSalesProductsColumn(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const code = typeof record.code === "string" ? record.code : "";
+  const message =
+    typeof record.message === "string" ? record.message.toLowerCase() : "";
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("schema cache") ||
+    message.includes("column")
+  );
+}
+
+function resolveSalesProductsErrorMessage(error: unknown, fallback: string) {
+  const message = extractAuditErrorMessage(error, fallback);
+  const normalized = message.toLowerCase();
+
+  if (
+    isMissingSalesProductsTable(error) ||
+    isMissingSalesProductsColumn(error) ||
+    normalized.includes("schema cache") ||
+    normalized.includes("guild_sales_products")
+  ) {
+    return "Banco de produtos de vendas desatualizado em producao. Aplique as migrations 107, 112 e 113 e tente novamente.";
+  }
+
+  if (
+    normalized.includes("nao autenticado") ||
+    normalized.includes("permissao") ||
+    normalized.includes("discord") ||
+    normalized.includes("categoria") ||
+    normalized.includes("produto")
+  ) {
+    return message;
+  }
+
+  return sanitizeErrorMessage(error, fallback);
 }
 
 function buildProductCode(id: string) {
@@ -366,6 +415,38 @@ function buildProductResponse(record: GuildSalesProductRecord) {
   };
 }
 
+function withProductDefaults(record: Partial<GuildSalesProductRecord>) {
+  return {
+    ...record,
+    description: record.description ?? "",
+    media_urls: record.media_urls ?? [],
+    price_amount: record.price_amount ?? 0,
+    compare_at_price_amount: record.compare_at_price_amount ?? null,
+    unit_price_amount: record.unit_price_amount ?? null,
+    charge_taxes: record.charge_taxes ?? true,
+    cost_per_item_amount: record.cost_per_item_amount ?? null,
+    inventory_tracked: record.inventory_tracked ?? true,
+    stock_quantity: record.stock_quantity ?? 0,
+    sku: record.sku ?? "",
+    barcode: record.barcode ?? "",
+    barcode_mode: record.barcode_mode ?? "auto",
+    product_type: record.product_type ?? "",
+    manufacturer: record.manufacturer ?? "",
+    tags: record.tags ?? [],
+    theme_model: record.theme_model ?? "default",
+    discord_publication_mode: record.discord_publication_mode ?? "online_only",
+    discord_channel_id: record.discord_channel_id ?? null,
+    discord_message_id: record.discord_message_id ?? null,
+    discord_last_synced_at: record.discord_last_synced_at ?? null,
+    discord_sync_status: record.discord_sync_status ?? "idle",
+    discord_sync_error: record.discord_sync_error ?? null,
+    published_virtual_store: record.published_virtual_store ?? true,
+    published_point_of_sale: record.published_point_of_sale ?? false,
+    published_pinterest: record.published_pinterest ?? false,
+    active: record.active ?? true,
+  } as GuildSalesProductRecord;
+}
+
 async function ensureGuildAccess(
   guildId: string,
   requiredPermission: TeamRolePermission,
@@ -437,11 +518,27 @@ async function findProductByCode(guildId: string, productCode: string) {
     .eq("guild_id", guildId)
     .limit(300);
 
-  if (result.error) throw new Error(result.error.message);
+  let data = result.data as Partial<GuildSalesProductRecord>[] | null;
+  let error = result.error;
 
-  return ((result.data || []) as GuildSalesProductRecord[]).find(
-    (record) => buildProductCode(record.id) === productCode,
-  );
+  if (result.error && isMissingSalesProductsColumn(result.error)) {
+    const fallback = await supabase
+      .from("guild_sales_products")
+      .select(PRODUCT_BASE_SELECT)
+      .eq("guild_id", guildId)
+      .limit(300);
+    data = fallback.data as Partial<GuildSalesProductRecord>[] | null;
+    error = fallback.error;
+  }
+
+  if (error) {
+    if (isMissingSalesProductsTable(error)) return null;
+    throw new Error(error.message);
+  }
+
+  return (data || [])
+    .map(withProductDefaults)
+    .find((record) => buildProductCode(record.id) === productCode);
 }
 
 async function validateProductCategory(
@@ -491,7 +588,6 @@ async function hasActiveSalesPaymentMethod(guildId: string) {
     .eq("guild_id", guildId)
     .eq("method_key", "mercado_pago")
     .eq("status", "active")
-    .eq("credentials_configured", true)
     .limit(1);
 
   if (result.error) {
@@ -782,22 +878,44 @@ export async function GET(request: Request) {
       query = query.eq("category_id", categoryId);
     }
 
-    const result = await query
-      .limit(200);
+    const result = await query.limit(200);
+    let data = result.data as Partial<GuildSalesProductRecord>[] | null;
+    let error = result.error;
 
-    if (result.error) {
-      if (isMissingSalesProductsTable(result.error)) {
+    if (error) {
+      if (isMissingSalesProductsTable(error)) {
         return applyNoStoreHeaders(NextResponse.json({ ok: true, products: [] }));
       }
-      throw new Error(result.error.message);
+      if (isMissingSalesProductsColumn(error)) {
+        let fallbackQuery = supabase
+          .from("guild_sales_products")
+          .select(PRODUCT_BASE_SELECT)
+          .eq("guild_id", guildId)
+          .order("created_at", { ascending: false });
+
+        if (categoryId && isUuid(categoryId)) {
+          fallbackQuery = fallbackQuery.eq("category_id", categoryId);
+        }
+
+        const fallback = await fallbackQuery.limit(200);
+        data = fallback.data as Partial<GuildSalesProductRecord>[] | null;
+        error = fallback.error;
+      }
+    }
+
+    if (error) {
+      if (isMissingSalesProductsTable(error)) {
+        return applyNoStoreHeaders(NextResponse.json({ ok: true, products: [] }));
+      }
+      throw new Error(error.message);
     }
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        products: ((result.data || []) as GuildSalesProductRecord[]).map(
-          buildProductResponse,
-        ),
+        products: (data || [])
+          .map(withProductDefaults)
+          .map(buildProductResponse),
       }),
     );
   } catch (error) {
@@ -805,7 +923,7 @@ export async function GET(request: Request) {
       NextResponse.json(
         {
           ok: false,
-          message: sanitizeErrorMessage(error, "Erro ao carregar produtos."),
+          message: resolveSalesProductsErrorMessage(error, "Erro ao carregar produtos."),
         },
         { status: 500 },
       ),
@@ -1033,7 +1151,7 @@ export async function PATCH(request: Request) {
       NextResponse.json(
         {
           ok: false,
-          message: sanitizeErrorMessage(error, "Erro ao atualizar produto."),
+          message: resolveSalesProductsErrorMessage(error, "Erro ao atualizar produto."),
         },
         { status: 500 },
       ),
@@ -1223,7 +1341,7 @@ export async function POST(request: Request) {
       NextResponse.json(
         {
           ok: false,
-          message: sanitizeErrorMessage(error, "Erro ao salvar produto."),
+          message: resolveSalesProductsErrorMessage(error, "Erro ao salvar produto."),
         },
         { status: 500 },
       ),

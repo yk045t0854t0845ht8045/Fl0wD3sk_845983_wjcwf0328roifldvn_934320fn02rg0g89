@@ -181,7 +181,6 @@ async function hasActiveSalesPaymentMethod(guildId: string) {
     .eq("guild_id", guildId)
     .eq("method_key", "mercado_pago")
     .eq("status", "active")
-    .eq("credentials_configured", true)
     .limit(1);
 
   if (result.error) {

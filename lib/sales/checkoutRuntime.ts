@@ -362,6 +362,21 @@ async function loadSalesMercadoPagoSecureSnapshot(guildId: string) {
     });
   const accessToken = snapshot?.payload?.mercadoPago?.accessToken?.trim();
   if (!accessToken) {
+    const methodResult = await getSupabaseAdminClientOrThrow()
+      .from("guild_sales_payment_methods")
+      .select("status, credentials_configured")
+      .eq("guild_id", guildId)
+      .eq("method_key", "mercado_pago")
+      .maybeSingle<Pick<SalesPaymentMethodRecord, "status" | "credentials_configured">>();
+    if (
+      !methodResult.error &&
+      (methodResult.data?.status === "active" ||
+        methodResult.data?.credentials_configured === true)
+    ) {
+      throw new Error(
+        "As credenciais seguras do Mercado Pago nao foram encontradas. Reative o PIX em Vendas > Metodos de pagamento e salve o Access Token novamente.",
+      );
+    }
     throw new Error("Mercado Pago nao esta configurado para este servidor.");
   }
   const environment = snapshot?.payload?.mercadoPago?.environment || "production";
@@ -381,6 +396,22 @@ async function loadSalesMercadoPagoSecureSnapshot(guildId: string) {
   };
 }
 
+function isMissingSalesPaymentMethodsRuntimeSchema(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("schema cache") ||
+    message.includes("guild_sales_payment_methods")
+  );
+}
+
 async function resolveActiveMercadoPagoConfig(guildId: string) {
   const secure = await loadSalesMercadoPagoSecureSnapshot(guildId);
   const supabase = getSupabaseAdminClientOrThrow();
@@ -391,8 +422,49 @@ async function resolveActiveMercadoPagoConfig(guildId: string) {
     .eq("method_key", "mercado_pago")
     .maybeSingle<SalesPaymentMethodRecord>();
 
-  if (result.error) throw new Error(result.error.message);
-  const method = result.data;
+  if (result.error) {
+    if (isMissingSalesPaymentMethodsRuntimeSchema(result.error)) {
+      throw new Error(
+        "Tabela de metodos de pagamento desatualizada. Aplique a migration 115 antes de gerar PIX.",
+      );
+    }
+    throw new Error(result.error.message);
+  }
+  let method = result.data;
+  if (!method) {
+    const ownerResult = await supabase
+      .from("guild_sales_settings")
+      .select("configured_by_user_id")
+      .eq("guild_id", guildId)
+      .maybeSingle<{ configured_by_user_id: number | null }>();
+    const configuredByUserId = ownerResult.data?.configured_by_user_id || null;
+    if (configuredByUserId) {
+      const repairResult = await supabase
+        .from("guild_sales_payment_methods")
+        .upsert(
+          {
+            guild_id: guildId,
+            method_key: "mercado_pago",
+            provider: "mercado_pago",
+            payment_rail: "pix",
+            display_name: "Mercado Pago",
+            status: "active",
+            credentials_configured: true,
+            environment: secure.environment,
+            public_key_fingerprint: createSecretFingerprint(secure.publicKey),
+            access_token_fingerprint: createSecretFingerprint(secure.accessToken),
+            last_health_status: "unchecked",
+            last_health_error: "",
+            configured_by_user_id: configuredByUserId,
+          },
+          { onConflict: "guild_id,method_key" },
+        )
+        .select("id, provider, payment_rail, status, credentials_configured, environment, last_health_status")
+        .single<SalesPaymentMethodRecord>();
+      if (repairResult.error) throw new Error(repairResult.error.message);
+      method = repairResult.data;
+    }
+  }
   if (!method || method.status !== "active") {
     throw new Error("PIX via Mercado Pago esta desativado neste servidor.");
   }
@@ -401,10 +473,7 @@ async function resolveActiveMercadoPagoConfig(guildId: string) {
   if (provider !== "mercado_pago" || rail !== "pix") {
     throw new Error("Metodo Mercado Pago ativo esta inconsistente. Reative o PIX no painel.");
   }
-  if (method.last_health_status === "failed") {
-    throw new Error("As credenciais Mercado Pago ativas falharam na ultima validacao.");
-  }
-  if (method.credentials_configured !== true) {
+  if (method.credentials_configured !== true || method.last_health_status === "failed") {
     const repairResult = await supabase
       .from("guild_sales_payment_methods")
       .update({
@@ -501,6 +570,75 @@ function assertPaymentAllowedForCartStatus(status: string) {
   }
 }
 
+function isMissingSalesStockItemsRuntimeSchema(error: {
+  code?: string | null;
+  message?: string | null;
+} | null | undefined) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("schema cache") ||
+    message.includes("guild_sales_stock_items")
+  );
+}
+
+async function loadAvailableStockQuantities(guildId: string, productIds: string[]) {
+  if (!productIds.length) return new Map<string, number>();
+
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_stock_items")
+    .select("product_id, quantity")
+    .eq("guild_id", guildId)
+    .in("product_id", productIds)
+    .eq("status", "available");
+
+  if (result.error) {
+    if (isMissingSalesStockItemsRuntimeSchema(result.error)) {
+      return new Map<string, number>();
+    }
+    throw new Error(result.error.message);
+  }
+
+  const quantities = new Map<string, number>();
+  for (const row of result.data || []) {
+    const productId =
+      row && typeof row === "object" && "product_id" in row
+        ? String(row.product_id || "")
+        : "";
+    if (!productId) continue;
+    quantities.set(
+      productId,
+      (quantities.get(productId) || 0) + Math.max(0, Number(row.quantity || 0)),
+    );
+  }
+  return quantities;
+}
+
+async function repairProductStockQuantity(input: {
+  guildId: string;
+  productId: string;
+  currentQuantity: number;
+  nextQuantity: number;
+}) {
+  if (input.currentQuantity === input.nextQuantity) return;
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_products")
+    .update({ stock_quantity: input.nextQuantity })
+    .eq("guild_id", input.guildId)
+    .eq("id", input.productId);
+  if (result.error) {
+    console.warn("[sales-checkout] failed to repair product stock quantity", {
+      guildId: input.guildId,
+      productId: input.productId,
+      error: result.error.message,
+    });
+  }
+}
+
 async function loadProductsForCartItems(items: SalesCartItemRecord[]) {
   const productIds = Array.from(new Set(items.map((item) => item.product_id)));
   if (!productIds.length) return new Map<string, SalesProductPaymentRecord>();
@@ -517,6 +655,10 @@ async function loadProductsForCartItems(items: SalesCartItemRecord[]) {
 
 async function refreshCartItemsForPayment(runtime: Awaited<ReturnType<typeof loadSalesCartRuntime>>) {
   const productsById = await loadProductsForCartItems(runtime.items);
+  const availableStockByProductId = await loadAvailableStockQuantities(
+    runtime.cart.guild_id,
+    Array.from(productsById.keys()),
+  );
   const updates: Array<Promise<unknown>> = [];
   const nextItems: SalesCartItemRecord[] = [];
 
@@ -530,11 +672,21 @@ async function refreshCartItemsForPayment(runtime: Awaited<ReturnType<typeof loa
     }
 
     const quantity = normalizeQuantity(item.quantity);
-    const stockQuantity = Number(product.stock_quantity || 0);
+    const storedStockQuantity = Number(product.stock_quantity || 0);
+    const stockItemsQuantity = availableStockByProductId.get(product.id) || 0;
+    const stockQuantity = Math.max(storedStockQuantity, stockItemsQuantity);
     if (product.inventory_tracked !== false && stockQuantity < quantity) {
       throw new Error(
         `Estoque insuficiente para ${product.title || "produto"}. Disponivel: ${stockQuantity}.`,
       );
+    }
+    if (product.inventory_tracked !== false && stockItemsQuantity !== storedStockQuantity) {
+      await repairProductStockQuantity({
+        guildId: runtime.cart.guild_id,
+        productId: product.id,
+        currentQuantity: storedStockQuantity,
+        nextQuantity: stockItemsQuantity,
+      });
     }
 
     const unitPrice = Number(toNumber(product.price_amount).toFixed(2));
@@ -846,8 +998,10 @@ async function settleSalesCartDeliveries(
 
   const rowsToInsert: Array<Record<string, unknown>> = [];
   const stockChangedProductIds = new Set<string>();
+  const productsById = await loadProductsForCartItems(runtime.items);
 
   for (const item of runtime.items) {
+    const product = productsById.get(item.product_id);
     const quantity = normalizeQuantity(item.quantity);
     for (let index = 0; index < quantity; index += 1) {
       const idempotencyKey = `${runtime.cart.id}:${item.id}:${index}`;
@@ -857,6 +1011,28 @@ async function settleSalesCartDeliveries(
       const legacyCount = legacyCountByProduct.get(item.product_id) || 0;
       if (legacyCount > 0) {
         legacyCountByProduct.set(item.product_id, legacyCount - 1);
+        continue;
+      }
+
+      if (product?.inventory_tracked === false) {
+        rowsToInsert.push({
+          cart_id: runtime.cart.id,
+          guild_id: runtime.cart.guild_id,
+          auth_user_id: runtime.cart.auth_user_id,
+          discord_user_id: runtime.cart.discord_user_id,
+          product_id: item.product_id,
+          cart_item_id: item.id,
+          unit_index: index,
+          idempotency_key: idempotencyKey,
+          stock_item_id: null,
+          delivery_method: "flowdesk_link",
+          status: "delivered",
+          delivery_payload: {
+            productTitle: getProductTitle(item),
+            message:
+              "Pagamento aprovado. Este produto nao controla estoque unitario; acesse sua entrega pelo Flowdesk ou pelo suporte do servidor.",
+          },
+        });
         continue;
       }
 

@@ -12,7 +12,7 @@ import {
   applyNoStoreHeaders,
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
-import { sanitizeErrorMessage } from "@/lib/security/errors";
+import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   markSalesProductDiscordSyncFailedById,
@@ -70,6 +70,19 @@ const STOCK_SELECT = [
   "created_at",
   "updated_at",
 ].join(", ");
+const STOCK_BASE_SELECT = [
+  "id",
+  "guild_id",
+  "product_id",
+  "product_name",
+  "item_type",
+  "delivery_method",
+  "status",
+  "quantity",
+  "payload",
+  "created_at",
+  "updated_at",
+].join(", ");
 
 type TeamPermission = TeamRolePermission;
 
@@ -93,6 +106,59 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   );
+}
+
+function getSupabaseErrorInfo(error: unknown) {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  return {
+    code: typeof record.code === "string" ? record.code : "",
+    message: typeof record.message === "string" ? record.message.toLowerCase() : "",
+  };
+}
+
+function isMissingStockItemsTable(error: unknown) {
+  const { code, message } = getSupabaseErrorInfo(error);
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("guild_sales_stock_items") &&
+      (message.includes("relation") || message.includes("table")) &&
+      (message.includes("does not exist") ||
+        message.includes("not found") ||
+        message.includes("could not find")))
+  );
+}
+
+function isMissingStockItemsColumn(error: unknown) {
+  const { code, message } = getSupabaseErrorInfo(error);
+  return (
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("schema cache") ||
+    message.includes("column")
+  );
+}
+
+function resolveStockErrorMessage(error: unknown, fallback: string) {
+  const message = extractAuditErrorMessage(error, fallback);
+  const normalized = message.toLowerCase();
+
+  if (isMissingStockItemsTable(error)) {
+    return "Tabela de estoque digital ausente em producao. Aplique a migration 114 e tente novamente.";
+  }
+
+  if (
+    normalized.includes("nao autenticado") ||
+    normalized.includes("permissao") ||
+    normalized.includes("discord") ||
+    normalized.includes("produto") ||
+    normalized.includes("estoque")
+  ) {
+    return message;
+  }
+
+  return sanitizeErrorMessage(error, fallback);
 }
 
 function readStockIdentity(rawBody: Record<string, unknown>) {
@@ -232,6 +298,57 @@ function buildStockResponse(record: StockRecord) {
   };
 }
 
+function withStockDefaults(record: Partial<StockRecord>) {
+  return {
+    ...record,
+    product_name: record.product_name || "",
+    item_type: record.item_type || "digital_services",
+    delivery_method: record.delivery_method || "flowdesk_link",
+    status: record.status || "available",
+    category: record.category || "",
+    platform: record.platform || "",
+    provider: record.provider || "",
+    email: record.email || "",
+    login: record.login || "",
+    password: record.password || "",
+    access_type: record.access_type || "",
+    recovery: record.recovery || "",
+    gift_card_name: record.gift_card_name || "",
+    redemption_value: record.redemption_value || "",
+    redemption_code: record.redemption_code || "",
+    access_link: record.access_link || "",
+    link_password: record.link_password || "",
+    region: record.region || "",
+    validity: record.validity || "",
+    quantity: record.quantity ?? 0,
+    server: record.server || "",
+    buyer_required_id: record.buyer_required_id || "",
+    delivery_deadline: record.delivery_deadline || "",
+    service_type: record.service_type || "",
+    required_buyer_info: record.required_buyer_info || "",
+    discord_product_type: record.discord_product_type || "",
+    server_or_bot_link: record.server_or_bot_link || "",
+    token_or_key: record.token_or_key || "",
+    required_permissions: record.required_permissions || "",
+    tool_name: record.tool_name || "",
+    automation_type: record.automation_type || "",
+    software_name: record.software_name || "",
+    software_version: record.software_version || "",
+    operating_system: record.operating_system || "",
+    license_key: record.license_key || "",
+    download_link: record.download_link || "",
+    subscription_duration: record.subscription_duration || "",
+    account_type: record.account_type || "",
+    course_name: record.course_name || "",
+    item_name: record.item_name || "",
+    instructions: record.instructions || "",
+    observations: record.observations || "",
+    payload: record.payload || {},
+    created_at: record.created_at || new Date(0).toISOString(),
+    updated_at: record.updated_at || record.created_at || new Date(0).toISOString(),
+  } as StockRecord;
+}
+
 async function ensureGuildAccess(guildId: string, requiredPermission: TeamPermission) {
   const sessionData = await resolveSessionAccessToken();
   if (!sessionData?.authSession || !sessionData.accessToken) {
@@ -347,7 +464,10 @@ async function assertProductBelongsToGuild(guildId: string, productId: string) {
     .eq("id", productId)
     .maybeSingle();
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingStockItemsTable(error)) return null;
+    throw new Error(error.message);
+  }
   return data as { id: string; title: string } | null;
 }
 
@@ -374,25 +494,55 @@ export async function GET(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const { data, error } = await supabase
+    const result = await supabase
       .from("guild_sales_stock_items")
       .select(STOCK_SELECT)
       .eq("guild_id", guildId)
       .eq("product_id", productId)
       .order("created_at", { ascending: false });
+    let data = result.data;
+    let error = result.error;
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      if (isMissingStockItemsTable(error)) {
+        return applyNoStoreHeaders(
+          NextResponse.json({
+            ok: true,
+            items: [],
+            requiresMigration: true,
+            message:
+              "Tabela de estoque digital ausente em producao. Aplique a migration 114.",
+          }),
+        );
+      }
+      if (isMissingStockItemsColumn(error)) {
+        const fallback = await supabase
+          .from("guild_sales_stock_items")
+          .select(STOCK_BASE_SELECT)
+          .eq("guild_id", guildId)
+          .eq("product_id", productId)
+          .order("created_at", { ascending: false });
+        data = fallback.data;
+        error = fallback.error;
+      }
+    }
+
+    if (error) {
+      throw new Error(error.message);
+    }
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        items: ((data || []) as unknown as StockRecord[]).map(buildStockResponse),
+        items: ((data || []) as unknown as Partial<StockRecord>[])
+          .map(withStockDefaults)
+          .map(buildStockResponse),
       }),
     );
   } catch (error) {
     return applyNoStoreHeaders(
       NextResponse.json(
-        { ok: false, message: sanitizeErrorMessage(error, "Erro ao carregar estoque.") },
+        { ok: false, message: resolveStockErrorMessage(error, "Erro ao carregar estoque.") },
         { status: 500 },
       ),
     );
@@ -457,7 +607,7 @@ export async function POST(request: Request) {
   } catch (error) {
     return applyNoStoreHeaders(
       NextResponse.json(
-        { ok: false, message: sanitizeErrorMessage(error, "Erro ao salvar estoque.") },
+        { ok: false, message: resolveStockErrorMessage(error, "Erro ao salvar estoque.") },
         { status: 500 },
       ),
     );
@@ -527,7 +677,7 @@ export async function PATCH(request: Request) {
   } catch (error) {
     return applyNoStoreHeaders(
       NextResponse.json(
-        { ok: false, message: sanitizeErrorMessage(error, "Erro ao atualizar estoque.") },
+        { ok: false, message: resolveStockErrorMessage(error, "Erro ao atualizar estoque.") },
         { status: 500 },
       ),
     );
@@ -578,7 +728,7 @@ export async function DELETE(request: Request) {
   } catch (error) {
     return applyNoStoreHeaders(
       NextResponse.json(
-        { ok: false, message: sanitizeErrorMessage(error, "Erro ao excluir estoque.") },
+        { ok: false, message: resolveStockErrorMessage(error, "Erro ao excluir estoque.") },
         { status: 500 },
       ),
     );
