@@ -18,6 +18,12 @@ export async function GET(request: Request) {
   const requestContext = createSecurityRequestContext(request);
   const respond = (body: unknown, init?: ResponseInit) =>
     attachRequestId(applyNoStoreHeaders(NextResponse.json(body, init)), requestContext.requestId);
+  const degradedSync = {
+    ...DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+    degraded: true,
+    usedDatabaseFallback: true,
+    reason: "discord_sync_failed" as const,
+  };
 
   try {
     const authSession = await getCurrentAuthSessionFromCookie();
@@ -82,9 +88,10 @@ export async function GET(request: Request) {
       {
         ok: false,
         message,
-        sync: DEFAULT_MANAGED_SERVERS_SYNC_STATE,
+        servers: [],
+        sync: status === 401 ? DEFAULT_MANAGED_SERVERS_SYNC_STATE : degradedSync,
       },
-      { status },
+      { status: status === 401 ? 401 : 200 },
     );
   }
 }

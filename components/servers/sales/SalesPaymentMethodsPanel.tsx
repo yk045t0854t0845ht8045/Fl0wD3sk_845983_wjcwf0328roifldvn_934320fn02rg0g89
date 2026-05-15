@@ -5,8 +5,10 @@ import { createPortal } from "react-dom";
 import {
   BadgeDollarSign,
   Check,
+  ChevronDown,
   CreditCard,
   Landmark,
+  ListFilter,
   Pencil,
   Power,
   Receipt,
@@ -84,6 +86,20 @@ const methodAccent: Record<PaymentMethodKey, string> = {
   nupay: "border-[#3A2040] bg-[#130A16] text-[#E8B3F2]",
 };
 
+const methodLogoSrc: Partial<Record<PaymentMethodKey, string>> = {
+  mercado_pago: "/cdn/payment-methods/mercado_pago.png",
+  card: "/cdn/payment-methods/card.png",
+  boleto: "/cdn/payment-methods/boleto.png",
+  paypal: "/cdn/payment-methods/paypal.png",
+  nupay: "/cdn/payment-methods/nupay.png",
+};
+
+const statusFilterOptions: Array<["all" | "active" | "disabled", string]> = [
+  ["all", "Todos"],
+  ["active", "Ativos"],
+  ["disabled", "Desativados"],
+];
+
 function formatUpdatedAt(value: string | null) {
   if (!value) return "Nunca configurado";
   const date = new Date(value);
@@ -95,6 +111,78 @@ function formatUpdatedAt(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function SelectMenu<T extends string>({
+  value,
+  options,
+  onChange,
+  disabled,
+}: {
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className={open ? "relative z-[220] min-w-[168px]" : "relative z-[1] min-w-[168px]"}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
+        className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] transition hover:border-[#444] disabled:cursor-not-allowed disabled:opacity-55"
+        aria-expanded={open}
+      >
+        <span className="inline-flex items-center gap-[8px]">
+          <ListFilter className="h-[15px] w-[15px] text-[#777]" />
+          {options.find(([option]) => option === value)?.[1] || "Selecionar"}
+        </span>
+        <ChevronDown
+          className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open ? (
+        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[220] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+          {options.map(([option, label]) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between rounded-[13px] px-[12px] py-[10px] text-left text-[13px] transition ${
+                option === value
+                  ? "bg-[#151515] text-[#F1F1F1]"
+                  : "text-[#AFAFAF] hover:bg-[#111] hover:text-white"
+              }`}
+            >
+              {label}
+              {option === value ? <Check className="h-[15px] w-[15px]" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PaymentLogo({ method }: { method: PaymentMethod }) {
+  const Icon = methodIcon[method.methodKey];
+  const targetPath = methodLogoSrc[method.methodKey] || "/cdn/payment-methods/";
+  return (
+    <span
+      className={cn(
+        "inline-flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[12px] border border-[#242424] bg-[#111] text-[#EAEAEA]",
+        methodAccent[method.methodKey],
+      )}
+      title={`Coloque o PNG em ${targetPath}`}
+    >
+      <Icon className="h-[20px] w-[20px]" />
+    </span>
+  );
 }
 
 function PaymentMethodModal({
@@ -164,14 +252,7 @@ function PaymentMethodModal({
         >
           <div className="flex items-start justify-between gap-[16px] border-b border-[#171717] px-[20px] py-[20px] sm:px-[24px]">
             <div className="flex min-w-0 items-start gap-[13px]">
-              <span
-                className={cn(
-                  "inline-flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[16px] border text-[13px] font-semibold",
-                  methodAccent[method.methodKey],
-                )}
-              >
-                {method.logoLabel}
-              </span>
+              <PaymentLogo method={method} />
               <div className="min-w-0">
                 <p className="text-[12px] uppercase tracking-[0.18em] text-[#686868]">
                   Metodo de pagamento
@@ -199,7 +280,7 @@ function PaymentMethodModal({
           <div className="space-y-[16px] px-[20px] py-[20px] sm:px-[24px] sm:py-[24px]">
             {!method.canActivate ? (
               <div className="rounded-[18px] border border-[#202020] bg-[#0D0D0D] px-[15px] py-[14px] text-[13px] leading-[1.6] text-[#AFAFAF]">
-                FlowPay, Cartao, Boleto, PayPal e Nupay permanecem desativados.
+                Cartao, Boleto, PayPal e Nupay permanecem desativados.
                 O checkout so libera PIX via Mercado Pago neste momento.
               </div>
             ) : (
@@ -398,9 +479,10 @@ export function SalesPaymentMethodsPanel({
   const filteredMethods = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return methods.filter((method) => {
+      if (method.methodKey === "flowpay") return false;
       if (statusFilter !== "all" && method.status !== statusFilter) return false;
       if (!normalized) return true;
-      return `${method.title} ${method.methodKey} ${method.provider} ${method.paymentRail} FlwStore`
+      return `${method.title} ${method.methodKey} ${method.provider} ${method.paymentRail}`
         .toLowerCase()
         .includes(normalized);
     });
@@ -475,25 +557,16 @@ export function SalesPaymentMethodsPanel({
             <ServerTextInput
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
-              placeholder="Pesquisar pagamento por ID, servidor ou metodo"
+              placeholder="Pesquisar metodo de pagamento"
               className="pl-[40px]"
             />
           </div>
           <div className="flex flex-wrap items-center gap-[8px]">
-            <span className="rounded-full border border-[#242424] bg-[#101010] px-[11px] py-[7px] text-[12px] font-semibold text-[#DADADA]">
-              FlwStore(R)
-            </span>
-            <select
+            <SelectMenu
               value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(event.currentTarget.value as "all" | "active" | "disabled")
-              }
-              className="h-[36px] rounded-[12px] border border-[#242424] bg-[#101010] px-[10px] text-[12px] font-semibold text-[#DADADA] outline-none"
-            >
-              <option value="all">Todos status</option>
-              <option value="active">Ativo</option>
-              <option value="disabled">Desativado</option>
-            </select>
+              options={statusFilterOptions}
+              onChange={setStatusFilter}
+            />
           </div>
         </div>
 
@@ -516,7 +589,7 @@ export function SalesPaymentMethodsPanel({
             action={<ServerButton onClick={() => void loadMethods()}>Tentar novamente</ServerButton>}
           />
         ) : filteredMethods.length ? (
-          <div className="grid gap-[14px] p-[18px] sm:grid-cols-2 xl:grid-cols-3">
+          <div className="space-y-[1px] bg-[#171717]">
             {filteredMethods.map((method) => {
               const Icon = methodIcon[method.methodKey];
               const isActive = method.status === "active";
@@ -524,22 +597,26 @@ export function SalesPaymentMethodsPanel({
                 <article
                   key={method.methodKey}
                   className={cn(
-                    "relative min-h-[196px] rounded-[20px] border bg-[#0C0C0C] p-[16px] transition hover:border-[#303030]",
-                    isActive ? "border-[#24402C]" : "border-[#191919]",
+                    "relative flex flex-col gap-[14px] bg-[#0B0B0B] px-[18px] py-[16px] transition hover:bg-[#0E0E0E] sm:px-[22px] lg:flex-row lg:items-center",
+                    isActive ? "shadow-[inset_3px_0_0_#2F8F4E]" : "",
                   )}
                 >
-                  <div className="flex items-start justify-between gap-[12px]">
+                  <div className="flex min-w-0 flex-1 items-center gap-[14px]">
+                    <PaymentLogo method={method} />
+                    <div className="min-w-0">
+                      <h4 className="truncate text-[15px] font-semibold text-[#F1F1F1]">
+                        {method.title}
+                      </h4>
+                      <p className="mt-[5px] line-clamp-1 text-[13px] leading-[1.5] text-[#777]">
+                        {method.description}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-[8px] sm:flex sm:items-center">
                     <span
                       className={cn(
-                        "inline-flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-[16px] border text-[13px] font-bold",
-                        methodAccent[method.methodKey],
-                      )}
-                    >
-                      {method.logoLabel}
-                    </span>
-                    <span
-                      className={cn(
-                        "rounded-full border px-[10px] py-[6px] text-[11px] font-semibold uppercase tracking-[0.12em]",
+                        "rounded-full border px-[10px] py-[6px] text-center text-[12px]",
                         isActive
                           ? "border-[#21492D] bg-[#0B170F] text-[#92E8A4]"
                           : "border-[#2A2A2A] bg-[#101010] text-[#8A8A8A]",
@@ -547,42 +624,24 @@ export function SalesPaymentMethodsPanel({
                     >
                       {isActive ? "Ativo" : "Desativado"}
                     </span>
-                  </div>
-
-                  <div className="mt-[16px] flex items-start gap-[10px]">
-                    <Icon className="mt-[2px] h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
-                    <div className="min-w-0">
-                      <h4 className="truncate text-[16px] font-semibold text-[#F1F1F1]">
-                        {method.title}
-                      </h4>
-                      <p className="mt-[7px] line-clamp-3 text-[13px] leading-[1.55] text-[#858585]">
-                        {method.description}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-[16px] flex flex-wrap gap-[7px] pr-[42px]">
                     <span className="rounded-full border border-[#242424] bg-[#101010] px-[9px] py-[6px] text-[11px] text-[#BDBDBD]">
-                      {method.paymentRail === "pix" ? "PIX" : method.paymentRail || "Offline"}
+                      {method.environment === "production" ? "Producao" : "Teste"}
                     </span>
-                    <span className="rounded-full border border-[#242424] bg-[#101010] px-[9px] py-[6px] text-[11px] text-[#BDBDBD]">
-                      {method.credentialsConfigured ? "Credenciais OK" : "Sem credenciais"}
-                    </span>
-                    <span className="rounded-full border border-[#242424] bg-[#101010] px-[9px] py-[6px] text-[11px] text-[#BDBDBD]">
+                    <Icon className="hidden h-[16px] w-[16px] text-[#777] sm:block" />
+                    <span className="hidden text-[12px] text-[#777] xl:inline">
                       {formatUpdatedAt(method.updatedAt)}
                     </span>
+                    <button
+                      type="button"
+                      aria-label={`Editar ${method.title}`}
+                      title="Editar metodo"
+                      disabled={readOnly}
+                      onClick={() => setEditingMethod(method)}
+                      className="flowdesk-server-button inline-flex h-[34px] w-[34px] items-center justify-center rounded-[12px] border border-[#252525] bg-[#111] text-[#DADADA] transition hover:border-[#3A3A3A] hover:bg-[#171717] disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <Pencil className="h-[15px] w-[15px]" />
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    aria-label={`Editar ${method.title}`}
-                    title="Editar metodo"
-                    disabled={readOnly}
-                    onClick={() => setEditingMethod(method)}
-                    className="flowdesk-server-button absolute bottom-[14px] right-[14px] inline-flex h-[34px] w-[34px] items-center justify-center rounded-[12px] border border-[#252525] bg-[#111] text-[#DADADA] transition hover:border-[#3A3A3A] hover:bg-[#171717] disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    <Pencil className="h-[15px] w-[15px]" />
-                  </button>
                 </article>
               );
             })}

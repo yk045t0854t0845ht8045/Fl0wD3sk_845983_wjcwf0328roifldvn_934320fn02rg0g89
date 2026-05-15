@@ -40,6 +40,10 @@ import {
   SalesProductEditPanel,
   SalesProductsListPanel,
 } from "@/components/servers/sales/SalesProductsPanel";
+import {
+  SalesCouponGiftCreatePanel,
+  SalesCouponsGiftsListPanel,
+} from "@/components/servers/sales/SalesCouponsGiftsPanel";
 import { SalesPaymentMethodsPanel } from "@/components/servers/sales/SalesPaymentMethodsPanel";
 import { SalesStockPanel } from "@/components/servers/sales/SalesStockPanel";
 import {
@@ -94,6 +98,7 @@ type ServerSettingsSection =
   | "sales_stock_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
+  | "sales_coupons_gifts_create"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
@@ -480,6 +485,7 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     | "sales_stock_edit"
     | "sales_payment_methods"
     | "sales_coupons_gifts"
+    | "sales_coupons_gifts_create"
   >,
   { tag: string; title: string; description: string }
 > = {
@@ -547,7 +553,13 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     tag: "Vendas",
     title: "Cupons e Gifts",
     description:
-      "Configure futuramente descontos, codigos promocionais e gifts para campanhas de venda.",
+      "Configure descontos, codigos promocionais e gifts para campanhas de venda.",
+  },
+  sales_coupons_gifts_create: {
+    tag: "Vendas",
+    title: "Criar Cupom ou Gift",
+    description:
+      "Defina codigo, valor, produtos, limite de uso e validade da campanha.",
   },
 };
 
@@ -2276,6 +2288,7 @@ export function ServerSettingsEditor({
         sales_stock_edit: "server_manage_tickets_overview",
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
+        sales_coupons_gifts_create: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
         entry_exit_message: "server_manage_welcome_message",
         security_antilink: "server_manage_antilink",
@@ -3659,7 +3672,8 @@ export function ServerSettingsEditor({
     settingsSection === "sales_stock" ||
     settingsSection === "sales_stock_edit" ||
     settingsSection === "sales_payment_methods" ||
-    settingsSection === "sales_coupons_gifts";
+    settingsSection === "sales_coupons_gifts" ||
+    settingsSection === "sales_coupons_gifts_create";
   const isSalesSettingsSection = settingsSection === "sales_overview";
   const salesPlaceholderContent = isSalesSection && settingsSection !== "sales_overview"
     ? SALES_PLACEHOLDER_CONTENT[settingsSection]
@@ -6018,6 +6032,16 @@ export function ServerSettingsEditor({
                     />
                   ) : settingsSection === "sales_payment_methods" ? (
                     <SalesPaymentMethodsPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_coupons_gifts" ? (
+                    <SalesCouponsGiftsListPanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_coupons_gifts_create" ? (
+                    <SalesCouponGiftCreatePanel
                       guildId={guildId}
                       readOnly={settingsReadOnly}
                     />

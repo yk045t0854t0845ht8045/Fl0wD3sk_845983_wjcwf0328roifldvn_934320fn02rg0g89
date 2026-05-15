@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  applySalesCartDiscount,
   createSalesCartPixPayment,
   syncSalesCartPayment,
 } from "@/lib/sales/checkoutRuntime";
@@ -50,6 +51,9 @@ const SAFE_CHECKOUT_ERROR_FRAGMENTS = [
   "pagamento",
   "metodo",
   "servidor",
+  "cupom",
+  "gift",
+  "desconto",
 ];
 
 function resolveCheckoutErrorMessage(error: unknown) {
@@ -95,6 +99,12 @@ export async function POST(request: Request) {
 
     if (action === "sync_payment") {
       const result = await syncSalesCartPayment(cartId);
+      return applyNoStoreHeaders(NextResponse.json({ ok: true, ...result }));
+    }
+
+    if (action === "apply_discount") {
+      const code = getTrimmedText(body.code, 80);
+      const result = await applySalesCartDiscount({ cartId, code });
       return applyNoStoreHeaders(NextResponse.json({ ok: true, ...result }));
     }
 

@@ -98,6 +98,30 @@ function withTimeout<TValue>(
   ]);
 }
 
+async function withManagedServersFallback<TValue>(
+  promise: Promise<TValue>,
+  fallback: TValue,
+  context: string,
+) {
+  try {
+    return {
+      ok: true as const,
+      value: await promise,
+      usedFallback: false,
+    };
+  } catch (error) {
+    console.warn("managed servers optional read failed", {
+      context,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ok: false as const,
+      value: fallback,
+      usedFallback: true,
+    };
+  }
+}
+
 function isMissingConfiguredGuildLookupTableError(error: {
   code?: string | null;
   message?: string | null;
@@ -344,29 +368,73 @@ async function fetchManagedServersFresh(
     : Promise.resolve<DiscordGuild[]>([]);
 
   const [
-    userPlanState,
-    scheduledChange,
+    userPlanStateResult,
+    scheduledChangeResult,
     accessibleGuildsResult,
-    acceptedTeamGuildIdsList,
-    ownedPlanGuilds,
-    lockedGuildMap,
-    downgradeEnforcement,
-    configuredGuildIdsList,
+    acceptedTeamGuildIdsResult,
+    ownedPlanGuildsResult,
+    lockedGuildMapResult,
+    downgradeEnforcementResult,
+    configuredGuildIdsResult,
   ] = await Promise.all([
-    getUserPlanState(userId),
-    getUserPlanScheduledChange(userId),
+    withManagedServersFallback(
+      getUserPlanState(userId),
+      null,
+      "user_plan_state",
+    ),
+    withManagedServersFallback(
+      getUserPlanScheduledChange(userId),
+      null,
+      "user_plan_scheduled_change",
+    ),
     accessibleGuildsPromise
       .then((guilds) => ({ ok: true as const, guilds }))
       .catch((error) => ({ ok: false as const, error })),
-    getAcceptedTeamGuildIdsForUser({
-      authUserId: userId,
-      discordUserId,
-    }),
-    getPlanGuildsForUser(userId, { includeInactive: true }),
-    getLockedGuildLicenseMapByUserId(userId),
-    getDowngradeEnforcementSummaryForUser(userId),
-    getConfiguredGuildIdsForUser(userId),
+    withManagedServersFallback(
+      getAcceptedTeamGuildIdsForUser({
+        authUserId: userId,
+        discordUserId,
+      }),
+      [] as string[],
+      "accepted_team_guild_ids",
+    ),
+    withManagedServersFallback(
+      getPlanGuildsForUser(userId, { includeInactive: true }),
+      [] as Awaited<ReturnType<typeof getPlanGuildsForUser>>,
+      "plan_guilds",
+    ),
+    withManagedServersFallback(
+      getLockedGuildLicenseMapByUserId(userId),
+      new Map() as Awaited<ReturnType<typeof getLockedGuildLicenseMapByUserId>>,
+      "locked_guild_license_map",
+    ),
+    withManagedServersFallback(
+      getDowngradeEnforcementSummaryForUser(userId),
+      null,
+      "downgrade_enforcement",
+    ),
+    withManagedServersFallback(
+      getConfiguredGuildIdsForUser(userId),
+      [] as string[],
+      "configured_guild_ids",
+    ),
   ]);
+
+  const userPlanState = userPlanStateResult.value;
+  const scheduledChange = scheduledChangeResult.value;
+  const acceptedTeamGuildIdsList = acceptedTeamGuildIdsResult.value;
+  const ownedPlanGuilds = ownedPlanGuildsResult.value;
+  const lockedGuildMap = lockedGuildMapResult.value;
+  const downgradeEnforcement = downgradeEnforcementResult.value;
+  const configuredGuildIdsList = configuredGuildIdsResult.value;
+  const usedOptionalFallback =
+    userPlanStateResult.usedFallback ||
+    scheduledChangeResult.usedFallback ||
+    acceptedTeamGuildIdsResult.usedFallback ||
+    ownedPlanGuildsResult.usedFallback ||
+    lockedGuildMapResult.usedFallback ||
+    downgradeEnforcementResult.usedFallback ||
+    configuredGuildIdsResult.usedFallback;
 
   void repairOrphanPlanGuildLinkForUser({
     userId,
@@ -485,7 +553,12 @@ async function fetchManagedServersFresh(
   );
 
   const guildIdsForLookup = Array.from(guildCatalog.keys());
-  const globalTeamLinkedGuildIds = await getGlobalTeamLinkedGuildIds(guildIdsForLookup);
+  const globalTeamLinkedGuildIdsResult = await withManagedServersFallback(
+    getGlobalTeamLinkedGuildIds(guildIdsForLookup),
+    new Set<string>(),
+    "global_team_linked_guild_ids",
+  );
+  const globalTeamLinkedGuildIds = globalTeamLinkedGuildIdsResult.value;
 
   const servers = Array.from(guildCatalog.values())
     .map((guild) => {
@@ -598,21 +671,27 @@ async function fetchManagedServersFresh(
     !requiresDiscordRelink &&
     !hasDatabaseCoverage &&
     (!accessibleGuildsResult.ok || accessibleGuilds.length === 0);
+  const shouldMarkOptionalReadDegraded =
+    usedOptionalFallback || globalTeamLinkedGuildIdsResult.usedFallback;
   const sync = buildManagedServersSyncState({
     authUserId: userId,
     accessibleGuildCount: accessibleGuilds.length,
     coveredGuildCount,
-    degraded: requiresDiscordRelink || shouldMarkDiscordSyncFailed,
+    degraded:
+      requiresDiscordRelink ||
+      shouldMarkDiscordSyncFailed ||
+      shouldMarkOptionalReadDegraded,
     reason: requiresDiscordRelink
       ? baseSyncReason
-      : shouldMarkDiscordSyncFailed
+      : shouldMarkDiscordSyncFailed || shouldMarkOptionalReadDegraded
         ? "discord_sync_failed"
         : "ok",
     requiresDiscordRelink,
     usedDatabaseFallback:
       coveredGuildCount > accessibleGuilds.length ||
       requiresDiscordRelink ||
-      !accessibleGuildsResult.ok,
+      !accessibleGuildsResult.ok ||
+      shouldMarkOptionalReadDegraded,
   });
   const snapshot = {
     servers,

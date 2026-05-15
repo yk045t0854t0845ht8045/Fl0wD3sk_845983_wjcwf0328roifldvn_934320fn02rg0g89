@@ -120,6 +120,7 @@ type ServerSettingsSection =
   | "sales_stock_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
+  | "sales_coupons_gifts_create"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
@@ -551,7 +552,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const salesSectionMatch = normalizedPathname.match(
-    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)\/?$/,
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts(?:\/create)?)\/?$/,
   );
   if (salesSectionMatch) {
     const salesSection = salesSectionMatch[2];
@@ -579,6 +580,8 @@ function parseWorkspaceRoute(pathname: string | null): {
               ? "sales_payment_methods"
               : salesSection === "coupons-gifts"
                 ? "sales_coupons_gifts"
+                : salesSection === "coupons-gifts/create"
+                  ? "sales_coupons_gifts_create"
                 : "sales_overview",
     };
   }
@@ -2567,7 +2570,8 @@ export function ServersWorkspace({
       selectedSettingsSectionForConfig === "sales_product_edit" ||
       selectedSettingsSectionForConfig === "sales_stock" ||
       selectedSettingsSectionForConfig === "sales_payment_methods" ||
-      selectedSettingsSectionForConfig === "sales_coupons_gifts");
+      selectedSettingsSectionForConfig === "sales_coupons_gifts" ||
+      selectedSettingsSectionForConfig === "sales_coupons_gifts_create");
   const isEntryExitGroupActive =
     isEditingServer &&
     selectedEditorTabForConfig === "settings" &&
@@ -2695,6 +2699,9 @@ export function ServersWorkspace({
     }
     if (settingsSection === "sales_coupons_gifts") {
       return `/servers/${encodedGuildId}/sales/coupons-gifts/`;
+    }
+    if (settingsSection === "sales_coupons_gifts_create") {
+      return `/servers/${encodedGuildId}/sales/coupons-gifts/create/`;
     }
     if (settingsSection === "message") {
       return `/servers/${encodedGuildId}/tickets/message/`;
@@ -3307,7 +3314,8 @@ export function ServersWorkspace({
       section === "sales_product_edit" ||
       section === "sales_stock" ||
       section === "sales_payment_methods" ||
-      section === "sales_coupons_gifts"
+      section === "sales_coupons_gifts" ||
+      section === "sales_coupons_gifts_create"
     ) {
       return perms.has("server_manage_tickets_overview");
     }
@@ -3713,7 +3721,10 @@ export function ServersWorkspace({
                                 (selectedSettingsSectionForConfig ===
                                   "sales_product_create" ||
                                   selectedSettingsSectionForConfig ===
-                                    "sales_product_edit"))) &&
+                                    "sales_product_edit")) ||
+                              (item.settingsSection === "sales_coupons_gifts" &&
+                                selectedSettingsSectionForConfig ===
+                                  "sales_coupons_gifts_create")) &&
                             isEditingServer,
                         );
 
