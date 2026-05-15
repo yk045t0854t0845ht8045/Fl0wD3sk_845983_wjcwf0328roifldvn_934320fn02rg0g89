@@ -29,6 +29,11 @@ type SalesCartRecord = {
   currency: string;
   subtotal_amount: string | number | null;
   total_amount: string | number | null;
+  discount_id?: string | null;
+  discount_code?: string | null;
+  discount_kind?: string | null;
+  discount_amount?: string | number | null;
+  discount_snapshot?: Record<string, unknown> | null;
   selected_payment_method_key: string | null;
   provider: string | null;
   provider_payment_id: string | null;
@@ -110,6 +115,26 @@ type SalesCartDeliveryRecord = {
   delivery_payload: Record<string, unknown> | null;
 };
 
+type SalesDiscountRecord = {
+  id: string;
+  guild_id: string;
+  kind: "coupon" | "gift_card" | "promotion";
+  code: string;
+  title: string;
+  status: string;
+  discount_type: "fixed" | "percent";
+  discount_value: string | number;
+  initial_amount: string | number;
+  remaining_amount: string | number;
+  minimum_order_amount: string | number;
+  applies_to_all_products: boolean;
+  product_ids: string[] | null;
+  max_redemptions: number | null;
+  one_per_customer: boolean;
+  starts_at: string | null;
+  expires_at: string | null;
+};
+
 export type SalesCartDeliveryResult = {
   id: string;
   productId: string;
@@ -169,6 +194,11 @@ const OPTIONAL_CART_COLUMNS = [
   "receipt_email_error",
   "discord_notification_sent_at",
   "discord_notification_error",
+  "discount_id",
+  "discount_code",
+  "discount_kind",
+  "discount_amount",
+  "discount_snapshot",
 ];
 
 const CART_BASE_SELECT = BASE_CART_COLUMNS.join(", ");
@@ -241,7 +271,29 @@ function withOptionalCartDefaults(cart: SalesCartRecord) {
     receipt_email_error: cart.receipt_email_error ?? "",
     discord_notification_sent_at: cart.discord_notification_sent_at ?? null,
     discord_notification_error: cart.discord_notification_error ?? "",
+    discount_id: cart.discount_id ?? null,
+    discount_code: cart.discount_code ?? "",
+    discount_kind: cart.discount_kind ?? "",
+    discount_amount: cart.discount_amount ?? 0,
+    discount_snapshot: cart.discount_snapshot ?? {},
   };
+}
+
+function normalizeDiscountCode(value: unknown) {
+  return typeof value === "string"
+    ? value
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/[^A-Z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 64)
+    : "";
+}
+
+function roundMoney(value: number) {
+  return Number(Math.max(0, value).toFixed(2));
 }
 
 function stripOptionalCartUpdateFields(values: Record<string, unknown>) {
@@ -538,16 +590,184 @@ export async function loadSalesCartRuntime(cartId: string) {
   };
 }
 
-async function recalculateCartTotals(cartId: string, items: SalesCartItemRecord[]) {
-  const total = items.reduce((sum, item) => {
+function calculateItemsSubtotal(items: SalesCartItemRecord[]) {
+  return roundMoney(items.reduce((sum, item) => {
     const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
     const unit = toNumber(item.unit_price_amount);
     return sum + quantity * unit;
-  }, 0);
-  const normalizedTotal = Number(total.toFixed(2));
+  }, 0));
+}
+
+function calculateEligibleSubtotal(
+  items: SalesCartItemRecord[],
+  discount: SalesDiscountRecord,
+) {
+  if (discount.applies_to_all_products) return calculateItemsSubtotal(items);
+  const productIds = new Set(Array.isArray(discount.product_ids) ? discount.product_ids : []);
+  if (!productIds.size) return 0;
+  return roundMoney(items.reduce((sum, item) => {
+    if (!productIds.has(item.product_id)) return sum;
+    const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+    return sum + quantity * toNumber(item.unit_price_amount);
+  }, 0));
+}
+
+function isDateWindowActive(startsAt: string | null, expiresAt: string | null) {
+  const now = Date.now();
+  if (startsAt) {
+    const starts = new Date(startsAt).getTime();
+    if (Number.isFinite(starts) && starts > now) return false;
+  }
+  if (expiresAt) {
+    const expires = new Date(expiresAt).getTime();
+    if (Number.isFinite(expires) && expires < now) return false;
+  }
+  return true;
+}
+
+async function loadDiscountById(discountId: string | null | undefined) {
+  if (!discountId) return null;
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_discounts")
+    .select("id, guild_id, kind, code, title, status, discount_type, discount_value, initial_amount, remaining_amount, minimum_order_amount, applies_to_all_products, product_ids, max_redemptions, one_per_customer, starts_at, expires_at")
+    .eq("id", discountId)
+    .maybeSingle<SalesDiscountRecord>();
+  if (result.error) throw new Error(result.error.message);
+  return result.data || null;
+}
+
+async function loadDiscountByCode(guildId: string, code: string) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_discounts")
+    .select("id, guild_id, kind, code, title, status, discount_type, discount_value, initial_amount, remaining_amount, minimum_order_amount, applies_to_all_products, product_ids, max_redemptions, one_per_customer, starts_at, expires_at")
+    .eq("guild_id", guildId)
+    .eq("code", code)
+    .maybeSingle<SalesDiscountRecord>();
+  if (result.error) throw new Error(result.error.message);
+  return result.data || null;
+}
+
+async function countDiscountRedemptions(discount: SalesDiscountRecord, authUserId: number | null) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const totalResult = await supabase
+    .from("guild_sales_discount_redemptions")
+    .select("id", { count: "exact", head: true })
+    .eq("discount_id", discount.id);
+  if (totalResult.error) throw new Error(totalResult.error.message);
+
+  let userCount = 0;
+  if (authUserId) {
+    const userResult = await supabase
+      .from("guild_sales_discount_redemptions")
+      .select("id", { count: "exact", head: true })
+      .eq("discount_id", discount.id)
+      .eq("auth_user_id", authUserId);
+    if (userResult.error) throw new Error(userResult.error.message);
+    userCount = userResult.count || 0;
+  }
+
+  return { total: totalResult.count || 0, user: userCount };
+}
+
+async function calculateDiscountForCart(input: {
+  cart: SalesCartRecord;
+  items: SalesCartItemRecord[];
+  discount: SalesDiscountRecord;
+  enforceLimits: boolean;
+}) {
+  const { cart, items, discount } = input;
+  const subtotal = calculateItemsSubtotal(items);
+  if (discount.guild_id !== cart.guild_id) throw new Error("Cupom ou gift invalido para este servidor.");
+  if (discount.status !== "active") throw new Error("Cupom ou gift nao esta ativo.");
+  if (!isDateWindowActive(discount.starts_at, discount.expires_at)) {
+    throw new Error("Cupom ou gift fora do periodo de validade.");
+  }
+  if (subtotal < toNumber(discount.minimum_order_amount)) {
+    throw new Error("Pedido minimo nao atingido para este cupom ou gift.");
+  }
+  if (discount.kind === "gift_card" && toNumber(discount.remaining_amount) <= 0) {
+    throw new Error("Gift card sem saldo disponivel.");
+  }
+
+  if (input.enforceLimits) {
+    const redemptions = await countDiscountRedemptions(discount, cart.auth_user_id);
+    if (discount.max_redemptions && redemptions.total >= discount.max_redemptions) {
+      throw new Error("Limite de usos deste cupom ou gift foi atingido.");
+    }
+    if (discount.one_per_customer && cart.auth_user_id && redemptions.user > 0) {
+      throw new Error("Este cupom ou gift ja foi usado por esta conta.");
+    }
+  }
+
+  const eligibleSubtotal = calculateEligibleSubtotal(items, discount);
+  if (eligibleSubtotal <= 0) {
+    throw new Error("Cupom ou gift nao se aplica aos produtos deste carrinho.");
+  }
+
+  const rawDiscount =
+    discount.kind === "gift_card"
+      ? Math.min(eligibleSubtotal, toNumber(discount.remaining_amount))
+      : discount.discount_type === "percent"
+        ? eligibleSubtotal * (Math.min(100, toNumber(discount.discount_value)) / 100)
+        : Math.min(eligibleSubtotal, toNumber(discount.discount_value));
+  const amount = roundMoney(Math.min(subtotal, rawDiscount));
+  if (amount <= 0) throw new Error("Cupom ou gift nao gerou desconto para este carrinho.");
+
+  return {
+    subtotal,
+    discountAmount: amount,
+    total: roundMoney(subtotal - amount),
+    snapshot: {
+      id: discount.id,
+      code: discount.code,
+      title: discount.title,
+      kind: discount.kind,
+      discountType: discount.discount_type,
+      discountValue: toNumber(discount.discount_value),
+      appliesToAllProducts: discount.applies_to_all_products,
+      productIds: discount.product_ids || [],
+    },
+  };
+}
+
+async function recalculateCartTotals(cartId: string, items: SalesCartItemRecord[]) {
+  const currentCart = await loadSalesCartRecord(cartId);
+  const subtotal = calculateItemsSubtotal(items);
+  let discountAmount = 0;
+  let discountSnapshot: Record<string, unknown> = {};
+  let discountCode = "";
+  let discountKind = "";
+  let discountId: string | null = null;
+
+  if (currentCart?.discount_id) {
+    const discount = await loadDiscountById(currentCart.discount_id);
+    if (discount) {
+      try {
+        const calculation = await calculateDiscountForCart({
+          cart: currentCart,
+          items,
+          discount,
+          enforceLimits: false,
+        });
+        discountAmount = calculation.discountAmount;
+        discountSnapshot = calculation.snapshot;
+        discountCode = discount.code;
+        discountKind = discount.kind;
+        discountId = discount.id;
+      } catch {
+        discountAmount = 0;
+      }
+    }
+  }
+
   return updateSalesCartAndSelect(cartId, {
-    subtotal_amount: normalizedTotal,
-    total_amount: normalizedTotal,
+    subtotal_amount: subtotal,
+    total_amount: roundMoney(subtotal - discountAmount),
+    discount_id: discountId,
+    discount_code: discountCode,
+    discount_kind: discountKind,
+    discount_amount: discountAmount,
+    discount_snapshot: discountSnapshot,
   });
 }
 
@@ -834,7 +1054,56 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
   const updatedCart = await recalculateCartTotals(cart.id, validatedItems);
   const amount = toNumber(updatedCart.total_amount);
   if (amount < 0.01) {
-    throw new Error("Valor do carrinho invalido para pagamento.");
+    const paidCart = await updateSalesCartAndSelect(cart.id, {
+      status: "paid",
+      selected_payment_method_key: null,
+      provider: "discount",
+      provider_payment_id: null,
+      provider_external_reference: `flowdesk-sales-discount:${cart.id}`,
+      provider_status: "approved",
+      provider_status_detail: "covered_by_discount",
+      paid_at: new Date().toISOString(),
+      customer_email: email,
+      customer_name: user.display_name || user.username || "Cliente Flowdesk",
+    });
+    await recordSalesOrderEvent({
+      cart: paidCart,
+      eventType: "payment_covered_by_discount",
+      eventKey: "payment_covered_by_discount",
+      payload: {
+        amount,
+        discountAmount: toNumber(paidCart.discount_amount),
+        discountCode: paidCart.discount_code,
+      },
+    });
+    await settleSalesDiscountRedemption(paidCart);
+    const deliveries = await settleSalesCartDeliveries({
+      ...runtime,
+      cart: paidCart,
+      items: validatedItems,
+    });
+    const hasFailedDelivery = deliveries.some((delivery) => delivery.status === "failed");
+    const finalStatus = hasFailedDelivery ? "delivery_failed" : "delivered";
+    const finalizedCart = await updateSalesCartAndSelect(cart.id, {
+      status: finalStatus,
+      delivered_at: new Date().toISOString(),
+    });
+    await sendSalesCartReceiptEmailSafe({
+      runtime: {
+        ...runtime,
+        cart: finalizedCart,
+        items: validatedItems,
+      },
+      cart: finalizedCart,
+      deliveries,
+    });
+    return {
+      ...runtime,
+      cart: finalizedCart,
+      items: validatedItems,
+      payment: buildPaymentResponse(finalizedCart),
+      deliveries,
+    };
   }
 
   const externalReference = `flowdesk-sales:${cart.id}`;
@@ -909,6 +1178,92 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
   }
 
   return nextRuntime;
+}
+
+export async function applySalesCartDiscount(input: {
+  cartId: string;
+  code: string;
+}): Promise<SalesCartRuntimeResult> {
+  const runtime = await loadSalesCartRuntime(input.cartId);
+  const { cart, items } = runtime;
+  if (!cart.auth_user_id) {
+    throw new Error("Vincule a compra antes de adicionar cupom ou gift.");
+  }
+  if (cart.provider_payment_id || cart.status === "payment_pending") {
+    throw new Error("Nao e possivel alterar cupom depois que o PIX foi gerado.");
+  }
+  assertPaymentAllowedForCartStatus(cart.status);
+  if (!items.length) throw new Error("Carrinho vazio.");
+
+  const code = normalizeDiscountCode(input.code);
+  if (!code) throw new Error("Informe um cupom ou gift valido.");
+  const discount = await loadDiscountByCode(cart.guild_id, code);
+  if (!discount) throw new Error("Cupom ou gift nao encontrado.");
+
+  const calculation = await calculateDiscountForCart({
+    cart,
+    items,
+    discount,
+    enforceLimits: true,
+  });
+  const updatedCart = await updateSalesCartAndSelect(cart.id, {
+    subtotal_amount: calculation.subtotal,
+    total_amount: calculation.total,
+    discount_id: discount.id,
+    discount_code: discount.code,
+    discount_kind: discount.kind,
+    discount_amount: calculation.discountAmount,
+    discount_snapshot: calculation.snapshot,
+  });
+  await recordSalesOrderEvent({
+    cart: updatedCart,
+    eventType: "discount_applied",
+    eventKey: `discount_applied:${discount.id}:${Date.now()}`,
+    payload: {
+      discountId: discount.id,
+      code: discount.code,
+      kind: discount.kind,
+      amount: calculation.discountAmount,
+    },
+  });
+
+  return {
+    ...runtime,
+    cart: updatedCart,
+    payment: buildPaymentResponse(updatedCart),
+  };
+}
+
+async function settleSalesDiscountRedemption(cart: SalesCartRecord) {
+  if (!cart.discount_id || toNumber(cart.discount_amount) <= 0) return;
+  const supabase = getSupabaseAdminClientOrThrow();
+  const insert = await supabase
+    .from("guild_sales_discount_redemptions")
+    .insert({
+      discount_id: cart.discount_id,
+      cart_id: cart.id,
+      guild_id: cart.guild_id,
+      auth_user_id: cart.auth_user_id,
+      discord_user_id: cart.discord_user_id,
+      discount_amount: toNumber(cart.discount_amount),
+    });
+  if (insert.error && insert.error.code !== "23505") {
+    throw new Error(insert.error.message);
+  }
+  if (cart.discount_kind === "gift_card" && (!insert.error || insert.error.code !== "23505")) {
+    const discount = await loadDiscountById(cart.discount_id);
+    if (discount) {
+      const remaining = roundMoney(toNumber(discount.remaining_amount) - toNumber(cart.discount_amount));
+      const update = await supabase
+        .from("guild_sales_discounts")
+        .update({
+          remaining_amount: remaining,
+          status: remaining <= 0 ? "expired" : discount.status,
+        })
+        .eq("id", discount.id);
+      if (update.error) throw new Error(update.error.message);
+    }
+  }
 }
 
 async function loadSalesCartDeliveryRows(cartId: string) {
@@ -1411,6 +1766,7 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     };
   }
 
+  await settleSalesDiscountRedemption(syncedCart);
   const deliveries = await settleSalesCartDeliveries({
     ...runtime,
     cart: syncedCart,

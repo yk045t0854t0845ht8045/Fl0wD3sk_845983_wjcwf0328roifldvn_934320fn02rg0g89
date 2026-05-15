@@ -46,7 +46,10 @@ import {
   buildAccountPathWithReturn,
   getCurrentBrowserPath,
 } from "@/lib/account/navigation";
-import type { ManagedServer } from "@/lib/servers/managedServersShared";
+import type {
+  ManagedServer,
+  ManagedServersSyncState,
+} from "@/lib/servers/managedServersShared";
 import { buildBrowserRoutingTargetFromInternalPath } from "@/lib/routing/subdomains";
 import {
   scheduleWarmBrowserRoutes,
@@ -373,6 +376,18 @@ function buildManagedServersSignature(servers: ManagedServer[]) {
     .join("|");
 }
 
+function resolveManagedServersSyncMessage(sync: ManagedServersSyncState | null) {
+  if (!sync?.degraded && !sync?.requiresDiscordRelink) {
+    return null;
+  }
+
+  if (sync.requiresDiscordRelink) {
+    return "Conexao com Discord precisa ser refeita para sincronizar seus servidores.";
+  }
+
+  return "Sincronizacao de servidores em modo degradado. O painel manteve dados salvos enquanto tenta atualizar novamente.";
+}
+
 function readDismissedDashboardTasks() {
   try {
     const raw = window.localStorage.getItem(DASHBOARD_DISMISSED_TASKS_KEY);
@@ -593,105 +608,6 @@ function DashboardRecentActivityList({
   );
 }
 
-function DashboardMarketingBanner({
-  hasManagedServers,
-  onNavigate,
-  onPrefetch,
-  onDismiss,
-}: {
-  hasManagedServers: boolean;
-  onNavigate: (href: string) => void;
-  onPrefetch: (href: string) => void;
-  onDismiss: () => void;
-}) {
-  const targetHref = hasManagedServers ? "/dashboard/domains/acquire" : "/servers/plans";
-  const title = hasManagedServers
-    ? "Publique sua proxima operacao com dominio profissional"
-    : "Administre seus servidores Discord em uma unica central";
-  const description = hasManagedServers
-    ? "Garanta o nome da sua marca, conecte ao painel e prepare sua estrutura para loja, suporte e automacoes."
-    : "Ative tickets, vendas, seguranca, logs e permissoes com um painel pensado para operacao diaria.";
-  const actionLabel = hasManagedServers ? "Buscar dominio" : "Comecar servidor";
-
-  return (
-    <div className="relative mt-[24px] overflow-hidden rounded-[30px] border border-[#111111] bg-[#020202] shadow-[0_30px_90px_rgba(0,0,0,0.38)]">
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_78%_18%,rgba(0,98,255,0.34)_0%,rgba(0,98,255,0.13)_22%,transparent_54%)]"
-      />
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute right-[-90px] top-[-110px] h-[260px] w-[360px] rotate-[-18deg] bg-[linear-gradient(135deg,#0062FF_0%,#7A4DFF_42%,#FF6A8A_100%)] opacity-90"
-      />
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute bottom-[-62px] right-[170px] h-[190px] w-[230px] rotate-[18deg] bg-[linear-gradient(135deg,#FFCE7A_0%,#FF6A8A_58%,#7A4DFF_100%)] opacity-70"
-      />
-
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="absolute right-[18px] top-[18px] z-20 inline-flex h-[40px] w-[40px] items-center justify-center rounded-[14px] border border-[rgba(255,255,255,0.08)] bg-[rgba(12,12,12,0.86)] text-[#CFCFCF] backdrop-blur transition-colors hover:bg-[rgba(22,22,22,0.92)] hover:text-white"
-        aria-label="Ocultar banner"
-      >
-        <X className="h-[18px] w-[18px]" strokeWidth={2.2} aria-hidden="true" />
-      </button>
-
-      <div className="relative z-10 grid min-h-[260px] gap-[24px] px-[24px] py-[28px] md:grid-cols-[minmax(0,0.92fr)_minmax(320px,0.8fr)] md:px-[44px] md:py-[42px]">
-        <div className="flex max-w-[560px] flex-col justify-center">
-          <span className="inline-flex w-fit items-center gap-[8px] rounded-full border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] px-[12px] py-[7px] text-[12px] font-medium text-[#BEBEBE]">
-            <Sparkles className="h-[14px] w-[14px] text-[#8DB3FF]" strokeWidth={2.1} aria-hidden="true" />
-            Recomendado para sua conta
-          </span>
-          <h2 className="mt-[18px] max-w-[560px] text-[30px] leading-[1.04] font-semibold tracking-[-0.055em] text-white md:text-[38px]">
-            {title}
-          </h2>
-          <p className="mt-[12px] max-w-[540px] text-[15px] leading-[1.65] text-[#A6A6A6]">
-            {description}
-          </p>
-          <button
-            type="button"
-            onMouseEnter={() => onPrefetch(targetHref)}
-            onFocus={() => onPrefetch(targetHref)}
-            onPointerDown={() => onPrefetch(targetHref)}
-            onClick={() => onNavigate(targetHref)}
-            className="mt-[24px] inline-flex h-[48px] w-fit items-center justify-center rounded-[14px] bg-[#F4F4F4] px-[20px] text-[15px] font-semibold text-[#111111] transition-transform duration-150 ease-out hover:translate-y-[-1px]"
-          >
-            {actionLabel}
-          </button>
-        </div>
-
-        <div className="relative hidden min-h-[220px] items-end md:flex">
-          <div className="relative ml-auto w-full max-w-[440px] overflow-hidden rounded-[24px] border border-[rgba(255,255,255,0.1)] bg-[rgba(8,8,12,0.86)] p-[14px] shadow-[0_28px_80px_rgba(0,0,0,0.42)] backdrop-blur">
-            <div className="flex items-center justify-between border-b border-[rgba(255,255,255,0.07)] pb-[12px]">
-              <div className="flex items-center gap-[8px]">
-                <span className="h-[10px] w-[10px] rounded-full bg-[#FF6A8A]" />
-                <span className="h-[10px] w-[10px] rounded-full bg-[#FFCE7A]" />
-                <span className="h-[10px] w-[10px] rounded-full bg-[#7AF0B1]" />
-              </div>
-              <span className="rounded-full bg-[rgba(255,255,255,0.06)] px-[10px] py-[5px] text-[11px] text-[#AFAFAF]">
-                Flowdesk
-              </span>
-            </div>
-            <div className="mt-[16px] grid grid-cols-[0.88fr_1.12fr] gap-[12px]">
-              <div className="space-y-[10px]">
-                <div className="h-[64px] rounded-[16px] bg-[linear-gradient(135deg,rgba(0,98,255,0.28)_0%,rgba(255,255,255,0.05)_100%)]" />
-                <div className="h-[92px] rounded-[16px] border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.035)]" />
-              </div>
-              <div className="rounded-[18px] bg-[linear-gradient(135deg,#161B2D_0%,#33217A_52%,#0062FF_100%)] p-[16px]">
-                <div className="h-[18px] w-[58%] rounded-full bg-white/80" />
-                <div className="mt-[12px] h-[10px] w-[82%] rounded-full bg-white/32" />
-                <div className="mt-[8px] h-[10px] w-[66%] rounded-full bg-white/24" />
-                <div className="mt-[44px] h-[34px] w-[112px] rounded-[12px] bg-white/88" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function SidebarWorkspaceIcon() {
   return (
     <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#E7A540_0%,#C77B12_58%,#6B3600_100%)] shadow-[0_0_30px_rgba(231,165,64,0.18)]">
@@ -866,9 +782,10 @@ export function DashboardWorkspace({
   const [sidebarSearchText, setSidebarSearchText] = useState("");
   const [pendingViewId, setPendingViewId] = useState<DashboardViewId | null>(null);
   const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
+  const [serversSyncState, setServersSyncState] = useState<ManagedServersSyncState | null>(null);
+  const [serversSyncMessage, setServersSyncMessage] = useState<string | null>(null);
   const [accountPlan, setAccountPlan] = useState<AccountPlanSummary | null>(null);
   const [dismissedTaskKeys, setDismissedTaskKeys] = useState<string[]>([]);
-  const [isMarketingBannerDismissed, setIsMarketingBannerDismissed] = useState(false);
   const [teamServers, setTeamServers] = useState<ManagedServer[]>([]);
   const [isTeamServersLoading, setIsTeamServersLoading] = useState(
     Boolean(currentAccount.discordUserId),
@@ -926,6 +843,11 @@ export function DashboardWorkspace({
   useNotificationEffect(teamsErrorMessage, {
     tone: "error",
     title: "Equipes",
+  });
+  useNotificationEffect(serversSyncMessage, {
+    tone: "default",
+    title: "Servidores",
+    durationMs: 5200,
   });
   useNotificationEffect(teamActionError, {
     tone: "error",
@@ -1105,6 +1027,23 @@ export function DashboardWorkspace({
       });
     }
 
+    if (serversSyncState?.degraded || serversSyncState?.requiresDiscordRelink) {
+      tasks.push({
+        key: "servers-sync-degraded",
+        icon: ShieldAlert,
+        title: serversSyncState.requiresDiscordRelink
+          ? "Reconecte o Discord para atualizar servidores"
+          : "Sincronizacao de servidores em recuperacao",
+        description: serversSyncState.requiresDiscordRelink
+          ? "A conexao atual nao permite atualizar cargos, canais e servidores com seguranca."
+          : "Estamos usando dados salvos enquanto a sincronizacao externa estabiliza.",
+        href: serversSyncState.requiresDiscordRelink ? "/discord/link" : "/servers",
+        actionLabel: serversSyncState.requiresDiscordRelink ? "Reconectar" : "Ver servidores",
+        tone: "warning",
+        priority: 55,
+      });
+    }
+
     if (managedServersCount === 0 && currentAccount.discordUserId) {
       tasks.push({
         key: "first-server",
@@ -1178,6 +1117,7 @@ export function DashboardWorkspace({
     expiringSoonServer,
     managedServersCount,
     pendingTeamInvites.length,
+    serversSyncState,
     teams.length,
   ]);
   const dashboardTasksTotal = dashboardTasks.length;
@@ -1266,8 +1206,10 @@ export function DashboardWorkspace({
           : "Nenhuma equipe criada";
 
   const applyServersSnapshot = useCallback(
-    (nextServers: ManagedServer[]) => {
+    (nextServers: ManagedServer[], sync: ManagedServersSyncState | null = null) => {
       storeCachedManagedServers(workspaceCacheKey, nextServers);
+      setServersSyncState(sync);
+      setServersSyncMessage(resolveManagedServersSyncMessage(sync));
       setServers((currentServers) =>
         buildManagedServersSignature(currentServers) ===
         buildManagedServersSignature(nextServers)
@@ -1312,16 +1254,27 @@ export function DashboardWorkspace({
               cache: "no-store",
             });
             const payload = (await response.json().catch(() => null)) as
-              | { ok?: boolean; servers?: ManagedServer[] }
+              | {
+                  ok?: boolean;
+                  message?: string;
+                  servers?: ManagedServer[];
+                  sync?: ManagedServersSyncState;
+                }
               | null;
 
             if (!response.ok || !payload?.ok) {
+              setServersSyncMessage(
+                payload?.message ||
+                  "Nao foi possivel atualizar servidores agora. Mantendo os dados salvos no painel.",
+              );
               return;
             }
 
-            applyServersSnapshot(payload.servers || []);
+            applyServersSnapshot(payload.servers || [], payload.sync || null);
           } catch {
-            // noop
+            setServersSyncMessage(
+              "Nao foi possivel atualizar servidores agora. Mantendo os dados salvos no painel.",
+            );
           }
         })(),
       );
@@ -1460,16 +1413,25 @@ export function DashboardWorkspace({
       });
       const payload = (await response.json()) as {
         ok?: boolean;
+        message?: string;
         servers?: ManagedServer[];
+        sync?: ManagedServersSyncState;
       };
 
       if (!response.ok || !payload.ok) {
+        setServersSyncMessage(
+          payload.message ||
+            "Nao foi possivel atualizar servidores disponiveis para equipes.",
+        );
         return;
       }
 
       setTeamServers(payload.servers || []);
+      setServersSyncMessage(resolveManagedServersSyncMessage(payload.sync || null));
     } catch {
-      // noop
+      setServersSyncMessage(
+        "Nao foi possivel atualizar servidores disponiveis para equipes.",
+      );
     } finally {
       setIsTeamServersLoading(false);
     }
@@ -1485,15 +1447,32 @@ export function DashboardWorkspace({
     async function loadServers() {
       try {
         const response = await fetch("/api/auth/me/servers?fresh=1", { cache: "no-store" });
-        const payload = (await response.json()) as { ok?: boolean; servers?: ManagedServer[] };
-        if (!isMounted || !response.ok || !payload.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              ok?: boolean;
+              message?: string;
+              servers?: ManagedServer[];
+              sync?: ManagedServersSyncState;
+            }
+          | null;
+        if (!isMounted || !response.ok || !payload?.ok) {
+          if (isMounted) {
+            setServersSyncMessage(
+              payload?.message ||
+                "Nao foi possivel atualizar servidores agora. Mantendo os dados salvos no painel.",
+            );
+          }
           return;
         }
 
         const nextServers = payload.servers || [];
-        applyServersSnapshot(nextServers);
+        applyServersSnapshot(nextServers, payload.sync || null);
       } catch {
-        // noop
+        if (isMounted) {
+          setServersSyncMessage(
+            "Nao foi possivel atualizar servidores agora. Mantendo os dados salvos no painel.",
+          );
+        }
       }
     }
 
@@ -1850,16 +1829,21 @@ export function DashboardWorkspace({
                   });
                   const refreshPayload = (await refreshResponse.json()) as {
                     ok?: boolean;
+                    message?: string;
                     servers?: ManagedServer[];
+                    sync?: ManagedServersSyncState;
                   };
 
                   if (!refreshResponse.ok || !refreshPayload.ok) {
+                    setServersSyncMessage(
+                      refreshPayload.message ||
+                        "Nao foi possivel atualizar servidores agora. Mantendo os dados salvos no painel.",
+                    );
                     return;
                   }
 
                   const nextServers = refreshPayload.servers || [];
-                  storeCachedManagedServers(workspaceCacheKey, nextServers);
-                  setServers(nextServers);
+                  applyServersSnapshot(nextServers, refreshPayload.sync || null);
                 })(),
                 loadTeamServerCatalog(),
               ]);
@@ -1894,6 +1878,7 @@ export function DashboardWorkspace({
     }
   }, [
     applyTeamsSnapshot,
+    applyServersSnapshot,
     createTeamIconKey,
     createTeamMemberIds,
     createTeamName,
@@ -1902,7 +1887,6 @@ export function DashboardWorkspace({
     isCreatingTeam,
     loadTeamServerCatalog,
     resetCreateTeamForm,
-    workspaceCacheKey,
   ]);
 
   const handleAcceptTeamInvite = useCallback(
@@ -2652,95 +2636,6 @@ export function DashboardWorkspace({
                       ))}
                     </div>
                   </section>
-
-                  {!isMarketingBannerDismissed ? (
-                    <DashboardMarketingBanner
-                      hasManagedServers={managedServersCount > 0}
-                      onNavigate={navigateToHref}
-                      onPrefetch={prefetchRoute}
-                      onDismiss={() => setIsMarketingBannerDismissed(true)}
-                    />
-                  ) : null}
-
-                  <div className="grid gap-[24px] xl:grid-cols-[minmax(0,0.95fr)_minmax(320px,0.62fr)]">
-                    <section className="relative overflow-hidden rounded-[26px] border border-[#141414] bg-[linear-gradient(180deg,rgba(9,9,9,0.98)_0%,rgba(5,5,5,0.98)_100%)] p-[18px] shadow-[0_24px_80px_rgba(0,0,0,0.26)]">
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[120px] rounded-t-[25px] bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.06)_0%,transparent_70%)]"
-                      />
-                      <div className="relative z-10 flex flex-col gap-[16px] md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <h2 className="text-[22px] leading-[1.05] font-semibold tracking-[-0.045em] text-[#F1F1F1]">
-                            Central de crescimento
-                          </h2>
-                          <p className="mt-[9px] max-w-[620px] text-[13px] leading-[1.65] text-[#7F7F7F]">
-                            Combine Discord, dominios, hospedagem e API para transformar sua comunidade em uma operacao completa.
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onMouseEnter={() => prefetchRoute("/dashboard/flowai-api")}
-                          onFocus={() => prefetchRoute("/dashboard/flowai-api")}
-                          onPointerDown={() => prefetchRoute("/dashboard/flowai-api")}
-                          onClick={() => navigateToHref("/dashboard/flowai-api")}
-                          className="inline-flex h-[46px] shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#FFFFFF_0%,#D8D8D8_100%)] px-[18px] text-[14px] font-semibold text-[#101010] transition-transform duration-150 ease-out hover:translate-y-[-1px]"
-                        >
-                          Ver FlowAI
-                        </button>
-                      </div>
-                      <div className="relative z-10 mt-[18px] grid gap-[10px] md:grid-cols-3">
-                        {[
-                          { label: "Discord", value: `${managedServersCount} servidor(es)` },
-                          { label: "Equipes", value: `${teams.length} equipe(s)` },
-                          { label: "Plano", value: accountPlan?.name || "Flowdesk" },
-                        ].map((item) => (
-                          <div
-                            key={item.label}
-                            className="rounded-[18px] border border-[#161616] bg-[#090909] px-[14px] py-[13px]"
-                          >
-                            <p className="text-[11px] uppercase tracking-[0.16em] text-[#666666]">
-                              {item.label}
-                            </p>
-                            <p className="mt-[8px] truncate text-[15px] font-semibold tracking-[-0.03em] text-[#E7E7E7]">
-                              {item.value}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-
-                    <section className="relative overflow-hidden rounded-[26px] border border-[#141414] bg-[#070707] p-[18px] shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
-                      <div className="flex items-center justify-between gap-[12px]">
-                        <div>
-                          <h2 className="text-[22px] leading-[1.05] font-semibold tracking-[-0.045em] text-[#F1F1F1]">
-                            Proximos lancamentos
-                          </h2>
-                          <p className="mt-[9px] text-[13px] leading-[1.6] text-[#787878]">
-                            VPS, jogos e automacoes entrando no ecossistema.
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-[16px] space-y-[9px]">
-                        {[
-                          ["VPS para bots", "Hospedagem"],
-                          ["Servidores de jogos", "Infra"],
-                          ["Workflows com IA", "FlowAI"],
-                        ].map(([title, label]) => (
-                          <div
-                            key={title}
-                            className="flex items-center justify-between gap-[12px] rounded-[16px] border border-[#151515] bg-[#0A0A0A] px-[13px] py-[12px]"
-                          >
-                            <span className="text-[14px] font-medium text-[#D9D9D9]">
-                              {title}
-                            </span>
-                            <span className="rounded-full border border-[#1E1E1E] bg-[#101010] px-[9px] py-[5px] text-[11px] font-medium text-[#8E8E8E]">
-                              {label}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  </div>
 
                   <DashboardRecentActivityList
                     items={recentActivities}

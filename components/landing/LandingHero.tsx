@@ -11,12 +11,6 @@ import { LandingServerUsageRow } from "@/components/landing/LandingServerUsageRo
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 
-const FEATURE_DIVIDER_POSITIONS = [
-  { left: "5.1601%" },
-  { left: "37.2%" },
-  { left: "69.2%" },
-] as const;
-
 const FEATURE_COLUMN_TITLES = [
   "99.9% Uptime",
   "Segurança+",
@@ -165,75 +159,51 @@ export function LandingHero({
             <div className="mx-auto mt-[48px] w-full max-w-[1124px]">
               <div className="h-[2px] w-full bg-[linear-gradient(90deg,rgba(14,14,14,0.2)_0%,rgba(14,14,14,1)_50%,rgba(14,14,14,0.2)_100%)]" />
 
-              <div className="relative hidden h-[320px] min-[1200px]:block">
-                {FEATURE_DIVIDER_POSITIONS.map((divider, index) => (
+              <div className="relative hidden min-[1200px]:grid min-[1200px]:grid-cols-3">
+                {[0, 1, 2].map((blockIndex) => (
                   <div
-                    key={`feature-divider-${index}`}
-                    className="absolute top-0 z-0 h-full w-[2px] -translate-x-1/2 bg-[#0E0E0E]"
-                    style={{ left: divider.left, opacity: 1 }}
-                  />
-                ))}
-
-                {FEATURE_DIVIDER_POSITIONS.map((divider, index) => (
-                  <div
-                    key={`feature-icon-${index}`}
-                    className="pointer-events-none absolute top-[34px] z-10 -translate-x-1/2"
-                    style={{ left: divider.left }}
+                    key={`feature-desktop-block-${blockIndex}`}
+                    className="relative flex min-h-[320px] flex-col border-b-2 border-[#0E0E0E] py-[53px] pr-[30px] pl-[110px] text-left"
                   >
-                    <Image
-                      src="/cdn/images/icon-arrow.svg"
-                      alt=""
-                      width={70}
-                      height={70}
-                      className="h-[70px] w-[70px] select-none object-contain"
-                      draggable={false}
-                    />
-                  </div>
-                ))}
-
-                {FEATURE_DIVIDER_POSITIONS.map((divider, index) => (
-                  <div
-                    key={`feature-title-${index}`}
-                    className="absolute top-[53px] bottom-[45px] z-10 flex w-[280px] flex-col text-left"
-                    style={{ left: `calc(${divider.left} + 52px)` }}
-                  >
-                      <h3 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[33px] leading-none font-semibold tracking-[-0.04em] text-transparent">
-                        {FEATURE_COLUMN_TITLES[index]}
-                      </h3>
-                      <p className="mt-[12px] max-w-[248px] text-[16px] leading-[1.22] font-medium tracking-[-0.03em] text-[rgba(218,218,218,0.72)]">
-                        {FEATURE_COLUMN_SUBTITLES[index]}
-                      </p>
-                      <p className="mt-[12px] max-w-[268px] text-[14px] leading-[1.28] font-normal tracking-[-0.03em] text-[rgba(218,218,218,0.54)]">
-                        {FEATURE_COLUMN_DESCRIPTIONS[index]}
-                      </p>
-                      <p className="mt-auto text-[18px] leading-none font-normal tracking-[-0.04em] text-[rgba(218,218,218,0.34)]">
-                        {FEATURE_COLUMN_NUMBERS[index]}
-                      </p>
-                  </div>
-                ))}
-
-                {FEATURE_DIVIDER_POSITIONS.map((divider, index) => (
-                  <div
-                    key={`feature-dot-${index}`}
-                    className="pointer-events-none absolute bottom-0 z-20 -translate-x-1/2 translate-y-1/2"
-                    style={{ left: divider.left }}
-                  >
-                    <div className="flex h-[14px] w-[14px] items-center justify-center rounded-full bg-[rgba(0,98,255,0.3)]">
-                      <div className="h-[8px] w-[8px] rounded-full bg-[#0062FF]" />
+                    <div className="absolute top-0 bottom-0 left-[58px] z-0 w-[2px] -translate-x-1/2 bg-[#0E0E0E]" />
+                    <div className="pointer-events-none absolute top-[34px] left-[58px] z-10 -translate-x-1/2">
+                      <Image
+                        src="/cdn/images/icon-arrow.svg"
+                        alt=""
+                        width={70}
+                        height={70}
+                        className="h-[70px] w-[70px] select-none object-contain"
+                        draggable={false}
+                      />
+                    </div>
+                    <h3 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[33px] leading-none font-semibold text-transparent">
+                      {FEATURE_COLUMN_TITLES[blockIndex]}
+                    </h3>
+                    <p className="mt-[12px] max-w-[248px] text-[16px] leading-[1.22] font-medium text-[rgba(218,218,218,0.72)]">
+                      {FEATURE_COLUMN_SUBTITLES[blockIndex]}
+                    </p>
+                    <p className="mt-[12px] max-w-[268px] text-[14px] leading-[1.28] font-normal text-[rgba(218,218,218,0.54)]">
+                      {FEATURE_COLUMN_DESCRIPTIONS[blockIndex]}
+                    </p>
+                    <p className="mt-auto pt-[28px] text-[18px] leading-none font-normal text-[rgba(218,218,218,0.34)]">
+                      {FEATURE_COLUMN_NUMBERS[blockIndex]}
+                    </p>
+                    <div className="pointer-events-none absolute bottom-0 left-[58px] z-20 -translate-x-1/2 translate-y-1/2">
+                      <div className="flex h-[14px] w-[14px] items-center justify-center rounded-full bg-[rgba(0,98,255,0.3)]">
+                        <div className="h-[8px] w-[8px] rounded-full bg-[#0062FF]" />
+                      </div>
                     </div>
                   </div>
                 ))}
-
-                <div className="absolute inset-x-0 bottom-0 z-0 h-[2px] bg-[linear-gradient(90deg,rgba(14,14,14,0.2)_0%,rgba(14,14,14,1)_50%,rgba(14,14,14,0.2)_100%)]" />
               </div>
 
               <div className="min-[1200px]:hidden">
                 {[0, 1, 2].map((blockIndex) => (
                   <div
                     key={`feature-mobile-block-${blockIndex}`}
-                    className="relative h-[224px]"
+                    className="relative flex min-h-[248px] flex-col border-b-2 border-[#0E0E0E] py-[45px] pr-[44px] pl-[96px] text-left"
                   >
-                    <div className="absolute left-[58px] top-0 z-0 h-full w-[2px] -translate-x-1/2 bg-[#0E0E0E]" />
+                    <div className="absolute top-0 bottom-0 left-[58px] z-0 w-[2px] -translate-x-1/2 bg-[#0E0E0E]" />
                     <div className="pointer-events-none absolute left-[58px] top-[26px] z-10 -translate-x-1/2">
                       <Image
                         src="/cdn/images/icon-arrow.svg"
@@ -244,18 +214,16 @@ export function LandingHero({
                         draggable={false}
                       />
                     </div>
-                    <div className="absolute left-[96px] top-[45px] bottom-[47px] z-10 flex w-[236px] flex-col text-left">
-                        <h3 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-none font-semibold tracking-[-0.04em] text-transparent">
-                        {FEATURE_COLUMN_TITLES[blockIndex]}
-                      </h3>
-                        <p className="mt-[10px] max-w-[220px] text-[15px] leading-[1.22] font-medium tracking-[-0.03em] text-[rgba(218,218,218,0.7)]">
-                          {FEATURE_COLUMN_SUBTITLES[blockIndex]}
-                        </p>
-                        <p className="mt-[10px] max-w-[236px] text-[13px] leading-[1.28] font-normal tracking-[-0.03em] text-[rgba(218,218,218,0.54)]">
-                          {FEATURE_COLUMN_DESCRIPTIONS[blockIndex]}
-                        </p>
-                    </div>
-                    <p className="absolute bottom-[47px] right-0 z-10 text-right text-[16px] leading-none font-normal tracking-[-0.04em] text-[rgba(218,218,218,0.34)]">
+                    <h3 className="bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-none font-semibold text-transparent">
+                      {FEATURE_COLUMN_TITLES[blockIndex]}
+                    </h3>
+                    <p className="mt-[10px] max-w-[220px] text-[15px] leading-[1.22] font-medium text-[rgba(218,218,218,0.7)]">
+                      {FEATURE_COLUMN_SUBTITLES[blockIndex]}
+                    </p>
+                    <p className="mt-[10px] max-w-[236px] text-[13px] leading-[1.28] font-normal text-[rgba(218,218,218,0.54)]">
+                      {FEATURE_COLUMN_DESCRIPTIONS[blockIndex]}
+                    </p>
+                    <p className="mt-auto pt-[24px] text-right text-[16px] leading-none font-normal text-[rgba(218,218,218,0.34)]">
                       {FEATURE_COLUMN_NUMBERS[blockIndex]}
                     </p>
                     <div className="pointer-events-none absolute bottom-0 left-[58px] z-20 -translate-x-1/2 translate-y-1/2">
@@ -263,7 +231,6 @@ export function LandingHero({
                         <div className="h-[7px] w-[7px] rounded-full bg-[#0062FF]" />
                       </div>
                     </div>
-                    <div className="absolute inset-x-0 bottom-0 z-0 h-[2px] bg-[linear-gradient(90deg,rgba(14,14,14,0.2)_0%,rgba(14,14,14,1)_50%,rgba(14,14,14,0.2)_100%)]" />
                   </div>
                 ))}
               </div>
