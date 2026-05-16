@@ -8,6 +8,7 @@ import {
 } from "@/lib/auth/discord";
 import {
   type CurrentAuthSession,
+  clearDiscordSessionTokensForUser,
   findReusableDiscordSessionTokensForUser,
   getCurrentAuthSessionFromCookie,
   updateSessionDiscordTokens,
@@ -92,7 +93,6 @@ export function isDiscordRelinkRequiredError(error: unknown) {
     (message.includes("discord") &&
       (message.includes("401") ||
         message.includes("unauthorized") ||
-        message.includes("renovar token") ||
         message.includes("expirou") ||
         message.includes("revogada") ||
         message.includes("revincule"))) ||
@@ -208,6 +208,20 @@ async function recoverLinkedDiscordTokens(authSession: CurrentAuthSession) {
   return recoveredTokens;
 }
 
+function withoutDiscordOAuthTokens(authSession: CurrentAuthSession): CurrentAuthSession {
+  return {
+    ...authSession,
+    discordAccessToken: null,
+    discordRefreshToken: null,
+    discordTokenExpiresAt: null,
+  };
+}
+
+async function markDiscordRelinkRequiredForSession(authSession: CurrentAuthSession) {
+  await clearDiscordSessionTokensForUser(authSession.user.id);
+  return withoutDiscordOAuthTokens(authSession);
+}
+
 export async function resolveSessionAccessToken() {
   const authSession = await getCurrentAuthSessionFromCookie();
   if (!authSession) return null;
@@ -230,7 +244,21 @@ export async function resolveSessionAccessToken() {
   }
 
   if ((!accessToken || isTokenExpired(tokenExpiresAt)) && refreshToken) {
-    const refreshed = await refreshDiscordToken(refreshToken);
+    let refreshed: Awaited<ReturnType<typeof refreshDiscordToken>>;
+
+    try {
+      refreshed = await refreshDiscordToken(refreshToken);
+    } catch (error) {
+      if (isDiscordRelinkRequiredError(error)) {
+        const relinkSession = await markDiscordRelinkRequiredForSession(authSession);
+        return {
+          authSession: relinkSession,
+          accessToken: null,
+        };
+      }
+
+      throw error;
+    }
 
     accessToken = refreshed.access_token;
     refreshToken = refreshed.refresh_token || refreshToken;
@@ -297,6 +325,11 @@ export async function getAccessibleGuildsForSession(
     await updateSessionGuildsCache(sessionContext.authSession.id, guilds);
     return accessibleGuilds;
   } catch (error) {
+    if (isDiscordRelinkRequiredError(error)) {
+      await markDiscordRelinkRequiredForSession(sessionContext.authSession);
+      throw error;
+    }
+
     if (cachedGuilds !== null) {
       return filterAccessibleGuilds(cachedGuilds);
     }

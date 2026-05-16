@@ -128,7 +128,12 @@ type AccountPlanSummary = {
 
 type AccountPlanApiResponse = {
   ok: boolean;
+  message?: string;
   plan?: AccountPlanSummary;
+  sync?: {
+    degraded?: boolean;
+    usedCache?: boolean;
+  };
 };
 
 type DashboardTask = {
@@ -388,6 +393,13 @@ function resolveManagedServersSyncMessage(sync: ManagedServersSyncState | null) 
   return "Sincronizacao de servidores em modo degradado. O painel manteve dados salvos enquanto tenta atualizar novamente.";
 }
 
+function shouldPreserveManagedServersSnapshot(
+  nextServers: ManagedServer[],
+  sync: ManagedServersSyncState | null | undefined,
+) {
+  return Boolean(sync?.degraded && nextServers.length === 0);
+}
+
 function readDismissedDashboardTasks() {
   try {
     const raw = window.localStorage.getItem(DASHBOARD_DISMISSED_TASKS_KEY);
@@ -608,6 +620,72 @@ function DashboardRecentActivityList({
   );
 }
 
+function DashboardDiscordRequiredModal({
+  isOpen,
+  onConnect,
+}: {
+  isOpen: boolean;
+  onConnect: () => void;
+}) {
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[5200] overflow-y-auto overscroll-contain p-[18px]">
+      <div className="absolute inset-0 bg-[rgba(0,0,0,0.86)] backdrop-blur-[7px]" />
+      <div className="relative z-10 mx-auto flex min-h-full max-w-[680px] items-center justify-center">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Vincular Discord"
+          className="relative w-full overflow-hidden rounded-[30px] border border-[#151515] bg-[linear-gradient(180deg,rgba(10,12,18,0.985)_0%,rgba(5,6,10,0.985)_100%)] p-[24px] shadow-[0_34px_110px_rgba(0,0,0,0.58)] sm:p-[30px]"
+        >
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-[linear-gradient(90deg,transparent_0%,rgba(114,154,255,0.5)_50%,transparent_100%)]"
+          />
+          <span className="inline-flex items-center rounded-full border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.1)] px-[12px] py-[6px] text-[11px] leading-none font-semibold uppercase tracking-[0.16em] text-[#A9CAFF]">
+            Login Discord necessario
+          </span>
+          <h2 className="mt-[18px] text-[30px] leading-[1.02] tracking-[-0.05em] text-[#F4F7FF] sm:text-[38px]">
+            Vincule sua conta Discord
+            <span className="block">para carregar seus servidores</span>
+          </h2>
+          <p className="mt-[16px] text-[15px] leading-[1.7] text-[#AAB4C7]">
+            Sua conta Flowdesk pode entrar com Google ou email, mas servidores,
+            equipes, canais, cargos e modulos do Discord precisam de uma
+            autorizacao Discord ativa nesta mesma conta.
+          </p>
+
+          <div className="mt-[20px] grid gap-[10px] text-[13px] leading-[1.6] text-[#8E99AD]">
+            <div className="rounded-[18px] border border-[#171717] bg-[#090B10] px-[16px] py-[14px]">
+              O painel fica protegido para nao mostrar listas vazias incorretas.
+            </div>
+            <div className="rounded-[18px] border border-[#171717] bg-[#090B10] px-[16px] py-[14px]">
+              Depois do vínculo, seus servidores e permissoes sincronizam automaticamente.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onConnect}
+            className="group relative mt-[24px] inline-flex h-[48px] w-full items-center justify-center overflow-visible whitespace-nowrap rounded-[14px] px-6 text-[15px] leading-none font-semibold sm:w-auto"
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 rounded-[14px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+            />
+            <span className="relative z-10 text-[#111111]">
+              Vincular com Discord
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SidebarWorkspaceIcon() {
   return (
     <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#E7A540_0%,#C77B12_58%,#6B3600_100%)] shadow-[0_0_30px_rgba(231,165,64,0.18)]">
@@ -784,6 +862,9 @@ export function DashboardWorkspace({
   const [servers, setServers] = useState<ManagedServer[]>(initialServersSnapshot ?? []);
   const [serversSyncState, setServersSyncState] = useState<ManagedServersSyncState | null>(null);
   const [serversSyncMessage, setServersSyncMessage] = useState<string | null>(null);
+  const [isDiscordRequiredModalOpen, setIsDiscordRequiredModalOpen] = useState(
+    !currentAccount.discordUserId,
+  );
   const [accountPlan, setAccountPlan] = useState<AccountPlanSummary | null>(null);
   const [dismissedTaskKeys, setDismissedTaskKeys] = useState<string[]>([]);
   const [teamServers, setTeamServers] = useState<ManagedServer[]>([]);
@@ -874,7 +955,9 @@ export function DashboardWorkspace({
     () => teams.find((team) => team.id === selectedTeamId) || null,
     [selectedTeamId, teams],
   );
-  useBodyScrollLock(isCreateTeamModalOpen);
+  const isDiscordAccessRequired =
+    !currentAccount.discordUserId || Boolean(serversSyncState?.requiresDiscordRelink);
+  useBodyScrollLock(isCreateTeamModalOpen || isDiscordRequiredModalOpen);
   const linkedGuildIdsInTeams = useMemo(
     () => new Set(teams.flatMap((team) => team.linkedGuildIds)),
     [teams],
@@ -1207,9 +1290,14 @@ export function DashboardWorkspace({
 
   const applyServersSnapshot = useCallback(
     (nextServers: ManagedServer[], sync: ManagedServersSyncState | null = null) => {
-      storeCachedManagedServers(workspaceCacheKey, nextServers);
       setServersSyncState(sync);
       setServersSyncMessage(resolveManagedServersSyncMessage(sync));
+
+      if (shouldPreserveManagedServersSnapshot(nextServers, sync)) {
+        return;
+      }
+
+      storeCachedManagedServers(workspaceCacheKey, nextServers);
       setServers((currentServers) =>
         buildManagedServersSignature(currentServers) ===
         buildManagedServersSignature(nextServers)
@@ -1234,6 +1322,10 @@ export function DashboardWorkspace({
       }
 
       setAccountPlan((currentPlan) => {
+        if (payload.sync?.degraded && currentPlan) {
+          return currentPlan;
+        }
+
         const currentSignature = currentPlan ? JSON.stringify(currentPlan) : "";
         const nextSignature = JSON.stringify(payload.plan);
         return currentSignature === nextSignature ? currentPlan : payload.plan || null;
@@ -1355,6 +1447,14 @@ export function DashboardWorkspace({
   }, [isBillingActive, isDomainsActive]);
 
   useEffect(() => {
+    if (isDiscordAccessRequired) {
+      setIsDiscordRequiredModalOpen(true);
+    } else {
+      setIsDiscordRequiredModalOpen(false);
+    }
+  }, [isDiscordAccessRequired]);
+
+  useEffect(() => {
     if (!pendingViewId || pendingViewId !== currentView.id) {
       return;
     }
@@ -1442,6 +1542,18 @@ export function DashboardWorkspace({
       return;
     }
 
+    if (!currentAccount.discordUserId) {
+      setServersSyncState({
+        degraded: true,
+        requiresDiscordRelink: true,
+        usedDatabaseFallback: false,
+        reason: "discord_not_linked",
+        diagnosticsFingerprint: null,
+      });
+      setServersSyncMessage(null);
+      return;
+    }
+
     let isMounted = true;
 
     async function loadServers() {
@@ -1481,7 +1593,7 @@ export function DashboardWorkspace({
     return () => {
       isMounted = false;
     };
-  }, [applyServersSnapshot, initialServers, workspaceCacheKey]);
+  }, [applyServersSnapshot, currentAccount.discordUserId, initialServers, workspaceCacheKey]);
 
   useEffect(() => {
     void loadTeamServerCatalog();
@@ -1948,11 +2060,15 @@ export function DashboardWorkspace({
     }
   }, [isLoggingOut]);
 
-  const openDiscordLoginFlow = useCallback(() => {
+  const openDiscordLoginFlow = useCallback((mode: "login" | "link" = "login") => {
     if (typeof window === "undefined") return;
     const nextPath = `${window.location.pathname}${window.location.search}`;
-    window.location.assign(buildDiscordAuthStartHref(nextPath));
+    window.location.assign(buildDiscordAuthStartHref(nextPath, mode));
   }, []);
+
+  const handleConnectRequiredDiscord = useCallback(() => {
+    openDiscordLoginFlow("link");
+  }, [openDiscordLoginFlow]);
 
   const handleAddAnotherAccount = useCallback(() => {
     setIsProfileMenuOpen(false);
@@ -3091,6 +3207,11 @@ export function DashboardWorkspace({
           ) : null}
         </div>
       ) : null}
+
+      <DashboardDiscordRequiredModal
+        isOpen={isDiscordRequiredModalOpen}
+        onConnect={handleConnectRequiredDiscord}
+      />
     </div>
   );
 }

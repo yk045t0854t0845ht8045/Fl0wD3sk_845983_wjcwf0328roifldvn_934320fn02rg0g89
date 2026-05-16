@@ -342,6 +342,7 @@ export async function GET(request: Request) {
       .from("guild_sales_categories")
       .select(CATEGORY_SELECT)
       .eq("guild_id", guildId)
+      .eq("active", true)
       .order("active", { ascending: false })
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: false });
@@ -376,6 +377,54 @@ export async function GET(request: Request) {
             error,
             "Erro ao carregar categorias de vendas.",
           ),
+        },
+        { status: 500 },
+      ),
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
+
+  try {
+    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const guildId = getTrimmedText(rawBody.guildId, 32);
+    const categoryCode = normalizeCategoryCode(rawBody.categoryCode);
+
+    if (!isGuildId(guildId) || !categoryCode) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Parametros invalidos." }, { status: 400 }),
+      );
+    }
+
+    const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
+    if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    const category = await findCategoryByCode(guildId, categoryCode);
+    if (!category) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Categoria nao encontrada." }, { status: 404 }),
+      );
+    }
+
+    const supabase = getSupabaseAdminClientOrThrow();
+    const result = await supabase
+      .from("guild_sales_categories")
+      .delete()
+      .eq("guild_id", guildId)
+      .eq("id", category.id);
+
+    if (result.error) throw new Error(result.error.message);
+
+    return applyNoStoreHeaders(NextResponse.json({ ok: true }));
+  } catch (error) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: sanitizeErrorMessage(error, "Erro ao excluir categoria de vendas."),
         },
         { status: 500 },
       ),

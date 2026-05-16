@@ -245,6 +245,11 @@ function writeAuthSessionCache(
   });
 }
 
+function invalidateAuthSessionCache() {
+  authSessionCache.clear();
+  authSessionInflight.clear();
+}
+
 export function isAuthSessionAvailabilityError(error: unknown) {
   if (isDatabaseAvailabilityError(error)) {
     return true;
@@ -1406,6 +1411,30 @@ export async function updateSessionDiscordTokens(
   if (result.error) {
     throw new Error(`Erro ao atualizar token da sessao: ${result.error.message}`);
   }
+
+  invalidateAuthSessionCache();
+}
+
+export async function clearDiscordSessionTokensForUser(userId: number) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  const result = await supabase
+    .from("auth_sessions")
+    .update({
+      discord_access_token: null,
+      discord_refresh_token: null,
+      discord_token_expires_at: null,
+    })
+    .eq("user_id", userId)
+    .is("revoked_at", null);
+
+  if (result.error) {
+    throw new Error(
+      `Erro ao limpar tokens Discord da conta: ${result.error.message}`,
+    );
+  }
+
+  invalidateAuthSessionCache();
 }
 
 export async function updateSessionGuildsCache(
@@ -1425,6 +1454,8 @@ export async function updateSessionGuildsCache(
   if (result.error) {
     throw new Error(`Erro ao atualizar cache de servidores: ${result.error.message}`);
   }
+
+  invalidateAuthSessionCache();
 }
 
 export async function updateSessionActiveGuild(

@@ -121,6 +121,7 @@ type ServerSettingsSection =
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "sales_coupons_gifts_create"
+  | "sales_coupons_gifts_edit"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
@@ -518,7 +519,7 @@ function parseWorkspaceRoute(pathname: string | null): {
     }
 
     if (
-      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
+      /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories(?:\/create)?|products|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts(?:\/(?:create|edit\/[^/]+))?)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?$/.test(
         comparablePathname,
       )
     ) {
@@ -552,7 +553,7 @@ function parseWorkspaceRoute(pathname: string | null): {
   }
 
   const salesSectionMatch = normalizedPathname.match(
-    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts(?:\/create)?)\/?$/,
+    /^\/servers\/(\d{10,25})\/sales\/(overview|categories(?:\/create|\/edit\/flw-[0-9]{8})?|products(?:\/create|\/edit\/prd-[0-9]{8})?|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts(?:\/create|\/edit\/[^/]+)?)\/?$/,
   );
   if (salesSectionMatch) {
     const salesSection = salesSectionMatch[2];
@@ -582,6 +583,8 @@ function parseWorkspaceRoute(pathname: string | null): {
                 ? "sales_coupons_gifts"
                 : salesSection === "coupons-gifts/create"
                   ? "sales_coupons_gifts_create"
+                : salesSection.startsWith("coupons-gifts/edit/")
+                  ? "sales_coupons_gifts_edit"
                 : "sales_overview",
     };
   }
@@ -646,7 +649,7 @@ function isServersWorkspacePath(pathname: string) {
     return true;
   }
 
-  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
+  return /^\/\d{10,25}(?:\/(?:sales\/(?:overview|categories|products|stock(?:\/edit\/prd-[0-9]{8})?|payment-methods|coupons-gifts(?:\/(?:create|edit\/[^/]+))?)|tickets\/(?:overview|message|flowai)|entry-exit\/(?:overview|message)|security\/(?:antilink|autorole|logs))?)?\/?$/.test(
     pathname,
   );
 }
@@ -1624,6 +1627,7 @@ export function ServersWorkspace({
     useState<ServerSettingsSection>(initialSettingsSection);
   const [hasUnsavedSettingsChanges, setHasUnsavedSettingsChanges] = useState(false);
   const [navigationBlockSignal, setNavigationBlockSignal] = useState(0);
+  const hasUnsavedSettingsChangesRef = useRef(false);
   const [isSalesSidebarOpen, setIsSalesSidebarOpen] = useState(false);
   const [isTicketSidebarOpen, setIsTicketSidebarOpen] = useState(false);
   const [isEntryExitSidebarOpen, setIsEntryExitSidebarOpen] = useState(false);
@@ -1939,7 +1943,7 @@ export function ServersWorkspace({
           },
           {
             cacheKey: `servers:${workspaceCacheKey}:${serversReloadToken > 0 ? "fresh" : "warm"}`,
-            cacheTtlMs: serversReloadToken > 0 ? 1200 : 30_000,
+            cacheTtlMs: serversReloadToken > 0 ? 1200 : 0,
             timeoutMs: serversReloadToken > 0 ? 6500 : 3200,
             storage: "memory",
           },
@@ -2571,7 +2575,8 @@ export function ServersWorkspace({
       selectedSettingsSectionForConfig === "sales_stock" ||
       selectedSettingsSectionForConfig === "sales_payment_methods" ||
       selectedSettingsSectionForConfig === "sales_coupons_gifts" ||
-      selectedSettingsSectionForConfig === "sales_coupons_gifts_create");
+      selectedSettingsSectionForConfig === "sales_coupons_gifts_create" ||
+      selectedSettingsSectionForConfig === "sales_coupons_gifts_edit");
   const isEntryExitGroupActive =
     isEditingServer &&
     selectedEditorTabForConfig === "settings" &&
@@ -2703,6 +2708,11 @@ export function ServersWorkspace({
     if (settingsSection === "sales_coupons_gifts_create") {
       return `/servers/${encodedGuildId}/sales/coupons-gifts/create/`;
     }
+    if (settingsSection === "sales_coupons_gifts_edit") {
+      return pathname.startsWith(`/servers/${encodedGuildId}/sales/coupons-gifts/edit/`)
+        ? pathname
+        : `/servers/${encodedGuildId}/sales/coupons-gifts/`;
+    }
     if (settingsSection === "message") {
       return `/servers/${encodedGuildId}/tickets/message/`;
     }
@@ -2725,7 +2735,7 @@ export function ServersWorkspace({
       return `/servers/${encodedGuildId}/security/logs/`;
     }
     return `/servers/${encodedGuildId}/tickets/overview/`;
-  }, []);
+  }, [pathname]);
 
   const navigateToUrl = useCallback((nextUrl: string, mode: "push" | "replace" = "push") => {
     if (typeof window === "undefined") return;
@@ -2767,7 +2777,6 @@ export function ServersWorkspace({
       return;
     }
 
-    void router.prefetch(nextPathname || target.path);
     if (mode === "replace") router.replace(target.path, { scroll: false });
     else router.push(target.path, { scroll: false });
   }, [router]);
@@ -2839,21 +2848,28 @@ export function ServersWorkspace({
     };
   }, [isEditingServer, prefetchWorkspaceSections, selectedGuildIdForConfig]);
 
+  const handleUnsavedSettingsChangesChange = useCallback((hasUnsavedChanges: boolean) => {
+    hasUnsavedSettingsChangesRef.current = hasUnsavedChanges;
+    setHasUnsavedSettingsChanges(hasUnsavedChanges);
+  }, []);
+
   const handleSidebarSettingsSectionNavigation = useCallback(
     (input: {
       guildId: string;
       tab: ServerEditorTab;
       settingsSection: ServerSettingsSection;
     }) => {
-      const isChangingSettingsSection =
+      const isLeavingCurrentSettingsView =
         selectedEditorTabForConfig === "settings" &&
-        input.tab === "settings" &&
-        selectedSettingsSectionForConfig !== input.settingsSection;
+        (input.tab !== "settings" ||
+          selectedSettingsSectionForConfig !== input.settingsSection);
+      const hasBlockingUnsavedSettingsChanges =
+        hasUnsavedSettingsChanges || hasUnsavedSettingsChangesRef.current;
 
       if (
         isEditingServer &&
-        hasUnsavedSettingsChanges &&
-        isChangingSettingsSection
+        hasBlockingUnsavedSettingsChanges &&
+        isLeavingCurrentSettingsView
       ) {
         setNavigationBlockSignal((current) => current + 1);
         return;
@@ -3315,7 +3331,8 @@ export function ServersWorkspace({
       section === "sales_stock" ||
       section === "sales_payment_methods" ||
       section === "sales_coupons_gifts" ||
-      section === "sales_coupons_gifts_create"
+      section === "sales_coupons_gifts_create" ||
+      section === "sales_coupons_gifts_edit"
     ) {
       return perms.has("server_manage_tickets_overview");
     }
@@ -3723,8 +3740,10 @@ export function ServersWorkspace({
                                   selectedSettingsSectionForConfig ===
                                     "sales_product_edit")) ||
                               (item.settingsSection === "sales_coupons_gifts" &&
-                                selectedSettingsSectionForConfig ===
-                                  "sales_coupons_gifts_create")) &&
+                                (selectedSettingsSectionForConfig ===
+                                  "sales_coupons_gifts_create" ||
+                                  selectedSettingsSectionForConfig ===
+                                    "sales_coupons_gifts_edit"))) &&
                             isEditingServer,
                         );
 
@@ -4417,7 +4436,7 @@ export function ServersWorkspace({
                           settingsSection: "overview",
                         });
                       }}
-                      onUnsavedChangesChange={setHasUnsavedSettingsChanges}
+                      onUnsavedChangesChange={handleUnsavedSettingsChangesChange}
                       onPermissionsChange={setCurrentDashboardPermissions}
                       navigationBlockSignal={navigationBlockSignal}
                       onClose={() => {

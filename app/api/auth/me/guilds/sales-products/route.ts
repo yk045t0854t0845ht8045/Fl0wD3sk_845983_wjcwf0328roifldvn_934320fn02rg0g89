@@ -902,6 +902,7 @@ export async function GET(request: Request) {
       .from("guild_sales_products")
       .select(PRODUCT_SELECT)
       .eq("guild_id", guildId)
+      .eq("active", true)
       .order("created_at", { ascending: false });
 
     if (categoryId && isUuid(categoryId)) {
@@ -954,6 +955,72 @@ export async function GET(request: Request) {
         {
           ok: false,
           message: resolveSalesProductsErrorMessage(error, "Erro ao carregar produtos."),
+        },
+        { status: 500 },
+      ),
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
+
+  try {
+    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const guildId = getTrimmedText(rawBody.guildId, 32);
+    const productCode = normalizeProductCode(rawBody.productCode);
+
+    if (!isGuildId(guildId) || !productCode) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Parametros invalidos." }, { status: 400 }),
+      );
+    }
+
+    const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
+    if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    const product = await findProductByCode(guildId, productCode);
+    if (!product) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Produto nao encontrado." }, { status: 404 }),
+      );
+    }
+
+    const supabase = getSupabaseAdminClientOrThrow();
+    const hardDelete = await supabase
+      .from("guild_sales_products")
+      .delete()
+      .eq("guild_id", guildId)
+      .eq("id", product.id);
+
+    if (hardDelete.error) {
+      const softDelete = await supabase
+        .from("guild_sales_products")
+        .update({
+          active: false,
+          status: "archived",
+          discord_publication_mode: "online_only",
+          discord_channel_id: null,
+          discord_message_id: null,
+          discord_sync_status: "idle",
+          discord_sync_error: null,
+        })
+        .eq("guild_id", guildId)
+        .eq("id", product.id);
+
+      if (softDelete.error) throw new Error(softDelete.error.message);
+    }
+
+    await refreshCategoryProductCounts(guildId, [product.category_id]);
+
+    return applyNoStoreHeaders(NextResponse.json({ ok: true }));
+  } catch (error) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: resolveSalesProductsErrorMessage(error, "Erro ao excluir produto."),
         },
         { status: 500 },
       ),

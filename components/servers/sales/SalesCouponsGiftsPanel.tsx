@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar,
@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import {
   ServerButton,
+  ServerDangerZone,
+  ServerDeleteConfirmModal,
   ServerEmptyState,
   ServerIconFrame,
   ServerSectionHeading,
@@ -27,6 +29,7 @@ import {
   ServerTextInput,
   cn,
 } from "@/components/servers/ServerUi";
+import { ButtonLoader } from "@/components/login/ButtonLoader";
 
 type CampaignKind = "coupon" | "gift_card" | "promotion";
 type DiscountMode = "percent" | "fixed";
@@ -44,6 +47,7 @@ type SalesCouponGift = {
   status: CampaignStatus;
   discountType: DiscountMode;
   discountValue: number;
+  minimumOrderAmount?: number;
   remainingAmount?: number;
   appliesToAllProducts: boolean;
   productIds: string[];
@@ -103,6 +107,13 @@ function formatDate(value: string | null) {
   }).format(date);
 }
 
+function dateInputValue(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 function valueLabel(item: SalesCouponGift) {
   if (item.kind === "gift_card") return formatMoney(item.remainingAmount ?? item.discountValue);
   return item.discountType === "percent"
@@ -128,6 +139,12 @@ function getCouponsPath(guildId: string) {
 
 function getCreatePath(guildId: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/coupons-gifts/create/`;
+}
+
+function getEditPath(guildId: string, item: SalesCouponGift) {
+  return `/servers/${encodeURIComponent(guildId)}/sales/coupons-gifts/edit/${encodeURIComponent(
+    item.editorCode || item.code,
+  )}/`;
 }
 
 function slugifyCode(value: string) {
@@ -156,7 +173,7 @@ function SelectMenu<T extends string>({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className={open ? "relative z-[240]" : "relative z-[1]"}>
+    <div className={open ? "relative z-[9000]" : "relative z-[1]"}>
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -166,11 +183,12 @@ function SelectMenu<T extends string>({
       >
         {options.find(([option]) => option === value)?.[1] || "Selecionar"}
         <ChevronDown
-          className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.9}
+          className={`h-[16px] w-[16px] shrink-0 bg-transparent text-[#9A9A9A] transition ${open ? "rotate-180 text-[#DADADA]" : ""}`}
         />
       </button>
       {open ? (
-        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[240] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.48)]">
+        <div className="flowdesk-scale-in-soft absolute left-0 right-0 top-[50px] z-[9000] rounded-[18px] border border-[#1E1E1E] bg-[#080808] p-[8px] shadow-[0_24px_70px_rgba(0,0,0,0.58)]">
           {options.map(([option, label]) => (
             <button
               key={option}
@@ -386,6 +404,7 @@ export function SalesCouponsGiftsListPanel({
                     aria-label={`Editar ${item.title}`}
                     title="Editar cupom ou gift"
                     disabled={readOnly}
+                    onClick={() => router.push(getEditPath(guildId, item))}
                     className="flowdesk-server-button inline-flex h-[34px] w-[34px] items-center justify-center rounded-[12px] border border-[#242424] bg-[#101010] text-[#DADADA] transition hover:border-[#3A3A3A] hover:bg-[#161616] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     <Pencil className="h-[15px] w-[15px]" />
@@ -409,9 +428,12 @@ export function SalesCouponsGiftsListPanel({
 export function SalesCouponGiftCreatePanel({
   guildId,
   readOnly = false,
-}: SalesCouponsGiftsPanelProps) {
+  discountCode,
+}: SalesCouponsGiftsPanelProps & { discountCode?: string }) {
   const router = useRouter();
+  const isEditing = Boolean(discountCode);
   const [kind, setKind] = useState<CampaignKind>("coupon");
+  const [discountId, setDiscountId] = useState("");
   const [title, setTitle] = useState("");
   const [code, setCode] = useState("");
   const [discountMode, setDiscountMode] = useState<DiscountMode>("percent");
@@ -428,7 +450,10 @@ export function SalesCouponGiftCreatePanel({
   const [startsAt, setStartsAt] = useState("");
   const [minimumOrder, setMinimumOrder] = useState("");
   const [status, setStatus] = useState<CampaignStatus>("active");
+  const [isLoadingDiscount, setIsLoadingDiscount] = useState(Boolean(discountCode));
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -449,7 +474,69 @@ export function SalesCouponGiftCreatePanel({
     };
   }, [guildId]);
 
-  const controlsDisabled = readOnly;
+  useEffect(() => {
+    if (kind === "gift_card") setDiscountMode("fixed");
+  }, [kind]);
+
+  useEffect(() => {
+    if (!discountCode) {
+      setIsLoadingDiscount(false);
+      return;
+    }
+
+    let cancelled = false;
+    async function loadDiscount() {
+      const currentDiscountCode = discountCode;
+      if (!currentDiscountCode) return;
+      setIsLoadingDiscount(true);
+      setStatusMessage(null);
+      try {
+        const response = await fetch(
+          `/api/auth/me/guilds/sales-coupons-gifts?guildId=${encodeURIComponent(
+            guildId,
+          )}&discountCode=${encodeURIComponent(currentDiscountCode)}`,
+          { credentials: "include", cache: "no-store" },
+        );
+        const payload = (await response.json().catch(() => ({}))) as CouponsGiftsResponse;
+        if (!response.ok || !payload.ok || !payload.discount) {
+          throw new Error(payload.message || "Cupom ou gift nao encontrado.");
+        }
+        if (cancelled) return;
+        const discount = payload.discount;
+        setDiscountId(discount.id);
+        setKind(discount.kind);
+        setTitle(discount.title);
+        setCode(discount.code);
+        setDiscountMode(discount.kind === "gift_card" ? "fixed" : discount.discountType);
+        setDiscountValue(String(discount.discountValue || ""));
+        setMinimumOrder(String(discount.minimumOrderAmount || ""));
+        setAppliesToMode(discount.appliesToAllProducts ? "all" : "selected");
+        setSelectedProductIds(discount.productIds || []);
+        setUsageMode(discount.maxRedemptions ? "limited" : "unlimited");
+        setMaxUses(discount.maxRedemptions ? String(discount.maxRedemptions) : "");
+        setOnePerCustomer(discount.onePerCustomer);
+        setExpirationMode(discount.expiresAt ? "date" : "never");
+        setExpiresAt(dateInputValue(discount.expiresAt));
+        setStartsAt(dateInputValue(discount.startsAt));
+        setStatus(discount.status);
+      } catch (error) {
+        if (!cancelled) {
+          setStatusMessage(
+            error instanceof Error ? error.message : "Erro ao carregar cupom ou gift.",
+          );
+        }
+      } finally {
+        if (!cancelled) setIsLoadingDiscount(false);
+      }
+    }
+
+    void loadDiscount();
+    return () => {
+      cancelled = true;
+    };
+  }, [discountCode, guildId]);
+
+  const controlsDisabled = readOnly || isLoadingDiscount;
   const generatedCode = slugifyCode(code || title || kindLabel[kind]);
   const previewValue =
     discountMode === "percent"
@@ -472,17 +559,19 @@ export function SalesCouponGiftCreatePanel({
     setStatusMessage(null);
     try {
       const response = await fetch("/api/auth/me/guilds/sales-coupons-gifts", {
-        method: "POST",
+        method: isEditing ? "PATCH" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           guildId,
+          discountId,
+          discountCode,
           kind,
           title,
           code: generatedCode,
           discountType: discountMode,
           discountValue,
-          remainingAmount: discountValue,
+          remainingAmount: kind === "gift_card" ? discountValue : undefined,
           minimumOrderAmount: minimumOrder,
           appliesToAllProducts: appliesToMode === "all",
           productIds: appliesToMode === "all" ? [] : selectedProductIds,
@@ -505,19 +594,85 @@ export function SalesCouponGiftCreatePanel({
     }
   };
 
+  const handleDeleteDiscount = async () => {
+    if (!isEditing || readOnly || isDeleting) return;
+    setIsDeleting(true);
+    setStatusMessage(null);
+    try {
+      const response = await fetch("/api/auth/me/guilds/sales-coupons-gifts", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guildId, discountId, discountCode }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as CouponsGiftsResponse;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Erro ao excluir campanha.");
+      }
+      setIsDeleteModalOpen(false);
+      router.push(getCouponsPath(guildId));
+      router.refresh();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Erro ao excluir campanha.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-[18px]">
-      <ServerSectionHeading
-        eyebrow="Vendas"
-        title="Criar cupom ou gift"
-        description="Defina tipo, valor, produtos elegiveis, janela de validade e limite de uso antes de publicar no checkout."
-        action={
-          <ServerButton onClick={() => router.push(getCouponsPath(guildId))} size="lg">
+      <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <ServerButton
+            onClick={() => router.push(getCouponsPath(guildId))}
+            variant="ghost"
+            size="sm"
+            className="px-[10px]"
+          >
             <ArrowLeft className="h-[16px] w-[16px]" />
-            Voltar
+            Cupons e gifts
           </ServerButton>
-        }
-      />
+          <div className="mt-[10px] flex items-center gap-[10px]">
+            <Tags className="h-[18px] w-[18px] text-[#A5A5A5]" />
+            <h3 className="text-[24px] font-semibold tracking-[-0.05em] text-[#EFEFEF]">
+              {isEditing ? "Editar cupom ou gift" : "Criar cupom ou gift"}
+            </h3>
+          </div>
+          <p className="mt-[8px] max-w-[760px] text-[13px] leading-[1.55] text-[#858585]">
+            {isEditing
+              ? "Atualize codigo, valor, produtos elegiveis, validade e regras de uso sem recriar a campanha."
+              : "Defina tipo, valor, produtos elegiveis, janela de validade e limite de uso antes de publicar no checkout."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-[10px]">
+          <ServerButton onClick={() => router.push(getCouponsPath(guildId))}>
+            Cancelar
+          </ServerButton>
+          <ServerButton
+            aria-busy={isSaving}
+            variant="primary"
+            className="min-w-[168px]"
+            disabled={controlsDisabled || isSaving}
+            onClick={() => void handleSave()}
+          >
+            {isSaving ? (
+              <ButtonLoader size={16} colorClassName="text-[#080808]" />
+            ) : (
+              <>
+                <Check className="h-[15px] w-[15px]" />
+                {isEditing ? "Salvar alteracoes" : "Salvar campanha"}
+              </>
+            )}
+          </ServerButton>
+        </div>
+      </div>
+
+      {statusMessage ? (
+        <div className="rounded-[18px] border border-[#3A2A1E] bg-[#170F09] px-[14px] py-[12px] text-[13px] text-[#F2B27D]">
+          {statusMessage}
+        </div>
+      ) : null}
 
       <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
         <div className="space-y-[18px]">
@@ -566,7 +721,7 @@ export function SalesCouponGiftCreatePanel({
           <ServerSurface className="p-[18px] sm:p-[22px]">
             <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Valor</h4>
             <div className="mt-[14px] grid grid-cols-2 rounded-[14px] border border-[#252525] bg-[#0D0D0D] p-[4px]">
-              <SegmentButton value="percent" current={discountMode} onChange={setDiscountMode} disabled={controlsDisabled}>
+              <SegmentButton value="percent" current={discountMode} onChange={setDiscountMode} disabled={controlsDisabled || kind === "gift_card"}>
                 Percentual
               </SegmentButton>
               <SegmentButton value="fixed" current={discountMode} onChange={setDiscountMode} disabled={controlsDisabled}>
@@ -714,6 +869,16 @@ export function SalesCouponGiftCreatePanel({
               Limitar a um uso por cliente
             </label>
           </ServerSurface>
+
+          {isEditing ? (
+            <ServerDangerZone
+              title="Excluir cupom ou gift"
+              description="Remove a campanha do checkout. Resgates ja registrados continuam preservados no historico operacional."
+              actionLabel="Excluir campanha"
+              disabled={controlsDisabled || isSaving || isDeleting}
+              onAction={() => setIsDeleteModalOpen(true)}
+            />
+          ) : null}
         </div>
 
         <aside className="space-y-[18px]">
@@ -774,25 +939,35 @@ export function SalesCouponGiftCreatePanel({
               </div>
             </div>
           </ServerSurface>
-
-          <ServerSurface className="p-[18px] sm:p-[20px]">
-            <ServerButton
-              variant="primary"
-              className="w-full"
-              disabled={controlsDisabled || isSaving}
-              onClick={() => void handleSave()}
-            >
-              <Check className="h-[15px] w-[15px]" />
-              {isSaving ? "Salvando..." : "Salvar campanha"}
-            </ServerButton>
-            {statusMessage ? (
-              <p className="mt-[10px] text-[12px] leading-[1.5] text-[#EFB47B]">
-                {statusMessage}
-              </p>
-            ) : null}
-          </ServerSurface>
         </aside>
       </div>
+      <ServerDeleteConfirmModal
+        open={isDeleteModalOpen}
+        title="Excluir campanha?"
+        description={`Esta acao remove "${title.trim() || generatedCode}" do checkout e impede novos usos desse codigo.`}
+        confirmLabel="Excluir campanha"
+        isDeleting={isDeleting}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onConfirm={() => void handleDeleteDiscount()}
+      />
     </div>
+  );
+}
+
+export function SalesCouponGiftEditPanel({
+  guildId,
+  readOnly = false,
+}: SalesCouponsGiftsPanelProps) {
+  const pathname = usePathname();
+  const discountCode = decodeURIComponent(
+    pathname.split("/sales/coupons-gifts/edit/")[1]?.split("/")[0] || "",
+  );
+
+  return (
+    <SalesCouponGiftCreatePanel
+      guildId={guildId}
+      readOnly={readOnly}
+      discountCode={discountCode}
+    />
   );
 }

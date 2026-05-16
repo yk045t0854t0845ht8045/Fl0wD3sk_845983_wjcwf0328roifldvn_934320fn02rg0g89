@@ -235,6 +235,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const guildId = (url.searchParams.get("guildId") || "").trim();
+    const discountCode = (url.searchParams.get("discountCode") || "").trim();
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(
         NextResponse.json({ ok: false, message: "Guild ID invalido." }, { status: 400 }),
@@ -253,9 +254,37 @@ export async function GET(request: Request) {
 
     if (result.error) {
       if (isMissingDiscountsTable(result.error)) {
-        return applyNoStoreHeaders(NextResponse.json({ ok: true, discounts: [] }));
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            discountCode
+              ? { ok: false, message: "Cupom ou gift nao encontrado." }
+              : { ok: true, discounts: [] },
+            { status: discountCode ? 404 : 200 },
+          ),
+        );
       }
       throw new Error(result.error.message);
+    }
+
+    if (discountCode) {
+      const discount = (result.data || []).find(
+        (record) =>
+          buildDiscountCode(record.id) === discountCode ||
+          record.code.toLowerCase() === discountCode.toLowerCase(),
+      );
+
+      if (!discount) {
+        return applyNoStoreHeaders(
+          NextResponse.json(
+            { ok: false, message: "Cupom ou gift nao encontrado." },
+            { status: 404 },
+          ),
+        );
+      }
+
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: true, discount: buildDiscountResponse(discount) }),
+      );
     }
 
     return applyNoStoreHeaders(
@@ -270,6 +299,190 @@ export async function GET(request: Request) {
         {
           ok: false,
           message: sanitizeErrorMessage(error, "Erro ao carregar cupons e gifts."),
+        },
+        { status: 500 },
+      ),
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
+
+  try {
+    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const guildId = getTrimmedText(rawBody.guildId, 25);
+    const discountId = getTrimmedText(rawBody.discountId, 64);
+    const editorCode = getTrimmedText(rawBody.discountCode, 64);
+    if (!isGuildId(guildId)) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Guild ID invalido." }, { status: 400 }),
+      );
+    }
+
+    const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
+    if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    let existing: GuildSalesDiscountRecord | null = null;
+    if (discountId) {
+      const existingResult = await getSupabaseAdminClientOrThrow()
+        .from("guild_sales_discounts")
+        .select(DISCOUNT_SELECT)
+        .eq("guild_id", guildId)
+        .eq("id", discountId)
+        .maybeSingle<GuildSalesDiscountRecord>();
+      if (existingResult.error) throw new Error(existingResult.error.message);
+      existing = existingResult.data || null;
+    } else if (editorCode) {
+      const listResult = await getSupabaseAdminClientOrThrow()
+        .from("guild_sales_discounts")
+        .select(DISCOUNT_SELECT)
+        .eq("guild_id", guildId)
+        .returns<GuildSalesDiscountRecord[]>();
+      if (listResult.error) throw new Error(listResult.error.message);
+      existing =
+        (listResult.data || []).find(
+          (record) =>
+            buildDiscountCode(record.id) === editorCode ||
+            record.code.toLowerCase() === editorCode.toLowerCase(),
+        ) || null;
+    }
+
+    if (!existing) {
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: "Cupom ou gift nao encontrado." },
+          { status: 404 },
+        ),
+      );
+    }
+
+    const kind = normalizeKind(rawBody.kind);
+    const code = normalizeCode(rawBody.code);
+    const title = getTrimmedText(rawBody.title, 120);
+    const discountType = normalizeDiscountType(rawBody.discountType);
+    const discountValue = toMoney(rawBody.discountValue);
+    const initialAmount = kind === "gift_card" ? discountValue : 0;
+    const remainingAmount =
+      kind === "gift_card" ? toMoney(rawBody.remainingAmount || discountValue) : 0;
+    const appliesToAllProducts = rawBody.appliesToAllProducts !== false;
+    const productIds = appliesToAllProducts ? [] : normalizeProductIds(rawBody.productIds);
+
+    if (!code || code.length < 2) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Informe um codigo valido." }, { status: 400 }),
+      );
+    }
+    if (title.length < 2) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Informe um nome valido." }, { status: 400 }),
+      );
+    }
+    if (discountValue <= 0) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Informe um valor maior que zero." }, { status: 400 }),
+      );
+    }
+    if (discountType === "percent" && discountValue > 100) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Percentual nao pode passar de 100%." }, { status: 400 }),
+      );
+    }
+    if (!appliesToAllProducts && !productIds.length) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Selecione ao menos um produto." }, { status: 400 }),
+      );
+    }
+
+    const result = await getSupabaseAdminClientOrThrow()
+      .from("guild_sales_discounts")
+      .update({
+        kind,
+        code,
+        title,
+        description: getTrimmedText(rawBody.description, 800),
+        status: normalizeStatus(rawBody.status),
+        discount_type: kind === "gift_card" ? "fixed" : discountType,
+        discount_value: discountValue,
+        initial_amount: initialAmount,
+        remaining_amount: remainingAmount,
+        minimum_order_amount: toMoney(rawBody.minimumOrderAmount),
+        applies_to_all_products: appliesToAllProducts,
+        product_ids: productIds,
+        max_redemptions: toPositiveIntOrNull(rawBody.maxRedemptions),
+        one_per_customer: rawBody.onePerCustomer !== false,
+        starts_at: normalizeDate(rawBody.startsAt),
+        expires_at: normalizeDate(rawBody.expiresAt),
+      })
+      .eq("guild_id", guildId)
+      .eq("id", existing.id)
+      .select(DISCOUNT_SELECT)
+      .single<GuildSalesDiscountRecord>();
+
+    if (result.error) throw new Error(result.error.message);
+
+    return applyNoStoreHeaders(
+      NextResponse.json({ ok: true, discount: buildDiscountResponse(result.data) }),
+    );
+  } catch (error) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: sanitizeErrorMessage(error, "Erro ao atualizar cupom ou gift."),
+        },
+        { status: 500 },
+      ),
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
+  if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
+
+  try {
+    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const guildId = getTrimmedText(rawBody.guildId, 32);
+    const discountId = getTrimmedText(rawBody.discountId, 80);
+    const discountCode = getTrimmedText(rawBody.discountCode, 80);
+
+    if (!isGuildId(guildId) || (!discountId && !discountCode)) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Parametros invalidos." }, { status: 400 }),
+      );
+    }
+
+    const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
+    if (!access.ok) return applyNoStoreHeaders(access.response);
+
+    let query = getSupabaseAdminClientOrThrow()
+      .from("guild_sales_discounts")
+      .delete()
+      .eq("guild_id", guildId);
+
+    if (discountId) {
+      query = query.eq("id", discountId);
+    } else {
+      query = query.eq("code", discountCode.toUpperCase());
+    }
+
+    const result = await query.select("id").maybeSingle();
+    if (result.error) throw new Error(result.error.message);
+    if (!result.data) {
+      return applyNoStoreHeaders(
+        NextResponse.json({ ok: false, message: "Cupom ou gift nao encontrado." }, { status: 404 }),
+      );
+    }
+
+    return applyNoStoreHeaders(NextResponse.json({ ok: true }));
+  } catch (error) {
+    return applyNoStoreHeaders(
+      NextResponse.json(
+        {
+          ok: false,
+          message: sanitizeErrorMessage(error, "Erro ao excluir cupom ou gift."),
         },
         { status: 500 },
       ),

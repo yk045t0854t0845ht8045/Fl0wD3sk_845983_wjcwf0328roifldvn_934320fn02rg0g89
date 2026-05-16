@@ -1698,8 +1698,18 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     accessToken: mercadoPagoConfig.accessToken,
     paymentId: cart.provider_payment_id,
   });
-  const resolvedStatus = resolveSalesMercadoPagoStatus(providerPayment.status);
+  let resolvedStatus = resolveSalesMercadoPagoStatus(providerPayment.status);
   const transactionData = providerPayment.point_of_interaction?.transaction_data;
+  const providerExpiresAt = providerPayment.date_of_expiration || cart.payment_expires_at;
+  const providerExpiresAtMs = providerExpiresAt ? Date.parse(providerExpiresAt) : Number.NaN;
+  const isProviderDeadlineExpired =
+    resolvedStatus === "pending" &&
+    Number.isFinite(providerExpiresAtMs) &&
+    providerExpiresAtMs <= Date.now();
+  if (isProviderDeadlineExpired) {
+    resolvedStatus = "expired";
+  }
+  const isFinalUnpaidStatus = ["cancelled", "expired", "rejected"].includes(resolvedStatus);
   const cartStatus =
     resolvedStatus === "approved"
       ? "paid"
@@ -1710,13 +1720,21 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
 
   const syncedCart = await updateSalesCartAndSelect(cart.id, {
     status: cartStatus,
-    provider_status: providerPayment.status || null,
-    provider_status_detail: providerPayment.status_detail || null,
-    provider_qr_code: transactionData?.qr_code || cart.provider_qr_code,
-    provider_qr_base64: transactionData?.qr_code_base64 || cart.provider_qr_base64,
-    provider_ticket_url: transactionData?.ticket_url || cart.provider_ticket_url,
+    provider_status: isProviderDeadlineExpired ? "expired" : providerPayment.status || null,
+    provider_status_detail: isProviderDeadlineExpired
+      ? "payment_deadline_expired"
+      : providerPayment.status_detail || null,
+    provider_qr_code: isFinalUnpaidStatus
+      ? null
+      : transactionData?.qr_code || cart.provider_qr_code,
+    provider_qr_base64: isFinalUnpaidStatus
+      ? null
+      : transactionData?.qr_code_base64 || cart.provider_qr_base64,
+    provider_ticket_url: isFinalUnpaidStatus
+      ? null
+      : transactionData?.ticket_url || cart.provider_ticket_url,
     provider_payload: providerPayment,
-    payment_expires_at: providerPayment.date_of_expiration || cart.payment_expires_at,
+    payment_expires_at: providerExpiresAt,
     paid_at: resolvedStatus === "approved" ? resolvePaidAt(providerPayment) : cart.paid_at,
     delivered_at: retryingFailedDelivery ? null : cart.delivered_at,
     delivery_started_at: retryingFailedDelivery ? null : cart.delivery_started_at,

@@ -86,7 +86,7 @@ export async function GET(request: Request) {
 
     return respond(
       {
-        ok: false,
+        ok: status === 401 ? false : true,
         message,
         servers: [],
         sync: status === 401 ? DEFAULT_MANAGED_SERVERS_SYNC_STATE : degradedSync,

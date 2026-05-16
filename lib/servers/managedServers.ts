@@ -1,6 +1,7 @@
 import {
   fetchGuildSummaryByBot,
   getAccessibleGuildsForSession,
+  isDiscordRelinkRequiredError,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import type { DiscordGuild } from "@/lib/auth/discord";
@@ -448,6 +449,11 @@ async function fetchManagedServersFresh(
   }).catch(() => null);
 
   const accessibleGuilds = accessibleGuildsResult.ok ? accessibleGuildsResult.guilds : [];
+  const discordOAuthRevoked =
+    !accessibleGuildsResult.ok &&
+    isDiscordRelinkRequiredError(accessibleGuildsResult.error);
+  const effectiveRequiresDiscordRelink =
+    requiresDiscordRelink || discordOAuthRevoked;
   const accessibleGuildLookup = buildGuildLookup(accessibleGuilds);
   const sessionGuildLookup = buildGuildLookup(authSession.discordGuildsCache);
 
@@ -668,7 +674,7 @@ async function fetchManagedServersFresh(
   const coveredGuildCount = coveredGuildIds.length;
   const hasDatabaseCoverage = coveredGuildCount > 0;
   const shouldMarkDiscordSyncFailed =
-    !requiresDiscordRelink &&
+    !effectiveRequiresDiscordRelink &&
     !hasDatabaseCoverage &&
     (!accessibleGuildsResult.ok || accessibleGuilds.length === 0);
   const shouldMarkOptionalReadDegraded =
@@ -678,18 +684,20 @@ async function fetchManagedServersFresh(
     accessibleGuildCount: accessibleGuilds.length,
     coveredGuildCount,
     degraded:
-      requiresDiscordRelink ||
+      effectiveRequiresDiscordRelink ||
       shouldMarkDiscordSyncFailed ||
       shouldMarkOptionalReadDegraded,
-    reason: requiresDiscordRelink
-      ? baseSyncReason
+    reason: effectiveRequiresDiscordRelink
+      ? discordOAuthRevoked
+        ? "discord_oauth_revoked"
+        : baseSyncReason
       : shouldMarkDiscordSyncFailed || shouldMarkOptionalReadDegraded
         ? "discord_sync_failed"
         : "ok",
-    requiresDiscordRelink,
+    requiresDiscordRelink: effectiveRequiresDiscordRelink,
     usedDatabaseFallback:
       coveredGuildCount > accessibleGuilds.length ||
-      requiresDiscordRelink ||
+      effectiveRequiresDiscordRelink ||
       !accessibleGuildsResult.ok ||
       shouldMarkOptionalReadDegraded,
   });

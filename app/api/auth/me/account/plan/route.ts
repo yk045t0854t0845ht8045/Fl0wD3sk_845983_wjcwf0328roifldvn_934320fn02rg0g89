@@ -1,9 +1,28 @@
 import { NextResponse } from "next/server";
-import { resolveSessionAccessToken } from "@/lib/auth/discordGuildAccess";
+import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { getUserPlanState } from "@/lib/plans/state";
 import { resolvePlanDefinition } from "@/lib/plans/catalog";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
 import { applyNoStoreHeaders } from "@/lib/security/http";
+
+const ACCOUNT_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type AccountPlanResponsePlan = {
+  code: string;
+  name: string;
+  status: string;
+  expiresAt: string | null;
+  activatedAt: string | null;
+  billingCycleDays: number;
+  recurrenceLabel: string;
+  isActive: boolean;
+  maxLicensedServers: number;
+};
+
+const accountPlanResponseCache = new Map<
+  number,
+  { plan: AccountPlanResponsePlan; timestamp: number }
+>();
 
 function isLocalDevRuntime() {
   return process.env.NODE_ENV !== "production";
@@ -37,51 +56,96 @@ async function getUserPlanStateForLocalRuntime(userId: number) {
   }
 }
 
+function buildFallbackPlan(): AccountPlanResponsePlan {
+  const planDefinition = resolvePlanDefinition("basic");
+
+  return {
+    code: "basic",
+    name: planDefinition?.name ?? "Flowdesk",
+    status: "inactive",
+    expiresAt: null,
+    activatedAt: null,
+    billingCycleDays: 0,
+    recurrenceLabel: "N/A",
+    isActive: false,
+    maxLicensedServers: 0,
+  };
+}
+
+function buildPlanResponse(
+  planState: Awaited<ReturnType<typeof getUserPlanState>>,
+): AccountPlanResponsePlan {
+  const planCode = planState?.plan_code ?? "basic";
+  const planDefinition = resolvePlanDefinition(planCode);
+  const billingCycleDays = planState?.billing_cycle_days ?? 0;
+  let recurrenceLabel = "N/A";
+
+  if (billingCycleDays > 0) {
+    if (billingCycleDays <= 31) recurrenceLabel = "Mensal";
+    else if (billingCycleDays <= 92) recurrenceLabel = "Trimestral";
+    else if (billingCycleDays <= 185) recurrenceLabel = "Semestral";
+    else recurrenceLabel = "Anual";
+  }
+
+  return {
+    code: planCode,
+    name: planDefinition?.name ?? planState?.plan_name ?? planCode,
+    status: planState?.status ?? "inactive",
+    expiresAt: planState?.expires_at ?? null,
+    activatedAt: planState?.activated_at ?? null,
+    billingCycleDays,
+    recurrenceLabel,
+    isActive: planState?.status === "active" || planState?.status === "trial",
+    maxLicensedServers: planState?.max_licensed_servers ?? 0,
+  };
+}
+
 export async function GET() {
+  let userId: number | null = null;
+
   try {
-    const sessionData = await resolveSessionAccessToken();
-    if (!sessionData?.authSession) {
+    const authSession = await getCurrentAuthSessionFromCookie();
+    if (!authSession) {
       return applyNoStoreHeaders(
-        NextResponse.json({ ok: false, message: "Não autenticado." }, { status: 401 }),
+        NextResponse.json({ ok: false, message: "Nao autenticado." }, { status: 401 }),
       );
     }
 
-    const userId = sessionData.authSession.user.id;
+    userId = authSession.user.id;
     const planState = await getUserPlanStateForLocalRuntime(userId);
-
-    const planCode = planState?.plan_code ?? "basic";
-    const planDefinition = resolvePlanDefinition(planCode);
-
-    const billingCycleDays = planState?.billing_cycle_days ?? 0;
-    let recurrenceLabel = "N/A";
-    if (billingCycleDays > 0) {
-      if (billingCycleDays <= 31) recurrenceLabel = "Mensal";
-      else if (billingCycleDays <= 92) recurrenceLabel = "Trimestral";
-      else if (billingCycleDays <= 185) recurrenceLabel = "Semestral";
-      else recurrenceLabel = "Anual";
-    }
+    const plan = buildPlanResponse(planState);
+    accountPlanResponseCache.set(userId, {
+      plan,
+      timestamp: Date.now(),
+    });
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        plan: {
-          code: planCode,
-          name: planDefinition?.name ?? planState?.plan_name ?? planCode,
-          status: planState?.status ?? "inactive",
-          expiresAt: planState?.expires_at ?? null,
-          activatedAt: planState?.activated_at ?? null,
-          billingCycleDays,
-          recurrenceLabel,
-          isActive: planState?.status === "active" || planState?.status === "trial",
-          maxLicensedServers: planState?.max_licensed_servers ?? 0,
+        plan,
+        sync: {
+          degraded: false,
+          usedCache: false,
         },
       }),
     );
   } catch (error) {
+    const cached = userId ? accountPlanResponseCache.get(userId) : null;
+    const canUseCache =
+      cached && Date.now() - cached.timestamp <= ACCOUNT_PLAN_CACHE_TTL_MS;
+
     return applyNoStoreHeaders(
       NextResponse.json(
-        { ok: false, message: sanitizeErrorMessage(error, "Erro ao carregar plano.") },
-        { status: 500 },
+        {
+          ok: true,
+          message: sanitizeErrorMessage(error, "Erro ao carregar plano."),
+          plan: canUseCache ? cached.plan : buildFallbackPlan(),
+          sync: {
+            degraded: true,
+            usedCache: Boolean(canUseCache),
+          },
+        },
+        { status: 200 },
       ),
     );
   }

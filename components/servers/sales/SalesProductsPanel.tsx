@@ -32,7 +32,9 @@ import {
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   ServerButton,
+  ServerDangerZone,
   ServerDiscordRelinkState,
+  ServerDeleteConfirmModal,
   ServerEmptyState,
   ServerIconFrame,
   ServerSectionHeading,
@@ -502,7 +504,8 @@ function SelectMenu<T extends string>({
       >
         {options.find(([option]) => option === value)?.[1] || "Selecionar"}
         <ChevronDown
-          className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.9}
+          className={`h-[16px] w-[16px] shrink-0 bg-transparent text-[#9A9A9A] transition ${open ? "rotate-180 text-[#DADADA]" : ""}`}
         />
       </button>
       {open ? (
@@ -1652,6 +1655,8 @@ export function SalesProductCreatePanel({
   const [discordChannelId, setDiscordChannelId] = useState("");
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isMediaLibraryOpen, setIsMediaLibraryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [organizationUsage, setOrganizationUsage] = useState<ProductOrganizationUsage>(() =>
@@ -2243,6 +2248,33 @@ export function SalesProductCreatePanel({
     title,
   ]);
 
+  const handleDeleteProduct = useCallback(async () => {
+    if (!isEditMode || !productCode || readOnly || isDeleting) return;
+    setIsDeleting(true);
+    setStatusMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/me/guilds/sales-products", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guildId, productCode }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Erro ao excluir produto.");
+      }
+      invalidateProductCaches(guildId);
+      setIsDeleteModalOpen(false);
+      router.push(getProductsPath(guildId));
+      router.refresh();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Erro ao excluir produto.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [guildId, isDeleting, isEditMode, productCode, readOnly, router]);
+
   return (
     <div className="space-y-[18px]">
       <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
@@ -2547,6 +2579,16 @@ export function SalesProductCreatePanel({
               </p>
             </div>
           </ServerSurface>
+
+          {isEditMode ? (
+            <ServerDangerZone
+              title="Excluir produto"
+              description="Remove o produto da loja e do painel. Se ja existir historico de pedidos, ele sera arquivado fora do catalogo para preservar auditoria."
+              actionLabel="Excluir produto"
+              disabled={controlsDisabled || isDeleting}
+              onAction={() => setIsDeleteModalOpen(true)}
+            />
+          ) : null}
         </div>
 
         <aside className="space-y-[18px]">
@@ -2731,6 +2773,15 @@ export function SalesProductCreatePanel({
         onConfirm={addExistingMedia}
         onUpload={addMediaFiles}
         disabled={controlsDisabled}
+      />
+      <ServerDeleteConfirmModal
+        open={isDeleteModalOpen}
+        title="Excluir produto?"
+        description={`Esta acao remove "${title.trim() || "este produto"}" das listagens. Estoques vinculados podem ser removidos junto quando nao houver historico bloqueando a exclusao.`}
+        confirmLabel="Excluir produto"
+        isDeleting={isDeleting}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onConfirm={() => void handleDeleteProduct()}
       />
     </div>
   );

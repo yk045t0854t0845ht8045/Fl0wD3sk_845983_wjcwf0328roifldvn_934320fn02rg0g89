@@ -24,6 +24,7 @@ export type ManagedServersSyncReason =
   | "ok"
   | "discord_not_linked"
   | "discord_oauth_missing"
+  | "discord_oauth_revoked"
   | "discord_sync_failed";
 
 export type ManagedServersSyncState = {

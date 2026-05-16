@@ -1,6 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { Trash2 } from "lucide-react";
+import { ButtonLoader } from "@/components/login/ButtonLoader";
 
 export function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -196,5 +200,155 @@ export function ServerDiscordRelinkState({
         </ServerButton>
       }
     />
+  );
+}
+
+export function ServerDeleteConfirmModal({
+  open,
+  title,
+  description,
+  confirmLabel = "Excluir",
+  isDeleting = false,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  description: string;
+  confirmLabel?: string;
+  isDeleting?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel, open]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[2600] isolate overflow-y-auto overscroll-contain">
+      <button
+        type="button"
+        aria-label="Fechar modal"
+        className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[7px]"
+        onClick={onCancel}
+      />
+      <div className="relative z-[10] flex min-h-full items-center justify-center px-[18px] py-[28px]">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          className="flowdesk-stage-fade relative w-full max-w-[620px] overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
+        >
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[30px] border border-[#111]" />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[29px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+          <div className="relative z-10">
+            <div className="flex items-start justify-between gap-[14px]">
+              <div>
+                <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#DB6B6B]">
+                  Exclusao
+                </p>
+                <h2 className="mt-[12px] text-[28px] leading-[1] font-medium tracking-[-0.05em] text-[#EFEFEF]">
+                  {title}
+                </h2>
+                <p className="mt-[12px] max-w-[520px] text-[14px] leading-[1.62] text-[#858585]">
+                  {description}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onCancel}
+                className="inline-flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+                aria-label="Fechar modal"
+              >
+                <span className="text-[18px] leading-none">x</span>
+              </button>
+            </div>
+            <div className="mt-[24px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={isDeleting}
+                className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={isDeleting}
+                aria-busy={isDeleting}
+                className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold disabled:cursor-not-allowed disabled:opacity-75"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out ${
+                    isDeleting
+                      ? "bg-[#1a0a0a]"
+                      : "bg-[linear-gradient(180deg,#e05252_0%,#b52f2f_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]"
+                  }`}
+                />
+                <span className={`relative z-10 inline-flex items-center justify-center gap-[8px] whitespace-nowrap leading-none ${isDeleting ? "text-[#c49a9a]" : "text-white"}`}>
+                  {isDeleting ? (
+                    <ButtonLoader size={16} colorClassName="text-[#c49a9a]" />
+                  ) : (
+                    <Trash2 className="h-[15px] w-[15px]" />
+                  )}
+                  {confirmLabel}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function ServerDangerZone({
+  title,
+  description,
+  actionLabel,
+  disabled = false,
+  onAction,
+}: {
+  title: string;
+  description: string;
+  actionLabel: string;
+  disabled?: boolean;
+  onAction: () => void;
+}) {
+  return (
+    <ServerSurface className="border-[#2A1717] bg-[linear-gradient(180deg,#0D0808_0%,#080707_100%)] p-[18px] sm:p-[22px]">
+      <div className="flex flex-col gap-[16px] sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#A95757]">
+            Zona de exclusao
+          </p>
+          <h4 className="mt-[9px] text-[16px] font-semibold text-[#F0E6E6]">
+            {title}
+          </h4>
+          <p className="mt-[7px] max-w-[720px] text-[13px] leading-[1.55] text-[#8A7373]">
+            {description}
+          </p>
+        </div>
+        <ServerButton
+          variant="danger"
+          disabled={disabled}
+          onClick={onAction}
+          className="self-start sm:self-auto"
+        >
+          <Trash2 className="h-[15px] w-[15px]" />
+          {actionLabel}
+        </ServerButton>
+      </div>
+    </ServerSurface>
   );
 }
