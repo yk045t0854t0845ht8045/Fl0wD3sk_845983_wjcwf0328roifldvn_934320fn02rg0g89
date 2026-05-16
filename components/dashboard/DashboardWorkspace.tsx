@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import {
   ArrowUpRight,
   ArrowRightLeft,
@@ -40,7 +41,11 @@ import { useNotificationEffect } from "@/components/notifications/NotificationsP
 import { DashboardContentSkeleton } from "@/components/workspace/WorkspaceRouteLoading";
 import { setWorkspaceShellReadyState } from "@/components/workspace/WorkspaceRouteAdaptiveLoading";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
-import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
+import {
+  buildDiscordAuthStartHref,
+  buildLoginHref,
+  getCurrentBrowserInternalPath,
+} from "@/lib/auth/paths";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 import {
   buildAccountPathWithReturn,
@@ -627,32 +632,31 @@ function DashboardDiscordRequiredModal({
   isOpen: boolean;
   onConnect: () => void;
 }) {
-  if (!isOpen) {
+  if (!isOpen || typeof document === "undefined") {
     return null;
   }
 
-  return (
-    <div className="fixed inset-0 z-[5200] overflow-y-auto overscroll-contain p-[18px]">
+  return createPortal(
+    <div className="fixed inset-0 z-[5200] isolate overflow-y-auto overscroll-contain">
       <div className="absolute inset-0 bg-[rgba(0,0,0,0.86)] backdrop-blur-[7px]" />
-      <div className="relative z-10 mx-auto flex min-h-full max-w-[680px] items-center justify-center">
+      <div className="relative z-[10] flex min-h-full items-center justify-center px-[18px] py-[28px]">
         <div
           role="dialog"
           aria-modal="true"
           aria-label="Vincular Discord"
-          className="relative w-full overflow-hidden rounded-[30px] border border-[#151515] bg-[linear-gradient(180deg,rgba(10,12,18,0.985)_0%,rgba(5,6,10,0.985)_100%)] p-[24px] shadow-[0_34px_110px_rgba(0,0,0,0.58)] sm:p-[30px]"
+          className="flowdesk-stage-fade relative w-full max-w-[620px] overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
         >
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-[linear-gradient(90deg,transparent_0%,rgba(114,154,255,0.5)_50%,transparent_100%)]"
-          />
-          <span className="inline-flex items-center rounded-full border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.1)] px-[12px] py-[6px] text-[11px] leading-none font-semibold uppercase tracking-[0.16em] text-[#A9CAFF]">
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[30px] border border-[#111]" />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[29px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+          <div className="relative z-10">
+          <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#9BB7FF]">
             Login Discord necessario
-          </span>
-          <h2 className="mt-[18px] text-[30px] leading-[1.02] tracking-[-0.05em] text-[#F4F7FF] sm:text-[38px]">
+          </p>
+          <h2 className="mt-[12px] text-[28px] leading-[1] font-medium tracking-[-0.05em] text-[#EFEFEF]">
             Vincule sua conta Discord
             <span className="block">para carregar seus servidores</span>
           </h2>
-          <p className="mt-[16px] text-[15px] leading-[1.7] text-[#AAB4C7]">
+          <p className="mt-[12px] max-w-[540px] text-[14px] leading-[1.62] text-[#858585]">
             Sua conta Flowdesk pode entrar com Google ou email, mas servidores,
             equipes, canais, cargos e modulos do Discord precisam de uma
             autorizacao Discord ativa nesta mesma conta.
@@ -670,11 +674,11 @@ function DashboardDiscordRequiredModal({
           <button
             type="button"
             onClick={onConnect}
-            className="group relative mt-[24px] inline-flex h-[48px] w-full items-center justify-center overflow-visible whitespace-nowrap rounded-[14px] px-6 text-[15px] leading-none font-semibold sm:w-auto"
+            className="group relative mt-[24px] inline-flex h-[46px] w-full items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold sm:w-auto"
           >
             <span
               aria-hidden="true"
-              className="absolute inset-0 rounded-[14px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+              className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
             />
             <span className="relative z-10 text-[#111111]">
               Vincular com Discord
@@ -683,6 +687,8 @@ function DashboardDiscordRequiredModal({
         </div>
       </div>
     </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -2062,7 +2068,7 @@ export function DashboardWorkspace({
 
   const openDiscordLoginFlow = useCallback((mode: "login" | "link" = "login") => {
     if (typeof window === "undefined") return;
-    const nextPath = `${window.location.pathname}${window.location.search}`;
+    const nextPath = getCurrentBrowserInternalPath("/dashboard");
     window.location.assign(buildDiscordAuthStartHref(nextPath, mode));
   }, []);
 

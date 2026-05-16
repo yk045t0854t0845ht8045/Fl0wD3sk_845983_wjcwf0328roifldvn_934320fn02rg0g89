@@ -5,6 +5,10 @@ import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
+import {
+  buildDiscordAuthStartHref,
+  getCurrentBrowserInternalPath,
+} from "@/lib/auth/paths";
 
 export function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -182,24 +186,39 @@ export function ServerDiscordRelinkState({
   description?: string;
 }) {
   const handleRelink = () => {
-    const next =
-      typeof window === "undefined"
-        ? "/servers"
-        : `${window.location.pathname}${window.location.search}`;
-    window.location.href = `/discord/link/start?next=${encodeURIComponent(next)}`;
+    const next = getCurrentBrowserInternalPath("/servers");
+    window.location.assign(buildDiscordAuthStartHref(next, "link"));
   };
 
   return (
-    <ServerEmptyState
-      icon={<span className="text-[20px] font-bold">DC</span>}
-      title="Revincule o Discord"
-      description={description}
-      action={
-        <ServerButton onClick={handleRelink} variant="primary">
-          Revincular Discord
-        </ServerButton>
-      }
-    />
+    <div className="relative overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_28px_90px_rgba(0,0,0,0.34)] sm:px-[28px] sm:py-[28px]">
+      <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[30px] border border-[#111]" />
+      <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[29px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+      <div className="relative z-10">
+        <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#9BB7FF]">
+          Login Discord necessario
+        </p>
+        <h4 className="mt-[12px] text-[26px] leading-[1] font-medium tracking-[-0.05em] text-[#EFEFEF]">
+          Vincule sua conta Discord
+        </h4>
+        <p className="mt-[12px] max-w-[560px] text-[14px] leading-[1.62] text-[#858585]">
+          {description}
+        </p>
+        <button
+          type="button"
+          onClick={handleRelink}
+          className="group relative mt-[24px] inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
+        >
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+          />
+          <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+            Vincular com Discord
+          </span>
+        </button>
+      </div>
+    </div>
   );
 }
 
