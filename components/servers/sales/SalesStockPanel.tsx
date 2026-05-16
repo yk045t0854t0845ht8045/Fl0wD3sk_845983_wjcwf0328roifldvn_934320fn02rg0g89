@@ -24,6 +24,8 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import {
   ServerButton,
+  ServerDangerZone,
+  ServerDeleteConfirmModal,
   ServerDiscordRelinkState,
   ServerEmptyState,
   ServerIconFrame,
@@ -438,7 +440,10 @@ function SelectMenu<T extends string>({
         className="flowdesk-server-button flex h-[42px] w-full items-center justify-between rounded-[14px] border border-[#292929] bg-[#0D0D0D] px-[14px] text-left text-[13px] text-[#EDEDED] transition hover:border-[#444] disabled:cursor-not-allowed disabled:opacity-55"
       >
         {options.find(([option]) => option === value)?.[1] || "Selecionar"}
-        <ChevronDown className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`} />
+        <ChevronDown
+          strokeWidth={1.9}
+          className={`h-[16px] w-[16px] shrink-0 bg-transparent text-[#9A9A9A] transition ${open ? "rotate-180 text-[#DADADA]" : ""}`}
+        />
       </button>
       {open ? (
         <div
@@ -581,11 +586,6 @@ function StockItemActionsModal({
   const [isDuplicateOpen, setIsDuplicateOpen] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(1);
   useBodyScrollLock(Boolean(item));
-
-  useEffect(() => {
-    setIsDuplicateOpen(false);
-    setDuplicateCount(1);
-  }, [item?.id]);
 
   useEffect(() => {
     if (!item) return;
@@ -800,6 +800,8 @@ export function SalesStockPanel({
   const [isSaving, setIsSaving] = useState(false);
   const [savingQuantityItemId, setSavingQuantityItemId] = useState<string | null>(null);
   const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
+  const [isDeletingAllStock, setIsDeletingAllStock] = useState(false);
   const [duplicatingItemId, setDuplicatingItemId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [needsDiscordRelink, setNeedsDiscordRelink] = useState(false);
@@ -1106,6 +1108,60 @@ export function SalesStockPanel({
     [cancelEdit, editingItemId, guildId, notifications, readOnly, selectedProduct],
   );
 
+  const deleteAllProductStock = useCallback(async () => {
+    if (!selectedProduct || readOnly || isDeletingAllStock) return;
+    setIsDeletingAllStock(true);
+    setStatusMessage(null);
+    try {
+      const response = await fetch("/api/auth/me/guilds/sales-stock", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guildId,
+          productId: selectedProduct.id,
+          deleteAllForProduct: true,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as StockResponse;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Erro ao excluir estoque do produto.");
+      }
+      setItems([]);
+      setProducts((current) =>
+        current.map((product) =>
+          product.id === selectedProduct.id
+            ? { ...product, stockQuantity: payload.stockQuantity ?? 0 }
+            : product,
+        ),
+      );
+      cancelEdit();
+      setIsDeleteAllModalOpen(false);
+      notifications.success("Estoque do produto removido.", { title: "Estoque atualizado" });
+      if (payload.discordSyncStatus === "failed") {
+        notifications.show(
+          payload.discordSyncError ||
+            "O estoque foi removido, mas o embed do produto no Discord nao sincronizou agora.",
+          { title: "Embed Discord", tone: "default", durationMs: 7200 },
+        );
+      }
+    } catch (error) {
+      notifications.error(
+        error instanceof Error ? error.message : "Erro ao excluir estoque do produto.",
+        { title: "Falha no estoque" },
+      );
+    } finally {
+      setIsDeletingAllStock(false);
+    }
+  }, [
+    cancelEdit,
+    guildId,
+    isDeletingAllStock,
+    notifications,
+    readOnly,
+    selectedProduct,
+  ]);
+
   const duplicateStockItem = useCallback(
     async (item: StockItem, count: number) => {
       if (!selectedProduct || readOnly) return;
@@ -1339,9 +1395,20 @@ export function SalesStockPanel({
           </div>
 
           {isLoadingProducts ? (
-            <div className="flex items-center justify-center gap-[10px] px-[22px] py-[48px] text-[13px] text-[#8A8A8A]">
-              <ButtonLoader size={16} />
-              Carregando produtos...
+            <div className="divide-y divide-[#151515]">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="flex items-center gap-[14px] px-[18px] py-[15px] sm:px-[22px]"
+                >
+                  <div className="h-[44px] w-[44px] shrink-0 animate-pulse rounded-[14px] bg-[#141414]" />
+                  <div className="min-w-0 flex-1">
+                    <div className="h-[14px] w-[min(260px,60vw)] animate-pulse rounded-full bg-[#171717]" />
+                    <div className="mt-[8px] h-[11px] w-[min(360px,70vw)] animate-pulse rounded-full bg-[#111]" />
+                  </div>
+                  <div className="h-[30px] w-[72px] animate-pulse rounded-full bg-[#111]" />
+                </div>
+              ))}
             </div>
           ) : filteredProducts.length ? (
             <div className="divide-y divide-[#151515]">
@@ -1671,7 +1738,15 @@ export function SalesStockPanel({
             </ServerSurface>
           </aside>
         </div>
+        <ServerDangerZone
+          title="Excluir estoque do produto"
+          description="Remove todas as triagens e entregas digitais deste produto. A quantidade publicada sera recalculada automaticamente."
+          actionLabel="Excluir estoque"
+          disabled={readOnly || isDeletingAllStock || isSaving}
+          onAction={() => setIsDeleteAllModalOpen(true)}
+        />
         <StockItemActionsModal
+          key={actionItem?.id || "stock-actions-empty"}
           item={actionItem}
           deleting={Boolean(actionItem && deletingItemId === actionItem.id)}
           duplicating={Boolean(actionItem && duplicatingItemId === actionItem.id)}
@@ -1679,6 +1754,15 @@ export function SalesStockPanel({
           onEdit={startEditItem}
           onDuplicate={(item, count) => void duplicateStockItem(item, count)}
           onDelete={(item) => void deleteStockItem(item)}
+        />
+        <ServerDeleteConfirmModal
+          open={isDeleteAllModalOpen}
+          title="Excluir estoque?"
+          description={`Esta acao remove todas as triagens de "${selectedProduct.title}". O produto continua existindo, mas o estoque ficara zerado.`}
+          confirmLabel="Excluir estoque"
+          isDeleting={isDeletingAllStock}
+          onCancel={() => setIsDeleteAllModalOpen(false)}
+          onConfirm={() => void deleteAllProductStock()}
         />
         </>
       )}

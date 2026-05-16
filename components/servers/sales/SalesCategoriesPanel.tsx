@@ -23,6 +23,8 @@ import {
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   ServerButton,
+  ServerDangerZone,
+  ServerDeleteConfirmModal,
   ServerEmptyState,
   ServerIconFrame,
   ServerSectionHeading,
@@ -495,7 +497,8 @@ function SelectMenu<T extends string>({
       >
         {options.find(([option]) => option === value)?.[1] || "Selecionar"}
         <ChevronDown
-          className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.9}
+          className={`h-[16px] w-[16px] shrink-0 bg-transparent text-[#9A9A9A] transition ${open ? "rotate-180 text-[#DADADA]" : ""}`}
         />
       </button>
       {open ? (
@@ -611,6 +614,8 @@ export function SalesCategoryCreatePanel({
   const [isDiscordMenuOpen, setIsDiscordMenuOpen] = useState(false);
   const [productSort, setProductSort] = useState<ProductSortOption>("Mais relevantes");
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1017,6 +1022,33 @@ export function SalesCategoryCreatePanel({
     title,
   ]);
 
+  const handleDeleteCategory = useCallback(async () => {
+    if (!isEditMode || !categoryCode || readOnly || isDeleting) return;
+    setIsDeleting(true);
+    setStatusMessage(null);
+
+    try {
+      const response = await fetch("/api/auth/me/guilds/sales-categories", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guildId, categoryCode }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as SalesCategoryCreateResponse;
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "Erro ao excluir categoria.");
+      }
+      invalidateCategoryCaches(guildId);
+      setIsDeleteModalOpen(false);
+      router.push(getCategoriesPath(guildId));
+      router.refresh();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Erro ao excluir categoria.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [categoryCode, guildId, isDeleting, isEditMode, readOnly, router]);
+
   return (
     <div className="space-y-[18px]">
       <div className="flex flex-col gap-[14px] lg:flex-row lg:items-center lg:justify-between">
@@ -1283,6 +1315,16 @@ export function SalesCategoryCreatePanel({
               </p>
             </div>
           </ServerSurface>
+
+          {isEditMode ? (
+            <ServerDangerZone
+              title="Excluir categoria"
+              description="Remove a categoria do painel. Produtos vinculados ficam preservados e voltam para a listagem sem categoria."
+              actionLabel="Excluir categoria"
+              disabled={isSaving || isDeleting || readOnly}
+              onAction={() => setIsDeleteModalOpen(true)}
+            />
+          ) : null}
         </div>
 
         <aside className="space-y-[18px]">
@@ -1389,7 +1431,8 @@ export function SalesCategoryCreatePanel({
               >
                 {discordPublicationLabel[discordPublicationMode]}
                 <ChevronDown
-                  className={`h-[16px] w-[16px] text-[#777] transition ${isDiscordMenuOpen ? "rotate-180" : ""}`}
+                  strokeWidth={1.9}
+                  className={`h-[16px] w-[16px] shrink-0 bg-transparent text-[#9A9A9A] transition ${isDiscordMenuOpen ? "rotate-180 text-[#DADADA]" : ""}`}
                 />
               </button>
               {isDiscordMenuOpen ? (
@@ -1476,6 +1519,15 @@ export function SalesCategoryCreatePanel({
         </aside>
       </div>
       )}
+      <ServerDeleteConfirmModal
+        open={isDeleteModalOpen}
+        title="Excluir categoria?"
+        description={`Esta acao remove "${title.trim() || "esta categoria"}". Os produtos vinculados nao serao apagados.`}
+        confirmLabel="Excluir categoria"
+        isDeleting={isDeleting}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onConfirm={() => void handleDeleteCategory()}
+      />
     </div>
   );
 }

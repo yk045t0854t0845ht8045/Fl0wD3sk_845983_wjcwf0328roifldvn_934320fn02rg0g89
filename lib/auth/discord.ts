@@ -255,6 +255,24 @@ export async function refreshDiscordToken(refreshToken: string) {
 
   if (!response.ok) {
     const text = await response.text();
+    const normalizedText = text.toLowerCase();
+    if (
+      response.status === 400 &&
+      (normalizedText.includes("invalid_grant") ||
+        normalizedText.includes("invalid token") ||
+        normalizedText.includes("revoked"))
+    ) {
+      throw new DiscordRelinkRequiredError(
+        "Sua autorizacao do Discord expirou ou foi revogada. Revincule sua conta Discord para continuar.",
+      );
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new DiscordRelinkRequiredError(
+        "Sua autorizacao do Discord expirou ou foi revogada. Revincule sua conta Discord para continuar.",
+      );
+    }
+
     throw new Error(`Falha ao renovar token Discord: ${text}`);
   }
 

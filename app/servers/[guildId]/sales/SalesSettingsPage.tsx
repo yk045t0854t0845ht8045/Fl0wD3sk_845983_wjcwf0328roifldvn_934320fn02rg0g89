@@ -14,12 +14,14 @@ type ServerSalesSettingsSection =
   | "sales_stock_edit"
   | "sales_payment_methods"
   | "sales_coupons_gifts"
-  | "sales_coupons_gifts_create";
+  | "sales_coupons_gifts_create"
+  | "sales_coupons_gifts_edit";
 
 type ServerSalesSettingsPageProps = {
   params: Promise<{
     guildId: string;
     productCode?: string;
+    discountCode?: string;
   }>;
   settingsSection: ServerSalesSettingsSection;
 };

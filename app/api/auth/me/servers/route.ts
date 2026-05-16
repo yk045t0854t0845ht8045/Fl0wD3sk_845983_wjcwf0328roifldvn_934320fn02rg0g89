@@ -73,7 +73,7 @@ export async function GET(request: Request) {
     }
 
     const snapshot = await getPanelManagedServersSnapshotForCurrentSession({
-      forceFresh,
+      forceFresh: forceFresh || Boolean(authSession.user.discord_user_id),
     });
     const auditContext = extendSecurityRequestContext(requestContext, {
       sessionId: authSession.id,
@@ -119,7 +119,7 @@ export async function GET(request: Request) {
 
     return respond(
       {
-        ok: false,
+        ok: status === 401 ? false : true,
         message,
         servers: [],
         sync: status === 401 ? DEFAULT_MANAGED_SERVERS_SYNC_STATE : degradedSync,

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   CircleHelp,
@@ -42,6 +42,7 @@ import {
 } from "@/components/servers/sales/SalesProductsPanel";
 import {
   SalesCouponGiftCreatePanel,
+  SalesCouponGiftEditPanel,
   SalesCouponsGiftsListPanel,
 } from "@/components/servers/sales/SalesCouponsGiftsPanel";
 import { SalesPaymentMethodsPanel } from "@/components/servers/sales/SalesPaymentMethodsPanel";
@@ -99,6 +100,7 @@ type ServerSettingsSection =
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "sales_coupons_gifts_create"
+  | "sales_coupons_gifts_edit"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
@@ -486,6 +488,7 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     | "sales_payment_methods"
     | "sales_coupons_gifts"
     | "sales_coupons_gifts_create"
+    | "sales_coupons_gifts_edit"
   >,
   { tag: string; title: string; description: string }
 > = {
@@ -560,6 +563,12 @@ const SALES_PLACEHOLDER_CONTENT: Record<
     title: "Criar Cupom ou Gift",
     description:
       "Defina codigo, valor, produtos, limite de uso e validade da campanha.",
+  },
+  sales_coupons_gifts_edit: {
+    tag: "Vendas",
+    title: "Editar Cupom ou Gift",
+    description:
+      "Atualize codigo, valor, produtos, limite de uso e validade da campanha.",
   },
 };
 
@@ -2289,6 +2298,7 @@ export function ServerSettingsEditor({
         sales_payment_methods: "server_manage_tickets_overview",
         sales_coupons_gifts: "server_manage_tickets_overview",
         sales_coupons_gifts_create: "server_manage_tickets_overview",
+        sales_coupons_gifts_edit: "server_manage_tickets_overview",
         entry_exit_overview: "server_manage_welcome_overview",
         entry_exit_message: "server_manage_welcome_message",
         security_antilink: "server_manage_antilink",
@@ -3673,7 +3683,8 @@ export function ServerSettingsEditor({
     settingsSection === "sales_stock_edit" ||
     settingsSection === "sales_payment_methods" ||
     settingsSection === "sales_coupons_gifts" ||
-    settingsSection === "sales_coupons_gifts_create";
+    settingsSection === "sales_coupons_gifts_create" ||
+    settingsSection === "sales_coupons_gifts_edit";
   const isSalesSettingsSection = settingsSection === "sales_overview";
   const salesPlaceholderContent = isSalesSection && settingsSection !== "sales_overview"
     ? SALES_PLACEHOLDER_CONTENT[settingsSection]
@@ -4289,7 +4300,7 @@ export function ServerSettingsEditor({
     }
   }, [hasUnsavedChanges, showSaveSuccessBar, successMessage]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (typeof onUnsavedChangesChange === "function") {
       onUnsavedChangesChange(hasUnsavedChanges);
     }
@@ -4323,6 +4334,14 @@ export function ServerSettingsEditor({
     navigationBlockSignal,
     showSaveSuccessBar,
   ]);
+
+  useEffect(() => {
+    setShowNavigationBlockedSaveState(false);
+    if (navigationBlockedFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(navigationBlockedFeedbackTimeoutRef.current);
+      navigationBlockedFeedbackTimeoutRef.current = null;
+    }
+  }, [activeTab, guildId, settingsSection]);
 
   useEffect(() => {
     if (!hasUnsavedChanges || isSaving || showSaveSuccessBar) {
@@ -6042,6 +6061,11 @@ export function ServerSettingsEditor({
                     />
                   ) : settingsSection === "sales_coupons_gifts_create" ? (
                     <SalesCouponGiftCreatePanel
+                      guildId={guildId}
+                      readOnly={settingsReadOnly}
+                    />
+                  ) : settingsSection === "sales_coupons_gifts_edit" ? (
+                    <SalesCouponGiftEditPanel
                       guildId={guildId}
                       readOnly={settingsReadOnly}
                     />

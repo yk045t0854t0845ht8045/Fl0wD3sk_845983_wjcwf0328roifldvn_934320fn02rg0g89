@@ -140,7 +140,8 @@ function SelectMenu<T extends string>({
           {options.find(([option]) => option === value)?.[1] || "Selecionar"}
         </span>
         <ChevronDown
-          className={`h-[16px] w-[16px] text-[#777] transition ${open ? "rotate-180" : ""}`}
+          strokeWidth={1.9}
+          className={`h-[16px] w-[16px] shrink-0 bg-transparent text-[#9A9A9A] transition ${open ? "rotate-180 text-[#DADADA]" : ""}`}
         />
       </button>
       {open ? (

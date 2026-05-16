@@ -886,8 +886,9 @@ export async function DELETE(request: Request) {
   try {
     const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const { guildId, productId, itemId } = readStockIdentity(rawBody);
+    const deleteAllForProduct = rawBody.deleteAllForProduct === true;
 
-    if (!isGuildId(guildId) || !isUuid(productId) || !isUuid(itemId)) {
+    if (!isGuildId(guildId) || !isUuid(productId) || (!deleteAllForProduct && !isUuid(itemId))) {
       return applyNoStoreHeaders(
         NextResponse.json({ ok: false, message: "Parametros invalidos." }, { status: 400 }),
       );
@@ -904,12 +905,17 @@ export async function DELETE(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
-    const { error } = await supabase
+    let deleteQuery = supabase
       .from("guild_sales_stock_items")
       .delete()
       .eq("guild_id", guildId)
-      .eq("product_id", productId)
-      .eq("id", itemId);
+      .eq("product_id", productId);
+
+    if (!deleteAllForProduct) {
+      deleteQuery = deleteQuery.eq("id", itemId);
+    }
+
+    const { error } = await deleteQuery;
 
     if (error) throw new Error(error.message);
     const stockSync = await syncProductStockQuantityAndDiscordEmbed(guildId, productId);

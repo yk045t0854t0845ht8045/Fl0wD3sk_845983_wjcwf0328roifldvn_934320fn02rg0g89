@@ -22,6 +22,7 @@ export type ServerSettingsSkeletonSection =
   | "sales_payment_methods"
   | "sales_coupons_gifts"
   | "sales_coupons_gifts_create"
+  | "sales_coupons_gifts_edit"
   | "entry_exit_overview"
   | "entry_exit_message"
   | "security_antilink"
