@@ -10,6 +10,7 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   createSalesMercadoPagoPixPayment,
   fetchSalesMercadoPagoPaymentById,
+  refundSalesMercadoPagoPayment,
   resolveSalesMercadoPagoStatus,
   type SalesMercadoPagoPayment,
 } from "@/lib/sales/mercadoPago";
@@ -1818,5 +1819,65 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
     ...nextRuntime,
     cart: finalizedCart,
     deliveries,
+  };
+}
+
+export async function refundSalesCartPayment(input: {
+  cartId: string;
+  guildId: string;
+  reason?: string | null;
+}) {
+  const runtime = await loadSalesCartRuntime(input.cartId);
+  const { cart } = runtime;
+  if (cart.guild_id !== input.guildId) {
+    throw new Error("Compra nao pertence ao servidor informado.");
+  }
+  if (!cart.provider_payment_id) {
+    throw new Error("Compra sem pagamento do provedor para reembolsar.");
+  }
+
+  const normalizedStatus = String(cart.status || "").toLowerCase();
+  const normalizedProviderStatus = String(cart.provider_status || "").toLowerCase();
+  if (
+    normalizedStatus === "refunded" ||
+    normalizedProviderStatus === "refunded" ||
+    String(cart.provider_status_detail || "").toLowerCase().includes("refund")
+  ) {
+    return {
+      cart,
+      alreadyRefunded: true,
+    };
+  }
+
+  const mercadoPagoConfig = await loadSalesMercadoPagoSecureSnapshot(cart.guild_id);
+  const refundPayload = await refundSalesMercadoPagoPayment({
+    accessToken: mercadoPagoConfig.accessToken,
+    paymentId: cart.provider_payment_id,
+  });
+  const refundedCart = await updateSalesCartAndSelect(cart.id, {
+    status: "refunded",
+    provider_status: "refunded",
+    provider_status_detail: "ticket_ai_refund",
+    provider_payload: {
+      refund: refundPayload,
+      refund_reason: input.reason || "Ticket refund",
+      refunded_at: new Date().toISOString(),
+    },
+  });
+  await recordSalesOrderEvent({
+    cart: refundedCart,
+    eventType: "ticket_ai_refund_processed",
+    eventKey: `ticket_ai_refund:${cart.provider_payment_id}`,
+    payload: {
+      provider: "mercado_pago",
+      providerPaymentId: cart.provider_payment_id,
+      reason: input.reason || null,
+      refund: refundPayload,
+    },
+  });
+
+  return {
+    cart: refundedCart,
+    alreadyRefunded: false,
   };
 }

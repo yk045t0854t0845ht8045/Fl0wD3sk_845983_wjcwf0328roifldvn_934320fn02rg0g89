@@ -367,34 +367,11 @@ async function reconcileRowsWithSecureVault(
     ) as SalesPaymentMethodRow[];
   }
 
-  if (
-    mercadoPagoRow.credentials_configured === true ||
-    mercadoPagoRow.status === "active"
-  ) {
-    const cleanupResult = await getSupabaseAdminClientOrThrow()
-      .from("guild_sales_payment_methods")
-      .update({
-        status: "disabled",
-        credentials_configured: false,
-        last_health_status: "failed",
-        last_health_error: MISSING_SECURE_CREDENTIAL_MESSAGE,
-      })
-      .eq("guild_id", guildId)
-      .eq("method_key", "mercado_pago");
-    if (cleanupResult.error) {
-      console.warn("[sales-payment-methods] stale secure credential cleanup failed", {
-        guildId,
-        error: extractAuditErrorMessage(cleanupResult.error),
-      });
-    }
-  }
-
   return rows.map((row) =>
     row.method_key === "mercado_pago"
       ? {
           ...row,
-          status: "disabled" as const,
-          credentials_configured: false,
+          credentials_configured: Boolean(row.credentials_configured),
           last_health_status: "failed" as const,
           last_health_error: MISSING_SECURE_CREDENTIAL_MESSAGE,
         }

@@ -283,6 +283,10 @@ function buildTicketSettingsPayload(input: {
       typeof input.snapshot?.aiTone === "string"
         ? input.snapshot.aiTone
         : ticketAiSettings.aiTone,
+    refundSettings:
+      typeof input.snapshot?.refundSettings === "object" && input.snapshot.refundSettings
+        ? input.snapshot.refundSettings
+        : null,
     updatedAt: input.updatedAt,
   };
 }

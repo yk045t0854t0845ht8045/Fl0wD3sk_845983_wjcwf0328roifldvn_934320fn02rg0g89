@@ -1437,6 +1437,27 @@ export async function clearDiscordSessionTokensForUser(userId: number) {
   invalidateAuthSessionCache();
 }
 
+export async function clearDiscordSessionTokens(sessionId: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+
+  const result = await supabase
+    .from("auth_sessions")
+    .update({
+      discord_access_token: null,
+      discord_refresh_token: null,
+      discord_token_expires_at: null,
+    })
+    .eq("id", sessionId);
+
+  if (result.error) {
+    throw new Error(
+      `Erro ao limpar tokens Discord da sessao: ${result.error.message}`,
+    );
+  }
+
+  invalidateAuthSessionCache();
+}
+
 export async function updateSessionGuildsCache(
   sessionId: string,
   guilds: DiscordGuild[],

@@ -691,6 +691,30 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean) {
   return fallback;
 }
 
+function isFlowAiHealthLlmProbeEnabled() {
+  return parseBooleanEnv(getServerEnv("FLOWAI_HEALTH_LLM_PROBES_ENABLED"), false);
+}
+
+function buildPassiveIntegrationHealth(
+  upstream: FlowAiHealthResponse["upstream"],
+): FlowAiIntegrationHealth {
+  const providerEntries = Object.values(upstream.providers || {});
+  const bestOperational = providerEntries.find((entry) => entry.status === "operational");
+  const bestDegraded = providerEntries.find(
+    (entry) => entry.status === "degraded_performance",
+  );
+  const source = bestOperational || bestDegraded || upstream.openai;
+
+  return {
+    status: source.status,
+    latencyMs: source.latencyMs,
+    message:
+      source.status === "operational"
+        ? "Probe leve: provider configurado sem chamada de modelo."
+        : source.message || "Provider de IA indisponivel no probe leve.",
+  };
+}
+
 function resolveProviderRetryCount() {
   const configured = Number(getServerEnv("FLOWAI_PROVIDER_MAX_RETRIES") || "");
   if (Number.isFinite(configured) && configured >= 0) {
@@ -1618,66 +1642,77 @@ export async function runFlowAiHealthProbe(): Promise<FlowAiHealthResponse> {
     probeConfiguredProvidersUpstream(),
     getFlowAiCircuitSnapshot(),
   ]);
-  const [
-    creativeTextProbe,
-    supportTextProbe,
-    structuredJsonProbe,
-    statusPageProbe,
-  ] = await Promise.all([
-    probeTextTask("domain_suggestions", [
-      {
-        role: "system",
-        content: "Voce sugere nomes curtos de dominio em PT-BR.",
-      },
-      {
-        role: "user",
-        content:
-          "Sugira um nome curto de dominio para uma empresa ficticia chamada Flowdesk.",
-      },
-    ]),
-    probeTextTask("ticket_reply", [
-      {
-        role: "system",
-        content: "Voce atua como atendimento premium em PT-BR.",
-      },
-      {
-        role: "user",
-        content: "Nao consigo acessar meu painel e o ticket ainda esta aberto.",
-      },
-    ]),
-    probeJsonTask("admin_plan", [
-      {
-        role: "system",
-        content:
-          "Responda apenas JSON com intent e actions para um assistente administrativo do Discord.",
-      },
-      {
-        role: "user",
-        content:
-          'Retorne {"intent":"execute","actions":[{"type":"create_channel","name":"suporte"}]}.',
-      },
-    ]),
-    probeJsonTask("status_note", [
-      {
-        role: "system",
-        content:
-          "Responda apenas JSON com title e description para uma pagina de status.",
-      },
-      {
-        role: "user",
-        content:
-          'Gere {"title":"Instabilidade parcial","description":"Detectamos lentidao em um servico monitorado."}.',
-      },
-    ]),
-  ]);
+  const passiveProbe = buildPassiveIntegrationHealth(upstream);
+  let domainSuggestions = cloneIntegrationHealth(passiveProbe);
+  let ticketAi = cloneIntegrationHealth(passiveProbe);
+  let ticketSuggestion = cloneIntegrationHealth(passiveProbe);
+  let discordMessageAi = cloneIntegrationHealth(passiveProbe);
+  let adminAssistant = cloneIntegrationHealth(passiveProbe);
+  let affiliateInsight = cloneIntegrationHealth(passiveProbe);
+  let statusPageAi = cloneIntegrationHealth(passiveProbe);
 
-  const domainSuggestions = cloneIntegrationHealth(creativeTextProbe);
-  const ticketAi = cloneIntegrationHealth(supportTextProbe);
-  const ticketSuggestion = cloneIntegrationHealth(supportTextProbe);
-  const discordMessageAi = cloneIntegrationHealth(supportTextProbe);
-  const adminAssistant = cloneIntegrationHealth(structuredJsonProbe);
-  const affiliateInsight = cloneIntegrationHealth(structuredJsonProbe);
-  const statusPageAi = cloneIntegrationHealth(statusPageProbe);
+  if (isFlowAiHealthLlmProbeEnabled()) {
+    const [
+      creativeTextProbe,
+      supportTextProbe,
+      structuredJsonProbe,
+      statusProbe,
+    ] = await Promise.all([
+      probeTextTask("domain_suggestions", [
+        {
+          role: "system",
+          content: "Voce sugere nomes curtos de dominio em PT-BR.",
+        },
+        {
+          role: "user",
+          content:
+            "Sugira um nome curto de dominio para uma empresa ficticia chamada Flowdesk.",
+        },
+      ]),
+      probeTextTask("ticket_reply", [
+        {
+          role: "system",
+          content: "Voce atua como atendimento premium em PT-BR.",
+        },
+        {
+          role: "user",
+          content: "Nao consigo acessar meu painel e o ticket ainda esta aberto.",
+        },
+      ]),
+      probeJsonTask("admin_plan", [
+        {
+          role: "system",
+          content:
+            "Responda apenas JSON com intent e actions para um assistente administrativo do Discord.",
+        },
+        {
+          role: "user",
+          content:
+            'Retorne {"intent":"execute","actions":[{"type":"create_channel","name":"suporte"}]}.',
+        },
+      ]),
+      probeJsonTask("status_note", [
+        {
+          role: "system",
+          content:
+            "Responda apenas JSON com title e description para uma pagina de status.",
+        },
+        {
+          role: "user",
+          content:
+            'Gere {"title":"Instabilidade parcial","description":"Detectamos lentidao em um servico monitorado."}.',
+        },
+      ]),
+    ]);
+
+    domainSuggestions = cloneIntegrationHealth(creativeTextProbe);
+    ticketAi = cloneIntegrationHealth(supportTextProbe);
+    ticketSuggestion = cloneIntegrationHealth(supportTextProbe);
+    discordMessageAi = cloneIntegrationHealth(supportTextProbe);
+    adminAssistant = cloneIntegrationHealth(structuredJsonProbe);
+    affiliateInsight = cloneIntegrationHealth(structuredJsonProbe);
+    statusPageAi = cloneIntegrationHealth(statusProbe);
+  }
   const infrastructure = getFlowAiInfraSnapshot();
   const observability = getFlowAiObservabilitySnapshot();
   const overall = resolveFlowAiOverallHealth({

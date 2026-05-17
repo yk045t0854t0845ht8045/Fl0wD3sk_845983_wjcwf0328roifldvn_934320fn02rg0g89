@@ -26,6 +26,16 @@ let cachedTransporterKey: string | null = null;
 const resolvedSmtpHosts = new Set<string>();
 const checkedDeliverabilityDomains = new Set<string>();
 
+function resetCachedTransporter() {
+  try {
+    cachedTransporter?.close?.();
+  } catch {
+    // Ignore transporter cleanup failures; the next send will create a fresh one.
+  }
+  cachedTransporter = null;
+  cachedTransporterKey = null;
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
@@ -794,6 +804,7 @@ export async function sendLoginOtpEmail(input: {
       }),
     });
   } catch (error) {
+    resetCachedTransporter();
     throw normalizeSmtpRuntimeError(error, config);
   }
 }
@@ -1060,6 +1071,7 @@ export async function sendFlowdeskTransactionalEmail(input: {
       html: buildTransactionalEmailHtml(input),
     });
   } catch (error) {
+    resetCachedTransporter();
     throw normalizeSmtpRuntimeError(error, config);
   }
 }

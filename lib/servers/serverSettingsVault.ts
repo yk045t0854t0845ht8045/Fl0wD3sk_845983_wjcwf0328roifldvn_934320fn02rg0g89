@@ -21,6 +21,8 @@ type ServerSettingsVaultRow = {
   updated_at: string | null;
 };
 
+const unreadableSnapshotWarnings = new Set<string>();
+
 function isMissingVaultRelationError(error: {
   code?: string | null;
   message?: string | null;
@@ -57,11 +59,18 @@ function parseVaultPayload<TValue>(input: {
 
     return JSON.parse(decrypted) as TValue;
   } catch (error) {
-    console.error("[serverSettingsVault] failed to decrypt snapshot", {
-      error,
-      guildId: input.guildId,
-      moduleKey: input.moduleKey,
-    });
+    const reason = error instanceof Error ? error.message : "unknown decrypt failure";
+    const warningKey = `${input.guildId}:${input.moduleKey}:${reason}`;
+    if (!unreadableSnapshotWarnings.has(warningKey)) {
+      unreadableSnapshotWarnings.add(warningKey);
+      console.warn("[serverSettingsVault] ignoring unreadable secure snapshot", {
+        reason,
+        guildId: input.guildId,
+        moduleKey: input.moduleKey,
+        recovery:
+          "A snapshot will be replaced automatically the next time this module is saved with the current FlowSecure key.",
+      });
+    }
     return null;
   }
 }

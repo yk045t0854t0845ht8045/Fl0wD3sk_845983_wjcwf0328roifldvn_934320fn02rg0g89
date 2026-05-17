@@ -177,6 +177,50 @@ export function buildSalesProductDiscordPayload(
   };
 }
 
+export function buildSalesProductUnavailableDiscordPayload(input: {
+  productCode: string;
+  title?: string | null;
+}) {
+  const title = input.title?.trim() || "Produto removido";
+
+  return {
+    flags: MESSAGE_FLAG_IS_COMPONENTS_V2,
+    allowed_mentions: { parse: [] as string[] },
+    components: [
+      {
+        type: COMPONENT_TYPE.CONTAINER,
+        accent_color: 0xdb4646,
+        components: [
+          buildTextDisplay(
+            [
+              `## ${title}`,
+              "Este produto esta indisponivel no momento ou foi removido do catalogo.",
+              "Abra a loja novamente pelo painel do servidor para conferir os produtos ativos.",
+            ].join("\n"),
+          ),
+          {
+            type: COMPONENT_TYPE.SEPARATOR,
+            divider: true,
+            spacing: 1,
+          },
+          {
+            type: COMPONENT_TYPE.ACTION_ROW,
+            components: [
+              {
+                type: COMPONENT_TYPE.BUTTON,
+                custom_id: `sales:cart:removed:${input.productCode}`,
+                style: BUTTON_STYLE.SECONDARY,
+                label: "Produto indisponivel",
+                disabled: true,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 export function salesProductMessageLooksManaged(
   message: unknown,
   productCode: string,

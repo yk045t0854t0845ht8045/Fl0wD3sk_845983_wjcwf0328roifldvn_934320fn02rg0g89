@@ -8,7 +8,7 @@ import {
 } from "@/lib/auth/discord";
 import {
   type CurrentAuthSession,
-  clearDiscordSessionTokensForUser,
+  clearDiscordSessionTokens,
   findReusableDiscordSessionTokensForUser,
   getCurrentAuthSessionFromCookie,
   updateSessionDiscordTokens,
@@ -218,7 +218,7 @@ function withoutDiscordOAuthTokens(authSession: CurrentAuthSession): CurrentAuth
 }
 
 async function markDiscordRelinkRequiredForSession(authSession: CurrentAuthSession) {
-  await clearDiscordSessionTokensForUser(authSession.user.id);
+  await clearDiscordSessionTokens(authSession.id);
   return withoutDiscordOAuthTokens(authSession);
 }
 
@@ -250,6 +250,22 @@ export async function resolveSessionAccessToken() {
       refreshed = await refreshDiscordToken(refreshToken);
     } catch (error) {
       if (isDiscordRelinkRequiredError(error)) {
+        try {
+          const recoveredTokens = await recoverLinkedDiscordTokens(authSession);
+          if (recoveredTokens?.discordAccessToken) {
+            return {
+              authSession: {
+                ...authSession,
+                discordAccessToken: recoveredTokens.discordAccessToken,
+                discordRefreshToken: recoveredTokens.discordRefreshToken,
+                discordTokenExpiresAt: recoveredTokens.discordTokenExpiresAt,
+              },
+              accessToken: recoveredTokens.discordAccessToken,
+            };
+          }
+        } catch {
+          // Se outra sessao nao tiver tokens reaproveitaveis, seguimos para o relink desta sessao.
+        }
         const relinkSession = await markDiscordRelinkRequiredForSession(authSession);
         return {
           authSession: relinkSession,
@@ -326,6 +342,21 @@ export async function getAccessibleGuildsForSession(
     return accessibleGuilds;
   } catch (error) {
     if (isDiscordRelinkRequiredError(error)) {
+      try {
+        const recoveredTokens = await recoverLinkedDiscordTokens(sessionContext.authSession);
+        if (recoveredTokens?.discordAccessToken) {
+          const guilds = await fetchDiscordGuilds(recoveredTokens.discordAccessToken);
+          const accessibleGuilds = filterAccessibleGuilds(guilds);
+
+          await updateSessionGuildsCache(sessionContext.authSession.id, guilds);
+          return accessibleGuilds;
+        }
+      } catch {
+        // Cai para o cache ou relink da sessao atual.
+      }
+      if (cachedGuilds !== null) {
+        return filterAccessibleGuilds(cachedGuilds);
+      }
       await markDiscordRelinkRequiredForSession(sessionContext.authSession);
       throw error;
     }

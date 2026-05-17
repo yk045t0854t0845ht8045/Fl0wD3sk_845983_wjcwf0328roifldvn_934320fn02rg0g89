@@ -18,6 +18,12 @@ type StatusNoteCache = {
 
 let latestStatusNoteCache: StatusNoteCache | null = null;
 
+function isStatusAiNarrativeEnabled() {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env.STATUS_AI_NARRATIVES_ENABLED || "").trim().toLowerCase(),
+  );
+}
+
 function buildFingerprint(criticalComponents: ComponentStatus[]) {
   return criticalComponents
     .map((component) =>
@@ -81,6 +87,11 @@ export async function generateCriticalTeamNote(
   criticalComponents: ComponentStatus[],
 ): Promise<StatusTeamNote> {
   const fallbackNote = buildFallbackNote(criticalComponents);
+
+  if (!isStatusAiNarrativeEnabled()) {
+    return fallbackNote;
+  }
+
   const cacheKey = buildFingerprint(criticalComponents);
   const now = Date.now();
 
@@ -174,6 +185,10 @@ export async function generateIncidentSummary(
 ): Promise<{ title: string; summary: string; updateMessage: string }> {
   const fallback = buildFallbackIncidentSummary(day, components, evidenceNotes);
 
+  if (!isStatusAiNarrativeEnabled()) {
+    return fallback;
+  }
+
   try {
     const result = await runFlowAiJson<{
       title?: string;
@@ -239,6 +254,10 @@ export async function generateIncidentInvestigationNote(
     title: buildIncidentTitleFromContext(componentNames, worstStatus),
     message: buildInvestigationUpdateFromContext(componentNames, worstStatus),
   };
+
+  if (!isStatusAiNarrativeEnabled()) {
+    return fallback;
+  }
 
   try {
     const result = await runFlowAiJson<{ title?: string; message?: string }>({

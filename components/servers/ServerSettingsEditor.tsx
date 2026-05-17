@@ -192,6 +192,14 @@ type ServerSettingsDraft = {
   aiCompanyBio: string;
   aiTone: string;
   aiEnabled: boolean;
+  refundLimitDays: number;
+  refundRules: string;
+  refundAutoProcessEnabled: boolean;
+  refundManualApprovalRequired: boolean;
+  refundApprovalChannelId: string | null;
+  refundApproverRoleIds: string[];
+  refundSuccessMessage: string;
+  refundErrorMessage: string;
 };
 
 type WelcomeSettingsDraft = {
@@ -711,6 +719,16 @@ function normalizeServerSettingsDraft(
     aiCompanyBio: typeof draft.aiCompanyBio === "string" ? draft.aiCompanyBio : "",
     aiTone: typeof draft.aiTone === "string" ? draft.aiTone : "formal",
     aiEnabled: Boolean(draft.aiEnabled),
+    refundLimitDays: Math.max(0, Math.min(365, Number(draft.refundLimitDays || 7))),
+    refundRules: typeof draft.refundRules === "string" ? draft.refundRules : "",
+    refundAutoProcessEnabled: Boolean(draft.refundAutoProcessEnabled),
+    refundManualApprovalRequired: Boolean(draft.refundManualApprovalRequired),
+    refundApprovalChannelId: draft.refundApprovalChannelId,
+    refundApproverRoleIds: normalizeDraftIds(draft.refundApproverRoleIds),
+    refundSuccessMessage:
+      typeof draft.refundSuccessMessage === "string" ? draft.refundSuccessMessage : "",
+    refundErrorMessage:
+      typeof draft.refundErrorMessage === "string" ? draft.refundErrorMessage : "",
   };
 }
 
@@ -2061,6 +2079,18 @@ export function ServerSettingsEditor({
   const [aiCompanyBio, setAiCompanyBio] = useState("");
   const [aiTone, setAiTone] = useState("formal");
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [refundLimitDays, setRefundLimitDays] = useState(7);
+  const [refundRules, setRefundRules] = useState("");
+  const [refundAutoProcessEnabled, setRefundAutoProcessEnabled] = useState(false);
+  const [refundManualApprovalRequired, setRefundManualApprovalRequired] = useState(true);
+  const [refundApprovalChannelId, setRefundApprovalChannelId] = useState<string | null>(null);
+  const [refundApproverRoleIds, setRefundApproverRoleIds] = useState<string[]>([]);
+  const [refundSuccessMessage, setRefundSuccessMessage] = useState(
+    "Reembolso concluido. O prazo de estorno ou compensacao depende do provedor de pagamento e do banco emissor.",
+  );
+  const [refundErrorMessage, setRefundErrorMessage] = useState(
+    "Nao consegui concluir o reembolso automaticamente. Encaminhei o caso para a equipe responsavel analisar.",
+  );
   const [isAiRulesModalOpen, setIsAiRulesModalOpen] = useState(false);
   const [isFlowAiUpgradeModalOpen, setIsFlowAiUpgradeModalOpen] = useState(false);
   const [flowAiPlanCode, setFlowAiPlanCode] = useState<PlanCode | null>(null);
@@ -2499,6 +2529,31 @@ export function ServerSettingsEditor({
           ? payload.ticketSettings.aiTone
           : "formal";
       let nextAiEnabled = Boolean(payload.ticketSettings?.aiEnabled);
+      const refundSettings = payload.ticketSettings?.refundSettings || {};
+      const nextRefundLimitDays = Number.isFinite(Number(refundSettings.refundLimitDays))
+        ? Number(refundSettings.refundLimitDays)
+        : 7;
+      const nextRefundRules = typeof refundSettings.refundRules === "string"
+        ? refundSettings.refundRules
+        : "";
+      const nextRefundAutoProcessEnabled = refundSettings.refundAutoProcessEnabled === true;
+      const nextRefundManualApprovalRequired = refundSettings.refundManualApprovalRequired !== false;
+      const nextRefundApprovalChannelId =
+        typeof refundSettings.refundApprovalChannelId === "string" &&
+        textSet.has(refundSettings.refundApprovalChannelId)
+          ? refundSettings.refundApprovalChannelId
+          : null;
+      const nextRefundApproverRoleIds = Array.isArray(refundSettings.refundApproverRoleIds)
+        ? refundSettings.refundApproverRoleIds.filter((id) => roleSet.has(id))
+        : [];
+      const nextRefundSuccessMessage =
+        typeof refundSettings.refundSuccessMessage === "string"
+          ? refundSettings.refundSuccessMessage
+          : "Reembolso concluido. O prazo de estorno ou compensacao depende do provedor de pagamento e do banco emissor.";
+      const nextRefundErrorMessage =
+        typeof refundSettings.refundErrorMessage === "string"
+          ? refundSettings.refundErrorMessage
+          : "Nao consegui concluir o reembolso automaticamente. Encaminhei o caso para a equipe responsavel analisar.";
 
       // Legacy fallback for JSON ai_rules
       try {
@@ -2758,6 +2813,14 @@ export function ServerSettingsEditor({
       setSalesReceiptCompanyName(nextSalesReceiptCompanyName);
       setSalesReceiptCompanyDocument(nextSalesReceiptCompanyDocument);
       setSalesReceiptSupportText(nextSalesReceiptSupportText);
+      setRefundLimitDays(nextRefundLimitDays);
+      setRefundRules(nextRefundRules);
+      setRefundAutoProcessEnabled(nextRefundAutoProcessEnabled);
+      setRefundManualApprovalRequired(nextRefundManualApprovalRequired);
+      setRefundApprovalChannelId(nextRefundApprovalChannelId);
+      setRefundApproverRoleIds(nextRefundApproverRoleIds);
+      setRefundSuccessMessage(nextRefundSuccessMessage);
+      setRefundErrorMessage(nextRefundErrorMessage);
       setSecurityLogsDraft(nextSecurityLogsDraft);
       setSavedSettingsDraft(
         normalizeServerSettingsDraft({
@@ -2776,6 +2839,14 @@ export function ServerSettingsEditor({
           aiCompanyBio: nextAiCompanyBio,
           aiTone: nextAiTone,
           aiEnabled: nextAiEnabled,
+          refundLimitDays: nextRefundLimitDays,
+          refundRules: nextRefundRules,
+          refundAutoProcessEnabled: nextRefundAutoProcessEnabled,
+          refundManualApprovalRequired: nextRefundManualApprovalRequired,
+          refundApprovalChannelId: nextRefundApprovalChannelId,
+          refundApproverRoleIds: nextRefundApproverRoleIds,
+          refundSuccessMessage: nextRefundSuccessMessage,
+          refundErrorMessage: nextRefundErrorMessage,
         }),
       );
       setSavedWelcomeSettingsDraft(
@@ -3908,6 +3979,14 @@ export function ServerSettingsEditor({
         aiCompanyBio,
         aiTone,
         aiEnabled,
+        refundLimitDays,
+        refundRules,
+        refundAutoProcessEnabled,
+        refundManualApprovalRequired,
+        refundApprovalChannelId,
+        refundApproverRoleIds,
+        refundSuccessMessage,
+        refundErrorMessage,
       }),
     [
       adminRoleId,
@@ -3925,6 +4004,14 @@ export function ServerSettingsEditor({
       aiCompanyBio,
       aiTone,
       aiEnabled,
+      refundLimitDays,
+      refundRules,
+      refundAutoProcessEnabled,
+      refundManualApprovalRequired,
+      refundApprovalChannelId,
+      refundApproverRoleIds,
+      refundSuccessMessage,
+      refundErrorMessage,
     ],
   );
   currentTicketDraftRef.current = currentSettingsDraft;
@@ -5182,6 +5269,14 @@ export function ServerSettingsEditor({
       setAiCompanyBio(savedSettingsDraft.aiCompanyBio);
       setAiTone(savedSettingsDraft.aiTone);
       setAiEnabled(savedSettingsDraft.aiEnabled);
+      setRefundLimitDays(savedSettingsDraft.refundLimitDays);
+      setRefundRules(savedSettingsDraft.refundRules);
+      setRefundAutoProcessEnabled(savedSettingsDraft.refundAutoProcessEnabled);
+      setRefundManualApprovalRequired(savedSettingsDraft.refundManualApprovalRequired);
+      setRefundApprovalChannelId(savedSettingsDraft.refundApprovalChannelId);
+      setRefundApproverRoleIds(savedSettingsDraft.refundApproverRoleIds);
+      setRefundSuccessMessage(savedSettingsDraft.refundSuccessMessage);
+      setRefundErrorMessage(savedSettingsDraft.refundErrorMessage);
     } else {
       return;
     }
@@ -5423,6 +5518,16 @@ export function ServerSettingsEditor({
             aiCompanyName,
             aiCompanyBio,
             aiTone,
+            refundSettings: {
+              refundLimitDays,
+              refundRules,
+              refundAutoProcessEnabled,
+              refundManualApprovalRequired,
+              refundApprovalChannelId,
+              refundApproverRoleIds,
+              refundSuccessMessage,
+              refundErrorMessage,
+            },
             panelTitle: legacyFields.panelTitle,
             panelDescription: legacyFields.panelDescription,
             panelButtonLabel: legacyFields.panelButtonLabel,
@@ -5507,6 +5612,14 @@ export function ServerSettingsEditor({
           aiCompanyBio: aiCompanyBio,
           aiTone: aiTone,
           aiEnabled: aiEnabled,
+          refundLimitDays,
+          refundRules,
+          refundAutoProcessEnabled,
+          refundManualApprovalRequired,
+          refundApprovalChannelId,
+          refundApproverRoleIds,
+          refundSuccessMessage,
+          refundErrorMessage,
         });
 
         setTicketEnabled(nextSavedTicketDraft.enabled);
@@ -5524,6 +5637,14 @@ export function ServerSettingsEditor({
         setAiCompanyBio(nextSavedTicketDraft.aiCompanyBio);
         setAiTone(nextSavedTicketDraft.aiTone);
         setAiEnabled(nextSavedTicketDraft.aiEnabled);
+        setRefundLimitDays(nextSavedTicketDraft.refundLimitDays);
+        setRefundRules(nextSavedTicketDraft.refundRules);
+        setRefundAutoProcessEnabled(nextSavedTicketDraft.refundAutoProcessEnabled);
+        setRefundManualApprovalRequired(nextSavedTicketDraft.refundManualApprovalRequired);
+        setRefundApprovalChannelId(nextSavedTicketDraft.refundApprovalChannelId);
+        setRefundApproverRoleIds(nextSavedTicketDraft.refundApproverRoleIds);
+        setRefundSuccessMessage(nextSavedTicketDraft.refundSuccessMessage);
+        setRefundErrorMessage(nextSavedTicketDraft.refundErrorMessage);
         setSavedSettingsDraft(nextSavedTicketDraft);
       }
 
@@ -5586,6 +5707,14 @@ export function ServerSettingsEditor({
     menuChannelId,
     notifyRoleIds,
     panelLayout,
+    refundApprovalChannelId,
+    refundApproverRoleIds,
+    refundAutoProcessEnabled,
+    refundErrorMessage,
+    refundLimitDays,
+    refundManualApprovalRequired,
+    refundRules,
+    refundSuccessMessage,
     savedSettingsDraft,
     salesCartsCategoryId,
     salesEnabled,
@@ -6567,6 +6696,105 @@ export function ServerSettingsEditor({
                                 ))}
                               </div>
                             </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[24px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[18px] sm:px-[22px] sm:py-[22px]">
+                        <div className="flex flex-col gap-[10px] lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <p className="text-[12px] uppercase tracking-[0.18em] text-[#5F5F5F]">Processamento de Reembolso</p>
+                            <h3 className="mt-[10px] text-[18px] leading-none font-medium tracking-[-0.03em] text-[#D1D1D1]">
+                              Regras financeiras do atendimento
+                            </h3>
+                            <p className="mt-[10px] max-w-[720px] text-[13px] leading-[1.55] text-[#6A6A6A]">
+                              Defina como o FlowAI consulta compras, valida prazo e encaminha aprovacoes sem expor credenciais no Discord.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-[20px] grid grid-cols-1 gap-[14px] lg:grid-cols-2">
+                          <div>
+                            <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Prazo limite para reembolso</label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={365}
+                              value={refundLimitDays}
+                              onChange={(event) => setRefundLimitDays(Math.max(0, Math.min(365, Number(event.target.value || 0))))}
+                              disabled={aiControlsDisabled}
+                              className={`h-[44px] w-full rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                            />
+                          </div>
+                          <ConfigStepSelect
+                            label="Canal de aprovacao manual"
+                            placeholder="Escolha o canal"
+                            options={textChannelOptions}
+                            value={refundApprovalChannelId}
+                            onChange={setRefundApprovalChannelId}
+                            disabled={aiControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                          <ConfigStepMultiSelect
+                            label="Cargos que aprovam ou negam"
+                            placeholder="Escolha os cargos"
+                            options={roleOptions}
+                            values={refundApproverRoleIds}
+                            onChange={setRefundApproverRoleIds}
+                            disabled={aiControlsDisabled}
+                            controlHeightPx={serverSettingsControlHeight}
+                          />
+                          <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-2">
+                            <label className={`flex items-center justify-between gap-[12px] rounded-[16px] border border-[#171717] bg-[#090909] px-[14px] py-[12px] ${aiControlsDisabled ? "opacity-50" : ""}`}>
+                              <span className="text-[12px] font-medium text-[#8A8A8A]">Processar automatico</span>
+                              <input
+                                type="checkbox"
+                                checked={refundAutoProcessEnabled}
+                                onChange={(event) => setRefundAutoProcessEnabled(event.target.checked)}
+                                disabled={aiControlsDisabled}
+                              />
+                            </label>
+                            <label className={`flex items-center justify-between gap-[12px] rounded-[16px] border border-[#171717] bg-[#090909] px-[14px] py-[12px] ${aiControlsDisabled ? "opacity-50" : ""}`}>
+                              <span className="text-[12px] font-medium text-[#8A8A8A]">Exigir aprovacao manual</span>
+                              <input
+                                type="checkbox"
+                                checked={refundManualApprovalRequired}
+                                onChange={(event) => setRefundManualApprovalRequired(event.target.checked)}
+                                disabled={aiControlsDisabled}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="mt-[14px] grid grid-cols-1 gap-[14px] lg:grid-cols-2">
+                          <textarea
+                            rows={4}
+                            value={refundRules}
+                            onChange={(event) => setRefundRules(event.target.value)}
+                            placeholder="Regras e condicoes do reembolso"
+                            maxLength={2000}
+                            disabled={aiControlsDisabled}
+                            className={`w-full resize-none rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] py-[12px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                          />
+                          <div className="space-y-[10px]">
+                            <input
+                              type="text"
+                              value={refundSuccessMessage}
+                              onChange={(event) => setRefundSuccessMessage(event.target.value)}
+                              placeholder="Mensagem personalizada de sucesso"
+                              maxLength={600}
+                              disabled={aiControlsDisabled}
+                              className={`h-[44px] w-full rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                            />
+                            <input
+                              type="text"
+                              value={refundErrorMessage}
+                              onChange={(event) => setRefundErrorMessage(event.target.value)}
+                              placeholder="Mensagem personalizada de erro"
+                              maxLength={600}
+                              disabled={aiControlsDisabled}
+                              className={`h-[44px] w-full rounded-[14px] border border-[#171717] bg-[#080808] px-[14px] text-[14px] text-[#D1D1D1] outline-none transition-all placeholder:text-[#3B3B3B] focus:border-[#262626] ${aiControlsDisabled ? "cursor-not-allowed opacity-50" : ""}`}
+                            />
                           </div>
                         </div>
                       </div>

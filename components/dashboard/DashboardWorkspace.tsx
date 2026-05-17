@@ -37,10 +37,15 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
+import { ServerDiscordLinkModal } from "@/components/servers/ServerUi";
 import { DashboardContentSkeleton } from "@/components/workspace/WorkspaceRouteLoading";
 import { setWorkspaceShellReadyState } from "@/components/workspace/WorkspaceRouteAdaptiveLoading";
 import { getDashboardViewById, resolveDashboardViewFromPathname, type DashboardViewId } from "@/lib/dashboard/navigation";
-import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
+import {
+  buildDiscordAuthStartHref,
+  buildLoginHref,
+  getCurrentBrowserInternalPath,
+} from "@/lib/auth/paths";
 import { OFFICIAL_DISCORD_INVITE_URL } from "@/lib/discordLink/config";
 import {
   buildAccountPathWithReturn,
@@ -617,72 +622,6 @@ function DashboardRecentActivityList({
         })}
       </div>
     </section>
-  );
-}
-
-function DashboardDiscordRequiredModal({
-  isOpen,
-  onConnect,
-}: {
-  isOpen: boolean;
-  onConnect: () => void;
-}) {
-  if (!isOpen) {
-    return null;
-  }
-
-  return (
-    <div className="fixed inset-0 z-[5200] overflow-y-auto overscroll-contain p-[18px]">
-      <div className="absolute inset-0 bg-[rgba(0,0,0,0.86)] backdrop-blur-[7px]" />
-      <div className="relative z-10 mx-auto flex min-h-full max-w-[680px] items-center justify-center">
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Vincular Discord"
-          className="relative w-full overflow-hidden rounded-[30px] border border-[#151515] bg-[linear-gradient(180deg,rgba(10,12,18,0.985)_0%,rgba(5,6,10,0.985)_100%)] p-[24px] shadow-[0_34px_110px_rgba(0,0,0,0.58)] sm:p-[30px]"
-        >
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-[linear-gradient(90deg,transparent_0%,rgba(114,154,255,0.5)_50%,transparent_100%)]"
-          />
-          <span className="inline-flex items-center rounded-full border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.1)] px-[12px] py-[6px] text-[11px] leading-none font-semibold uppercase tracking-[0.16em] text-[#A9CAFF]">
-            Login Discord necessario
-          </span>
-          <h2 className="mt-[18px] text-[30px] leading-[1.02] tracking-[-0.05em] text-[#F4F7FF] sm:text-[38px]">
-            Vincule sua conta Discord
-            <span className="block">para carregar seus servidores</span>
-          </h2>
-          <p className="mt-[16px] text-[15px] leading-[1.7] text-[#AAB4C7]">
-            Sua conta Flowdesk pode entrar com Google ou email, mas servidores,
-            equipes, canais, cargos e modulos do Discord precisam de uma
-            autorizacao Discord ativa nesta mesma conta.
-          </p>
-
-          <div className="mt-[20px] grid gap-[10px] text-[13px] leading-[1.6] text-[#8E99AD]">
-            <div className="rounded-[18px] border border-[#171717] bg-[#090B10] px-[16px] py-[14px]">
-              O painel fica protegido para nao mostrar listas vazias incorretas.
-            </div>
-            <div className="rounded-[18px] border border-[#171717] bg-[#090B10] px-[16px] py-[14px]">
-              Depois do vínculo, seus servidores e permissoes sincronizam automaticamente.
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={onConnect}
-            className="group relative mt-[24px] inline-flex h-[48px] w-full items-center justify-center overflow-visible whitespace-nowrap rounded-[14px] px-6 text-[15px] leading-none font-semibold sm:w-auto"
-          >
-            <span
-              aria-hidden="true"
-              className="absolute inset-0 rounded-[14px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
-            />
-            <span className="relative z-10 text-[#111111]">
-              Vincular com Discord
-            </span>
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -2062,7 +2001,7 @@ export function DashboardWorkspace({
 
   const openDiscordLoginFlow = useCallback((mode: "login" | "link" = "login") => {
     if (typeof window === "undefined") return;
-    const nextPath = `${window.location.pathname}${window.location.search}`;
+    const nextPath = getCurrentBrowserInternalPath("/dashboard");
     window.location.assign(buildDiscordAuthStartHref(nextPath, mode));
   }, []);
 
@@ -3208,8 +3147,10 @@ export function DashboardWorkspace({
         </div>
       ) : null}
 
-      <DashboardDiscordRequiredModal
-        isOpen={isDiscordRequiredModalOpen}
+      <ServerDiscordLinkModal
+        open={isDiscordRequiredModalOpen}
+        mode="connect"
+        onClose={() => setIsDiscordRequiredModalOpen(false)}
         onConnect={handleConnectRequiredDiscord}
       />
     </div>

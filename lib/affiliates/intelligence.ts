@@ -1,6 +1,12 @@
 import { runFlowAiJson } from "@/lib/flowai/service";
 import type { AffiliateAIInsight, AffiliateAIInsightCard } from "./affiliateTypes";
 
+function isAffiliateAiInsightEnabled() {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env.AFFILIATE_AI_INSIGHTS_ENABLED || "").trim().toLowerCase(),
+  );
+}
+
 const DAY_MS = 1000 * 60 * 60 * 24;
 const PERIOD_DAYS = 30;
 const PERIOD_LABEL = "Baseado nos últimos 30 dias";
@@ -474,6 +480,15 @@ export async function generateAffiliateInsight(input: {
   const analytics = buildAnalytics(input);
   const fallback = buildFallbackInsight(analytics);
   const generatedAt = new Date().toISOString();
+
+  if (!isAffiliateAiInsightEnabled()) {
+    return {
+      insight: fallback,
+      periodLabel: PERIOD_LABEL,
+      generatedAt,
+      source: "fallback",
+    } satisfies AffiliateInsightResult;
+  }
 
   try {
     const result = await runFlowAiJson<AffiliateAIInsight>({

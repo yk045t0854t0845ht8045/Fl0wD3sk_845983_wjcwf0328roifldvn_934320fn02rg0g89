@@ -17,15 +17,12 @@ import {
   Plus,
   Search,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
 import {
   ServerButton,
-  ServerDangerZone,
-  ServerDeleteConfirmModal,
   ServerDiscordRelinkState,
   ServerEmptyState,
   ServerIconFrame,
@@ -358,6 +355,23 @@ function createEmptyForm(product?: SalesProduct | null): StockFormState {
   };
 }
 
+function normalizeStockForm(form: StockFormState, status: StockItem["status"]) {
+  return {
+    ...form,
+    productId: (form.productId || "").trim(),
+    productName: (form.productName || "").trim(),
+    quantity: Math.max(1, Math.floor(Number(form.quantity) || 1)),
+    status,
+  };
+}
+
+function areStockFormSnapshotsEqual(
+  left: ReturnType<typeof normalizeStockForm> | null,
+  right: ReturnType<typeof normalizeStockForm>,
+) {
+  return Boolean(left) && JSON.stringify(left) === JSON.stringify(right);
+}
+
 function formatMoney(value: number) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -568,20 +582,16 @@ function getItemMainLabel(item: StockItem) {
 
 function StockItemActionsModal({
   item,
-  deleting,
   duplicating,
   onClose,
   onEdit,
   onDuplicate,
-  onDelete,
 }: {
   item: StockItem | null;
-  deleting: boolean;
   duplicating: boolean;
   onClose: () => void;
   onEdit: (item: StockItem) => void;
   onDuplicate: (item: StockItem, count: number) => void;
-  onDelete: (item: StockItem) => void;
 }) {
   const [isDuplicateOpen, setIsDuplicateOpen] = useState(false);
   const [duplicateCount, setDuplicateCount] = useState(1);
@@ -632,7 +642,7 @@ function StockItemActionsModal({
                       {getItemMainLabel(item)}
                     </h2>
                     <p className="mt-[14px] max-w-[560px] text-[14px] leading-[1.62] text-[#787878]">
-                      Edite, duplique ou delete este registro do estoque. A quantidade do produto sera atualizada automaticamente.
+                      Edite ou duplique este registro do estoque. A quantidade do produto sera atualizada automaticamente.
                     </p>
                   </div>
                 </div>
@@ -676,7 +686,7 @@ function StockItemActionsModal({
                             ),
                           )
                         }
-                        disabled={deleting || duplicating}
+                        disabled={duplicating}
                       />
                     </label>
                   </div>
@@ -684,7 +694,7 @@ function StockItemActionsModal({
                     <button
                       type="button"
                       onClick={() => setIsDuplicateOpen(false)}
-                      disabled={deleting || duplicating}
+                      disabled={duplicating}
                       className="inline-flex h-[42px] items-center justify-center rounded-[13px] border border-[#171717] bg-[#0D0D0D] px-[16px] text-[13px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Cancelar duplicacao
@@ -692,7 +702,7 @@ function StockItemActionsModal({
                     <button
                       type="button"
                       onClick={() => onDuplicate(item, duplicateCount)}
-                      disabled={deleting || duplicating}
+                      disabled={duplicating}
                       aria-busy={duplicating}
                       className="inline-flex h-[42px] items-center justify-center gap-[8px] rounded-[13px] border border-[#242424] bg-[#F1F1F1] px-[16px] text-[13px] font-semibold text-[#080808] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
                     >
@@ -711,7 +721,7 @@ function StockItemActionsModal({
                 <button
                   type="button"
                   onClick={onClose}
-                  disabled={deleting || duplicating}
+                  disabled={duplicating}
                   className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancelar
@@ -720,7 +730,7 @@ function StockItemActionsModal({
                 <button
                   type="button"
                   onClick={() => onEdit(item)}
-                  disabled={deleting || duplicating}
+                  disabled={duplicating}
                   className="inline-flex h-[46px] items-center justify-center gap-[8px] rounded-[14px] border border-[#171717] bg-[#101010] px-[18px] text-[14px] font-semibold text-[#EDEDED] transition-colors hover:border-[#2A2A2A] hover:bg-[#151515] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Pencil className="h-[15px] w-[15px]" />
@@ -730,39 +740,13 @@ function StockItemActionsModal({
                 <button
                   type="button"
                   onClick={() => setIsDuplicateOpen(true)}
-                  disabled={deleting || duplicating}
+                  disabled={duplicating}
                   className="inline-flex h-[46px] items-center justify-center gap-[8px] rounded-[14px] border border-[#1F1F1F] bg-[#151515] px-[18px] text-[14px] font-semibold text-[#EDEDED] transition-colors hover:border-[#303030] hover:bg-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Copy className="h-[15px] w-[15px]" />
                   Duplicar
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => onDelete(item)}
-                  disabled={deleting || duplicating}
-                  aria-busy={deleting || duplicating}
-                  className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold disabled:cursor-not-allowed disabled:opacity-75"
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`absolute inset-0 rounded-[12px] transition-transform duration-150 ease-out ${
-                      deleting
-                        ? "bg-[#1a0a0a]"
-                        : "bg-[linear-gradient(180deg,#e05252_0%,#b52f2f_100%)] group-hover:scale-[1.02] group-active:scale-[0.985]"
-                    }`}
-                  />
-                  <span className={`relative z-10 inline-flex items-center justify-center gap-[8px] whitespace-nowrap leading-none ${deleting ? "text-[#c49a9a]" : "text-white"}`}>
-                    {deleting ? (
-                      <ButtonLoader size={16} colorClassName="text-[#c49a9a]" />
-                    ) : (
-                      <>
-                        <Trash2 className="h-[15px] w-[15px]" />
-                        Deletar
-                      </>
-                    )}
-                  </span>
-                </button>
               </div>
             </div>
           </div>
@@ -799,12 +783,11 @@ export function SalesStockPanel({
   const [isLoadingItems, setIsLoadingItems] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savingQuantityItemId, setSavingQuantityItemId] = useState<string | null>(null);
-  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
-  const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
-  const [isDeletingAllStock, setIsDeletingAllStock] = useState(false);
   const [duplicatingItemId, setDuplicatingItemId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [needsDiscordRelink, setNeedsDiscordRelink] = useState(false);
+  const [savedFormSnapshot, setSavedFormSnapshot] =
+    useState<ReturnType<typeof normalizeStockForm> | null>(null);
   const routeProductCode = getStockProductCodeFromPath(pathname);
 
   const selectedProduct = useMemo(
@@ -915,6 +898,7 @@ export function SalesStockPanel({
     (product: SalesProduct, options?: { syncUrl?: boolean }) => {
       setSelectedProductId(product.id);
       setForm(createEmptyForm(product));
+      setSavedFormSnapshot(null);
       setEditingItemId(null);
       setIsFormOpen(false);
       setActionItem(null);
@@ -944,6 +928,7 @@ export function SalesStockPanel({
         setIsFormOpen(false);
         setActionItem(null);
         setForm(createEmptyForm());
+        setSavedFormSnapshot(null);
       }
       return;
     }
@@ -961,8 +946,21 @@ export function SalesStockPanel({
     [],
   );
 
+  const currentFormSnapshot = useMemo(
+    () => normalizeStockForm(form, formStatus),
+    [form, formStatus],
+  );
+  const hasStockFormChanges =
+    !editingItemId || !areStockFormSnapshotsEqual(savedFormSnapshot, currentFormSnapshot);
+  const canSaveStockItem = Boolean(
+    selectedProduct &&
+      !readOnly &&
+      !isSaving &&
+      hasStockFormChanges,
+  );
+
   const saveStockItem = useCallback(async () => {
-    if (!selectedProduct || readOnly) return;
+    if (!canSaveStockItem || !selectedProduct) return;
     setIsSaving(true);
     setStatusMessage(null);
     try {
@@ -1023,10 +1021,12 @@ export function SalesStockPanel({
     } finally {
       setIsSaving(false);
     }
-  }, [editingItemId, form, formStatus, guildId, notifications, readOnly, selectedProduct]);
+  }, [canSaveStockItem, editingItemId, form, formStatus, guildId, notifications, selectedProduct]);
 
   const startCreateItem = useCallback(() => {
-    setForm(createEmptyForm(selectedProduct));
+    const emptyForm = createEmptyForm(selectedProduct);
+    setForm(emptyForm);
+    setSavedFormSnapshot(normalizeStockForm(emptyForm, "available"));
     setEditingItemId(null);
     setActionItem(null);
     setFormStatus("available");
@@ -1037,6 +1037,7 @@ export function SalesStockPanel({
   const startEditItem = useCallback((item: StockItem) => {
     setForm({ ...item });
     setFormStatus(item.status);
+    setSavedFormSnapshot(normalizeStockForm({ ...item }, item.status));
     setEditingItemId(item.id);
     setActionItem(null);
     setStatusMessage(null);
@@ -1051,116 +1052,13 @@ export function SalesStockPanel({
 
   const cancelEdit = useCallback(() => {
     setForm(createEmptyForm(selectedProduct));
+    setSavedFormSnapshot(null);
     setEditingItemId(null);
     setIsFormOpen(false);
     setActionItem(null);
     setFormStatus("available");
     setStatusMessage(null);
   }, [selectedProduct]);
-
-  const deleteStockItem = useCallback(
-    async (item: StockItem) => {
-      if (!selectedProduct || readOnly) return;
-      setDeletingItemId(item.id);
-      setStatusMessage(null);
-      try {
-        const response = await fetch("/api/auth/me/guilds/sales-stock", {
-          method: "DELETE",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            guildId,
-            productId: selectedProduct.id,
-            itemId: item.id,
-          }),
-        });
-        const payload = (await response.json().catch(() => ({}))) as StockResponse;
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.message || "Erro ao excluir estoque.");
-        }
-        setItems((current) => current.filter((currentItem) => currentItem.id !== item.id));
-        setProducts((current) =>
-          current.map((product) =>
-            product.id === selectedProduct.id
-              ? { ...product, stockQuantity: payload.stockQuantity ?? product.stockQuantity }
-              : product,
-          ),
-        );
-        if (editingItemId === item.id) cancelEdit();
-        setActionItem(null);
-        notifications.success("Entrega removida do estoque.", { title: "Estoque atualizado" });
-        if (payload.discordSyncStatus === "failed") {
-          notifications.show(
-            payload.discordSyncError ||
-              "O estoque foi removido, mas o embed do produto no Discord nao sincronizou agora.",
-            { title: "Embed Discord", tone: "default", durationMs: 7200 },
-          );
-        }
-      } catch (error) {
-        notifications.error(
-          error instanceof Error ? error.message : "Erro ao excluir estoque.",
-          { title: "Falha no estoque" },
-        );
-      } finally {
-        setDeletingItemId(null);
-      }
-    },
-    [cancelEdit, editingItemId, guildId, notifications, readOnly, selectedProduct],
-  );
-
-  const deleteAllProductStock = useCallback(async () => {
-    if (!selectedProduct || readOnly || isDeletingAllStock) return;
-    setIsDeletingAllStock(true);
-    setStatusMessage(null);
-    try {
-      const response = await fetch("/api/auth/me/guilds/sales-stock", {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          guildId,
-          productId: selectedProduct.id,
-          deleteAllForProduct: true,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as StockResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "Erro ao excluir estoque do produto.");
-      }
-      setItems([]);
-      setProducts((current) =>
-        current.map((product) =>
-          product.id === selectedProduct.id
-            ? { ...product, stockQuantity: payload.stockQuantity ?? 0 }
-            : product,
-        ),
-      );
-      cancelEdit();
-      setIsDeleteAllModalOpen(false);
-      notifications.success("Estoque do produto removido.", { title: "Estoque atualizado" });
-      if (payload.discordSyncStatus === "failed") {
-        notifications.show(
-          payload.discordSyncError ||
-            "O estoque foi removido, mas o embed do produto no Discord nao sincronizou agora.",
-          { title: "Embed Discord", tone: "default", durationMs: 7200 },
-        );
-      }
-    } catch (error) {
-      notifications.error(
-        error instanceof Error ? error.message : "Erro ao excluir estoque do produto.",
-        { title: "Falha no estoque" },
-      );
-    } finally {
-      setIsDeletingAllStock(false);
-    }
-  }, [
-    cancelEdit,
-    guildId,
-    isDeletingAllStock,
-    notifications,
-    readOnly,
-    selectedProduct,
-  ]);
 
   const duplicateStockItem = useCallback(
     async (item: StockItem, count: number) => {
@@ -1334,7 +1232,7 @@ export function SalesStockPanel({
                 </ServerButton>
                 <ServerButton
                   aria-busy={isSaving}
-                  disabled={readOnly || isSaving}
+                  disabled={!canSaveStockItem}
                   onClick={() => void saveStockItem()}
                   variant="primary"
                   className="min-w-[158px]"
@@ -1672,8 +1570,7 @@ export function SalesStockPanel({
                               }}
                               disabled={
                                 readOnly ||
-                                savingQuantityItemId === item.id ||
-                                deletingItemId === item.id
+                                savingQuantityItemId === item.id
                               }
                               aria-label={`Quantidade de ${getItemMainLabel(item)}`}
                               className="flowdesk-server-input h-[34px] w-full rounded-[11px] border border-[#242424] bg-[#0D0D0D] px-[10px] text-right text-[13px] font-semibold text-[#DCDCDC] outline-none transition focus:border-[#4A4A4A] disabled:cursor-not-allowed disabled:opacity-55"
@@ -1690,16 +1587,12 @@ export function SalesStockPanel({
                           <button
                             type="button"
                             onClick={() => setActionItem(item)}
-                            disabled={readOnly || deletingItemId === item.id}
+                            disabled={readOnly}
                             className="flowdesk-server-button ml-auto inline-flex h-[32px] w-[32px] items-center justify-center rounded-[11px] text-[#8A8A8A] transition hover:bg-[#171717] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
                             aria-label="Abrir acoes do estoque"
                             title="Abrir acoes do estoque"
                           >
-                            {deletingItemId === item.id ? (
-                              <ButtonLoader size={13} />
-                            ) : (
-                              <Pencil className="h-[14px] w-[14px]" />
-                            )}
+                            <Pencil className="h-[14px] w-[14px]" />
                           </button>
                         </div>
                       ))}
@@ -1738,31 +1631,13 @@ export function SalesStockPanel({
             </ServerSurface>
           </aside>
         </div>
-        <ServerDangerZone
-          title="Excluir estoque do produto"
-          description="Remove todas as triagens e entregas digitais deste produto. A quantidade publicada sera recalculada automaticamente."
-          actionLabel="Excluir estoque"
-          disabled={readOnly || isDeletingAllStock || isSaving}
-          onAction={() => setIsDeleteAllModalOpen(true)}
-        />
         <StockItemActionsModal
           key={actionItem?.id || "stock-actions-empty"}
           item={actionItem}
-          deleting={Boolean(actionItem && deletingItemId === actionItem.id)}
           duplicating={Boolean(actionItem && duplicatingItemId === actionItem.id)}
           onClose={() => setActionItem(null)}
           onEdit={startEditItem}
           onDuplicate={(item, count) => void duplicateStockItem(item, count)}
-          onDelete={(item) => void deleteStockItem(item)}
-        />
-        <ServerDeleteConfirmModal
-          open={isDeleteAllModalOpen}
-          title="Excluir estoque?"
-          description={`Esta acao remove todas as triagens de "${selectedProduct.title}". O produto continua existindo, mas o estoque ficara zerado.`}
-          confirmLabel="Excluir estoque"
-          isDeleting={isDeletingAllStock}
-          onCancel={() => setIsDeleteAllModalOpen(false)}
-          onConfirm={() => void deleteAllProductStock()}
         />
         </>
       )}
