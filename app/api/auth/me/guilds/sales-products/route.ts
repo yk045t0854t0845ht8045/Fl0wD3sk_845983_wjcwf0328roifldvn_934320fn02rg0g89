@@ -26,7 +26,7 @@ const PRODUCT_TITLE_MAX_LENGTH = 120;
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
 const PRODUCT_TEXT_MAX_LENGTH = 120;
 const PRODUCT_MEDIA_MAX_ITEMS = 8;
-const PRODUCT_MEDIA_MAX_LENGTH = 1_500_000;
+const PRODUCT_MEDIA_MAX_LENGTH = 7_000_000;
 const PRODUCT_BASE_SELECT =
   "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
 const PRODUCT_SELECT = `${PRODUCT_BASE_SELECT}, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error`;

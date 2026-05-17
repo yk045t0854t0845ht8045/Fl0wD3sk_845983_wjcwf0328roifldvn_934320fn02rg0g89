@@ -137,23 +137,22 @@ export function buildSalesProductDiscordPayload(
       type: COMPONENT_TYPE.CONTAINER,
       accent_color: 0xf1f1f1,
       components: [
-        firstImage
-          ? {
-              type: COMPONENT_TYPE.SECTION,
-              components: [buildTextDisplay(buildProductMarkdown(input))],
-              accessory: {
-                type: COMPONENT_TYPE.THUMBNAIL,
-                media: { url: firstImage },
+        buildTextDisplay(buildProductMarkdown(input)),
+        ...(firstImage
+          ? [
+              {
+                type: COMPONENT_TYPE.MEDIA_GALLERY,
+                media: [{ url: firstImage }],
               },
-            }
-          : buildTextDisplay(buildProductMarkdown(input)),
+            ]
+          : []),
         {
           type: COMPONENT_TYPE.SEPARATOR,
           divider: true,
           spacing: 1,
         },
         buildDisabledInfoButtons(input),
-      ],
+      ].filter(Boolean) as JsonRecord[],
     },
     {
       type: COMPONENT_TYPE.ACTION_ROW,
