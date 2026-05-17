@@ -6512,20 +6512,25 @@ export function ServerSettingsEditor({
                         {flowAiChecklist.map((item) => (
                           <div
                             key={item.id}
-                            className={`rounded-[20px] border px-[16px] py-[14px] ${
-                              item.complete
-                                ? "border-[rgba(0,98,255,0.2)] bg-[rgba(0,98,255,0.06)]"
-                                : "border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)]"
-                            }`}
+                            className="rounded-[20px] border border-[#161616] bg-[linear-gradient(180deg,#0B0B0B_0%,#090909_100%)] px-[18px] py-[16px] flex flex-col justify-between"
                           >
-                            <p className="text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">
-                              {item.label}
-                            </p>
-                            <p
-                              className={`mt-[10px] text-[16px] font-medium tracking-[-0.02em] ${
-                                item.complete ? "text-[#D7E6FF]" : "text-[#D1D1D1]"
-                              }`}
-                            >
+                            <div className="flex items-center justify-between gap-[8px]">
+                              <p className="text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">
+                                {item.label}
+                              </p>
+                              {item.complete ? (
+                                <span className="flex h-[14px] w-[14px] items-center justify-center rounded-full bg-[#00E676]/10 text-[#00E676]">
+                                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-[10px] w-[10px]">
+                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                </span>
+                              ) : (
+                                <span className="flex h-[14px] w-[14px] items-center justify-center rounded-full bg-[#3E3E3E]/20 text-[#6E6E6E]">
+                                  <span className="h-[4px] w-[4px] rounded-full bg-[#6E6E6E]" />
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-[12px] text-[16px] font-semibold tracking-[-0.02em] text-[#E5E5E5]">
                               {item.value}
                             </p>
                           </div>
@@ -6543,7 +6548,7 @@ export function ServerSettingsEditor({
                           </p>
                         </div>
 
-                        <div className="mt-[18px] grid grid-cols-1 gap-[16px] xl:grid-cols-2">
+                        <div className="mt-[18px] flex flex-col gap-[18px]">
                           <div>
                             <label className="mb-[8px] block text-[12px] font-medium text-[#5F5F5F]">Nome da Empresa / Marca</label>
                             <input
@@ -6682,12 +6687,12 @@ export function ServerSettingsEditor({
                                   aiControlsDisabled ? "opacity-40 cursor-not-allowed grayscale-[0.5]" : ""
                                 } ${
                                   aiTone === tone.id
-                                    ? "border-[#4A93FF] bg-[rgba(0,98,255,0.06)] shadow-[0_0_12px_rgba(0,98,255,0.12)]"
-                                    : aiControlsDisabled ? "border-[#171717] bg-[#090909]" : "border-[#171717] bg-[#090909] hover:border-[#1E1E1E] hover:bg-[#0B0B0B]"
+                                    ? "border-[#2E2E2E] bg-[#141414] shadow-[0_0_14px_rgba(255,255,255,0.01)]"
+                                    : "border-[#171717] bg-[#090909] hover:border-[#222222] hover:bg-[#0C0C0C]"
                                 }`}
                               >
                                 <span className={`text-[20px] transition-transform ${aiTone === tone.id ? "scale-110" : ""}`}>{tone.icon}</span>
-                                <span className={`text-[12px] font-medium transition-colors ${aiTone === tone.id ? "text-[#4A93FF]" : "text-[#8A8A8A]"}`}>{tone.label}</span>
+                                <span className={`text-[12px] font-semibold transition-colors ${aiTone === tone.id ? "text-[#FFFFFF]" : "text-[#6A6A6A]"}`}>{tone.label}</span>
                               </button>
                             ))}
                           </div>
@@ -6738,25 +6743,47 @@ export function ServerSettingsEditor({
                             disabled={aiControlsDisabled}
                             controlHeightPx={serverSettingsControlHeight}
                           />
-                          <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-2">
-                            <label className={`flex items-center justify-between gap-[12px] rounded-[16px] border border-[#171717] bg-[#090909] px-[14px] py-[12px] ${aiControlsDisabled ? "cursor-not-allowed opacity-60" : ""}`}>
-                              <span className="text-[12px] font-medium text-[#8A8A8A]">Processar automatico</span>
-                              <input
-                                type="checkbox"
-                                checked={refundAutoProcessEnabled}
-                                onChange={(event) => setRefundAutoProcessEnabled(event.target.checked)}
+                          <div className="grid grid-cols-1 gap-[12px] sm:grid-cols-2">
+                            <div className={`flex items-center justify-between gap-[16px] rounded-[16px] border border-[#171717] bg-[#090909] px-[16px] py-[14px] ${aiControlsDisabled ? "opacity-40" : ""}`}>
+                              <span className="text-[13px] font-medium text-[#8A8A8A]">Processar reembolso automaticamente</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (aiControlsDisabled) return;
+                                  setRefundAutoProcessEnabled(!refundAutoProcessEnabled);
+                                }}
                                 disabled={aiControlsDisabled}
-                              />
-                            </label>
-                            <label className={`flex items-center justify-between gap-[12px] rounded-[16px] border border-[#171717] bg-[#090909] px-[14px] py-[12px] ${aiControlsDisabled ? "cursor-not-allowed opacity-60" : ""}`}>
-                              <span className="text-[12px] font-medium text-[#8A8A8A]">Exigir aprovacao manual</span>
-                              <input
-                                type="checkbox"
-                                checked={refundManualApprovalRequired}
-                                onChange={(event) => setRefundManualApprovalRequired(event.target.checked)}
+                                className={`relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out outline-none ${
+                                  refundAutoProcessEnabled ? "bg-[#0062FF]" : "bg-[#1E1E1E]"
+                                } ${aiControlsDisabled ? "cursor-not-allowed" : ""}`}
+                              >
+                                <span
+                                  className={`pointer-events-none inline-block h-[18px] w-[18px] transform rounded-full bg-[#FFFFFF] shadow transition duration-200 ease-in-out ${
+                                    refundAutoProcessEnabled ? "translate-x-[18px]" : "translate-x-0"
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                            <div className={`flex items-center justify-between gap-[16px] rounded-[16px] border border-[#171717] bg-[#090909] px-[16px] py-[14px] ${aiControlsDisabled ? "opacity-40" : ""}`}>
+                              <span className="text-[13px] font-medium text-[#8A8A8A]">Exigir aprovacao manual</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (aiControlsDisabled) return;
+                                  setRefundManualApprovalRequired(!refundManualApprovalRequired);
+                                }}
                                 disabled={aiControlsDisabled}
-                              />
-                            </label>
+                                className={`relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out outline-none ${
+                                  refundManualApprovalRequired ? "bg-[#0062FF]" : "bg-[#1E1E1E]"
+                                } ${aiControlsDisabled ? "cursor-not-allowed" : ""}`}
+                              >
+                                <span
+                                  className={`pointer-events-none inline-block h-[18px] w-[18px] transform rounded-full bg-[#FFFFFF] shadow transition duration-200 ease-in-out ${
+                                    refundManualApprovalRequired ? "translate-x-[18px]" : "translate-x-0"
+                                  }`}
+                                />
+                              </button>
+                            </div>
                           </div>
                         </div>
 
