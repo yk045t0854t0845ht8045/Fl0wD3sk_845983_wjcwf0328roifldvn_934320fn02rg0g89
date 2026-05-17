@@ -1,6 +1,7 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   buildSalesProductDiscordPayload,
+  buildSalesProductUnavailableDiscordPayload,
   salesProductMessageLooksManaged,
 } from "@/lib/servers/salesProductDiscordPayload";
 
@@ -335,6 +336,50 @@ export async function syncSalesProductDiscordMessageById(input: {
     error: sync.error,
   });
   return sync;
+}
+
+export async function markSalesProductDiscordMessageUnavailable(input: {
+  product: SalesProductDiscordSyncRecord;
+}) {
+  if (
+    input.product.discord_publication_mode !== "channel" ||
+    !input.product.discord_channel_id ||
+    !input.product.discord_message_id
+  ) {
+    return null;
+  }
+
+  const botToken = resolveBotToken();
+  if (!botToken) return null;
+
+  const productCode = buildSalesProductCode(input.product.id);
+  const payload = buildSalesProductUnavailableDiscordPayload({
+    productCode,
+    title: input.product.title,
+  });
+
+  const storedMessage = await requestDiscordWithBot<DiscordChannelMessage | null>({
+    url: `https://discord.com/api/v10/channels/${input.product.discord_channel_id}/messages/${input.product.discord_message_id}`,
+    botToken,
+    resourceLabel: "buscar o embed do produto removido",
+  });
+  if (!storedMessage || !salesProductMessageLooksManaged(storedMessage, productCode)) {
+    return null;
+  }
+
+  const updated = await requestDiscordWithBot<{ id: string }>({
+    url: `https://discord.com/api/v10/channels/${input.product.discord_channel_id}/messages/${input.product.discord_message_id}`,
+    method: "PATCH",
+    body: payload,
+    botToken,
+    resourceLabel: "marcar produto removido no Discord",
+  });
+
+  return {
+    messageId: updated.id,
+    status: "synced" as const,
+    error: null,
+  };
 }
 
 export async function markSalesProductDiscordSyncFailedById(input: {

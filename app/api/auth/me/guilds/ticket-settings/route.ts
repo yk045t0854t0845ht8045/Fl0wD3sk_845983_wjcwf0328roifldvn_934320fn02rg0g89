@@ -60,6 +60,8 @@ const PANEL_BUTTON_LABEL_MAX_LENGTH = 40;
 const AI_COMPANY_NAME_MAX_LENGTH = 100;
 const AI_COMPANY_BIO_MAX_LENGTH = 1000;
 const AI_RULES_MAX_LENGTH = 4000;
+const REFUND_RULES_MAX_LENGTH = 2000;
+const REFUND_MESSAGE_MAX_LENGTH = 600;
 const AI_ALLOWED_TONES = ["formal", "friendly"] as const;
 const TICKET_SETTINGS_SELECT_BASE =
   "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, ai_rules, updated_at";
@@ -198,6 +200,10 @@ function buildTicketSettingsResponse(
     aiCompanyName: ticketAiSettings.aiCompanyName,
     aiCompanyBio: ticketAiSettings.aiCompanyBio,
     aiTone: ticketAiSettings.aiTone,
+    refundSettings:
+      typeof record.refund_settings === "object" && record.refund_settings
+        ? record.refund_settings
+        : null,
     updatedAt: typeof record.updated_at === "string" ? record.updated_at : null,
   };
 }
@@ -265,6 +271,10 @@ function buildTicketSettingsResponseFromSnapshot(input: {
         : "",
     aiTone:
       typeof input.snapshot.aiTone === "string" ? input.snapshot.aiTone : "formal",
+    refundSettings:
+      typeof input.snapshot.refundSettings === "object" && input.snapshot.refundSettings
+        ? input.snapshot.refundSettings
+        : null,
     updatedAt: input.updatedAt,
   };
 }
@@ -511,6 +521,47 @@ export async function GET(request: Request) {
   }
 }
 
+async function upsertTicketRefundSettings(input: {
+  guildId: string;
+  refundSettings: Record<string, unknown>;
+  configuredByUserId: number;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_ticket_refund_settings")
+    .upsert(
+      {
+        guild_id: input.guildId,
+        enabled: true,
+        refund_limit_days: input.refundSettings.refundLimitDays,
+        refund_rules: input.refundSettings.refundRules,
+        auto_process_enabled: input.refundSettings.refundAutoProcessEnabled,
+        manual_approval_required: input.refundSettings.refundManualApprovalRequired,
+        approval_channel_id: input.refundSettings.refundApprovalChannelId || null,
+        approver_role_ids: input.refundSettings.refundApproverRoleIds,
+        success_message: input.refundSettings.refundSuccessMessage,
+        error_message: input.refundSettings.refundErrorMessage,
+        configured_by_user_id: input.configuredByUserId,
+      },
+      { onConflict: "guild_id" },
+    )
+    .select("guild_id")
+    .maybeSingle();
+
+  if (result.error) {
+    const message = String(result.error.message || "").toLowerCase();
+    if (
+      result.error.code === "42P01" ||
+      message.includes("guild_ticket_refund_settings")
+    ) {
+      return false;
+    }
+    throw new Error(result.error.message);
+  }
+
+  return true;
+}
+
 export async function POST(request: Request) {
   const invalidMutationResponse = ensureSameOriginJsonMutationRequest(request);
   if (invalidMutationResponse) {
@@ -536,6 +587,16 @@ export async function POST(request: Request) {
       aiCompanyName?: string;
       aiCompanyBio?: string;
       aiTone?: (typeof AI_ALLOWED_TONES)[number];
+      refundSettings?: {
+        refundLimitDays?: number;
+        refundRules?: string;
+        refundAutoProcessEnabled?: boolean;
+        refundManualApprovalRequired?: boolean;
+        refundApprovalChannelId?: string | null;
+        refundApproverRoleIds?: string[];
+        refundSuccessMessage?: string;
+        refundErrorMessage?: string;
+      };
     };
     try {
       body = parseFlowSecureDto(
@@ -602,6 +663,7 @@ export async function POST(request: Request) {
             }),
           ),
           aiTone: flowSecureDto.optional(flowSecureDto.enum(AI_ALLOWED_TONES)),
+          refundSettings: flowSecureDto.optional(flowSecureDto.record()),
         },
         {
           rejectUnknown: true,
@@ -642,6 +704,45 @@ export async function POST(request: Request) {
       ? body.aiCompanyBio.trim().slice(0, AI_COMPANY_BIO_MAX_LENGTH)
       : "";
     const aiTone = body.aiTone || "formal";
+    const rawRefundSettings =
+      body.refundSettings && typeof body.refundSettings === "object"
+        ? body.refundSettings
+        : {};
+    const refundSettings = {
+      refundLimitDays: Math.max(
+        0,
+        Math.min(365, Number(rawRefundSettings.refundLimitDays ?? 7) || 7),
+      ),
+      refundRules:
+        typeof rawRefundSettings.refundRules === "string"
+          ? rawRefundSettings.refundRules.trim().slice(0, REFUND_RULES_MAX_LENGTH)
+          : "",
+      refundAutoProcessEnabled: rawRefundSettings.refundAutoProcessEnabled === true,
+      refundManualApprovalRequired:
+        rawRefundSettings.refundManualApprovalRequired !== false,
+      refundApprovalChannelId: getTrimmedId(rawRefundSettings.refundApprovalChannelId),
+      refundApproverRoleIds: Array.isArray(rawRefundSettings.refundApproverRoleIds)
+        ? Array.from(
+            new Set(
+              rawRefundSettings.refundApproverRoleIds
+                .map((roleId) => getTrimmedId(roleId))
+                .filter(isGuildId),
+            ),
+          ).slice(0, 25)
+        : [],
+      refundSuccessMessage:
+        typeof rawRefundSettings.refundSuccessMessage === "string"
+          ? rawRefundSettings.refundSuccessMessage
+              .trim()
+              .slice(0, REFUND_MESSAGE_MAX_LENGTH)
+          : "",
+      refundErrorMessage:
+        typeof rawRefundSettings.refundErrorMessage === "string"
+          ? rawRefundSettings.refundErrorMessage
+              .trim()
+              .slice(0, REFUND_MESSAGE_MAX_LENGTH)
+          : "",
+    };
     const panelLayout = normalizeTicketPanelLayout(body.panelLayout, {
       panelTitle: getTrimmedText(body.panelTitle),
       panelDescription: getTrimmedText(body.panelDescription),
@@ -934,6 +1035,7 @@ export async function POST(request: Request) {
         aiCompanyName: existingSettingsResponse?.aiCompanyName || "",
         aiCompanyBio: existingSettingsResponse?.aiCompanyBio || "",
         aiTone: existingSettingsResponse?.aiTone || "formal",
+        refundSettings,
       };
       const secureUpdated = await writeServerSettingsVaultSnapshot({
         guildId,
@@ -1095,6 +1197,11 @@ export async function POST(request: Request) {
       aiTone: aiTone,
       configuredByUserId: authUserId,
     });
+    await upsertTicketRefundSettings({
+      guildId,
+      refundSettings,
+      configuredByUserId: authUserId,
+    });
     const secureUpdated = await writeServerSettingsVaultSnapshot({
       guildId,
       moduleKey: "ticket_settings",
@@ -1115,6 +1222,7 @@ export async function POST(request: Request) {
         aiCompanyName,
         aiCompanyBio,
         aiTone,
+        refundSettings,
       },
     });
     invalidateDashboardSettingsCache({ guildId });
@@ -1187,4 +1295,3 @@ export async function POST(request: Request) {
     );
   }
 }
-

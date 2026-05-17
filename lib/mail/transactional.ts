@@ -72,12 +72,43 @@ type SalesEmailSettings = {
 
 const AUTH_USER_EMAIL_SELECT_COLUMNS =
   "id, email, display_name, username";
+const SERVER_SETTINGS_EMAIL_COOLDOWN_MS = 1000 * 60 * 30;
+const serverSettingsEmailCooldowns = new Map<string, number>();
 
 function shouldSkipLocalAuthTransactionalEmail() {
   return (
     process.env.NODE_ENV !== "production" &&
     process.env.AUTH_ENABLE_LOCAL_TRANSACTIONAL_EMAILS !== "1"
   );
+}
+
+function isServerSettingsEmailEnabled() {
+  return String(process.env.SERVER_SETTINGS_EMAIL_NOTIFICATIONS_ENABLED || "")
+    .trim()
+    .toLowerCase() === "1";
+}
+
+function shouldSkipServerSettingsEmail(input: {
+  userId: number;
+  guildId: string;
+  moduleLabel: string;
+}) {
+  if (!isServerSettingsEmailEnabled()) return true;
+
+  const now = Date.now();
+  const key = `${input.userId}:${input.guildId}:${input.moduleLabel}`;
+  const blockedUntil = serverSettingsEmailCooldowns.get(key) || 0;
+  if (blockedUntil > now) return true;
+
+  serverSettingsEmailCooldowns.set(key, now + SERVER_SETTINGS_EMAIL_COOLDOWN_MS);
+
+  for (const [cooldownKey, expiresAt] of serverSettingsEmailCooldowns.entries()) {
+    if (expiresAt <= now) {
+      serverSettingsEmailCooldowns.delete(cooldownKey);
+    }
+  }
+
+  return false;
 }
 
 function normalizeEmail(value: unknown) {
@@ -642,6 +673,15 @@ export async function sendServerSettingsSavedEmailSafe(input: {
 }) {
   const email = normalizeEmail(input.user.email);
   if (!email) return;
+  if (
+    shouldSkipServerSettingsEmail({
+      userId: input.user.id,
+      guildId: input.guildId,
+      moduleLabel: input.moduleLabel,
+    })
+  ) {
+    return;
+  }
 
   await sendFlowdeskTransactionalEmail({
     toEmail: email,

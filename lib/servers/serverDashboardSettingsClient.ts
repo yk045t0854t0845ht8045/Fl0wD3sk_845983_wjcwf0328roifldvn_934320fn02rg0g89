@@ -34,6 +34,16 @@ type ServerDashboardSettingsPayload = {
     aiCompanyName: string;
     aiCompanyBio: string;
     aiTone: string;
+    refundSettings?: {
+      refundLimitDays?: number;
+      refundRules?: string;
+      refundAutoProcessEnabled?: boolean;
+      refundManualApprovalRequired?: boolean;
+      refundApprovalChannelId?: string | null;
+      refundApproverRoleIds?: string[];
+      refundSuccessMessage?: string;
+      refundErrorMessage?: string;
+    } | null;
     updatedAt: string | null;
   } | null;
   staffSettings: {

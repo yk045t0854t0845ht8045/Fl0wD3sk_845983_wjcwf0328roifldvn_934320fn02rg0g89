@@ -20,10 +20,10 @@ import {
 } from "lucide-react";
 import {
   ServerButton,
-  ServerDangerZone,
   ServerDeleteConfirmModal,
   ServerEmptyState,
   ServerIconFrame,
+  ServerMoreActionsMenu,
   ServerSectionHeading,
   ServerSurface,
   ServerTextInput,
@@ -83,6 +83,24 @@ type SalesCouponsGiftsPanelProps = {
   readOnly?: boolean;
 };
 
+type CampaignEditorSnapshot = {
+  kind: CampaignKind;
+  title: string;
+  code: string;
+  discountMode: DiscountMode;
+  discountValue: string;
+  appliesToMode: AppliesToMode;
+  selectedProductIds: string[];
+  usageMode: UsageMode;
+  maxUses: string;
+  onePerCustomer: boolean;
+  expirationMode: ExpirationMode;
+  expiresAt: string;
+  startsAt: string;
+  minimumOrder: string;
+  status: CampaignStatus;
+};
+
 const kindLabel: Record<CampaignKind, string> = {
   coupon: "Cupom",
   gift_card: "Gift card",
@@ -112,6 +130,37 @@ function dateInputValue(value: string | null | undefined) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
   return date.toISOString().slice(0, 10);
+}
+
+function normalizeEditorText(value: string | null | undefined) {
+  return (value || "").trim();
+}
+
+function discountToEditorSnapshot(discount: SalesCouponGift): CampaignEditorSnapshot {
+  return {
+    kind: discount.kind,
+    title: normalizeEditorText(discount.title),
+    code: normalizeEditorText(discount.code),
+    discountMode: discount.kind === "gift_card" ? "fixed" : discount.discountType,
+    discountValue: String(discount.discountValue || ""),
+    appliesToMode: discount.appliesToAllProducts ? "all" : "selected",
+    selectedProductIds: [...(discount.productIds || [])].sort(),
+    usageMode: discount.maxRedemptions ? "limited" : "unlimited",
+    maxUses: discount.maxRedemptions ? String(discount.maxRedemptions) : "",
+    onePerCustomer: discount.onePerCustomer,
+    expirationMode: discount.expiresAt ? "date" : "never",
+    expiresAt: dateInputValue(discount.expiresAt),
+    startsAt: dateInputValue(discount.startsAt),
+    minimumOrder: String(discount.minimumOrderAmount || ""),
+    status: discount.status,
+  };
+}
+
+function areCampaignEditorSnapshotsEqual(
+  left: CampaignEditorSnapshot | null,
+  right: CampaignEditorSnapshot,
+) {
+  return Boolean(left) && JSON.stringify(left) === JSON.stringify(right);
 }
 
 function valueLabel(item: SalesCouponGift) {
@@ -240,6 +289,49 @@ function SegmentButton<T extends string>({
     >
       {children}
     </button>
+  );
+}
+
+function FieldLabel({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <label className={`mb-[8px] block text-[12px] font-semibold text-[#AFAFAF] ${className}`}>
+      {children}
+    </label>
+  );
+}
+
+function CampaignEditorSkeleton() {
+  return (
+    <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
+      <div className="space-y-[18px]">
+        {Array.from({ length: 4 }).map((_, sectionIndex) => (
+          <ServerSurface key={sectionIndex} className="p-[18px] sm:p-[22px]">
+            <div className="h-[14px] w-[150px] animate-pulse rounded-full bg-[#1A1A1A]" />
+            <div className="mt-[14px] h-[44px] animate-pulse rounded-[14px] bg-[#111]" />
+            <div className="mt-[14px] grid gap-[10px] sm:grid-cols-2">
+              <div className="h-[44px] animate-pulse rounded-[14px] bg-[#101010]" />
+              <div className="h-[44px] animate-pulse rounded-[14px] bg-[#101010]" />
+            </div>
+            <div className="mt-[18px] h-[88px] animate-pulse rounded-[16px] bg-[#101010]" />
+          </ServerSurface>
+        ))}
+      </div>
+      <aside className="space-y-[18px]">
+        {Array.from({ length: 2 }).map((_, sectionIndex) => (
+          <ServerSurface key={sectionIndex} className="p-[18px] sm:p-[20px]">
+            <div className="h-[14px] w-[120px] animate-pulse rounded-full bg-[#1A1A1A]" />
+            <div className="mt-[14px] h-[42px] animate-pulse rounded-[14px] bg-[#111]" />
+            <div className="mt-[12px] h-[110px] animate-pulse rounded-[18px] bg-[#101010]" />
+          </ServerSurface>
+        ))}
+      </aside>
+    </div>
   );
 }
 
@@ -455,6 +547,8 @@ export function SalesCouponGiftCreatePanel({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [savedEditorSnapshot, setSavedEditorSnapshot] =
+    useState<CampaignEditorSnapshot | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -519,6 +613,7 @@ export function SalesCouponGiftCreatePanel({
         setExpiresAt(dateInputValue(discount.expiresAt));
         setStartsAt(dateInputValue(discount.startsAt));
         setStatus(discount.status);
+        setSavedEditorSnapshot(discountToEditorSnapshot(discount));
       } catch (error) {
         if (!cancelled) {
           setStatusMessage(
@@ -538,6 +633,45 @@ export function SalesCouponGiftCreatePanel({
 
   const controlsDisabled = readOnly || isLoadingDiscount;
   const generatedCode = slugifyCode(code || title || kindLabel[kind]);
+  const currentEditorSnapshot = useMemo<CampaignEditorSnapshot>(
+    () => ({
+      kind,
+      title: normalizeEditorText(title),
+      code: generatedCode,
+      discountMode,
+      discountValue: normalizeEditorText(discountValue),
+      appliesToMode,
+      selectedProductIds: [...selectedProductIds].sort(),
+      usageMode,
+      maxUses: normalizeEditorText(maxUses),
+      onePerCustomer,
+      expirationMode,
+      expiresAt: expirationMode === "date" ? expiresAt : "",
+      startsAt,
+      minimumOrder: normalizeEditorText(minimumOrder),
+      status,
+    }),
+    [
+      appliesToMode,
+      discountMode,
+      discountValue,
+      expirationMode,
+      expiresAt,
+      generatedCode,
+      kind,
+      maxUses,
+      minimumOrder,
+      onePerCustomer,
+      selectedProductIds,
+      startsAt,
+      status,
+      title,
+      usageMode,
+    ],
+  );
+  const hasCampaignEditorChanges =
+    !isEditing || !areCampaignEditorSnapshotsEqual(savedEditorSnapshot, currentEditorSnapshot);
+  const canSaveCampaign = !controlsDisabled && !isSaving && hasCampaignEditorChanges;
   const previewValue =
     discountMode === "percent"
       ? `${discountValue || "0"}%`
@@ -554,7 +688,7 @@ export function SalesCouponGiftCreatePanel({
   }, [productOptions, selectedProducts]);
 
   const handleSave = async () => {
-    if (controlsDisabled || isSaving) return;
+    if (!canSaveCampaign) return;
     setIsSaving(true);
     setStatusMessage(null);
     try {
@@ -638,22 +772,24 @@ export function SalesCouponGiftCreatePanel({
               {isEditing ? "Editar cupom ou gift" : "Criar cupom ou gift"}
             </h3>
           </div>
-          <p className="mt-[8px] max-w-[760px] text-[13px] leading-[1.55] text-[#858585]">
-            {isEditing
-              ? "Atualize codigo, valor, produtos elegiveis, validade e regras de uso sem recriar a campanha."
-              : "Defina tipo, valor, produtos elegiveis, janela de validade e limite de uso antes de publicar no checkout."}
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-[10px]">
           <ServerButton onClick={() => router.push(getCouponsPath(guildId))}>
             Cancelar
           </ServerButton>
+          <ServerMoreActionsMenu
+            resourceLabel="campanha"
+            deleteLabel="Excluir campanha"
+            disabled={(controlsDisabled || isSaving) && !isEditing}
+            deleteDisabled={!isEditing || controlsDisabled || isSaving || isDeleting}
+            onDelete={() => setIsDeleteModalOpen(true)}
+          />
           <ServerButton
             aria-busy={isSaving}
             variant="primary"
             className="min-w-[168px]"
-            disabled={controlsDisabled || isSaving}
+            disabled={!canSaveCampaign}
             onClick={() => void handleSave()}
           >
             {isSaving ? (
@@ -668,18 +804,32 @@ export function SalesCouponGiftCreatePanel({
         </div>
       </div>
 
-      {statusMessage ? (
+      {!isLoadingDiscount && statusMessage ? (
         <div className="rounded-[18px] border border-[#3A2A1E] bg-[#170F09] px-[14px] py-[12px] text-[13px] text-[#F2B27D]">
           {statusMessage}
         </div>
       ) : null}
 
+      {isLoadingDiscount ? (
+        <CampaignEditorSkeleton />
+      ) : (
+      <>
       <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_398px]">
         <div className="space-y-[18px]">
           <ServerSurface className="p-[18px] sm:p-[22px]">
-            <label className="block text-[13px] font-semibold text-[#D8D8D8]">
-              Nome da campanha
-            </label>
+            <div className="flex items-start justify-between gap-[16px]">
+              <div>
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">
+                  Identidade da campanha
+                </h4>
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Nome, codigo e tipo que aparecem no checkout e nos controles internos.
+                </p>
+              </div>
+              <Pencil className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
+            </div>
+
+            <FieldLabel className="mt-[18px]">Nome da campanha</FieldLabel>
             <ServerTextInput
               value={title}
               onChange={(event) => setTitle(event.currentTarget.value)}
@@ -690,9 +840,7 @@ export function SalesCouponGiftCreatePanel({
 
             <div className="mt-[18px] grid gap-[12px] sm:grid-cols-2">
               <div>
-                <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                  Codigo
-                </label>
+                <FieldLabel>Codigo</FieldLabel>
                 <ServerTextInput
                   value={code}
                   onChange={(event) => setCode(slugifyCode(event.currentTarget.value))}
@@ -701,9 +849,7 @@ export function SalesCouponGiftCreatePanel({
                 />
               </div>
               <div>
-                <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                  Tipo
-                </label>
+                <FieldLabel>Tipo rapido</FieldLabel>
                 <SelectMenu
                   value={kind}
                   options={[
@@ -716,10 +862,73 @@ export function SalesCouponGiftCreatePanel({
                 />
               </div>
             </div>
+
+            <div className="mt-[16px] grid gap-[10px] lg:grid-cols-3">
+              {[
+                {
+                  id: "coupon" as const,
+                  icon: <Tags className="h-[16px] w-[16px]" />,
+                  title: "Cupom",
+                  description: "Codigo manual com desconto no checkout.",
+                },
+                {
+                  id: "gift_card" as const,
+                  icon: <Gift className="h-[16px] w-[16px]" />,
+                  title: "Gift card",
+                  description: "Saldo fixo para resgate futuro.",
+                },
+                {
+                  id: "promotion" as const,
+                  icon: <Sparkles className="h-[16px] w-[16px]" />,
+                  title: "Promocao",
+                  description: "Campanha preparada para regra automatica.",
+                },
+              ].map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setKind(option.id)}
+                  disabled={controlsDisabled}
+                  className={cn(
+                    "flowdesk-server-button flex min-h-[104px] items-start gap-[11px] rounded-[16px] border px-[12px] py-[12px] text-left transition disabled:cursor-not-allowed disabled:opacity-55",
+                    kind === option.id
+                      ? "border-[#343434] bg-[#151515]"
+                      : "border-[#202020] bg-[#0D0D0D] hover:border-[#2A2A2A] hover:bg-[#111]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "mt-[1px] inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[11px]",
+                      kind === option.id ? "bg-[#F1F1F1] text-[#080808]" : "bg-[#171717] text-[#BDBDBD]",
+                    )}
+                  >
+                    {option.icon}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-semibold text-[#EDEDED]">
+                      {option.title}
+                    </span>
+                    <span className="mt-[5px] block text-[12px] leading-[1.45] text-[#777]">
+                      {option.description}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
           </ServerSurface>
 
           <ServerSurface className="p-[18px] sm:p-[22px]">
-            <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Valor</h4>
+            <div className="flex items-start justify-between gap-[16px]">
+              <div>
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">
+                  Valor e pedido minimo
+                </h4>
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Defina o desconto aplicado e, opcionalmente, o minimo do pedido.
+                </p>
+              </div>
+              <Percent className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
+            </div>
             <div className="mt-[14px] grid grid-cols-2 rounded-[14px] border border-[#252525] bg-[#0D0D0D] p-[4px]">
               <SegmentButton value="percent" current={discountMode} onChange={setDiscountMode} disabled={controlsDisabled || kind === "gift_card"}>
                 Percentual
@@ -729,23 +938,37 @@ export function SalesCouponGiftCreatePanel({
               </SegmentButton>
             </div>
             <div className="mt-[12px] grid gap-[12px] sm:grid-cols-2">
-              <ServerTextInput
-                value={discountValue}
-                onChange={(event) => setDiscountValue(event.currentTarget.value)}
-                placeholder={discountMode === "percent" ? "10" : "25,00"}
-                disabled={controlsDisabled}
-              />
-              <ServerTextInput
-                value={minimumOrder}
-                onChange={(event) => setMinimumOrder(event.currentTarget.value)}
-                placeholder="Pedido minimo opcional"
-                disabled={controlsDisabled}
-              />
+              <div>
+                <FieldLabel>{kind === "gift_card" ? "Saldo inicial" : "Valor do desconto"}</FieldLabel>
+                <ServerTextInput
+                  value={discountValue}
+                  onChange={(event) => setDiscountValue(event.currentTarget.value)}
+                  placeholder={discountMode === "percent" ? "10" : "25,00"}
+                  disabled={controlsDisabled}
+                />
+              </div>
+              <div>
+                <FieldLabel>Pedido minimo</FieldLabel>
+                <ServerTextInput
+                  value={minimumOrder}
+                  onChange={(event) => setMinimumOrder(event.currentTarget.value)}
+                  placeholder="Opcional"
+                  disabled={controlsDisabled}
+                />
+              </div>
             </div>
           </ServerSurface>
 
-          <ServerSurface className="p-[18px] sm:p-[22px]">
-            <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Aplicacao</h4>
+          <ServerSurface className="relative z-[60] overflow-visible p-[18px] sm:p-[22px]">
+            <div className="flex items-start justify-between gap-[16px]">
+              <div>
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">Aplicacao</h4>
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Escolha se a campanha vale para todos os produtos ou apenas itens selecionados.
+                </p>
+              </div>
+              <PackageSearch className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
+            </div>
             <div className="mt-[14px] grid grid-cols-2 rounded-[14px] border border-[#252525] bg-[#0D0D0D] p-[4px]">
               <SegmentButton value="all" current={appliesToMode} onChange={setAppliesToMode} disabled={controlsDisabled}>
                 Todos
@@ -795,12 +1018,20 @@ export function SalesCouponGiftCreatePanel({
           </ServerSurface>
 
           <ServerSurface className="p-[18px] sm:p-[22px]">
-            <h4 className="text-[14px] font-semibold text-[#E2E2E2]">Uso e validade</h4>
+            <div className="flex items-start justify-between gap-[16px]">
+              <div>
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">
+                  Uso e validade
+                </h4>
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Controle limite de resgates, janela de uso e regra por cliente.
+                </p>
+              </div>
+              <Calendar className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
+            </div>
             <div className="mt-[14px] grid gap-[12px] sm:grid-cols-2">
               <div>
-                <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                  Usos
-                </label>
+                <FieldLabel>Usos</FieldLabel>
                 <SelectMenu
                   value={usageMode}
                   options={[
@@ -812,9 +1043,7 @@ export function SalesCouponGiftCreatePanel({
                 />
               </div>
               <div>
-                <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                  Quantidade
-                </label>
+                <FieldLabel>Quantidade</FieldLabel>
                 <ServerTextInput
                   value={maxUses}
                   onChange={(event) => setMaxUses(event.currentTarget.value.replace(/\D/g, ""))}
@@ -823,9 +1052,7 @@ export function SalesCouponGiftCreatePanel({
                 />
               </div>
               <div>
-                <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                  Inicio
-                </label>
+                <FieldLabel>Inicio</FieldLabel>
                 <ServerTextInput
                   type="date"
                   value={startsAt}
@@ -834,9 +1061,7 @@ export function SalesCouponGiftCreatePanel({
                 />
               </div>
               <div>
-                <label className="mb-[8px] block text-[12px] font-semibold text-[#AFAFAF]">
-                  Expiracao
-                </label>
+                <FieldLabel>Expiracao</FieldLabel>
                 <SelectMenu
                   value={expirationMode}
                   options={[
@@ -870,15 +1095,33 @@ export function SalesCouponGiftCreatePanel({
             </label>
           </ServerSurface>
 
-          {isEditing ? (
-            <ServerDangerZone
-              title="Excluir cupom ou gift"
-              description="Remove a campanha do checkout. Resgates ja registrados continuam preservados no historico operacional."
-              actionLabel="Excluir campanha"
-              disabled={controlsDisabled || isSaving || isDeleting}
-              onAction={() => setIsDeleteModalOpen(true)}
-            />
-          ) : null}
+          <ServerSurface className="p-[18px] sm:p-[22px]">
+            <div className="flex items-start justify-between gap-[16px]">
+              <div>
+                <h4 className="text-[15px] font-semibold text-[#E7E7E7]">
+                  Previa no checkout
+                </h4>
+                <p className="mt-[8px] text-[12px] leading-[1.5] text-[#777]">
+                  Visual aproximado do codigo quando ele for validado em uma compra.
+                </p>
+              </div>
+              <Pencil className="h-[17px] w-[17px] shrink-0 text-[#8A8A8A]" />
+            </div>
+            <div className="mt-[18px] rounded-[18px] border border-[#202020] bg-[#0C0C0C] p-[16px]">
+              <p className="truncate text-[13px] text-[#D8D8D8]">{generatedCode}</p>
+              <p className="mt-[12px] text-[20px] leading-[1.25] font-medium text-[#8AB6FF]">
+                {title.trim() || "Nova campanha"}
+              </p>
+              <p className="mt-[10px] text-[14px] leading-[1.55] text-[#BDBDBD]">
+                {kind === "gift_card"
+                  ? `Gift card com saldo de ${previewValue}.`
+                  : `${previewValue} de desconto ${appliesToMode === "all" ? "em todos os produtos" : "em produtos selecionados"}.`}
+              </p>
+              <p className="mt-[10px] text-[13px] font-semibold text-[#DCDCDC]">
+                {expirationMode === "never" ? "Sem expiracao definida" : `Expira em ${expiresAt || "data pendente"}`}
+              </p>
+            </div>
+          </ServerSurface>
         </div>
 
         <aside className="space-y-[18px]">
@@ -950,6 +1193,8 @@ export function SalesCouponGiftCreatePanel({
         onCancel={() => setIsDeleteModalOpen(false)}
         onConfirm={() => void handleDeleteDiscount()}
       />
+      </>
+      )}
     </div>
   );
 }

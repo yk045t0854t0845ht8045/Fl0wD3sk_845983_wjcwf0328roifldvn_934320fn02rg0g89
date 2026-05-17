@@ -23,10 +23,10 @@ import {
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   ServerButton,
-  ServerDangerZone,
   ServerDeleteConfirmModal,
   ServerEmptyState,
   ServerIconFrame,
+  ServerMoreActionsMenu,
   ServerSectionHeading,
   ServerSurface,
   ServerTextInput,
@@ -106,6 +106,16 @@ type ChannelsResponse = {
     text?: DiscordChannel[];
     categories?: DiscordChannel[];
   };
+};
+
+type CategoryEditorSnapshot = {
+  title: string;
+  description: string;
+  collectionType: SalesCategory["collectionType"];
+  discordPublicationMode: "online_only" | "channel";
+  discordChannelId: string;
+  publishedVirtualStore: boolean;
+  imagePreviewUrl: string | null;
 };
 
 const discordPublicationLabel = {
@@ -429,6 +439,29 @@ function slugifyCategoryPath(value: string) {
   );
 }
 
+function normalizeEditorText(value: string | null | undefined) {
+  return (value || "").trim();
+}
+
+function categoryToEditorSnapshot(category: SalesCategory): CategoryEditorSnapshot {
+  return {
+    title: normalizeEditorText(category.title),
+    description: category.description || "",
+    collectionType: category.collectionType,
+    discordPublicationMode: category.discordPublicationMode === "channel" ? "channel" : "online_only",
+    discordChannelId: category.discordChannelId || "",
+    publishedVirtualStore: category.publishedVirtualStore,
+    imagePreviewUrl: category.imageUrl || null,
+  };
+}
+
+function areCategoryEditorSnapshotsEqual(
+  left: CategoryEditorSnapshot | null,
+  right: CategoryEditorSnapshot,
+) {
+  return Boolean(left) && JSON.stringify(left) === JSON.stringify(right);
+}
+
 function SelectMenu<T extends string>({
   value,
   options,
@@ -617,6 +650,8 @@ export function SalesCategoryCreatePanel({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [savedEditorSnapshot, setSavedEditorSnapshot] =
+    useState<CategoryEditorSnapshot | null>(null);
 
   useEffect(() => {
     return () => {
@@ -656,6 +691,7 @@ export function SalesCategoryCreatePanel({
         setPublishedVirtualStore(cached.publishedVirtualStore);
         setImagePreviewUrl(cached.imageUrl || null);
         setImageName(cached.imageUrl ? "Imagem atual" : null);
+        setSavedEditorSnapshot(categoryToEditorSnapshot(cached));
         writeCache(categoryDetailCache, cacheKey, cached);
         setIsLoadingCategory(false);
       } else {
@@ -697,6 +733,7 @@ export function SalesCategoryCreatePanel({
         setPublishedVirtualStore(category.publishedVirtualStore);
         setImagePreviewUrl(category.imageUrl || null);
         setImageName(category.imageUrl ? "Imagem atual" : null);
+        setSavedEditorSnapshot(categoryToEditorSnapshot(category));
         writeCache(categoryDetailCache, cacheKey, category);
         writeClientCache(getCategoryCacheKey(guildId, safeCategoryCode), category);
       } catch (error) {
@@ -854,11 +891,34 @@ export function SalesCategoryCreatePanel({
   }, [guildId, router]);
 
   const isEditMode = mode === "edit";
+  const currentEditorSnapshot = useMemo<CategoryEditorSnapshot>(
+    () => ({
+      title: normalizeEditorText(title),
+      description,
+      collectionType,
+      discordPublicationMode,
+      discordChannelId: discordPublicationMode === "channel" ? discordChannelId : "",
+      publishedVirtualStore,
+      imagePreviewUrl,
+    }),
+    [
+      collectionType,
+      description,
+      discordChannelId,
+      discordPublicationMode,
+      imagePreviewUrl,
+      publishedVirtualStore,
+      title,
+    ],
+  );
+  const hasCategoryEditorChanges =
+    !isEditMode || !areCategoryEditorSnapshotsEqual(savedEditorSnapshot, currentEditorSnapshot);
   const hasDiscordPublicationTarget =
     discordPublicationMode === "online_only" || Boolean(discordChannelId);
   const canSave =
     title.trim().length >= 2 &&
     hasDiscordPublicationTarget &&
+    hasCategoryEditorChanges &&
     !isSaving &&
     !isLoadingCategory &&
     !readOnly;
@@ -1076,6 +1136,13 @@ export function SalesCategoryCreatePanel({
           >
             Cancelar
           </ServerButton>
+          <ServerMoreActionsMenu
+            resourceLabel="categoria"
+            deleteLabel="Excluir categoria"
+            disabled={(isLoadingCategory || isSaving || readOnly) && !isEditMode}
+            deleteDisabled={!isEditMode || isLoadingCategory || isSaving || isDeleting || readOnly}
+            onDelete={() => setIsDeleteModalOpen(true)}
+          />
           <ServerButton
             aria-busy={isSaving}
             disabled={!canSave}
@@ -1316,15 +1383,6 @@ export function SalesCategoryCreatePanel({
             </div>
           </ServerSurface>
 
-          {isEditMode ? (
-            <ServerDangerZone
-              title="Excluir categoria"
-              description="Remove a categoria do painel. Produtos vinculados ficam preservados e voltam para a listagem sem categoria."
-              actionLabel="Excluir categoria"
-              disabled={isSaving || isDeleting || readOnly}
-              onAction={() => setIsDeleteModalOpen(true)}
-            />
-          ) : null}
         </div>
 
         <aside className="space-y-[18px]">

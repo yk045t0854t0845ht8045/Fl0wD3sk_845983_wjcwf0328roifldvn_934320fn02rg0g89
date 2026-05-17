@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
-import { Trash2 } from "lucide-react";
+import { Archive, ChevronDown, Link2, Search, Trash2 } from "lucide-react";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   buildDiscordAuthStartHref,
@@ -191,11 +191,11 @@ export function ServerDiscordRelinkState({
   };
 
   return (
-    <div className="relative overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_28px_90px_rgba(0,0,0,0.34)] sm:px-[28px] sm:py-[28px]">
+    <div className="flowdesk-stage-fade relative overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]">
       <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[30px] border border-[#111]" />
       <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[29px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
       <div className="relative z-10">
-        <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#9BB7FF]">
+        <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#AFAFAF]">
           Login Discord necessario
         </p>
         <h4 className="mt-[12px] text-[26px] leading-[1] font-medium tracking-[-0.05em] text-[#EFEFEF]">
@@ -204,21 +204,140 @@ export function ServerDiscordRelinkState({
         <p className="mt-[12px] max-w-[560px] text-[14px] leading-[1.62] text-[#858585]">
           {description}
         </p>
-        <button
-          type="button"
-          onClick={handleRelink}
-          className="group relative mt-[24px] inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
-        >
-          <span
-            aria-hidden="true"
-            className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
-          />
-          <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
-            Vincular com Discord
-          </span>
-        </button>
+        <div className="mt-[24px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={handleRelink}
+            className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+            />
+            <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+              Vincular com Discord
+            </span>
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+export function ServerDiscordLinkModal({
+  open,
+  mode = "connect",
+  diagnosticsFingerprint,
+  onClose,
+  onConnect,
+}: {
+  open: boolean;
+  mode?: "connect" | "reconnect";
+  diagnosticsFingerprint?: string | null;
+  onClose?: () => void;
+  onConnect: () => void;
+}) {
+  useEffect(() => {
+    if (!open || !onClose) return;
+    const closeModal = onClose;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeModal();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
+
+  if (!open || typeof document === "undefined") return null;
+
+  const isReconnect = mode === "reconnect";
+  const title = isReconnect
+    ? "Reconectar conta Discord"
+    : "Vincule sua conta Discord";
+  const description = isReconnect
+    ? "Nao conseguimos validar a sincronizacao ao vivo desta sessao. Mantivemos os dados seguros do banco para evitar listas vazias, e a reconexao atualiza os servidores sem afetar o resto da conta."
+    : "Sua conta Flowdesk pode entrar com Google ou email, mas servidores, equipes, canais, cargos e modulos do Discord precisam de uma autorizacao Discord ativa nesta mesma conta.";
+  const secondaryDescription = isReconnect
+    ? "Se voce acabou de vincular, tente atualizar a pagina antes de reconectar. O Flowdesk tambem tenta reaproveitar tokens recentes automaticamente."
+    : "Depois do vinculo, seus servidores e permissoes sincronizam automaticamente.";
+
+  return createPortal(
+    <div className="fixed inset-0 z-[5200] isolate overflow-y-auto overscroll-contain">
+      <button
+        type="button"
+        aria-label="Fechar modal"
+        className="absolute inset-0 bg-[rgba(0,0,0,0.84)] backdrop-blur-[7px]"
+        onClick={onClose}
+      />
+      <div className="relative z-[10] flex min-h-full items-center justify-center px-[18px] py-[28px]">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          className="flowdesk-stage-fade relative w-full max-w-[620px] overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
+        >
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[30px] border border-[#111]" />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[29px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
+          <div className="relative z-10">
+            <div className="flex items-start justify-between gap-[14px]">
+              <div className="min-w-0">
+                <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#AFAFAF]">
+                  Login Discord necessario
+                </p>
+                <h2 className="mt-[12px] text-[28px] leading-[1] font-medium tracking-[-0.05em] text-[#EFEFEF]">
+                  {title}
+                </h2>
+              </div>
+              {onClose ? (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="inline-flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] text-[#9C9C9C] transition-colors hover:border-[#242424] hover:text-[#E4E4E4]"
+                  aria-label="Fechar modal"
+                >
+                  <span className="text-[18px] leading-none">x</span>
+                </button>
+              ) : null}
+            </div>
+            <p className="mt-[12px] max-w-[540px] text-[14px] leading-[1.62] text-[#858585]">
+              {description}
+            </p>
+            <p className="mt-[12px] max-w-[540px] text-[14px] leading-[1.62] text-[#858585]">
+              {secondaryDescription}
+            </p>
+            {diagnosticsFingerprint ? (
+              <p className="mt-[12px] text-[11px] uppercase tracking-[0.16em] text-[#666]">
+                Diagnostico FlowSecure: {diagnosticsFingerprint}
+              </p>
+            ) : null}
+            <div className="mt-[24px] flex flex-col-reverse gap-[10px] sm:flex-row sm:justify-end">
+              {onClose ? (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="inline-flex h-[46px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D] px-[18px] text-[14px] font-medium text-[#CACACA] transition-colors hover:border-[#232323] hover:bg-[#111111] hover:text-[#F1F1F1]"
+                >
+                  Agora nao
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={onConnect}
+                className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
+              >
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
+                />
+                <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
+                  {isReconnect ? "Reconectar Discord" : "Vincular com Discord"}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -328,6 +447,143 @@ export function ServerDeleteConfirmModal({
       </div>
     </div>,
     document.body,
+  );
+}
+
+function ServerActionBrandIcon({ label }: { label: string }) {
+  return (
+    <span className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-[#575757] text-[10px] font-bold leading-none text-[#090909]">
+      {label}
+    </span>
+  );
+}
+
+export function ServerMoreActionsMenu({
+  resourceLabel,
+  deleteLabel,
+  disabled = false,
+  deleteDisabled = false,
+  onDelete,
+}: {
+  resourceLabel: string;
+  deleteLabel: string;
+  disabled?: boolean;
+  deleteDisabled?: boolean;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointer(event: MouseEvent) {
+      if (
+        menuRef.current &&
+        event.target instanceof Node &&
+        !menuRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  const shareItems = [
+    { label: "Copiar link", icon: <Link2 className="h-[17px] w-[17px]" /> },
+    { label: "Facebook", icon: <ServerActionBrandIcon label="f" /> },
+    { label: "Reddit", icon: <ServerActionBrandIcon label="r" /> },
+    { label: "LinkedIn", icon: <ServerActionBrandIcon label="in" /> },
+    { label: "Pinterest", icon: <ServerActionBrandIcon label="p" /> },
+    { label: "X", icon: <span className="text-[20px] leading-none">X</span> },
+  ];
+
+  return (
+    <div ref={menuRef} className={open ? "relative z-[620]" : "relative z-[1]"}>
+      <ServerButton
+        onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
+        aria-expanded={open}
+        className="gap-[7px]"
+      >
+        Mais acoes
+        <ChevronDown
+          strokeWidth={1.9}
+          className={`h-[15px] w-[15px] text-[#9A9A9A] transition ${open ? "rotate-180 text-[#DADADA]" : ""}`}
+        />
+      </ServerButton>
+      {open ? (
+        <div className="flowdesk-scale-in-soft absolute right-0 top-[calc(100%+8px)] z-[620] w-[292px] overflow-hidden rounded-[18px] border border-[#242424] bg-[#080808] shadow-[0_24px_70px_rgba(0,0,0,0.52)]">
+          <div className="p-[10px]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-[12px] top-1/2 h-[16px] w-[16px] -translate-y-1/2 text-[#7C7C7C]" />
+              <input
+                value=""
+                readOnly
+                disabled
+                placeholder="Pesquisar acoes"
+                className="h-[40px] w-full rounded-[12px] border border-[#2E2E2E] bg-[#101010] pl-[38px] pr-[12px] text-[13px] text-[#AFAFAF] outline-none placeholder:text-[#8A8A8A] disabled:opacity-70"
+              />
+            </div>
+            <p className="px-[6px] pb-[8px] pt-[16px] text-[14px] font-semibold text-[#DCDCDC]">
+              Compartilhar
+            </p>
+            <div className="space-y-[2px]">
+              {shareItems.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  disabled
+                  className="flex h-[38px] w-full cursor-not-allowed items-center gap-[12px] rounded-[12px] px-[8px] text-left text-[14px] text-[#CFCFCF] opacity-45"
+                  title={`Compartilhar ${resourceLabel} ainda nao esta disponivel`}
+                >
+                  <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#D6D6D6]">
+                    {item.icon}
+                  </span>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="border-t border-[#1D1D1D] p-[10px]">
+            <p className="px-[6px] pb-[8px] text-[14px] font-semibold text-[#DCDCDC]">
+              Mais acoes
+            </p>
+            <button
+              type="button"
+              disabled
+              className="flex h-[38px] w-full cursor-not-allowed items-center gap-[12px] rounded-[12px] px-[8px] text-left text-[14px] text-[#CFCFCF] opacity-45"
+              title={`Arquivar ${resourceLabel} ainda nao esta disponivel`}
+            >
+              <Archive className="h-[18px] w-[18px]" />
+              Arquivar {resourceLabel}
+            </button>
+            <button
+              type="button"
+              disabled={deleteDisabled}
+              onClick={() => {
+                setOpen(false);
+                onDelete();
+              }}
+              className="mt-[2px] flex h-[38px] w-full items-center gap-[12px] rounded-[12px] px-[8px] text-left text-[14px] text-[#FF8D9B] transition hover:bg-[#1A0A0D] hover:text-[#FFB1BA] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              <Trash2 className="h-[18px] w-[18px]" />
+              {deleteLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

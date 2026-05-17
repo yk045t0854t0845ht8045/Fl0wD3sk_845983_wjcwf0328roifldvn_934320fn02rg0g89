@@ -20,6 +20,7 @@ import {
   buildSalesProductDiscordPayload,
   salesProductMessageLooksManaged,
 } from "@/lib/servers/salesProductDiscordPayload";
+import { markSalesProductDiscordMessageUnavailable } from "@/lib/servers/salesProductDiscordSync";
 
 const PRODUCT_TITLE_MAX_LENGTH = 120;
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
@@ -988,6 +989,27 @@ export async function DELETE(request: Request) {
     }
 
     const supabase = getSupabaseAdminClientOrThrow();
+    await markSalesProductDiscordMessageUnavailable({
+      product: {
+        id: product.id,
+        guild_id: product.guild_id,
+        title: product.title,
+        description: product.description,
+        media_urls: product.media_urls,
+        price_amount: product.price_amount,
+        stock_quantity: product.stock_quantity,
+        discord_publication_mode: product.discord_publication_mode,
+        discord_channel_id: product.discord_channel_id,
+        discord_message_id: product.discord_message_id,
+      },
+    }).catch((error) => {
+      console.warn("[sales-products] failed to mark deleted product unavailable on Discord", {
+        guildId,
+        productId: product.id,
+        error: extractAuditErrorMessage(error),
+      });
+    });
+
     const hardDelete = await supabase
       .from("guild_sales_products")
       .delete()

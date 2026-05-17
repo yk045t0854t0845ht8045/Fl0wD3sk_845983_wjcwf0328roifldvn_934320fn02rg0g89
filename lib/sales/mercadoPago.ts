@@ -212,3 +212,23 @@ export async function fetchSalesMercadoPagoPaymentById(input: {
     },
   );
 }
+
+export async function refundSalesMercadoPagoPayment(input: {
+  accessToken: string;
+  paymentId: string | number;
+}) {
+  return fetchMercadoPago<Record<string, unknown>>(
+    `/v1/payments/${encodeURIComponent(String(input.paymentId))}/refunds`,
+    {
+      accessToken: input.accessToken,
+      method: "POST",
+      headers: {
+        "X-Idempotency-Key": crypto
+          .createHash("sha256")
+          .update(`flowdesk-sales-refund:${input.paymentId}`)
+          .digest("hex"),
+      },
+      fallbackError: "falha ao processar reembolso.",
+    },
+  );
+}

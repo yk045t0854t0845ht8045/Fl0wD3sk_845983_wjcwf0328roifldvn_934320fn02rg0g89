@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import type { RefObject } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { createPortal } from "react-dom";
 import {
   ArrowUpRight,
   ArrowRightLeft,
@@ -45,6 +44,7 @@ import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
 import { LandingReveal } from "@/components/landing/LandingReveal";
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import { useNotificationEffect } from "@/components/notifications/NotificationsProvider";
+import { ServerDiscordLinkModal } from "@/components/servers/ServerUi";
 import { ServerSettingsEditor } from "@/components/servers/ServerSettingsEditor";
 import { ServerSettingsEditorSkeleton } from "@/components/servers/ServerSettingsEditorSkeleton";
 import { PermissionDeniedState } from "@/components/servers/PermissionDeniedState";
@@ -869,72 +869,6 @@ function ServersSyncBanner({
   );
 }
 
-function DiscordReconnectModal({
-  diagnosticsFingerprint,
-  isOpen,
-  onReconnect,
-}: {
-  diagnosticsFingerprint?: string | null;
-  isOpen: boolean;
-  onReconnect: () => void;
-}) {
-  if (!isOpen || typeof document === "undefined") {
-    return null;
-  }
-
-  return createPortal(
-    <div className="fixed inset-0 z-[5200] isolate overflow-y-auto overscroll-contain">
-      <div className="absolute inset-0 bg-[rgba(0,0,0,0.86)] backdrop-blur-[7px]" />
-      <div className="relative z-[10] flex min-h-full items-center justify-center px-[18px] py-[28px]">
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Reconectar conta Discord"
-          className="flowdesk-stage-fade relative w-full max-w-[620px] overflow-hidden rounded-[30px] px-[22px] py-[22px] shadow-[0_34px_110px_rgba(0,0,0,0.52)] sm:px-[28px] sm:py-[28px]"
-        >
-          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[30px] border border-[#111]" />
-          <span aria-hidden="true" className="pointer-events-none absolute inset-[1px] rounded-[29px] bg-[linear-gradient(180deg,rgba(8,8,8,0.985)_0%,rgba(4,4,4,0.985)_100%)]" />
-          <div className="relative z-10">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#9BB7FF]">
-              Login Discord necessario
-            </p>
-            <h2 className="mt-[12px] text-[28px] leading-[1] font-medium tracking-[-0.05em] text-[#EFEFEF]">
-              Vincule sua conta Discord
-            </h2>
-            <p className="mt-[12px] max-w-[540px] text-[14px] leading-[1.62] text-[#858585]">
-              Detectamos um problema de vinculacao ou token do Discord nesta conta.
-              O Flowdesk manteve os dados validados do banco e a sidebar continua
-              disponivel, mas a sincronizacao ao vivo precisa ser refeita para evitar
-              sumico incorreto de servidores.
-            </p>
-            {diagnosticsFingerprint ? (
-              <p className="mt-[12px] text-[11px] uppercase tracking-[0.16em] text-[#5F6D82]">
-                Diagnostico FlowSecure: {diagnosticsFingerprint}
-              </p>
-            ) : null}
-
-            <div className="mt-[24px] flex justify-end">
-              <button
-                type="button"
-                onClick={onReconnect}
-                className="group relative inline-flex h-[46px] shrink-0 items-center justify-center overflow-visible whitespace-nowrap rounded-[12px] px-6 text-[14px] leading-none font-semibold"
-              >
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-0 rounded-[12px] bg-[#F3F3F3] transition-transform duration-150 ease-out group-hover:scale-[1.02] group-active:scale-[0.985]"
-                />
-                <span className="relative z-10 inline-flex items-center justify-center whitespace-nowrap leading-none text-[#111111]">
-                  Vincular com Discord
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
 function GridIcon() {
   return <Grid2x2 className="h-[18px] w-[18px] shrink-0" strokeWidth={1.8} aria-hidden="true" />;
 }
@@ -1581,7 +1515,7 @@ export function ServersWorkspace({
   const [savedAccounts, setSavedAccounts] = useState<SavedPanelAccount[]>([]);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isDiscordReconnectModalOpen, setIsDiscordReconnectModalOpen] = useState(
-    !currentAccount.discordUserId || Boolean(initialServersSync?.requiresDiscordRelink),
+    !currentAccount.discordUserId,
   );
   const [teamActionMessage, setTeamActionMessage] = useState<string | null>(null);
   const [teamActionError, setTeamActionError] = useState<string | null>(null);
@@ -2287,7 +2221,7 @@ export function ServersWorkspace({
       if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
         return;
       }
-      if (event.key.toLowerCase() !== "f") {
+      if (typeof event.key !== "string" || event.key.toLowerCase() !== "f") {
         return;
       }
 
@@ -2335,13 +2269,15 @@ export function ServersWorkspace({
     [selectedTeamId, teams],
   );
   useEffect(() => {
-    if (isDiscordRelinkRequired) {
+    if (!currentAccount.discordUserId) {
       setIsDiscordReconnectModalOpen(true);
       return;
     }
 
-    setIsDiscordReconnectModalOpen(false);
-  }, [isDiscordRelinkRequired]);
+    if (!isDiscordRelinkRequired) {
+      setIsDiscordReconnectModalOpen(false);
+    }
+  }, [currentAccount.discordUserId, isDiscordRelinkRequired]);
 
   useBodyScrollLock(isCreateTeamModalOpen || isDiscordReconnectModalOpen);
   const linkedGuildIdsInTeams = useMemo(
@@ -4529,10 +4465,12 @@ export function ServersWorkspace({
           </section>
         </div>
       </main>
-      <DiscordReconnectModal
+      <ServerDiscordLinkModal
         diagnosticsFingerprint={serversSync.diagnosticsFingerprint}
-        isOpen={isDiscordReconnectModalOpen}
-        onReconnect={handleReconnectDiscord}
+        open={isDiscordReconnectModalOpen}
+        mode={currentAccount.discordUserId ? "reconnect" : "connect"}
+        onClose={() => setIsDiscordReconnectModalOpen(false)}
+        onConnect={handleReconnectDiscord}
       />
 
       {isCreateTeamModalOpen ? (

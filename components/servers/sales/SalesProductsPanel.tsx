@@ -32,11 +32,11 @@ import {
 import { ButtonLoader } from "@/components/login/ButtonLoader";
 import {
   ServerButton,
-  ServerDangerZone,
   ServerDiscordRelinkState,
   ServerDeleteConfirmModal,
   ServerEmptyState,
   ServerIconFrame,
+  ServerMoreActionsMenu,
   ServerSectionHeading,
   ServerSurface,
   ServerTextInput,
@@ -148,6 +148,25 @@ type ProductOrganizationUsage = {
   productTypes: Record<string, number>;
   manufacturers: Record<string, number>;
   tags: Record<string, number>;
+};
+
+type ProductEditorSnapshot = {
+  title: string;
+  description: string;
+  categoryId: string;
+  status: ProductStatus;
+  mediaUrls: string[];
+  priceAmount: string;
+  compareAtPriceAmount: string;
+  sku: string;
+  barcode: string;
+  barcodeMode: "auto" | "manual";
+  productType: string;
+  manufacturer: string;
+  tags: string[];
+  discordPublicationMode: ProductDiscordPublicationMode;
+  discordChannelId: string;
+  publishedVirtualStore: boolean;
 };
 
 const productsListCache = new Map<string, CacheEntry<SalesProduct[]>>();
@@ -794,6 +813,52 @@ function sameTag(left: string, right: string) {
   return left.localeCompare(right, "pt-BR", { sensitivity: "base" }) === 0;
 }
 
+function normalizeEditorText(value: string | null | undefined) {
+  return (value || "").trim();
+}
+
+function normalizeTagList(values: string[]) {
+  const output: string[] = [];
+  values.forEach((value) => {
+    const normalized = normalizeTag(value);
+    if (!normalized || output.some((item) => sameTag(item, normalized))) return;
+    output.push(normalized);
+  });
+  return output;
+}
+
+function addPendingTag(tags: string[], pendingTag: string) {
+  return normalizeTagList([...tags, pendingTag]);
+}
+
+function productToEditorSnapshot(product: SalesProduct): ProductEditorSnapshot {
+  return {
+    title: normalizeEditorText(product.title),
+    description: product.description || "",
+    categoryId: product.categoryId || "",
+    status: product.status,
+    mediaUrls: product.mediaUrls || [],
+    priceAmount: String(product.priceAmount || ""),
+    compareAtPriceAmount: product.compareAtPriceAmount ? String(product.compareAtPriceAmount) : "",
+    sku: product.sku || "",
+    barcode: product.barcode || generateBarcode(product.title),
+    barcodeMode: product.barcodeMode === "manual" ? "manual" : "auto",
+    productType: normalizeEditorText(product.productType),
+    manufacturer: normalizeEditorText(product.manufacturer),
+    tags: normalizeTagList(product.tags || []),
+    discordPublicationMode: product.discordPublicationMode === "channel" ? "channel" : "online_only",
+    discordChannelId: product.discordChannelId || "",
+    publishedVirtualStore: product.publishedVirtualStore !== false,
+  };
+}
+
+function areProductEditorSnapshotsEqual(
+  left: ProductEditorSnapshot | null,
+  right: ProductEditorSnapshot,
+) {
+  return Boolean(left) && JSON.stringify(left) === JSON.stringify(right);
+}
+
 function readOrganizationUsage(guildId: string): ProductOrganizationUsage {
   if (typeof window === "undefined") return emptyOrganizationUsage();
 
@@ -875,13 +940,13 @@ function ProductTagsInput({
   onChange,
   suggestions,
   disabled,
-  onAddTags,
+  onPendingTagChange,
 }: {
   value: string[];
   onChange: (tags: string[]) => void;
   suggestions: string[];
   disabled?: boolean;
-  onAddTags?: (tags: string[]) => void;
+  onPendingTagChange?: (tag: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -893,14 +958,15 @@ function ProductTagsInput({
       const nextTag = normalizeTag(rawTag);
       if (!nextTag || value.some((tag) => sameTag(tag, nextTag))) {
         setQuery("");
+        onPendingTagChange?.("");
         return;
       }
       onChange([...value, nextTag]);
-      onAddTags?.([nextTag]);
       setQuery("");
+      onPendingTagChange?.("");
       setOpen(true);
     },
-    [onAddTags, onChange, value],
+    [onChange, onPendingTagChange, value],
   );
 
   useEffect(() => {
@@ -1006,7 +1072,9 @@ function ProductTagsInput({
             ref={inputRef}
             value={query}
             onChange={(event) => {
-              setQuery(event.target.value);
+              const nextQuery = event.target.value;
+              setQuery(nextQuery);
+              onPendingTagChange?.(normalizeTag(nextQuery));
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
@@ -1650,6 +1718,7 @@ export function SalesProductCreatePanel({
   const [productType, setProductType] = useState("");
   const [manufacturer, setManufacturer] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [pendingTag, setPendingTag] = useState("");
   const [discordPublicationMode, setDiscordPublicationMode] =
     useState<ProductDiscordPublicationMode>("online_only");
   const [discordChannelId, setDiscordChannelId] = useState("");
@@ -1659,6 +1728,8 @@ export function SalesProductCreatePanel({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isMediaLibraryOpen, setIsMediaLibraryOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [savedEditorSnapshot, setSavedEditorSnapshot] =
+    useState<ProductEditorSnapshot | null>(null);
   const [organizationUsage, setOrganizationUsage] = useState<ProductOrganizationUsage>(() =>
     emptyOrganizationUsage(),
   );
@@ -1679,6 +1750,15 @@ export function SalesProductCreatePanel({
 
   useEffect(() => {
     setOrganizationUsage(readOrganizationUsage(guildId));
+  }, [guildId]);
+
+  useEffect(() => {
+    setOrganizationUsage((current) => {
+      if (!Object.keys(current.tags).length) return current;
+      const nextUsage = { ...current, tags: {} };
+      writeOrganizationUsage(guildId, nextUsage);
+      return nextUsage;
+    });
   }, [guildId]);
 
   useEffect(() => {
@@ -1876,11 +1956,13 @@ export function SalesProductCreatePanel({
         setProductType(cached.productType || "");
         setManufacturer(cached.manufacturer || "");
         setTags(cached.tags || []);
+        setPendingTag("");
         setDiscordPublicationMode(
           cached.discordPublicationMode === "channel" ? "channel" : "online_only",
         );
         setDiscordChannelId(cached.discordChannelId || "");
         setPublishedVirtualStore(cached.publishedVirtualStore !== false);
+        setSavedEditorSnapshot(productToEditorSnapshot(cached));
         writeCache(productDetailCache, cacheKey, cached);
         setIsLoadingProduct(false);
       }
@@ -1931,11 +2013,13 @@ export function SalesProductCreatePanel({
         setProductType(product.productType || "");
         setManufacturer(product.manufacturer || "");
         setTags(product.tags || []);
+        setPendingTag("");
         setDiscordPublicationMode(
           product.discordPublicationMode === "channel" ? "channel" : "online_only",
         );
         setDiscordChannelId(product.discordChannelId || "");
         setPublishedVirtualStore(product.publishedVirtualStore !== false);
+        setSavedEditorSnapshot(productToEditorSnapshot(product));
         writeCache(productDetailCache, `${guildId}:${safeProductCode}`, product);
         writeClientCache(getProductCacheKey(guildId, safeProductCode), product);
       } catch (error) {
@@ -2057,8 +2141,8 @@ export function SalesProductCreatePanel({
   );
   const tagSuggestions = useMemo(() => {
     const productTags = libraryProducts.flatMap((product) => product.tags || []);
-    return buildOrganizationSuggestions(organizationUsage.tags, productTags, tags);
-  }, [libraryProducts, organizationUsage.tags, tags]);
+    return buildOrganizationSuggestions({}, productTags, tags);
+  }, [libraryProducts, tags]);
   const productTypeSuggestions = useMemo(() => {
     return buildOrganizationSuggestions(
       organizationUsage.productTypes,
@@ -2091,6 +2175,49 @@ export function SalesProductCreatePanel({
   }, [description, manufacturer, priceAmount, productType, tags, title]);
 
   const isEditMode = mode === "edit";
+  const productTagsForSave = useMemo(
+    () => addPendingTag(tags, pendingTag),
+    [pendingTag, tags],
+  );
+  const currentEditorSnapshot = useMemo<ProductEditorSnapshot>(
+    () => ({
+      title: normalizeEditorText(title),
+      description,
+      categoryId: categoryId || "",
+      status,
+      mediaUrls,
+      priceAmount: normalizeEditorText(priceAmount),
+      compareAtPriceAmount: normalizeEditorText(compareAtPriceAmount),
+      sku: normalizeEditorText(sku),
+      barcode: normalizeEditorText(barcode),
+      barcodeMode,
+      productType: normalizeEditorText(productType),
+      manufacturer: normalizeEditorText(manufacturer),
+      tags: productTagsForSave,
+      discordPublicationMode,
+      discordChannelId: discordPublicationMode === "channel" ? discordChannelId : "",
+      publishedVirtualStore,
+    }),
+    [
+      barcode,
+      barcodeMode,
+      categoryId,
+      compareAtPriceAmount,
+      description,
+      discordChannelId,
+      discordPublicationMode,
+      manufacturer,
+      mediaUrls,
+      priceAmount,
+      productTagsForSave,
+      productType,
+      publishedVirtualStore,
+      sku,
+      status,
+      title,
+    ],
+  );
+  const hasProductEditorChanges = !isEditMode || !areProductEditorSnapshotsEqual(savedEditorSnapshot, currentEditorSnapshot);
   const isFormLoading = isLoadingProduct || isLoadingCategories;
   const controlsDisabled = isFormLoading || isSaving || readOnly;
   const hasDiscordPublicationTarget =
@@ -2103,6 +2230,7 @@ export function SalesProductCreatePanel({
     hasRequiredCategory &&
     hasRequiredPrice &&
     hasDiscordPublicationTarget &&
+    hasProductEditorChanges &&
     !isSaving &&
     !isFormLoading &&
     !readOnly;
@@ -2194,7 +2322,7 @@ export function SalesProductCreatePanel({
           barcodeMode,
           productType,
           manufacturer,
-          tags,
+          tags: productTagsForSave,
           themeModel: "default",
           discordPublicationMode,
           discordChannelId:
@@ -2210,7 +2338,6 @@ export function SalesProductCreatePanel({
       }
       rememberOrganizationValues("productTypes", [productType]);
       rememberOrganizationValues("manufacturers", [manufacturer]);
-      rememberOrganizationValues("tags", tags);
       router.push(getProductsPath(guildId));
       invalidateProductCaches(guildId);
       router.refresh();
@@ -2237,6 +2364,7 @@ export function SalesProductCreatePanel({
     manufacturer,
     mediaUrls,
     priceAmount,
+    productTagsForSave,
     productType,
     productCode,
     publishedVirtualStore,
@@ -2244,7 +2372,6 @@ export function SalesProductCreatePanel({
     router,
     sku,
     status,
-    tags,
     title,
   ]);
 
@@ -2298,6 +2425,13 @@ export function SalesProductCreatePanel({
 
         <div className="flex flex-wrap items-center gap-[10px]">
           <ServerButton onClick={goBack}>Cancelar</ServerButton>
+          <ServerMoreActionsMenu
+            resourceLabel="produto"
+            deleteLabel="Excluir produto"
+            disabled={controlsDisabled && !isEditMode}
+            deleteDisabled={!isEditMode || controlsDisabled || isDeleting}
+            onDelete={() => setIsDeleteModalOpen(true)}
+          />
           <ServerButton
             aria-busy={isSaving}
             disabled={!canSave}
@@ -2579,16 +2713,6 @@ export function SalesProductCreatePanel({
               </p>
             </div>
           </ServerSurface>
-
-          {isEditMode ? (
-            <ServerDangerZone
-              title="Excluir produto"
-              description="Remove o produto da loja e do painel. Se ja existir historico de pedidos, ele sera arquivado fora do catalogo para preservar auditoria."
-              actionLabel="Excluir produto"
-              disabled={controlsDisabled || isDeleting}
-              onAction={() => setIsDeleteModalOpen(true)}
-            />
-          ) : null}
         </div>
 
         <aside className="space-y-[18px]">
@@ -2658,9 +2782,10 @@ export function SalesProductCreatePanel({
                 value={tags}
                 onChange={(nextTags) => {
                   setTags(nextTags);
+                  setPendingTag("");
                   setStatusMessage(null);
                 }}
-                onAddTags={(nextTags) => rememberOrganizationValues("tags", nextTags)}
+                onPendingTagChange={setPendingTag}
                 suggestions={tagSuggestions}
                 disabled={controlsDisabled}
               />
