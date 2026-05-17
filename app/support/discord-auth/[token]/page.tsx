@@ -173,15 +173,7 @@ export default async function DiscordSupportAuthPage({
 
   // ─── 1. HANDLE LOGOUT INTENT ───
   if (logout === "true") {
-    const cookieStore = await cookies();
-    cookieStore.delete("flowdesk_auth_session");
-    cookieStore.delete("flowdesk_auth_session_proof");
-    cookieStore.delete("flowdesk_oauth_discord_state");
-    cookieStore.delete("flowdesk_oauth_discord_redirect_uri");
-    cookieStore.delete("flowdesk_oauth_discord_next_path");
-    cookieStore.delete("flowdesk_oauth_discord_mode");
-
-    redirect(buildDiscordAuthStartHref(authPath));
+    redirect(`/api/auth/logout-redirect?redirect=${encodeURIComponent(authPath)}`);
   }
 
   const session = await getCurrentAuthSessionFromCookie();

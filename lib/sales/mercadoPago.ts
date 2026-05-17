@@ -39,7 +39,7 @@ type CreateSalesPixPaymentInput = {
 };
 
 const MERCADO_PAGO_API_BASE_URL = "https://api.mercadopago.com";
-const MERCADO_PAGO_TIMEOUT_MS = 20_000;
+const MERCADO_PAGO_TIMEOUT_MS = 45_000;
 
 function splitName(value: string) {
   const parts = value.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);

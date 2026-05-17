@@ -599,141 +599,248 @@ export function DiscordLinkPageClient({
   }, [bootstrapHumanCheck, humanCheckPhase, isExpiredSecureLink, syncLink]);
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-black text-[#F2F2F2]">
+    <main className="min-h-screen bg-black text-[#F2F2F2] font-sans antialiased selection:bg-[#3b82f6]/30 selection:text-white flex items-center justify-center px-4 py-8 relative overflow-hidden">
+      {/* Decorative Background */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         <div className="absolute inset-x-0 top-[-16%] h-[520px] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0.015)_34%,transparent_72%)]" />
         <div className="absolute left-1/2 top-[12%] h-[360px] w-[360px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.04)_0%,transparent_72%)] blur-3xl" />
       </div>
 
-      <section className="relative mx-auto flex min-h-screen w-full max-w-[760px] items-center justify-center px-4 py-8 sm:px-6">
-        <div className="relative w-full overflow-hidden rounded-[32px] px-[24px] py-[24px] shadow-[0_32px_120px_rgba(0,0,0,0.44)] sm:px-[34px] sm:py-[34px]">
-          <span className="pointer-events-none absolute inset-0 rounded-[32px] border border-[#0E0E0E]" />
-          <span className="flowdesk-tag-border-glow pointer-events-none absolute inset-[-2px] rounded-[32px]" />
-          <span className="flowdesk-tag-border-core pointer-events-none absolute inset-[-1px] rounded-[32px]" />
-          <span className="pointer-events-none absolute inset-[1px] rounded-[31px] bg-[linear-gradient(180deg,rgba(8,8,8,0.98)_0%,rgba(4,4,4,0.98)_100%)]" />
-          <div className="pointer-events-none absolute inset-x-[1px] top-[1px] h-[180px] rounded-t-[31px] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0.015)_34%,transparent_74%)]" />
+      <div className="w-full max-w-[460px] overflow-hidden rounded-[24px] border border-[#161616] bg-[#0A0A0A]/95 backdrop-blur-xl p-8 shadow-[0_32px_120px_rgba(0,0,0,0.66)] text-center relative z-10">
+        {/* Decorative Top Ambient Light */}
+        <div className="absolute -top-[120px] left-1/2 -translate-x-1/2 w-[280px] h-[280px] rounded-full bg-[#3b82f6]/10 blur-[90px] pointer-events-none" />
 
-          <div className="relative z-10">
-            <Link href="/" className="relative mx-auto block h-[34px] w-[168px]" aria-label="Voltar para a pagina inicial da Flowdesk">
-              <Image src="/cdn/logos/logo.png" alt="Flowdesk" fill sizes="168px" className="object-contain object-center" priority />
-            </Link>
+        {/* Logo */}
+        <div className="relative mx-auto h-[32px] w-[148px]">
+          <Image
+            src="/cdn/logos/logo.png"
+            alt="Flowdesk Logo"
+            fill
+            sizes="148px"
+            className="object-contain object-center"
+            priority
+          />
+        </div>
 
-            <div className="mx-auto mt-[28px] flex max-w-[520px] items-center justify-center gap-3 sm:gap-5">
-              <div className="min-w-0 flex-1">
-                <div className="mx-auto flex h-[76px] w-[76px] items-center justify-center overflow-hidden rounded-full border border-[#171717] bg-[#0B0B0B] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <div className="relative h-[40px] w-[40px]">
-                    <Image src="/cdn/logos/logotipo_.svg" alt="Flowdesk" fill sizes="40px" className="object-contain" priority />
+        {state.phase === "success" ? (
+          <>
+            <h1 className="mt-8 text-[28px] font-semibold tracking-tight text-white leading-tight">
+              Conta vinculada!
+            </h1>
+            <p className="mt-2 text-[14px] text-[#8E8E8F]">
+              Tudo pronto. Sua conta foi sincronizada no servidor.
+            </p>
+
+            <div className="mt-8 flex justify-center">
+              <div className="relative w-16 h-16 bg-[#10b981]/10 rounded-full flex items-center justify-center border border-[#10b981]/20">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor" className="w-8 h-8 text-[#10b981]">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              </div>
+            </div>
+
+            <p className="mt-6 text-[14px] leading-[1.8] text-[#9A9A9A]">
+              Sua vinculacao foi concluida com sucesso. O cargo correspondente no Discord oficial sera sincronizado em instantes.
+            </p>
+
+            <a
+              href={state.actionHref}
+              className="mt-8 block w-full text-center py-3.5 rounded-[16px] bg-[#F3F3F3] hover:bg-white text-black transition-all duration-300 font-medium text-[14px] cursor-pointer"
+            >
+              {state.actionLabel}
+            </a>
+            {state.actionHref !== officialDiscordHref ? (
+              <a
+                href={officialDiscordHref}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 block text-[13px] font-medium text-[#8E8E8E] hover:text-[#DADADA] transition-colors duration-200"
+              >
+                Abrir Discord oficial
+              </a>
+            ) : null}
+          </>
+        ) : state.phase === "error" ? (
+          <>
+            <h1 className="mt-8 text-[28px] font-semibold tracking-tight text-white leading-tight">
+              Falha na vinculacao
+            </h1>
+            <p className="mt-2 text-[14px] text-[#8E8E8F]">
+              Ocorreu um problema ao sincronizar.
+            </p>
+
+            <div className="mt-8 flex justify-center">
+              <div className="relative w-16 h-16 bg-[#ef4444]/10 rounded-full flex items-center justify-center border border-[#ef4444]/20">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor" className="w-8 h-8 text-[#ef4444]">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                </svg>
+              </div>
+            </div>
+
+            <p className="mt-6 text-[14px] leading-[1.8] text-[#9A9A9A]">
+              {state.description}
+            </p>
+            {state.requestId ? (
+              <p className="mt-2 text-[12px] text-[#6F6F6F]">
+                Protocolo tecnico: <span className="text-[#AFAFAF]">{state.requestId}</span>
+              </p>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => { void handleRetryAction(); }}
+              className="mt-8 block w-full text-center py-3.5 rounded-[16px] bg-[#F3F3F3] hover:bg-white text-black transition-all duration-300 font-medium text-[14px] cursor-pointer"
+            >
+              {isExpiredSecureLink ? "Gerar novo link seguro" : "Tentar novamente"}
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Standard flow or human check pending */}
+            <h1 className="mt-8 text-[28px] font-semibold tracking-tight text-white leading-tight">
+              Que bom que você voltou
+            </h1>
+            <p className="mt-2 text-[14px] text-[#8E8E8F]">
+              {shouldRenderHumanCheck
+                ? "Escolha uma conta para continuar."
+                : state.description}
+            </p>
+
+            {/* Currently Logged In Account Box */}
+            <div className="mt-8">
+              <button
+                type="button"
+                disabled={
+                  humanCheckPhase === "loading" ||
+                  humanCheckPhase === "verifying" ||
+                  state.phase === "redirecting" ||
+                  state.phase === "syncing"
+                }
+                onPointerMove={(event) => { registerHumanInteraction(event.pointerType); }}
+                onPointerDown={(event) => { registerHumanInteraction(event.pointerType); }}
+                onClick={() => {
+                  registerHumanInteraction(humanCheckPointerTypeRef.current || "mouse");
+                  if (shouldRenderHumanCheck) {
+                    void handleHumanCheckConfirm();
+                  } else {
+                    void syncLink(false);
+                  }
+                }}
+                className="group block w-full text-left p-4 rounded-[18px] bg-[#111112] enabled:hover:bg-[#161618] border border-[#202022] enabled:hover:border-[#38383a] transition-all duration-300 shadow-[inset_0_1px_1px_rgba(255,255,255,0.02)] cursor-pointer disabled:cursor-not-allowed disabled:opacity-80"
+              >
+                <div className="flex items-center gap-4">
+                  {/* User Avatar */}
+                  <div className="relative flex-shrink-0">
+                    {authenticatedUser?.avatarUrl ? (
+                      <div className="w-13 h-13 rounded-full overflow-hidden border border-[#2a2a2c] group-hover:border-[#444] transition-colors duration-300">
+                        <img
+                          src={authenticatedUser.avatarUrl}
+                          alt={accountDisplayName}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-13 h-13 rounded-full bg-gradient-to-tr from-[#3b82f6]/80 to-[#1d4ed8]/80 text-white font-semibold text-[15px] flex items-center justify-center border border-[#2a2a2c]">
+                        {accountDisplayName.slice(0, 2).toUpperCase()}
+                      </div>
+                    )}
+                    {/* Micro-dot Status indicator / spinner */}
+                    {humanCheckPhase === "loading" || humanCheckPhase === "verifying" || state.phase === "syncing" || state.phase === "redirecting" ? (
+                      <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 bg-[#111112] rounded-full flex items-center justify-center border border-[#202022]">
+                        <ButtonLoader size={10} colorClassName="text-[#3b82f6]" />
+                      </div>
+                    ) : (
+                      <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-[#10b981] border-[2.5px] border-[#111112] group-hover:border-[#161618] transition-colors duration-300 rounded-full" />
+                    )}
+                  </div>
+
+                  {/* User Meta info */}
+                  <div className="flex-grow min-w-0">
+                    <h2 className="text-[15px] font-medium text-white group-hover:text-[#3b82f6] transition-colors duration-300 truncate">
+                      {accountDisplayName}
+                    </h2>
+                    <p className="text-[12px] text-[#8E8E8F] truncate mt-0.5">
+                      {accountSubtitle}
+                    </p>
+                  </div>
+
+                  {/* Arrow Indicator */}
+                  <div className="flex-shrink-0 text-[#444] group-hover:text-white transition-colors duration-300 pr-1">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth="2.5"
+                      stroke="currentColor"
+                      className="w-4 h-4"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M8.25 4.5l7.5 7.5-7.5 7.5"
+                      />
+                    </svg>
                   </div>
                 </div>
-                <p className="mt-3 text-center text-[15px] font-medium tracking-[-0.03em] text-[#F2F2F2]">Flowdesk</p>
-                <p className="mt-1 text-center text-[12px] text-[#818181]">Sistema oficial</p>
-              </div>
+              </button>
+            </div>
 
-              <div className="flex min-w-[84px] items-center gap-2 sm:min-w-[112px] sm:gap-3">
-                <span className="h-px flex-1 bg-[#242424]" />
-                <span className={`flex h-[34px] w-[34px] items-center justify-center rounded-full border text-[16px] font-semibold ${
-                  state.phase === "success"
-                    ? "border-[#EAEAEA] bg-[#F3F3F3] text-black"
-                    : state.phase === "error"
-                      ? "border-[#3B1E1E] bg-[#120B0B] text-[#E5B9B9]"
-                      : "border-[#222222] bg-[#0D0D0D] text-[#E6E6E6]"
-                }`}>
-                  {state.phase === "success" ? "OK" : state.phase === "error" ? "!" : "."}
-                </span>
-                <span className="h-px flex-1 bg-[#242424]" />
-              </div>
+            {shouldRenderHumanCheck && humanCheckError ? (
+              <p className="mt-3 text-[13px] leading-[1.75] text-[#D7A5A5]">{humanCheckError}</p>
+            ) : null}
 
-              <div className="min-w-0 flex-1">
-                <div className="mx-auto flex h-[76px] w-[76px] items-center justify-center overflow-hidden rounded-full border border-[#171717] bg-[#0B0B0B] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  {!shouldHideAuthenticatedUserCard && authenticatedUser?.avatarUrl ? (
-                    <Image src={authenticatedUser.avatarUrl} alt={accountDisplayName} width={76} height={76} className="h-full w-full object-cover" />
-                  ) : (
-                    <span className="text-[26px] font-medium tracking-[-0.04em] text-[#F2F2F2]">{accountDisplayName.slice(0, 1).toUpperCase()}</span>
-                  )}
+            {/* Separator "OU" */}
+            {shouldRenderSwitchAccountAction ? (
+              <>
+                <div className="relative my-6 flex items-center justify-center">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-[#1a1a1c]" />
+                  </div>
+                  <span className="relative bg-[#0A0A0A] px-4 text-[11px] font-semibold text-[#555] uppercase tracking-[0.2em]">
+                    OU
+                  </span>
                 </div>
-                <p className="mt-3 truncate text-center text-[15px] font-medium tracking-[-0.03em] text-[#F2F2F2]">
-                  {shouldHideAuthenticatedUserCard ? "Conta Discord" : accountDisplayName}
-                </p>
-                <p className="mt-1 truncate text-center text-[12px] text-[#818181]">
-                  {shouldHideAuthenticatedUserCard ? "Aguardando autenticacao" : accountSubtitle}
-                </p>
-              </div>
-            </div>
 
-            <div className="mx-auto mt-[30px] max-w-[520px] text-center">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#707070]">{panelEyebrow}</p>
-              <h1 className="mt-[14px] text-[30px] leading-[1.02] font-normal tracking-[-0.05em] text-[#F5F5F5] sm:text-[38px]">{panelTitle}</h1>
-              <p className="mt-[14px] text-[14px] leading-[1.8] text-[#9A9A9A] sm:text-[15px]">{panelDescription}</p>
-            </div>
-
-            <div className="mx-auto mt-[28px] flex max-w-[420px] flex-col items-center border-t border-[#161616] pt-[28px] text-center">
-              {shouldRenderHumanCheck ? (
-                <>
+                {/* Option 2: Logout and Log In to Another Account */}
+                <div>
                   <button
                     type="button"
-                    disabled={humanCheckPhase === "loading" || humanCheckPhase === "verifying"}
-                    onPointerMove={(event) => { registerHumanInteraction(event.pointerType); }}
-                    onPointerDown={(event) => { registerHumanInteraction(event.pointerType); }}
-                    onClick={() => {
-                      registerHumanInteraction(humanCheckPointerTypeRef.current || "mouse");
-                      void handleHumanCheckConfirm();
-                    }}
-                    className="inline-flex h-[54px] w-full items-center justify-center rounded-[16px] bg-[#F3F3F3] px-5 text-[15px] font-medium text-black transition hover:bg-white disabled:cursor-not-allowed disabled:bg-[#D8D8D8]"
+                    onClick={() => { void handleLogout(); }}
+                    disabled={isLoggingOut}
+                    className="block w-full text-center py-3.5 rounded-[16px] bg-transparent border border-[#222] text-white hover:bg-white hover:text-black hover:border-white transition-all duration-300 font-medium text-[14px] cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 shadow-sm"
                   >
-                    {humanCheckPhase === "loading" ? <span className="inline-flex items-center gap-3"><ButtonLoader size={16} colorClassName="text-black" />Preparando verificacao</span> : humanCheckPhase === "verifying" ? <span className="inline-flex items-center gap-3"><ButtonLoader size={16} colorClassName="text-black" />Confirmando vinculacao</span> : "Continuar com esta conta"}
+                    {isLoggingOut ? "Saindo..." : "Entre em outra conta"}
                   </button>
-                  <p className="mt-4 text-[13px] leading-[1.75] text-[#8A8A8A]">A verificacao leva cerca de {humanCheckSolveSeconds}s e usa apenas a conta autenticada neste navegador.</p>
-                  {humanCheckError ? <p className="mt-3 text-[13px] leading-[1.75] text-[#D7A5A5]">{humanCheckError}</p> : null}
-                </>
-              ) : state.phase === "success" ? (
-                <>
-                  <span className="flex h-[64px] w-[64px] items-center justify-center rounded-full border border-[#1A1A1A] bg-[#0B0B0B] text-[20px] font-medium text-[#F3F3F3]">OK</span>
-                  <p className="mt-5 text-[14px] leading-[1.8] text-[#9A9A9A]">Sua vinculacao foi concluida. Aguarde alguns instantes enquanto o Discord oficial reconhece o acesso.</p>
-                  <a href={state.actionHref} className="mt-6 inline-flex h-[54px] w-full items-center justify-center rounded-[16px] bg-[#F3F3F3] px-5 text-[15px] font-medium text-black transition hover:bg-white">{state.actionLabel}</a>
-                  {state.actionHref !== officialDiscordHref ? <a href={officialDiscordHref} target="_blank" rel="noreferrer" className="mt-3 text-[13px] font-medium text-[#8E8E8E] transition-colors hover:text-[#DADADA]">Abrir Discord oficial</a> : null}
-                </>
-              ) : state.phase === "error" ? (
-                <>
-                  <span className="flex h-[64px] w-[64px] items-center justify-center rounded-full border border-[#2A1717] bg-[#120B0B] text-[28px] text-[#E5B9B9]">!</span>
-                  <p className="mt-5 text-[14px] leading-[1.8] text-[#9A9A9A]">{state.description}</p>
-                  {state.requestId ? <p className="mt-3 text-[12px] leading-[1.7] text-[#6F6F6F]">Protocolo tecnico: <span className="text-[#AFAFAF]">{state.requestId}</span></p> : null}
-                  <button type="button" onClick={() => { void handleRetryAction(); }} className="mt-6 inline-flex h-[54px] w-full items-center justify-center rounded-[16px] bg-[#F3F3F3] px-5 text-[15px] font-medium text-black transition hover:bg-white">
-                    {isExpiredSecureLink ? "Gerar novo link seguro" : "Tentar novamente"}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="flex h-[64px] w-[64px] items-center justify-center rounded-full border border-[#1A1A1A] bg-[#0B0B0B]"><ButtonLoader size={24} colorClassName="text-[#F3F3F3]" /></span>
-                  <p className="mt-5 text-[14px] leading-[1.8] text-[#9A9A9A]">{state.description}</p>
-                  {state.phase === "syncing" && state.helperHref && state.helperLabel ? <a href={state.helperHref} target="_blank" rel="noreferrer" className="mt-5 inline-flex h-[48px] w-full items-center justify-center rounded-[14px] border border-[#1A1A1A] bg-[#0B0B0B] px-5 text-[14px] font-medium text-[#E2E2E2] transition-colors hover:border-[#2A2A2A] hover:bg-[#111111]">{state.helperLabel}</a> : null}
-                </>
-              )}
+                </div>
+              </>
+            ) : null}
 
-              {shouldRenderSwitchAccountAction ? (
-                <button
-                  type="button"
-                  onClick={() => { void handleLogout(); }}
-                  disabled={isLoggingOut}
-                  className="mt-4 inline-flex h-[46px] w-full items-center justify-center rounded-[14px] border border-[#1A1A1A] bg-transparent px-5 text-[14px] font-medium text-[#A7A7A7] transition-colors hover:border-[#2A2A2A] hover:text-[#F3F3F3] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isLoggingOut ? (
-                    <span className="inline-flex items-center gap-3">
-                      <ButtonLoader size={16} colorClassName="text-[#F3F3F3]" />
-                      Saindo para trocar de conta
-                    </span>
-                  ) : (
-                    "Sair e entrar com outra conta"
-                  )}
-                </button>
-              ) : null}
-            </div>
+            {state.phase === "syncing" && state.helperHref && state.helperLabel ? (
+              <a
+                href={state.helperHref}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-6 block w-full text-center py-3 rounded-[14px] border border-[#1a1a1c] bg-[#111112] text-white hover:bg-[#161618] hover:border-[#38383a] transition-all duration-300 text-[14px] font-medium"
+              >
+                {state.helperLabel}
+              </a>
+            ) : null}
+          </>
+        )}
 
-            <p className="mx-auto mt-[26px] max-w-[460px] text-center text-[12px] leading-[1.8] text-[#7B7B7B]">
-              Ao continuar, voce concorda com nossos <Link href={footerLinks.termsUrl} className="text-[#CACACA] transition-colors hover:text-white">Termos</Link> e a nossa <Link href={footerLinks.privacyUrl} className="text-[#CACACA] transition-colors hover:text-white">Politica de Privacidade</Link>.
-            </p>
-          </div>
-        </div>
-      </section>
+        {/* Footer legal links */}
+        <p className="mx-auto mt-8 max-w-[460px] text-center text-[12px] leading-[1.8] text-[#7B7B7B]">
+          Ao continuar, voce concorda com nossos{" "}
+          <Link href={footerLinks.termsUrl} className="text-[#CACACA] hover:text-white transition-colors duration-200">
+            Termos
+          </Link>{" "}
+          e a nossa{" "}
+          <Link href={footerLinks.privacyUrl} className="text-[#CACACA] hover:text-white transition-colors duration-200">
+            Politica de Privacidade
+          </Link>
+          .
+        </p>
+      </div>
     </main>
   );
 }

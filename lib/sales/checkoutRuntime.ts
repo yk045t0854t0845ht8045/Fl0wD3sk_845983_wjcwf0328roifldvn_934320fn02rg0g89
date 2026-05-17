@@ -1850,10 +1850,34 @@ export async function refundSalesCartPayment(input: {
   }
 
   const mercadoPagoConfig = await loadSalesMercadoPagoSecureSnapshot(cart.guild_id);
-  const refundPayload = await refundSalesMercadoPagoPayment({
-    accessToken: mercadoPagoConfig.accessToken,
-    paymentId: cart.provider_payment_id,
-  });
+  
+  let refundPayload: any = null;
+  try {
+    refundPayload = await refundSalesMercadoPagoPayment({
+      accessToken: mercadoPagoConfig.accessToken,
+      paymentId: cart.provider_payment_id,
+    });
+  } catch (refundError: any) {
+    // ─── Mecanismo de Auto-Cura (Self-Healing) ───
+    // Se a chamada de reembolso falhar (por exemplo, devido a um timeout de 20s-45s),
+    // consultamos o status atual no Mercado Pago para ver se a transacao foi processada mesmo assim!
+    try {
+      const paymentInfo = await fetchSalesMercadoPagoPaymentById({
+        accessToken: mercadoPagoConfig.accessToken,
+        paymentId: cart.provider_payment_id,
+      });
+      const resolvedStatus = resolveSalesMercadoPagoStatus(paymentInfo.status);
+      if (resolvedStatus === "cancelled" || paymentInfo.status === "refunded") {
+        // O estorno foi bem-sucedido no Mercado Pago apesar do erro de conexao local!
+        refundPayload = paymentInfo;
+      } else {
+        throw refundError;
+      }
+    } catch (checkError) {
+      throw refundError;
+    }
+  }
+
   const refundedCart = await updateSalesCartAndSelect(cart.id, {
     status: "refunded",
     provider_status: "refunded",
