@@ -162,6 +162,16 @@ export default async function DiscordCheckoutLinkPage({
     );
   }
 
+  if (link.status === "confirmed") {
+    return (
+      <StatePage
+        tone="success"
+        title="Compra ja vinculada"
+        description="Tudo certo. Volte ao carrinho no Discord e clique para continuar com quantidade e pagamento PIX."
+      />
+    );
+  }
+
   const checkoutPath = `/checkout/discord/${encodeURIComponent(token)}`;
 
   // ─── 1. HANDLE LOGOUT INTENT ───
@@ -179,12 +189,62 @@ export default async function DiscordCheckoutLinkPage({
   }
 
   if (session.user.discord_user_id !== link.discord_user_id) {
+    const displayName = session.user.display_name || session.user.username || "Cliente Flowdesk";
+
     return (
-      <StatePage
-        tone="error"
-        title="Conta Discord diferente"
-        description="Entre com a mesma conta Discord que iniciou o carrinho para autorizar esta compra."
-      />
+      <main className="min-h-screen bg-black text-[#F2F2F2] font-sans antialiased selection:bg-[#3b82f6]/30 selection:text-white flex items-center justify-center px-4 py-8">
+        <div className="w-full max-w-[460px] overflow-hidden rounded-[24px] border border-[#161616] bg-[#0A0A0A]/95 backdrop-blur-xl p-8 shadow-[0_32px_120px_rgba(0,0,0,0.66)] text-center relative">
+          {/* Decorative Top Ambient Light */}
+          <div className="absolute -top-[120px] left-1/2 -translate-x-1/2 w-[280px] h-[280px] rounded-full bg-[#ef4444]/5 blur-[90px] pointer-events-none" />
+
+          {/* Logo */}
+          <div className="relative mx-auto h-[32px] w-[148px]">
+            <Image
+              src="/cdn/logos/logo.png"
+              alt="Flowdesk Logo"
+              fill
+              sizes="148px"
+              className="object-contain object-center"
+              priority
+            />
+          </div>
+
+          {/* Alert Icon */}
+          <div className="mt-8 flex justify-center">
+            <div className="relative w-16 h-16 bg-[#ef4444]/10 rounded-full flex items-center justify-center border border-[#ef4444]/20 animate-pulse">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor" className="w-8 h-8 text-[#ef4444]">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Title */}
+          <h1 className="mt-6 text-[26px] font-semibold tracking-tight text-white leading-tight">
+            Conta Discord diferente
+          </h1>
+          <p className="mt-3 text-[14px] leading-[1.6] text-[#8E8E8F]">
+            Você está logado no site como <span className="text-white font-medium">{displayName}</span>, mas este link de compra requer a conta Discord com ID <span className="text-white font-mono text-[13px]">{link.discord_user_id}</span>.
+          </p>
+
+          {/* Actions */}
+          <div className="mt-8 flex flex-col gap-3">
+            <a
+              href={`${checkoutPath}?logout=true`}
+              className="block w-full text-center py-3.5 rounded-[16px] bg-[#ef4444] hover:bg-[#dc2626] text-white transition-all duration-300 font-medium text-[14px] cursor-pointer shadow-md"
+            >
+              Trocar de conta Discord
+            </a>
+            <a
+              href="https://discord.com/app"
+              target="_blank"
+              rel="noreferrer"
+              className="block w-full text-center py-3.5 rounded-[16px] bg-transparent border border-[#222] text-white hover:bg-white hover:text-black hover:border-white transition-all duration-300 font-medium text-[14px] cursor-pointer"
+            >
+              Voltar ao Discord
+            </a>
+          </div>
+        </div>
+      </main>
     );
   }
 

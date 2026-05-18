@@ -74,13 +74,12 @@ function StatePage({
             />
           </div>
           <div
-            className={`mx-auto mt-7 flex h-[66px] w-[66px] items-center justify-center rounded-full border text-[18px] font-semibold ${
-              tone === "success"
+            className={`mx-auto mt-7 flex h-[66px] w-[66px] items-center justify-center rounded-full border text-[18px] font-semibold ${tone === "success"
                 ? "border-[#21492D] bg-[#0B170F] text-[#92E8A4]"
                 : tone === "error"
                   ? "border-[#3A1E1E] bg-[#160B0B] text-[#F1A7A7]"
                   : "border-[#242424] bg-[#101010] text-[#DADADA]"
-            }`}
+              }`}
           >
             {tone === "success" ? "OK" : tone === "error" ? "!" : "..."}
           </div>
