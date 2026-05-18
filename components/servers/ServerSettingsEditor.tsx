@@ -703,6 +703,11 @@ function normalizeDraftIds(values: string[]) {
 function normalizeServerSettingsDraft(
   draft: ServerSettingsDraft,
 ): ServerSettingsDraft {
+  const refundAutoProcessEnabled = Boolean(draft.refundAutoProcessEnabled);
+  const refundManualApprovalRequired = refundAutoProcessEnabled
+    ? false
+    : draft.refundManualApprovalRequired !== false;
+
   return {
     enabled: draft.enabled,
     menuChannelId: draft.menuChannelId,
@@ -721,8 +726,8 @@ function normalizeServerSettingsDraft(
     aiEnabled: Boolean(draft.aiEnabled),
     refundLimitDays: Math.max(0, Math.min(365, Number(draft.refundLimitDays || 7))),
     refundRules: typeof draft.refundRules === "string" ? draft.refundRules : "",
-    refundAutoProcessEnabled: Boolean(draft.refundAutoProcessEnabled),
-    refundManualApprovalRequired: Boolean(draft.refundManualApprovalRequired),
+    refundAutoProcessEnabled,
+    refundManualApprovalRequired,
     refundApprovalChannelId: draft.refundApprovalChannelId,
     refundApproverRoleIds: normalizeDraftIds(draft.refundApproverRoleIds),
     refundSuccessMessage:
@@ -2537,7 +2542,9 @@ export function ServerSettingsEditor({
         ? refundSettings.refundRules
         : "";
       const nextRefundAutoProcessEnabled = refundSettings.refundAutoProcessEnabled === true;
-      const nextRefundManualApprovalRequired = refundSettings.refundManualApprovalRequired !== false;
+      const nextRefundManualApprovalRequired = nextRefundAutoProcessEnabled
+        ? false
+        : refundSettings.refundManualApprovalRequired !== false;
       const nextRefundApprovalChannelId =
         typeof refundSettings.refundApprovalChannelId === "string" &&
         textSet.has(refundSettings.refundApprovalChannelId)
@@ -5622,9 +5629,17 @@ export function ServerSettingsEditor({
               ? ticket.settings.refundSettings.refundRules
               : refundRules,
           refundAutoProcessEnabled:
-            ticket.settings?.refundSettings?.refundAutoProcessEnabled === true,
+            typeof ticket.settings?.refundSettings?.refundAutoProcessEnabled === "boolean"
+              ? ticket.settings.refundSettings.refundAutoProcessEnabled === true
+              : refundAutoProcessEnabled,
           refundManualApprovalRequired:
-            ticket.settings?.refundSettings?.refundManualApprovalRequired !== false,
+            typeof ticket.settings?.refundSettings?.refundManualApprovalRequired === "boolean"
+              ? ticket.settings.refundSettings.refundAutoProcessEnabled === true
+                ? false
+                : ticket.settings.refundSettings.refundManualApprovalRequired !== false
+              : refundAutoProcessEnabled
+                ? false
+                : refundManualApprovalRequired,
           refundApprovalChannelId:
             typeof ticket.settings?.refundSettings?.refundApprovalChannelId === "string"
               ? ticket.settings.refundSettings.refundApprovalChannelId
