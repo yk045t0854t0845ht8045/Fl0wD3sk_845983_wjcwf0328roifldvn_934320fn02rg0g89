@@ -708,6 +708,20 @@ export async function POST(request: Request) {
       body.refundSettings && typeof body.refundSettings === "object"
         ? body.refundSettings
         : {};
+    const rawRefundAutoProcessEnabled = rawRefundSettings.refundAutoProcessEnabled === true;
+    const rawRefundManualApprovalRequired = rawRefundSettings.refundManualApprovalRequired !== false;
+
+    let refundAutoProcessEnabled = rawRefundAutoProcessEnabled;
+    let refundManualApprovalRequired = rawRefundManualApprovalRequired;
+
+    if (refundAutoProcessEnabled && refundManualApprovalRequired) {
+      // Se ambos vierem true, processar automaticamente ganha prioridade ou garantimos que um anula o outro
+      refundManualApprovalRequired = false;
+    } else if (!refundAutoProcessEnabled && !refundManualApprovalRequired) {
+      // Se ambos vierem false, garantimos que fiquem coerentes
+      refundManualApprovalRequired = true;
+    }
+
     const refundSettings = {
       refundLimitDays: Math.max(
         0,
@@ -717,9 +731,8 @@ export async function POST(request: Request) {
         typeof rawRefundSettings.refundRules === "string"
           ? rawRefundSettings.refundRules.trim().slice(0, REFUND_RULES_MAX_LENGTH)
           : "",
-      refundAutoProcessEnabled: rawRefundSettings.refundAutoProcessEnabled === true,
-      refundManualApprovalRequired:
-        rawRefundSettings.refundManualApprovalRequired !== false,
+      refundAutoProcessEnabled,
+      refundManualApprovalRequired,
       refundApprovalChannelId: getTrimmedId(rawRefundSettings.refundApprovalChannelId),
       refundApproverRoleIds: Array.isArray(rawRefundSettings.refundApproverRoleIds)
         ? Array.from(
@@ -1176,6 +1189,30 @@ export async function POST(request: Request) {
             { status: 400 },
           ),
         );
+      }
+
+      // Validação estrita do Canal de Aprovação Manual do Reembolso
+      if (refundSettings.refundAutoProcessEnabled || refundSettings.refundManualApprovalRequired) {
+        const approvalChannelId = refundSettings.refundApprovalChannelId;
+        const approvalChannel = approvalChannelId ? channelsById.get(approvalChannelId) : null;
+
+        if (!approvalChannel || !isValidTextChannelType(approvalChannel.type)) {
+          recordServerSaveDiagnostic({
+            context: diagnostic,
+            authUserId,
+            accessMode,
+            licenseStatus,
+            outcome: "validation_failed",
+            httpStatus: 400,
+            detail: "Canal de aprovacao manual de reembolso invalido ou inacessivel.",
+          });
+          return applyNoStoreHeaders(
+            NextResponse.json(
+              { ok: false, message: "Canal de aprovacao manual de reembolso invalido ou inacessivel." },
+              { status: 400 },
+            ),
+          );
+        }
       }
     }
 
