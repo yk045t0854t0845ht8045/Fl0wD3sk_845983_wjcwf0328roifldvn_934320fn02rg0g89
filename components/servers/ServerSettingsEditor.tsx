@@ -6750,7 +6750,11 @@ export function ServerSettingsEditor({
                                 type="button"
                                 onClick={() => {
                                   if (aiControlsDisabled) return;
-                                  setRefundAutoProcessEnabled(!refundAutoProcessEnabled);
+                                  const nextVal = !refundAutoProcessEnabled;
+                                  setRefundAutoProcessEnabled(nextVal);
+                                  if (nextVal) {
+                                    setRefundManualApprovalRequired(false);
+                                  }
                                 }}
                                 disabled={aiControlsDisabled}
                                 className={`relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out outline-none ${
@@ -6770,7 +6774,11 @@ export function ServerSettingsEditor({
                                 type="button"
                                 onClick={() => {
                                   if (aiControlsDisabled) return;
-                                  setRefundManualApprovalRequired(!refundManualApprovalRequired);
+                                  const nextVal = !refundManualApprovalRequired;
+                                  setRefundManualApprovalRequired(nextVal);
+                                  if (nextVal) {
+                                    setRefundAutoProcessEnabled(false);
+                                  }
                                 }}
                                 disabled={aiControlsDisabled}
                                 className={`relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out outline-none ${
