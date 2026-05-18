@@ -20,6 +20,7 @@ import {
 import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
 import {
   readServerSettingsVaultSnapshot,
+  rewriteUnreadableServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
 } from "@/lib/servers/serverSettingsVault";
 import {
@@ -320,29 +321,40 @@ export async function GET(request: Request) {
       );
     }
 
+    const canonicalSettings = {
+      enabled: Boolean(result.data.enabled),
+      logChannelId: result.data.log_channel_id,
+      enforcementAction: normalizeAction(result.data.enforcement_action),
+      timeoutMinutes: normalizeTimeoutMinutes(result.data.timeout_minutes),
+      ignoredRoleIds: Array.isArray(result.data.ignored_role_ids)
+        ? result.data.ignored_role_ids.filter(
+            (roleId): roleId is string => typeof roleId === "string",
+          )
+        : [],
+      ignoredChannelIds: Array.isArray(result.data.ignored_channel_ids)
+        ? result.data.ignored_channel_ids.filter(
+            (channelId): channelId is string => typeof channelId === "string",
+          )
+        : [],
+      blockExternalLinks: result.data.block_external_links !== false,
+      blockDiscordInvites: result.data.block_discord_invites !== false,
+      blockObfuscatedLinks: result.data.block_obfuscated_links !== false,
+      updatedAt: result.data.updated_at,
+    };
+    if (secureSnapshotResult?.recovery?.unreadable) {
+      void rewriteUnreadableServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "antilink_settings",
+        payload: canonicalSettings,
+        configuredByUserId: access.context.sessionData.authSession.user.id,
+        recovery: secureSnapshotResult.recovery,
+      });
+    }
+
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        settings: {
-          enabled: Boolean(result.data.enabled),
-          logChannelId: result.data.log_channel_id,
-          enforcementAction: normalizeAction(result.data.enforcement_action),
-          timeoutMinutes: normalizeTimeoutMinutes(result.data.timeout_minutes),
-          ignoredRoleIds: Array.isArray(result.data.ignored_role_ids)
-            ? result.data.ignored_role_ids.filter(
-                (roleId): roleId is string => typeof roleId === "string",
-              )
-            : [],
-          ignoredChannelIds: Array.isArray(result.data.ignored_channel_ids)
-            ? result.data.ignored_channel_ids.filter(
-                (channelId): channelId is string => typeof channelId === "string",
-              )
-            : [],
-          blockExternalLinks: true,
-          blockDiscordInvites: true,
-          blockObfuscatedLinks: true,
-          updatedAt: result.data.updated_at,
-        },
+        settings: canonicalSettings,
       }),
     );
   } catch (error) {

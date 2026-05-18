@@ -16,6 +16,7 @@ const historyCache = new Map<number, { data: ManagedHistory; timestamp: number }
 const refreshingUserIds = new Set<number>();
 const CACHE_TTL_MS = 600000; // 10 minutes
 const STALE_THRESHOLD_MS = 20000; // 20 seconds
+const OFFICIAL_SUPPORT_GUILD_ID = "1353259338759671838";
 
 export type PaymentOrderStatus =
   | "pending"
@@ -272,6 +273,25 @@ function toHistoryOrder(
   };
 }
 
+function isRefundedPaymentOrder(order: PaymentOrderRecord) {
+  const status = String(order.status || "").toLowerCase();
+  const providerStatus = String(order.provider_status || "").toLowerCase();
+  const providerStatusDetail = String(order.provider_status_detail || "").toLowerCase();
+  return (
+    status === "refunded" ||
+    providerStatus === "refunded" ||
+    providerStatusDetail.includes("refund") ||
+    providerStatusDetail.includes("reembols")
+  );
+}
+
+function enforceRefundHistoryTenantIsolation(orders: PaymentOrderRecord[]) {
+  return orders.filter((order) => {
+    if (!isRefundedPaymentOrder(order)) return true;
+    return String(order.guild_id || "") === OFFICIAL_SUPPORT_GUILD_ID;
+  });
+}
+
 export async function getManagedHistoryForUser(userId: number): Promise<ManagedHistory> {
   const cached = historyCache.get(userId);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -336,7 +356,7 @@ async function fetchHistoryFresh(userId: number): Promise<ManagedHistory> {
     throw new Error(storedMethodsResult.error.message);
   }
 
-  let rawOrders = ordersResult.data || [];
+  let rawOrders = enforceRefundHistoryTenantIsolation(ordersResult.data || []);
 
   // 2. Opportunistic reconciliation (Paralelizada)
   const candidates = rawOrders
@@ -369,7 +389,7 @@ async function fetchHistoryFresh(userId: number): Promise<ManagedHistory> {
         .returns<PaymentOrderRecord[]>();
       
       if (!refreshedResult.error) {
-        rawOrders = refreshedResult.data || [];
+        rawOrders = enforceRefundHistoryTenantIsolation(refreshedResult.data || []);
       }
     }
   }
