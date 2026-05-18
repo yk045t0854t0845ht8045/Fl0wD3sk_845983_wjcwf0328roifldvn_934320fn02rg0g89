@@ -1851,13 +1851,13 @@ export async function refundSalesCartPayment(input: {
 
   const mercadoPagoConfig = await loadSalesMercadoPagoSecureSnapshot(cart.guild_id);
   
-  let refundPayload: any = null;
+  let refundPayload: unknown = null;
   try {
     refundPayload = await refundSalesMercadoPagoPayment({
       accessToken: mercadoPagoConfig.accessToken,
       paymentId: cart.provider_payment_id,
     });
-  } catch (refundError: any) {
+  } catch (refundError: unknown) {
     // ─── Mecanismo de Auto-Cura (Self-Healing) ───
     // Se a chamada de reembolso falhar (por exemplo, devido a um timeout de 20s-45s),
     // consultamos o status atual no Mercado Pago para ver se a transacao foi processada mesmo assim!
@@ -1867,13 +1867,29 @@ export async function refundSalesCartPayment(input: {
         paymentId: cart.provider_payment_id,
       });
       const resolvedStatus = resolveSalesMercadoPagoStatus(paymentInfo.status);
-      if (resolvedStatus === "cancelled" || paymentInfo.status === "refunded") {
+      const refunds = Array.isArray(paymentInfo.refunds) ? paymentInfo.refunds : [];
+      const refundedAmount = Number(
+        paymentInfo.refunded_amount ?? paymentInfo.transaction_amount_refunded ?? 0,
+      );
+      const transactionAmount = Number(paymentInfo.transaction_amount ?? cart.total_amount ?? 0);
+      const hasProviderRefund =
+        refunds.length > 0 ||
+        refundedAmount > 0 ||
+        String(paymentInfo.status || "").toLowerCase() === "refunded" ||
+        String(paymentInfo.status_detail || "").toLowerCase().includes("refund");
+      const fullAmountRefunded =
+        !Number.isFinite(transactionAmount) ||
+        transactionAmount <= 0 ||
+        !Number.isFinite(refundedAmount) ||
+        refundedAmount <= 0 ||
+        refundedAmount + 0.01 >= transactionAmount;
+      if ((resolvedStatus === "cancelled" || hasProviderRefund) && fullAmountRefunded) {
         // O estorno foi bem-sucedido no Mercado Pago apesar do erro de conexao local!
         refundPayload = paymentInfo;
       } else {
         throw refundError;
       }
-    } catch (checkError) {
+    } catch {
       throw refundError;
     }
   }

@@ -11,6 +11,9 @@ export type SalesMercadoPagoPayment = {
   id: number | string;
   status?: string | null;
   status_detail?: string | null;
+  refunds?: Array<Record<string, unknown>> | null;
+  refunded_amount?: number | null;
+  transaction_amount_refunded?: number | null;
   external_reference?: string | null;
   transaction_amount?: number | null;
   date_approved?: string | null;
