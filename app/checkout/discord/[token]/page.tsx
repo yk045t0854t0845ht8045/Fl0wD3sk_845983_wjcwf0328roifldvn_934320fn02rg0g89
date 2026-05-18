@@ -171,6 +171,7 @@ export default async function DiscordCheckoutLinkPage({
       />
     );
   }
+
   const checkoutPath = `/checkout/discord/${encodeURIComponent(token)}`;
 
   // ─── 1. HANDLE LOGOUT INTENT ───
