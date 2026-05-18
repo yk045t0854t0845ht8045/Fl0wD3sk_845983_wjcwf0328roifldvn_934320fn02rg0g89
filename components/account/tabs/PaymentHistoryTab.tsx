@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { History, CheckCircle2, XCircle, AlertCircle, QrCode, CreditCard, Search, ChevronDown, MessageSquare } from "lucide-react";
+import { History, CheckCircle2, XCircle, AlertCircle, QrCode, CreditCard, Search, ChevronDown, MessageSquare, RotateCcw } from "lucide-react";
 import { usePaymentHistory } from "@/hooks/useAccountData";
 
 type OrderMethod = "pix" | "card" | "trial" | string;
-type OrderStatus = "approved" | "pending" | "rejected" | "cancelled" | "expired" | "failed" | string;
+type OrderStatus = "approved" | "pending" | "rejected" | "cancelled" | "expired" | "failed" | "refunded" | string;
 
 type Order = {
   id: number;
@@ -62,6 +62,7 @@ function resolveMethodLabel(method: OrderMethod): { label: string; icon: React.E
 function resolveStatusDisplay(status: OrderStatus): { label: string; color: string; icon: React.ElementType } {
   if (status === "approved") return { label: "Aprovado", color: "text-[#34A853] bg-[rgba(52,168,83,0.10)]", icon: CheckCircle2 };
   if (status === "pending") return { label: "Pendente", color: "text-[#F2C823] bg-[rgba(242,200,35,0.10)]", icon: AlertCircle };
+  if (status === "refunded") return { label: "Estornado", color: "text-[#9E9E9E] bg-[rgba(158,158,158,0.10)]", icon: RotateCcw };
   return { label: "Falhou", color: "text-[#DB4646] bg-[rgba(219,70,70,0.10)]", icon: XCircle };
 }
 
@@ -162,7 +163,7 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
   void _onNavigateTickets;
   const { orders, loading, error } = usePaymentHistory();
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "refunded" | "failed">("all");
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
   const [rawCurrentPage, setRawCurrentPage] = useState(1);
 
@@ -170,7 +171,7 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
     return orders.filter((order: Order) => {
       const matchSearch = String(order.orderNumber).includes(searchQuery);
       let mapStatus = order.status;
-      if (order.status !== "approved" && order.status !== "pending") mapStatus = "failed";
+      if (order.status !== "approved" && order.status !== "pending" && order.status !== "refunded") mapStatus = "failed";
       const matchStatus = statusFilter === "all" || statusFilter === mapStatus;
       return matchSearch && matchStatus;
     });
@@ -229,8 +230,8 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
           </div>
           
           <div className="flex items-center gap-[10px]">
-            <div className="flex items-center gap-[6px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] p-[4px]">
-              {(["all", "approved", "pending", "failed"] as const).map((opt) => {
+            <div className="flex items-center gap-[6px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] p-[4px] overflow-x-auto max-w-[calc(100vw-60px)] custom-scrollbar">
+              {(["all", "approved", "pending", "refunded", "failed"] as const).map((opt) => {
                 const isActive = statusFilter === opt;
                 return (
                   <button
@@ -240,13 +241,13 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                       setRawCurrentPage(1);
                       setExpandedOrderId(null);
                     }}
-                    className={`rounded-[10px] px-[16px] py-[8px] text-[13px] font-semibold transition-all ${
+                    className={`rounded-[10px] px-[16px] py-[8px] text-[13px] font-semibold transition-all whitespace-nowrap ${
                       isActive
                         ? "bg-[#1A1A1A] text-[#EEEEEE] shadow-sm"
                         : "text-[#666666] hover:bg-[#111111] hover:text-[#A6A6A6]"
                     }`}
                   >
-                    {opt === "all" ? "Todos" : opt === "approved" ? "Aprovados" : opt === "pending" ? "Pendentes" : "Falhas"}
+                    {opt === "all" ? "Todos" : opt === "approved" ? "Aprovados" : opt === "pending" ? "Pendentes" : opt === "refunded" ? "Estornados" : "Falhas"}
                   </button>
                 );
               })}
