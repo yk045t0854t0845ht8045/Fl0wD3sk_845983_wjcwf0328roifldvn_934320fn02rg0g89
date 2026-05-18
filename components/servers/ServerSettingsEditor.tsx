@@ -5502,6 +5502,10 @@ export function ServerSettingsEditor({
               notifyRoleIds.length,
           );
         const legacyFields = deriveLegacyTicketPanelFields(panelLayout);
+        const normalizedRefundAutoProcessEnabled = refundAutoProcessEnabled === true;
+        const normalizedRefundManualApprovalRequired = normalizedRefundAutoProcessEnabled
+          ? false
+          : refundManualApprovalRequired !== false;
         const ticketRes = await fetch("/api/auth/me/guilds/ticket-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -5521,8 +5525,8 @@ export function ServerSettingsEditor({
             refundSettings: {
               refundLimitDays,
               refundRules,
-              refundAutoProcessEnabled,
-              refundManualApprovalRequired,
+              refundAutoProcessEnabled: normalizedRefundAutoProcessEnabled,
+              refundManualApprovalRequired: normalizedRefundManualApprovalRequired,
               refundApprovalChannelId,
               refundApproverRoleIds,
               refundSuccessMessage,
@@ -5612,14 +5616,30 @@ export function ServerSettingsEditor({
           aiCompanyBio: aiCompanyBio,
           aiTone: aiTone,
           aiEnabled: aiEnabled,
-          refundLimitDays,
-          refundRules,
-          refundAutoProcessEnabled,
-          refundManualApprovalRequired,
-          refundApprovalChannelId,
-          refundApproverRoleIds,
-          refundSuccessMessage,
-          refundErrorMessage,
+          refundLimitDays: Number(ticket.settings?.refundSettings?.refundLimitDays ?? refundLimitDays),
+          refundRules:
+            typeof ticket.settings?.refundSettings?.refundRules === "string"
+              ? ticket.settings.refundSettings.refundRules
+              : refundRules,
+          refundAutoProcessEnabled:
+            ticket.settings?.refundSettings?.refundAutoProcessEnabled === true,
+          refundManualApprovalRequired:
+            ticket.settings?.refundSettings?.refundManualApprovalRequired !== false,
+          refundApprovalChannelId:
+            typeof ticket.settings?.refundSettings?.refundApprovalChannelId === "string"
+              ? ticket.settings.refundSettings.refundApprovalChannelId
+              : refundApprovalChannelId,
+          refundApproverRoleIds: Array.isArray(ticket.settings?.refundSettings?.refundApproverRoleIds)
+            ? ticket.settings.refundSettings.refundApproverRoleIds
+            : refundApproverRoleIds,
+          refundSuccessMessage:
+            typeof ticket.settings?.refundSettings?.refundSuccessMessage === "string"
+              ? ticket.settings.refundSettings.refundSuccessMessage
+              : refundSuccessMessage,
+          refundErrorMessage:
+            typeof ticket.settings?.refundSettings?.refundErrorMessage === "string"
+              ? ticket.settings.refundSettings.refundErrorMessage
+              : refundErrorMessage,
         });
 
         setTicketEnabled(nextSavedTicketDraft.enabled);
@@ -6754,6 +6774,8 @@ export function ServerSettingsEditor({
                                   setRefundAutoProcessEnabled(nextVal);
                                   if (nextVal) {
                                     setRefundManualApprovalRequired(false);
+                                  } else {
+                                    setRefundManualApprovalRequired(true);
                                   }
                                 }}
                                 disabled={aiControlsDisabled}
@@ -6778,6 +6800,8 @@ export function ServerSettingsEditor({
                                   setRefundManualApprovalRequired(nextVal);
                                   if (nextVal) {
                                     setRefundAutoProcessEnabled(false);
+                                  } else {
+                                    setRefundAutoProcessEnabled(true);
                                   }
                                 }}
                                 disabled={aiControlsDisabled}

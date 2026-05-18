@@ -19,6 +19,7 @@ import {
 import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
 import {
   readServerSettingsVaultSnapshot,
+  rewriteUnreadableServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
 } from "@/lib/servers/serverSettingsVault";
 import {
@@ -359,27 +360,50 @@ export async function GET(request: Request) {
       );
     }
 
+    const canonicalSnapshot: WelcomeSecureSnapshot = {
+      enabled: Boolean(result.data.enabled),
+      entryPublicChannelId: result.data.entry_public_channel_id,
+      entryLogChannelId: result.data.entry_log_channel_id,
+      exitPublicChannelId: result.data.exit_public_channel_id,
+      exitLogChannelId: result.data.exit_log_channel_id,
+      entryPublicLayout: normalizeWelcomeLayout(
+        result.data.entry_layout,
+        createDefaultWelcomeEntryLayout(),
+      ),
+      entryLogLayout: normalizeWelcomeLayout(
+        result.data.entry_layout,
+        createDefaultWelcomeEntryLayout(),
+      ),
+      exitPublicLayout: normalizeWelcomeLayout(
+        result.data.exit_layout,
+        createDefaultWelcomeExitLayout(),
+      ),
+      exitLogLayout: normalizeWelcomeLayout(
+        result.data.exit_layout,
+        createDefaultWelcomeExitLayout(),
+      ),
+      entryPublicThumbnailMode: resolveThumbnailMode(result.data.entry_thumbnail_mode),
+      entryLogThumbnailMode: resolveThumbnailMode(result.data.entry_thumbnail_mode),
+      exitPublicThumbnailMode: resolveThumbnailMode(result.data.exit_thumbnail_mode),
+      exitLogThumbnailMode: resolveThumbnailMode(result.data.exit_thumbnail_mode),
+    };
+    if (secureSnapshotResult?.recovery?.unreadable) {
+      void rewriteUnreadableServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "welcome_settings",
+        payload: canonicalSnapshot,
+        configuredByUserId: access.context.sessionData.authSession.user.id,
+        recovery: secureSnapshotResult.recovery,
+      });
+    }
+
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
-        settings: {
-          enabled: Boolean(result.data.enabled),
-          entryPublicChannelId: result.data.entry_public_channel_id,
-          entryLogChannelId: result.data.entry_log_channel_id,
-          exitPublicChannelId: result.data.exit_public_channel_id,
-          exitLogChannelId: result.data.exit_log_channel_id,
-          entryLayout: normalizeWelcomeLayout(
-            result.data.entry_layout,
-            createDefaultWelcomeEntryLayout(),
-          ),
-          exitLayout: normalizeWelcomeLayout(
-            result.data.exit_layout,
-            createDefaultWelcomeExitLayout(),
-          ),
-          entryThumbnailMode: resolveThumbnailMode(result.data.entry_thumbnail_mode),
-          exitThumbnailMode: resolveThumbnailMode(result.data.exit_thumbnail_mode),
+        settings: buildWelcomeResponseFromSecureSnapshot({
+          snapshot: canonicalSnapshot,
           updatedAt: result.data.updated_at,
-        },
+        }),
       }),
     );
   } catch (error) {

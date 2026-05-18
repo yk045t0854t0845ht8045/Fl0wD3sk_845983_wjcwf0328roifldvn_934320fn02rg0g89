@@ -21,6 +21,7 @@ import {
 import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
 import {
   readServerSettingsVaultSnapshot,
+  rewriteUnreadableServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
 } from "@/lib/servers/serverSettingsVault";
 import {
@@ -68,6 +69,8 @@ const TICKET_SETTINGS_SELECT_BASE =
 const TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI = `${TICKET_SETTINGS_SELECT_BASE}, ai_enabled, ai_company_name, ai_company_bio, ai_tone`;
 const TICKET_SETTINGS_RETURNING_SELECT_BASE = `guild_id, ${TICKET_SETTINGS_SELECT_BASE}`;
 const TICKET_SETTINGS_RETURNING_SELECT_WITH_DEDICATED_AI = `guild_id, ${TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI}`;
+const TICKET_REFUND_SETTINGS_SELECT =
+  "guild_id, enabled, refund_limit_days, refund_rules, auto_process_enabled, manual_approval_required, approval_channel_id, approver_role_ids, success_message, error_message, updated_at";
 
 const OPTIONAL_DISCORD_SNOWFLAKE_TEXT = flowSecureDto.string({
   maxLength: 20,
@@ -148,8 +151,66 @@ async function loadGuildTicketSettingsRecord(guildId: string) {
   return legacyResult.data;
 }
 
+function normalizeRefundSettingsRecord(record: Record<string, unknown> | null | undefined) {
+  if (!record) return null;
+
+  const autoProcessEnabled = record.auto_process_enabled === true;
+  const manualApprovalRequired = autoProcessEnabled
+    ? false
+    : record.manual_approval_required !== false;
+
+  return {
+    refundLimitDays: Math.max(
+      0,
+      Math.min(365, Number(record.refund_limit_days ?? 7) || 7),
+    ),
+    refundRules:
+      typeof record.refund_rules === "string"
+        ? record.refund_rules.slice(0, REFUND_RULES_MAX_LENGTH)
+        : "",
+    refundAutoProcessEnabled: autoProcessEnabled,
+    refundManualApprovalRequired: manualApprovalRequired,
+    refundApprovalChannelId:
+      typeof record.approval_channel_id === "string"
+        ? record.approval_channel_id
+        : null,
+    refundApproverRoleIds: Array.isArray(record.approver_role_ids)
+      ? record.approver_role_ids.filter((item): item is string => typeof item === "string")
+      : [],
+    refundSuccessMessage:
+      typeof record.success_message === "string"
+        ? record.success_message.slice(0, REFUND_MESSAGE_MAX_LENGTH)
+        : "",
+    refundErrorMessage:
+      typeof record.error_message === "string"
+        ? record.error_message.slice(0, REFUND_MESSAGE_MAX_LENGTH)
+        : "",
+  };
+}
+
+async function loadGuildTicketRefundSettingsRecord(guildId: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_ticket_refund_settings")
+    .select(TICKET_REFUND_SETTINGS_SELECT)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (!result.error) {
+    return result.data as Record<string, unknown> | null;
+  }
+
+  const message = String(result.error.message || "").toLowerCase();
+  if (result.error.code === "42P01" || message.includes("guild_ticket_refund_settings")) {
+    return null;
+  }
+
+  throw new Error(result.error.message);
+}
+
 function buildTicketSettingsResponse(
   record: Record<string, unknown> | null | undefined,
+  refundRecord?: Record<string, unknown> | null,
 ) {
   if (!record) {
     return null;
@@ -201,9 +262,10 @@ function buildTicketSettingsResponse(
     aiCompanyBio: ticketAiSettings.aiCompanyBio,
     aiTone: ticketAiSettings.aiTone,
     refundSettings:
-      typeof record.refund_settings === "object" && record.refund_settings
+      normalizeRefundSettingsRecord(refundRecord) ||
+      (typeof record.refund_settings === "object" && record.refund_settings
         ? record.refund_settings
-        : null,
+        : null),
     updatedAt: typeof record.updated_at === "string" ? record.updated_at : null,
   };
 }
@@ -211,6 +273,7 @@ function buildTicketSettingsResponse(
 function buildTicketSettingsResponseFromSnapshot(input: {
   snapshot: Record<string, unknown>;
   updatedAt: string | null;
+  refundRecord?: Record<string, unknown> | null;
 }) {
   return {
     guildId:
@@ -272,9 +335,10 @@ function buildTicketSettingsResponseFromSnapshot(input: {
     aiTone:
       typeof input.snapshot.aiTone === "string" ? input.snapshot.aiTone : "formal",
     refundSettings:
-      typeof input.snapshot.refundSettings === "object" && input.snapshot.refundSettings
+      normalizeRefundSettingsRecord(input.refundRecord) ||
+      (typeof input.snapshot.refundSettings === "object" && input.snapshot.refundSettings
         ? input.snapshot.refundSettings
-        : null,
+        : null),
     updatedAt: input.updatedAt,
   };
 }
@@ -468,8 +532,9 @@ export async function GET(request: Request) {
       source: "guild_ticket_settings_get",
     });
 
-    const [result, secureSnapshotResult] = await Promise.all([
+    const [result, refundResult, secureSnapshotResult] = await Promise.all([
       loadGuildTicketSettingsRecord(guildId),
+      loadGuildTicketRefundSettingsRecord(guildId),
       readServerSettingsVaultSnapshot<Record<string, unknown>>({
         guildId,
         moduleKey: "ticket_settings",
@@ -483,6 +548,7 @@ export async function GET(request: Request) {
           settings: buildTicketSettingsResponseFromSnapshot({
             snapshot: secureSnapshotResult.payload,
             updatedAt: secureSnapshotResult.updatedAt,
+            refundRecord: refundResult,
           }),
         }),
       );
@@ -497,12 +563,24 @@ export async function GET(request: Request) {
       );
     }
 
+    const canonicalSettings = buildTicketSettingsResponse(
+      result as Record<string, unknown>,
+      refundResult,
+    );
+    if (canonicalSettings && secureSnapshotResult?.recovery?.unreadable) {
+      void rewriteUnreadableServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "ticket_settings",
+        payload: canonicalSettings,
+        configuredByUserId: access.context.sessionData.authSession.user.id,
+        recovery: secureSnapshotResult.recovery,
+      });
+    }
+
     return applyNoStoreHeaders(
       NextResponse.json({
       ok: true,
-      settings: buildTicketSettingsResponse(
-        result as Record<string, unknown>,
-      ),
+      settings: canonicalSettings,
       }),
     );
   } catch (error) {
@@ -1192,7 +1270,7 @@ export async function POST(request: Request) {
       }
 
       // Validação estrita do Canal de Aprovação Manual do Reembolso
-      if (refundSettings.refundAutoProcessEnabled || refundSettings.refundManualApprovalRequired) {
+      if (refundSettings.refundManualApprovalRequired) {
         const approvalChannelId = refundSettings.refundApprovalChannelId;
         const approvalChannel = approvalChannelId ? channelsById.get(approvalChannelId) : null;
 

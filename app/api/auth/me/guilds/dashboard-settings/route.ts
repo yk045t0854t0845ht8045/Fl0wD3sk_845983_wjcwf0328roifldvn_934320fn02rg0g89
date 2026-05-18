@@ -17,6 +17,7 @@ import {
 import { getPanelManagedServersForCurrentSession } from "@/lib/servers/managedServers";
 import {
   readServerSettingsVaultSnapshots,
+  rewriteUnreadableServerSettingsVaultSnapshot,
   type ServerSettingsVaultModule,
 } from "@/lib/servers/serverSettingsVault";
 import { normalizeTicketPanelLayout } from "@/lib/servers/ticketPanelBuilder";
@@ -39,6 +40,8 @@ const DASHBOARD_SETTINGS_CACHE_TTL_MS = 15_000;
 const TICKET_SETTINGS_SELECT_BASE =
   "enabled, menu_channel_id, tickets_category_id, logs_created_channel_id, logs_closed_channel_id, panel_layout, panel_title, panel_description, panel_button_label, ai_rules, updated_at";
 const TICKET_SETTINGS_SELECT_WITH_DEDICATED_AI = `${TICKET_SETTINGS_SELECT_BASE}, ai_enabled, ai_company_name, ai_company_bio, ai_tone`;
+const TICKET_REFUND_SETTINGS_SELECT =
+  "enabled, refund_limit_days, refund_rules, auto_process_enabled, manual_approval_required, approval_channel_id, approver_role_ids, success_message, error_message, updated_at";
 
 type ChannelOption = {
   id: string;
@@ -174,14 +177,54 @@ async function loadGuildTicketSettings(
     .maybeSingle();
 }
 
+async function loadGuildTicketRefundSettings(
+  supabase: ReturnType<typeof getSupabaseAdminClientOrThrow>,
+  guildId: string,
+) {
+  const result = await supabase
+    .from("guild_ticket_refund_settings")
+    .select(TICKET_REFUND_SETTINGS_SELECT)
+    .eq("guild_id", guildId)
+    .maybeSingle();
+
+  if (!result.error) return result;
+
+  const code = typeof result.error.code === "string" ? result.error.code : "";
+  const message = String(result.error.message || "").toLowerCase();
+  if (code === "42P01" || message.includes("guild_ticket_refund_settings")) {
+    return { data: null, error: null };
+  }
+
+  return result;
+}
+
+function normalizeRefundSettingsRecord(record: Record<string, unknown> | null | undefined) {
+  if (!record) return null;
+  const autoProcessEnabled = record.auto_process_enabled === true;
+  return {
+    refundLimitDays: Math.max(0, Math.min(365, Number(record.refund_limit_days ?? 7) || 7)),
+    refundRules: typeof record.refund_rules === "string" ? record.refund_rules : "",
+    refundAutoProcessEnabled: autoProcessEnabled,
+    refundManualApprovalRequired: autoProcessEnabled ? false : record.manual_approval_required !== false,
+    refundApprovalChannelId:
+      typeof record.approval_channel_id === "string" ? record.approval_channel_id : null,
+    refundApproverRoleIds: Array.isArray(record.approver_role_ids)
+      ? record.approver_role_ids.filter((item): item is string => typeof item === "string")
+      : [],
+    refundSuccessMessage: typeof record.success_message === "string" ? record.success_message : "",
+    refundErrorMessage: typeof record.error_message === "string" ? record.error_message : "",
+  };
+}
+
 function buildTicketSettingsPayload(input: {
   record: Record<string, unknown> | null;
+  refundRecord: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
   textSet: Set<string>;
   categorySet: Set<string>;
   updatedAt: string | null;
 }) {
-  if (!input.record && !input.snapshot) {
+  if (!input.record && !input.snapshot && !input.refundRecord) {
     return null;
   }
 
@@ -284,9 +327,10 @@ function buildTicketSettingsPayload(input: {
         ? input.snapshot.aiTone
         : ticketAiSettings.aiTone,
     refundSettings:
-      typeof input.snapshot?.refundSettings === "object" && input.snapshot.refundSettings
+      normalizeRefundSettingsRecord(input.refundRecord) ||
+      (typeof input.snapshot?.refundSettings === "object" && input.snapshot.refundSettings
         ? input.snapshot.refundSettings
-        : null,
+        : null),
     updatedAt: input.updatedAt,
   };
 }
@@ -894,6 +938,7 @@ export async function GET(request: Request) {
       rawChannelsResult,
       rawRolesResult,
       ticketResult,
+      refundResult,
       staffResult,
       welcomeResult,
       antiLinkResult,
@@ -909,6 +954,7 @@ export async function GET(request: Request) {
         .then((roles) => ({ ok: true as const, roles }))
         .catch((error) => ({ ok: false as const, error })),
       loadGuildTicketSettings(supabase, guildId),
+      loadGuildTicketRefundSettings(supabase, guildId),
       supabase
         .from("guild_ticket_staff_settings")
         .select(
@@ -969,6 +1015,7 @@ export async function GET(request: Request) {
     const rawRoles = rawRolesResult.ok ? rawRolesResult.roles : null;
 
     if (ticketResult.error) throw new Error(ticketResult.error.message);
+    if (refundResult.error) throw new Error(refundResult.error.message);
     if (staffResult.error) throw new Error(staffResult.error.message);
     if (welcomeResult.error) throw new Error(welcomeResult.error.message);
     if (antiLinkResult.error) throw new Error(antiLinkResult.error.message);
@@ -1043,6 +1090,7 @@ export async function GET(request: Request) {
       },
       ticketSettings: buildTicketSettingsPayload({
         record: toRecordOrNull(ticketResult.data),
+        refundRecord: toRecordOrNull(refundResult.data),
         snapshot: toRecordOrNull(secureSnapshots.get("ticket_settings")?.payload),
         textSet,
         categorySet,
@@ -1129,6 +1177,31 @@ export async function GET(request: Request) {
           ? "full"
           : Array.from(access.dashboardPerms),
     };
+
+    const repairCandidates: Array<{
+      moduleKey: ServerSettingsVaultModule;
+      settings: unknown;
+    }> = [
+      { moduleKey: "ticket_settings", settings: payload.ticketSettings },
+      { moduleKey: "ticket_staff_settings", settings: payload.staffSettings },
+      { moduleKey: "welcome_settings", settings: payload.welcomeSettings },
+      { moduleKey: "antilink_settings", settings: payload.antiLinkSettings },
+      { moduleKey: "autorole_settings", settings: payload.autoRoleSettings },
+      { moduleKey: "sales_settings", settings: payload.salesSettings },
+      { moduleKey: "security_logs_settings", settings: payload.securityLogsSettings },
+    ];
+
+    for (const candidate of repairCandidates) {
+      const snapshot = secureSnapshots.get(candidate.moduleKey);
+      if (!snapshot?.recovery?.unreadable || !candidate.settings) continue;
+      void rewriteUnreadableServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: candidate.moduleKey,
+        payload: candidate.settings,
+        configuredByUserId: access.sessionData.authSession.user.id,
+        recovery: snapshot.recovery,
+      });
+    }
 
     writeDashboardSettingsCache(
       cacheKey,

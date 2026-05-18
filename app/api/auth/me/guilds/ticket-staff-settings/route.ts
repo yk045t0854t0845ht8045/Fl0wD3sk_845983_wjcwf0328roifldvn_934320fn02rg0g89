@@ -22,6 +22,7 @@ import {
 import { invalidateDashboardSettingsCache } from "@/lib/servers/serverDashboardSettingsCache";
 import {
   readServerSettingsVaultSnapshot,
+  rewriteUnreadableServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
 } from "@/lib/servers/serverSettingsVault";
 import {
@@ -257,22 +258,33 @@ export async function GET(request: Request) {
       );
     }
 
+    const canonicalSettings = {
+      adminRoleId: data.admin_role_id,
+      claimRoleIds: Array.isArray(data.claim_role_ids)
+        ? data.claim_role_ids.filter((roleId): roleId is string => typeof roleId === "string")
+        : [],
+      closeRoleIds: Array.isArray(data.close_role_ids)
+        ? data.close_role_ids.filter((roleId): roleId is string => typeof roleId === "string")
+        : [],
+      notifyRoleIds: Array.isArray(data.notify_role_ids)
+        ? data.notify_role_ids.filter((roleId): roleId is string => typeof roleId === "string")
+        : [],
+      updatedAt: data.updated_at,
+    };
+    if (secureSnapshotResult?.recovery?.unreadable) {
+      void rewriteUnreadableServerSettingsVaultSnapshot({
+        guildId,
+        moduleKey: "ticket_staff_settings",
+        payload: canonicalSettings,
+        configuredByUserId: access.context.sessionData.authSession.user.id,
+        recovery: secureSnapshotResult.recovery,
+      });
+    }
+
     return applyNoStoreHeaders(
       NextResponse.json({
       ok: true,
-      settings: {
-        adminRoleId: data.admin_role_id,
-        claimRoleIds: Array.isArray(data.claim_role_ids)
-          ? data.claim_role_ids.filter((roleId): roleId is string => typeof roleId === "string")
-          : [],
-        closeRoleIds: Array.isArray(data.close_role_ids)
-          ? data.close_role_ids.filter((roleId): roleId is string => typeof roleId === "string")
-          : [],
-        notifyRoleIds: Array.isArray(data.notify_role_ids)
-          ? data.notify_role_ids.filter((roleId): roleId is string => typeof roleId === "string")
-          : [],
-        updatedAt: data.updated_at,
-      },
+      settings: canonicalSettings,
       }),
     );
   } catch (error) {
@@ -635,4 +647,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
