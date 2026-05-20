@@ -789,7 +789,7 @@ export async function POST(request: Request) {
     const rawRefundAutoProcessEnabled = rawRefundSettings.refundAutoProcessEnabled === true;
     const rawRefundManualApprovalRequired = rawRefundSettings.refundManualApprovalRequired !== false;
 
-    let refundAutoProcessEnabled = rawRefundAutoProcessEnabled;
+    const refundAutoProcessEnabled = rawRefundAutoProcessEnabled;
     let refundManualApprovalRequired = rawRefundManualApprovalRequired;
 
     if (refundAutoProcessEnabled && refundManualApprovalRequired) {
@@ -1381,6 +1381,7 @@ export async function POST(request: Request) {
           aiCompanyName,
           aiCompanyBio,
           aiTone,
+          refundSettings,
         },
         updatedAt: secureUpdated?.updatedAt || savedSettings.updated_at || null,
       }),

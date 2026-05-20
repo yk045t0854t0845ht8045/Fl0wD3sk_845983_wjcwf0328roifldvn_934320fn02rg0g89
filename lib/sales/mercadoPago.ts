@@ -5,7 +5,9 @@ export type SalesMercadoPagoPaymentStatus =
   | "approved"
   | "rejected"
   | "cancelled"
-  | "expired";
+  | "expired"
+  | "refunded"
+  | "charged_back";
 
 export type SalesMercadoPagoPayment = {
   id: number | string;
@@ -138,9 +140,11 @@ export function resolveSalesMercadoPagoStatus(
       return "rejected";
     case "cancelled":
     case "canceled":
-    case "refunded":
-    case "charged_back":
       return "cancelled";
+    case "refunded":
+      return "refunded";
+    case "charged_back":
+      return "charged_back";
     case "expired":
       return "expired";
     default:

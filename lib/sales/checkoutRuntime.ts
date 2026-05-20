@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { readServerSettingsVaultSnapshot } from "@/lib/servers/serverSettingsVault";
-import { claimSalesStockDelivery } from "@/lib/servers/salesStockDelivery";
+import {
+  claimReservedSalesStockDelivery,
+  claimSalesStockDelivery,
+  releaseSalesStockReservations,
+  reserveSalesStockDelivery,
+} from "@/lib/servers/salesStockDelivery";
 import {
   markSalesProductDiscordSyncFailedById,
   syncSalesProductDiscordMessageById,
@@ -19,6 +24,9 @@ import {
   getSalesMercadoPagoEnvironmentMismatchMessage,
   type SalesPaymentMethodsSecureSnapshot,
 } from "@/lib/sales/paymentMethods";
+
+const SALES_PIX_PAYMENT_TTL_MS = 30 * 60_000;
+const SALES_STOCK_RESERVATION_GRACE_MS = 10 * 60_000;
 
 type SalesCartRecord = {
   id: string;
@@ -800,7 +808,7 @@ function productSnapshotFromRecord(
 }
 
 function assertPaymentAllowedForCartStatus(status: string) {
-  if (["cancelled", "expired", "rejected", "delivery_failed"].includes(status)) {
+  if (["cancelled", "expired", "rejected", "delivery_failed", "refunded", "charged_back"].includes(status)) {
     throw new Error("Este carrinho nao pode mais gerar pagamento.");
   }
 }
@@ -976,6 +984,92 @@ async function refreshCartItemsForPayment(runtime: Awaited<ReturnType<typeof loa
   return nextItems;
 }
 
+async function releaseSalesCartStockReservations(input: {
+  cart: SalesCartRecord;
+  items: SalesCartItemRecord[];
+  reason: string;
+}) {
+  const released = await releaseSalesStockReservations(input.cart.id);
+  if (released <= 0) return released;
+
+  await recordSalesOrderEvent({
+    cart: input.cart,
+    eventType: "stock_reservation_released",
+    eventKey: `stock_reservation_released:${input.reason}:${Date.now()}`,
+    payload: {
+      reason: input.reason,
+      released,
+    },
+  }).catch(() => null);
+
+  await syncProductEmbedsAfterStockChange({
+    cart: input.cart,
+    productIds: input.items.map((item) => item.product_id),
+  }).catch(() => null);
+
+  return released;
+}
+
+async function reserveSalesCartStock(input: {
+  runtime: Awaited<ReturnType<typeof loadSalesCartRuntime>>;
+  items: SalesCartItemRecord[];
+  reservationExpiresAt: string;
+}) {
+  const productsById = await loadProductsForCartItems(input.items);
+  const reservedProductIds = new Set<string>();
+
+  try {
+    for (const item of input.items) {
+      const product = productsById.get(item.product_id);
+      if (!product || product.inventory_tracked === false) continue;
+
+      const quantity = normalizeQuantity(item.quantity);
+      for (let index = 0; index < quantity; index += 1) {
+        const reservation = await reserveSalesStockDelivery({
+          guildId: input.runtime.cart.guild_id,
+          productId: item.product_id,
+          cartId: input.runtime.cart.id,
+          cartItemId: item.id,
+          unitIndex: index,
+          reservationExpiresAt: input.reservationExpiresAt,
+        });
+
+        if (!reservation) {
+          throw new Error(
+            `Estoque insuficiente para ${product.title || "produto"}. Nenhuma unidade disponivel para reservar.`,
+          );
+        }
+
+        reservedProductIds.add(item.product_id);
+      }
+    }
+  } catch (error) {
+    await releaseSalesCartStockReservations({
+      cart: input.runtime.cart,
+      items: input.items,
+      reason: "reservation_failed",
+    }).catch(() => null);
+    throw error;
+  }
+
+  if (reservedProductIds.size) {
+    await recordSalesOrderEvent({
+      cart: input.runtime.cart,
+      eventType: "stock_reserved",
+      eventKey: `stock_reserved:${input.reservationExpiresAt}`,
+      payload: {
+        reservationExpiresAt: input.reservationExpiresAt,
+        productIds: Array.from(reservedProductIds),
+      },
+    }).catch(() => null);
+
+    await syncProductEmbedsAfterStockChange({
+      cart: input.runtime.cart,
+      productIds: reservedProductIds,
+    }).catch(() => null);
+  }
+}
+
 async function recordSalesOrderEvent(input: {
   cart: SalesCartRecord;
   eventType: string;
@@ -1054,131 +1148,159 @@ export async function createSalesCartPixPayment(cartId: string): Promise<SalesCa
   const validatedItems = await refreshCartItemsForPayment(runtime);
   const updatedCart = await recalculateCartTotals(cart.id, validatedItems);
   const amount = toNumber(updatedCart.total_amount);
-  if (amount < 0.01) {
-    const paidCart = await updateSalesCartAndSelect(cart.id, {
-      status: "paid",
-      selected_payment_method_key: null,
-      provider: "discount",
-      provider_payment_id: null,
-      provider_external_reference: `flowdesk-sales-discount:${cart.id}`,
-      provider_status: "approved",
-      provider_status_detail: "covered_by_discount",
-      paid_at: new Date().toISOString(),
+  const expiresAt = new Date(Date.now() + SALES_PIX_PAYMENT_TTL_MS).toISOString();
+  const reservationExpiresAt = new Date(
+    Date.parse(expiresAt) + SALES_STOCK_RESERVATION_GRACE_MS,
+  ).toISOString();
+  const reservationRuntime = {
+    ...runtime,
+    cart: updatedCart,
+    items: validatedItems,
+  };
+  await reserveSalesCartStock({
+    runtime: reservationRuntime,
+    items: validatedItems,
+    reservationExpiresAt,
+  });
+
+  let providerPaymentCreated = false;
+  try {
+    if (amount < 0.01) {
+      const paidCart = await updateSalesCartAndSelect(cart.id, {
+        status: "paid",
+        selected_payment_method_key: null,
+        provider: "discount",
+        provider_payment_id: null,
+        provider_external_reference: `flowdesk-sales-discount:${cart.id}`,
+        provider_status: "approved",
+        provider_status_detail: "covered_by_discount",
+        paid_at: new Date().toISOString(),
+        customer_email: email,
+        customer_name: user.display_name || user.username || "Cliente Flowdesk",
+      });
+      await recordSalesOrderEvent({
+        cart: paidCart,
+        eventType: "payment_covered_by_discount",
+        eventKey: "payment_covered_by_discount",
+        payload: {
+          amount,
+          discountAmount: toNumber(paidCart.discount_amount),
+          discountCode: paidCart.discount_code,
+        },
+      });
+      await settleSalesDiscountRedemption(paidCart);
+      const deliveries = await settleSalesCartDeliveries({
+        ...runtime,
+        cart: paidCart,
+        items: validatedItems,
+      });
+      const hasFailedDelivery = deliveries.some((delivery) => delivery.status === "failed");
+      const finalStatus = hasFailedDelivery ? "delivery_failed" : "delivered";
+      const finalizedCart = await updateSalesCartAndSelect(cart.id, {
+        status: finalStatus,
+        delivered_at: new Date().toISOString(),
+      });
+      await sendSalesCartReceiptEmailSafe({
+        runtime: {
+          ...runtime,
+          cart: finalizedCart,
+          items: validatedItems,
+        },
+        cart: finalizedCart,
+        deliveries,
+      });
+      return {
+        ...runtime,
+        cart: finalizedCart,
+        items: validatedItems,
+        payment: buildPaymentResponse(finalizedCart),
+        deliveries,
+      };
+    }
+
+    const externalReference = `flowdesk-sales:${cart.id}`;
+    const providerPayment = await createSalesMercadoPagoPixPayment({
+      accessToken: mercadoPagoConfig.accessToken,
+      amount,
+      description: `Compra Flowdesk ${cart.id.slice(0, 8)}`,
+      payerEmail: email,
+      payerName: user.display_name || user.username || "Cliente Flowdesk",
+      externalReference,
+      expiresAt,
+      notificationUrl: buildSalesPaymentNotificationUrl(cart.id),
+      metadata: {
+        flowdesk_scope: "guild_sales",
+        cart_id: cart.id,
+        guild_id: cart.guild_id,
+        discord_user_id: cart.discord_user_id,
+        auth_user_id: String(cart.auth_user_id),
+      },
+      idempotencyKey: crypto
+        .createHash("sha256")
+        .update(`flowdesk-sales-pix:${cart.id}:${amount.toFixed(2)}`)
+        .digest("hex"),
+    });
+    providerPaymentCreated = true;
+
+    const transactionData = providerPayment.point_of_interaction?.transaction_data;
+    const providerStatus = providerPayment.status || null;
+    const providerStatusDetail = providerPayment.status_detail || null;
+    const nextStatus =
+      resolveSalesMercadoPagoStatus(providerStatus) === "approved"
+        ? "paid"
+        : "payment_pending";
+    const updatedPaymentCart = await updateSalesCartAndSelect(cart.id, {
+      status: nextStatus,
+      selected_payment_method_key: "mercado_pago",
+      provider: "mercado_pago",
+      provider_payment_id: String(providerPayment.id),
+      provider_external_reference: providerPayment.external_reference || externalReference,
+      provider_status: providerStatus,
+      provider_status_detail: providerStatusDetail,
+      provider_qr_code: transactionData?.qr_code || null,
+      provider_qr_base64: transactionData?.qr_code_base64 || null,
+      provider_ticket_url: transactionData?.ticket_url || null,
+      provider_payload: providerPayment,
+      payment_expires_at: providerPayment.date_of_expiration || expiresAt,
+      paid_at: providerPayment.date_approved || null,
       customer_email: email,
       customer_name: user.display_name || user.username || "Cliente Flowdesk",
     });
     await recordSalesOrderEvent({
-      cart: paidCart,
-      eventType: "payment_covered_by_discount",
-      eventKey: "payment_covered_by_discount",
+      cart: updatedPaymentCart,
+      eventType: "payment_created",
+      eventKey: `payment_created:${providerPayment.id}`,
       payload: {
+        provider: "mercado_pago",
+        providerPaymentId: String(providerPayment.id),
+        status: providerStatus,
         amount,
-        discountAmount: toNumber(paidCart.discount_amount),
-        discountCode: paidCart.discount_code,
       },
     });
-    await settleSalesDiscountRedemption(paidCart);
-    const deliveries = await settleSalesCartDeliveries({
+
+    const nextRuntime = {
       ...runtime,
-      cart: paidCart,
+      cart: updatedPaymentCart,
       items: validatedItems,
-    });
-    const hasFailedDelivery = deliveries.some((delivery) => delivery.status === "failed");
-    const finalStatus = hasFailedDelivery ? "delivery_failed" : "delivered";
-    const finalizedCart = await updateSalesCartAndSelect(cart.id, {
-      status: finalStatus,
-      delivered_at: new Date().toISOString(),
-    });
-    await sendSalesCartReceiptEmailSafe({
-      runtime: {
-        ...runtime,
-        cart: finalizedCart,
-        items: validatedItems,
-      },
-      cart: finalizedCart,
-      deliveries,
-    });
-    return {
-      ...runtime,
-      cart: finalizedCart,
-      items: validatedItems,
-      payment: buildPaymentResponse(finalizedCart),
-      deliveries,
+      payment: buildPaymentResponse(updatedPaymentCart),
     };
+
+    if (nextStatus === "paid") {
+      return syncSalesCartPayment(cart.id);
+    }
+
+    return nextRuntime;
+  } catch (error) {
+    if (!providerPaymentCreated) {
+      await releaseSalesCartStockReservations({
+        cart: updatedCart,
+        items: validatedItems,
+        reason: "payment_creation_failed",
+      }).catch(() => null);
+    }
+    throw error;
   }
 
-  const externalReference = `flowdesk-sales:${cart.id}`;
-  const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
-  const providerPayment = await createSalesMercadoPagoPixPayment({
-    accessToken: mercadoPagoConfig.accessToken,
-    amount,
-    description: `Compra Flowdesk ${cart.id.slice(0, 8)}`,
-    payerEmail: email,
-    payerName: user.display_name || user.username || "Cliente Flowdesk",
-    externalReference,
-    expiresAt,
-    notificationUrl: buildSalesPaymentNotificationUrl(cart.id),
-    metadata: {
-      flowdesk_scope: "guild_sales",
-      cart_id: cart.id,
-      guild_id: cart.guild_id,
-      discord_user_id: cart.discord_user_id,
-      auth_user_id: String(cart.auth_user_id),
-    },
-    idempotencyKey: crypto
-      .createHash("sha256")
-      .update(`flowdesk-sales-pix:${cart.id}:${amount.toFixed(2)}`)
-      .digest("hex"),
-  });
-
-  const transactionData = providerPayment.point_of_interaction?.transaction_data;
-  const providerStatus = providerPayment.status || null;
-  const providerStatusDetail = providerPayment.status_detail || null;
-  const nextStatus =
-    resolveSalesMercadoPagoStatus(providerStatus) === "approved"
-      ? "paid"
-      : "payment_pending";
-  const updatedPaymentCart = await updateSalesCartAndSelect(cart.id, {
-    status: nextStatus,
-    selected_payment_method_key: "mercado_pago",
-    provider: "mercado_pago",
-    provider_payment_id: String(providerPayment.id),
-    provider_external_reference: providerPayment.external_reference || externalReference,
-    provider_status: providerStatus,
-    provider_status_detail: providerStatusDetail,
-    provider_qr_code: transactionData?.qr_code || null,
-    provider_qr_base64: transactionData?.qr_code_base64 || null,
-    provider_ticket_url: transactionData?.ticket_url || null,
-    provider_payload: providerPayment,
-    payment_expires_at: providerPayment.date_of_expiration || expiresAt,
-    paid_at: providerPayment.date_approved || null,
-    customer_email: email,
-    customer_name: user.display_name || user.username || "Cliente Flowdesk",
-  });
-  await recordSalesOrderEvent({
-    cart: updatedPaymentCart,
-    eventType: "payment_created",
-    eventKey: `payment_created:${providerPayment.id}`,
-    payload: {
-      provider: "mercado_pago",
-      providerPaymentId: String(providerPayment.id),
-      status: providerStatus,
-      amount,
-    },
-  });
-
-  const nextRuntime = {
-    ...runtime,
-    cart: updatedPaymentCart,
-    items: validatedItems,
-    payment: buildPaymentResponse(updatedPaymentCart),
-  };
-
-  if (nextStatus === "paid") {
-    return syncSalesCartPayment(cart.id);
-  }
-
-  return nextRuntime;
 }
 
 export async function applySalesCartDiscount(input: {
@@ -1441,10 +1563,19 @@ async function settleSalesCartDeliveries(
         continue;
       }
 
-      const delivery = await claimSalesStockDelivery({
+      let delivery = await claimReservedSalesStockDelivery({
         guildId: runtime.cart.guild_id,
         productId: item.product_id,
+        cartId: runtime.cart.id,
+        cartItemId: item.id,
+        unitIndex: index,
       });
+      if (!delivery) {
+        delivery = await claimSalesStockDelivery({
+          guildId: runtime.cart.guild_id,
+          productId: item.product_id,
+        });
+      }
       if (!delivery) {
         if (retryRow) {
           continue;
@@ -1464,7 +1595,7 @@ async function settleSalesCartDeliveries(
           delivery_payload: {
             productTitle: getProductTitle(item),
             message:
-              "Pagamento aprovado, mas nao havia estoque disponivel para esta unidade. Abra um ticket com o comprovante.",
+              "Pagamento aprovado, mas a unidade reservada nao foi localizada para entrega automatica. Abra um ticket com o comprovante para a equipe reconciliar este pedido.",
           },
         });
         continue;
@@ -1769,6 +1900,19 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
   };
 
   if (resolvedStatus !== "approved") {
+    if (isFinalUnpaidStatus) {
+      await releaseSalesCartStockReservations({
+        cart: syncedCart,
+        items: runtime.items,
+        reason: `payment_${resolvedStatus}`,
+      }).catch((error) => {
+        console.warn("[sales-checkout] failed to release stock reservation", {
+          cartId: cart.id,
+          status: resolvedStatus,
+          error: error instanceof Error ? error.message : error,
+        });
+      });
+    }
     return {
       ...nextRuntime,
       deliveries: await loadSalesCartDeliveries(cart.id),
@@ -1822,6 +1966,132 @@ export async function syncSalesCartPayment(cartId: string): Promise<SalesCartRun
   };
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toFinitePositiveNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function getProviderRefundState(payment: SalesMercadoPagoPayment, cart: SalesCartRecord) {
+  const refunds = Array.isArray(payment.refunds) ? payment.refunds : [];
+  const refundedAmount = Math.max(
+    toFinitePositiveNumber(payment.refunded_amount),
+    toFinitePositiveNumber(payment.transaction_amount_refunded),
+    ...refunds.map((refund) => toFinitePositiveNumber(refund.amount)),
+  );
+  const transactionAmount =
+    toFinitePositiveNumber(payment.transaction_amount) ||
+    toFinitePositiveNumber(cart.total_amount);
+  const providerStatus = String(payment.status || "").toLowerCase();
+  const providerDetail = String(payment.status_detail || "").toLowerCase();
+  const hasProviderRefund =
+    refunds.length > 0 ||
+    refundedAmount > 0 ||
+    providerStatus === "refunded" ||
+    providerStatus === "charged_back" ||
+    providerDetail.includes("refund") ||
+    providerDetail.includes("reembols");
+  const fullAmountRefunded =
+    hasProviderRefund &&
+    (transactionAmount > 0
+      ? refundedAmount + 0.01 >= transactionAmount || providerStatus === "refunded"
+      : true);
+
+  return {
+    hasProviderRefund,
+    fullAmountRefunded,
+    refundedAmount,
+    transactionAmount,
+    providerStatus,
+    providerDetail,
+  };
+}
+
+async function fetchConfirmedSalesProviderRefund(input: {
+  accessToken: string;
+  cart: SalesCartRecord;
+  attempts?: number;
+}) {
+  const attempts = Math.max(1, input.attempts || 8);
+  let lastPayment: SalesMercadoPagoPayment | null = null;
+
+  for (let index = 0; index < attempts; index += 1) {
+    if (index > 0) {
+      await delay(Math.min(7000, 900 * index));
+    }
+
+    const paymentInfo = await fetchSalesMercadoPagoPaymentById({
+      accessToken: input.accessToken,
+      paymentId: input.cart.provider_payment_id || "",
+    });
+    lastPayment = paymentInfo;
+    const refundState = getProviderRefundState(paymentInfo, input.cart);
+    if (refundState.fullAmountRefunded) {
+      return {
+        confirmed: true,
+        paymentInfo,
+        refundState,
+      };
+    }
+  }
+
+  return {
+    confirmed: false,
+    paymentInfo: lastPayment,
+    refundState: lastPayment ? getProviderRefundState(lastPayment, input.cart) : null,
+  };
+}
+
+async function persistRefundedSalesCart(input: {
+  cart: SalesCartRecord;
+  reason?: string | null;
+  refundPayload: unknown;
+}) {
+  const providerPayload = {
+    refund: input.refundPayload,
+    refund_reason: input.reason || "Ticket refund",
+    refunded_at: new Date().toISOString(),
+  };
+
+  try {
+    const cart = await updateSalesCartAndSelect(input.cart.id, {
+      status: "refunded",
+      provider_status: "refunded",
+      provider_status_detail: "ticket_ai_refund",
+      provider_payload: providerPayload,
+    });
+    return { cart, completed: true, fallbackApplied: false, error: null as Error | null };
+  } catch (primaryError) {
+    try {
+      const cart = await updateSalesCartAndSelect(input.cart.id, {
+        provider_status: "refunded",
+        provider_status_detail: "ticket_ai_refund",
+        provider_payload: providerPayload,
+      });
+      return {
+        cart,
+        completed: true,
+        fallbackApplied: true,
+        error: primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
+      };
+    } catch (fallbackError) {
+      return {
+        cart: input.cart,
+        completed: false,
+        fallbackApplied: false,
+        error: fallbackError instanceof Error
+          ? fallbackError
+          : primaryError instanceof Error
+            ? primaryError
+            : new Error(String(fallbackError || primaryError)),
+      };
+    }
+  }
+}
+
 export async function refundSalesCartPayment(input: {
   cartId: string;
   guildId: string;
@@ -1850,8 +2120,9 @@ export async function refundSalesCartPayment(input: {
   }
 
   const mercadoPagoConfig = await loadSalesMercadoPagoSecureSnapshot(cart.guild_id);
-  
+
   let refundPayload: unknown = null;
+  let providerRefundConfirmedAfterError = false;
   try {
     refundPayload = await refundSalesMercadoPagoPayment({
       accessToken: mercadoPagoConfig.accessToken,
@@ -1866,58 +2137,69 @@ export async function refundSalesCartPayment(input: {
         accessToken: mercadoPagoConfig.accessToken,
         paymentId: cart.provider_payment_id,
       });
-      const resolvedStatus = resolveSalesMercadoPagoStatus(paymentInfo.status);
-      const refunds = Array.isArray(paymentInfo.refunds) ? paymentInfo.refunds : [];
-      const refundedAmount = Number(
-        paymentInfo.refunded_amount ?? paymentInfo.transaction_amount_refunded ?? 0,
-      );
-      const transactionAmount = Number(paymentInfo.transaction_amount ?? cart.total_amount ?? 0);
-      const hasProviderRefund =
-        refunds.length > 0 ||
-        refundedAmount > 0 ||
-        String(paymentInfo.status || "").toLowerCase() === "refunded" ||
-        String(paymentInfo.status_detail || "").toLowerCase().includes("refund");
-      const fullAmountRefunded =
-        !Number.isFinite(transactionAmount) ||
-        transactionAmount <= 0 ||
-        !Number.isFinite(refundedAmount) ||
-        refundedAmount <= 0 ||
-        refundedAmount + 0.01 >= transactionAmount;
-      if ((resolvedStatus === "cancelled" || hasProviderRefund) && fullAmountRefunded) {
+      const refundState = getProviderRefundState(paymentInfo, cart);
+      if (refundState.fullAmountRefunded) {
         // O estorno foi bem-sucedido no Mercado Pago apesar do erro de conexao local!
         refundPayload = paymentInfo;
       } else {
         throw refundError;
       }
     } catch {
-      throw refundError;
+      const reconciliation = await fetchConfirmedSalesProviderRefund({
+        accessToken: mercadoPagoConfig.accessToken,
+        cart,
+        attempts: 10,
+      }).catch(() => null);
+      if (!reconciliation?.confirmed) {
+        throw refundError;
+      }
+      refundPayload = reconciliation.paymentInfo;
+      providerRefundConfirmedAfterError = true;
     }
   }
 
-  const refundedCart = await updateSalesCartAndSelect(cart.id, {
-    status: "refunded",
-    provider_status: "refunded",
-    provider_status_detail: "ticket_ai_refund",
-    provider_payload: {
-      refund: refundPayload,
-      refund_reason: input.reason || "Ticket refund",
-      refunded_at: new Date().toISOString(),
-    },
+  const persistence = await persistRefundedSalesCart({
+    cart,
+    reason: input.reason,
+    refundPayload,
   });
-  await recordSalesOrderEvent({
-    cart: refundedCart,
-    eventType: "ticket_ai_refund_processed",
-    eventKey: `ticket_ai_refund:${cart.provider_payment_id}`,
-    payload: {
-      provider: "mercado_pago",
+  let eventLogged = false;
+  let eventError: string | null = null;
+  try {
+    await recordSalesOrderEvent({
+      cart: persistence.cart,
+      eventType: "ticket_ai_refund_processed",
+      eventKey: `ticket_ai_refund:${cart.provider_payment_id}`,
+      payload: {
+        provider: "mercado_pago",
+        providerPaymentId: cart.provider_payment_id,
+        reason: input.reason || null,
+        refund: refundPayload,
+        providerRefundConfirmedAfterError,
+        persistenceCompleted: persistence.completed,
+        persistenceFallbackApplied: persistence.fallbackApplied,
+        persistenceError: persistence.error?.message || null,
+      },
+    });
+    eventLogged = true;
+  } catch (error) {
+    eventError = error instanceof Error ? error.message : String(error || "Falha ao auditar reembolso.");
+    console.warn("[sales-checkout] ticket refund processed but event logging failed", {
+      cartId: cart.id,
       providerPaymentId: cart.provider_payment_id,
-      reason: input.reason || null,
-      refund: refundPayload,
-    },
-  });
+      error: eventError,
+    });
+  }
 
   return {
-    cart: refundedCart,
+    cart: persistence.cart,
     alreadyRefunded: false,
+    financialRefunded: true,
+    providerRefundConfirmedAfterError,
+    persistenceCompleted: persistence.completed,
+    persistenceFallbackApplied: persistence.fallbackApplied,
+    persistenceError: persistence.error?.message || null,
+    eventLogged,
+    eventError,
   };
 }

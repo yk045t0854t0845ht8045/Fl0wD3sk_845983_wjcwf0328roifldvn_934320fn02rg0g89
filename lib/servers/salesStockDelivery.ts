@@ -184,6 +184,26 @@ function isMissingClaimStockFunctionError(error: { code?: string | null; message
   return code === "42883" || message.includes("claim_guild_sales_stock_item");
 }
 
+function isMissingReservationFunctionError(error: { code?: string | null; message?: string | null }) {
+  const code = typeof error.code === "string" ? error.code : "";
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    code === "42883" ||
+    message.includes("reserve_guild_sales_stock_item") ||
+    message.includes("claim_reserved_guild_sales_stock_item") ||
+    message.includes("release_guild_sales_stock_reservations")
+  );
+}
+
+function mapStockDeliveryRecord(record: StockDeliveryRecord, stockQuantity: number) {
+  return {
+    stockItemId: record.id,
+    deliveryMethod: record.delivery_method,
+    message: formatDeliveryMessage(record),
+    stockQuantity,
+  };
+}
+
 async function claimSalesStockDeliveryViaRpc(input: {
   guildId: string;
   productId: string;
@@ -210,12 +230,91 @@ async function claimSalesStockDeliveryViaRpc(input: {
   if (!record) return null;
 
   const stockQuantity = await refreshProductStockQuantity(input.guildId, input.productId);
-  return {
-    stockItemId: record.id,
-    deliveryMethod: record.delivery_method,
-    message: formatDeliveryMessage(record),
-    stockQuantity,
-  };
+  return mapStockDeliveryRecord(record, stockQuantity);
+}
+
+export async function reserveSalesStockDelivery(input: {
+  guildId: string;
+  productId: string;
+  cartId: string;
+  cartItemId: string;
+  unitIndex: number;
+  reservationExpiresAt: string;
+  preferredDeliveryMethod?: DeliveryMethod;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const { data, error } = await supabase.rpc("reserve_guild_sales_stock_item", {
+    p_guild_id: input.guildId,
+    p_product_id: input.productId,
+    p_cart_id: input.cartId,
+    p_cart_item_id: input.cartItemId,
+    p_unit_index: input.unitIndex,
+    p_reservation_expires_at: input.reservationExpiresAt,
+    p_preferred_delivery_method: input.preferredDeliveryMethod || null,
+  });
+
+  if (error) {
+    if (isMissingReservationFunctionError(error)) {
+      throw new Error(
+        "Reserva de estoque nao esta aplicada no banco. Execute a migracao 121_guild_sales_stock_reservations.sql.",
+      );
+    }
+    throw new Error(error.message);
+  }
+
+  const record = (Array.isArray(data) ? data[0] : data) as
+    | StockDeliveryRecord
+    | null
+    | undefined;
+  if (!record) return null;
+
+  const stockQuantity = await refreshProductStockQuantity(input.guildId, input.productId);
+  return mapStockDeliveryRecord(record, stockQuantity);
+}
+
+export async function claimReservedSalesStockDelivery(input: {
+  guildId: string;
+  productId: string;
+  cartId: string;
+  cartItemId: string;
+  unitIndex: number;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const { data, error } = await supabase.rpc("claim_reserved_guild_sales_stock_item", {
+    p_guild_id: input.guildId,
+    p_product_id: input.productId,
+    p_cart_id: input.cartId,
+    p_cart_item_id: input.cartItemId,
+    p_unit_index: input.unitIndex,
+  });
+
+  if (error) {
+    if (isMissingReservationFunctionError(error)) return undefined;
+    throw new Error(error.message);
+  }
+
+  const record = (Array.isArray(data) ? data[0] : data) as
+    | StockDeliveryRecord
+    | null
+    | undefined;
+  if (!record) return null;
+
+  const stockQuantity = await refreshProductStockQuantity(input.guildId, input.productId);
+  return mapStockDeliveryRecord(record, stockQuantity);
+}
+
+export async function releaseSalesStockReservations(cartId: string) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const { data, error } = await supabase.rpc("release_guild_sales_stock_reservations", {
+    p_cart_id: cartId,
+  });
+
+  if (error) {
+    if (isMissingReservationFunctionError(error)) return 0;
+    throw new Error(error.message);
+  }
+
+  return Math.max(0, Number(data || 0));
 }
 
 export async function claimSalesStockDelivery(input: {
@@ -264,10 +363,5 @@ export async function claimSalesStockDelivery(input: {
   if (!update.data) return null;
   const stockQuantity = await refreshProductStockQuantity(input.guildId, input.productId);
 
-  return {
-    stockItemId: record.id,
-    deliveryMethod: record.delivery_method,
-    message: formatDeliveryMessage(record),
-    stockQuantity,
-  };
+  return mapStockDeliveryRecord(record, stockQuantity);
 }

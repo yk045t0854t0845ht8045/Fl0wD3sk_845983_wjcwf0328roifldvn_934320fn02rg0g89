@@ -52,6 +52,7 @@ import { useBodyScrollLock } from "@/lib/ui/useBodyScrollLock";
 
 type ProductStatus = "active" | "draft" | "archived";
 type ProductDiscordPublicationMode = "online_only" | "channel";
+type ProductDiscordSyncStatus = "idle" | "synced" | "failed";
 
 type SalesProduct = {
   id: string;
@@ -78,7 +79,7 @@ type SalesProduct = {
   discordChannelId?: string;
   discordMessageId?: string;
   discordLastSyncedAt?: string | null;
-  discordSyncStatus?: "idle" | "synced" | "failed";
+  discordSyncStatus?: ProductDiscordSyncStatus;
   discordSyncError?: string;
   publishedVirtualStore?: boolean;
   publishedPointOfSale?: boolean;
@@ -105,6 +106,12 @@ type ProductsResponse = {
   message?: string;
   products?: SalesProduct[];
   product?: SalesProduct;
+  discordSync?: {
+    status?: ProductDiscordSyncStatus;
+    error?: string | null;
+    channelId?: string | null;
+    messageId?: string | null;
+  };
 };
 
 type CategoriesResponse = {
@@ -208,6 +215,10 @@ function getProductCacheKey(guildId: string, productCode: string) {
   return `flowdesk_sales_product:${guildId}:${productCode}`;
 }
 
+function getProductFlashKey(guildId: string, productCode: string) {
+  return `flowdesk_sales_product_flash:${guildId}:${productCode}`;
+}
+
 function getCategoriesCacheKey(guildId: string) {
   return `flowdesk_sales_product_categories:${guildId}`;
 }
@@ -268,6 +279,19 @@ function getCreatePath(guildId: string) {
 
 function getEditPath(guildId: string, productCode: string) {
   return `/servers/${encodeURIComponent(guildId)}/sales/products/edit/${encodeURIComponent(productCode)}/`;
+}
+
+function writeProductFlashMessage(guildId: string, productCode: string, message: string) {
+  if (typeof window === "undefined" || !productCode || !message) return;
+  window.sessionStorage.setItem(getProductFlashKey(guildId, productCode), message);
+}
+
+function readProductFlashMessage(guildId: string, productCode: string) {
+  if (typeof window === "undefined" || !productCode) return null;
+  const key = getProductFlashKey(guildId, productCode);
+  const message = window.sessionStorage.getItem(key);
+  if (message) window.sessionStorage.removeItem(key);
+  return message;
 }
 
 function getProductCodeFromPath(pathname: string | null) {
@@ -1722,6 +1746,10 @@ export function SalesProductCreatePanel({
   const [discordPublicationMode, setDiscordPublicationMode] =
     useState<ProductDiscordPublicationMode>("online_only");
   const [discordChannelId, setDiscordChannelId] = useState("");
+  const [discordMessageId, setDiscordMessageId] = useState("");
+  const [discordSyncStatus, setDiscordSyncStatus] =
+    useState<ProductDiscordSyncStatus>("idle");
+  const [discordSyncError, setDiscordSyncError] = useState("");
   const [publishedVirtualStore, setPublishedVirtualStore] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -1746,6 +1774,17 @@ export function SalesProductCreatePanel({
       });
     },
     [guildId],
+  );
+
+  const updateDiscordSyncState = useCallback(
+    (product?: SalesProduct, sync?: ProductsResponse["discordSync"]) => {
+      setDiscordSyncStatus(
+        product?.discordSyncStatus || sync?.status || "idle",
+      );
+      setDiscordSyncError(product?.discordSyncError || sync?.error || "");
+      setDiscordMessageId(product?.discordMessageId || sync?.messageId || "");
+    },
+    [],
   );
 
   useEffect(() => {
@@ -1926,6 +1965,7 @@ export function SalesProductCreatePanel({
 
     async function loadProduct() {
       const cacheKey = `${guildId}:${safeProductCode}`;
+      const flashMessage = readProductFlashMessage(guildId, safeProductCode);
       const cached =
         readCache(productDetailCache, cacheKey) ||
         readClientCache<SalesProduct>(
@@ -1961,6 +2001,7 @@ export function SalesProductCreatePanel({
           cached.discordPublicationMode === "channel" ? "channel" : "online_only",
         );
         setDiscordChannelId(cached.discordChannelId || "");
+        updateDiscordSyncState(cached);
         setPublishedVirtualStore(cached.publishedVirtualStore !== false);
         setSavedEditorSnapshot(productToEditorSnapshot(cached));
         writeCache(productDetailCache, cacheKey, cached);
@@ -1968,7 +2009,7 @@ export function SalesProductCreatePanel({
       }
 
       if (!cached) setIsLoadingProduct(true);
-      setStatusMessage(null);
+      setStatusMessage(flashMessage);
 
       try {
         const product = await coalescedClientFetch(
@@ -2018,6 +2059,7 @@ export function SalesProductCreatePanel({
           product.discordPublicationMode === "channel" ? "channel" : "online_only",
         );
         setDiscordChannelId(product.discordChannelId || "");
+        updateDiscordSyncState(product);
         setPublishedVirtualStore(product.publishedVirtualStore !== false);
         setSavedEditorSnapshot(productToEditorSnapshot(product));
         writeCache(productDetailCache, `${guildId}:${safeProductCode}`, product);
@@ -2039,7 +2081,7 @@ export function SalesProductCreatePanel({
     return () => {
       cancelled = true;
     };
-  }, [guildId, mode, productCode]);
+  }, [guildId, mode, productCode, updateDiscordSyncState]);
 
   useEffect(() => {
     if (!isMediaLibraryOpen) return;
@@ -2222,6 +2264,11 @@ export function SalesProductCreatePanel({
   const controlsDisabled = isFormLoading || isSaving || readOnly;
   const hasDiscordPublicationTarget =
     discordPublicationMode === "online_only" || Boolean(discordChannelId);
+  const canRetryDiscordSync =
+    isEditMode &&
+    discordPublicationMode === "channel" &&
+    discordSyncStatus === "failed" &&
+    hasDiscordPublicationTarget;
   const hasRequiredCategory = Boolean(categoryId);
   const parsedPriceAmount = parseMoneyInput(priceAmount);
   const hasRequiredPrice = parsedPriceAmount !== null;
@@ -2230,10 +2277,39 @@ export function SalesProductCreatePanel({
     hasRequiredCategory &&
     hasRequiredPrice &&
     hasDiscordPublicationTarget &&
-    hasProductEditorChanges &&
+    (hasProductEditorChanges || canRetryDiscordSync) &&
     !isSaving &&
     !isFormLoading &&
     !readOnly;
+  const discordSyncNotice = useMemo(() => {
+    if (discordPublicationMode !== "channel") return null;
+
+    if (discordSyncStatus === "failed") {
+      return {
+        tone: "warning" as const,
+        message:
+          discordSyncError ||
+          "Falha ao sincronizar o embed no Discord. Verifique o canal e as permissoes do bot.",
+      };
+    }
+
+    if (discordSyncStatus === "synced" && !hasProductEditorChanges) {
+      return {
+        tone: "success" as const,
+        message: discordMessageId
+          ? `Embed sincronizado no Discord. Mensagem ${discordMessageId}.`
+          : "Embed sincronizado no Discord.",
+      };
+    }
+
+    return null;
+  }, [
+    discordMessageId,
+    discordPublicationMode,
+    discordSyncError,
+    discordSyncStatus,
+    hasProductEditorChanges,
+  ]);
 
   const goBack = useCallback(() => {
     router.push(getProductsPath(guildId));
@@ -2333,8 +2409,39 @@ export function SalesProductCreatePanel({
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as ProductsResponse;
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "Erro ao salvar produto.");
+      const savedProduct = payload.product;
+      const saveMessage = payload.message || "Erro ao salvar produto.";
+
+      if (savedProduct) {
+        updateDiscordSyncState(savedProduct, payload.discordSync);
+        setSavedEditorSnapshot(productToEditorSnapshot(savedProduct));
+        writeCache(productDetailCache, `${guildId}:${savedProduct.code}`, savedProduct);
+        writeClientCache(getProductCacheKey(guildId, savedProduct.code), savedProduct);
+      }
+
+      const discordSyncFailed =
+        savedProduct?.discordSyncStatus === "failed" ||
+        payload.discordSync?.status === "failed";
+
+      if (!response.ok || !payload.ok || discordSyncFailed) {
+        if (savedProduct) {
+          invalidateProductCaches(guildId);
+          writeCache(productDetailCache, `${guildId}:${savedProduct.code}`, savedProduct);
+          writeClientCache(getProductCacheKey(guildId, savedProduct.code), savedProduct);
+
+          if (!isEditMode) {
+            writeProductFlashMessage(guildId, savedProduct.code, saveMessage);
+            router.replace(getEditPath(guildId, savedProduct.code));
+            router.refresh();
+            return;
+          }
+
+          setStatusMessage(saveMessage);
+          router.refresh();
+          return;
+        }
+
+        throw new Error(saveMessage);
       }
       rememberOrganizationValues("productTypes", [productType]);
       rememberOrganizationValues("manufacturers", [manufacturer]);
@@ -2373,6 +2480,7 @@ export function SalesProductCreatePanel({
     sku,
     status,
     title,
+    updateDiscordSyncState,
   ]);
 
   const handleDeleteProduct = useCallback(async () => {
@@ -2441,6 +2549,11 @@ export function SalesProductCreatePanel({
           >
             {isSaving ? (
               <ButtonLoader size={16} colorClassName="text-[#080808]" />
+            ) : canRetryDiscordSync && !hasProductEditorChanges ? (
+              <>
+                <RefreshCw className="h-[16px] w-[16px]" />
+                Reenviar embed
+              </>
             ) : (
               <>
                 <Check className="h-[16px] w-[16px]" />
@@ -2826,6 +2939,9 @@ export function SalesProductCreatePanel({
                 onChange={(nextMode) => {
                   setDiscordPublicationMode(nextMode);
                   if (nextMode === "online_only") setDiscordChannelId("");
+                  setDiscordMessageId("");
+                  setDiscordSyncStatus("idle");
+                  setDiscordSyncError("");
                   setStatusMessage(null);
                 }}
                 disabled={controlsDisabled}
@@ -2838,6 +2954,9 @@ export function SalesProductCreatePanel({
                   options={discordChannelOptions}
                   onChange={(nextChannelId) => {
                     setDiscordChannelId(nextChannelId);
+                    setDiscordMessageId("");
+                    setDiscordSyncStatus("idle");
+                    setDiscordSyncError("");
                     setStatusMessage(null);
                   }}
                   disabled={controlsDisabled || isLoadingChannels || (!discordChannels.length && Boolean(channelsMessage))}
@@ -2854,6 +2973,17 @@ export function SalesProductCreatePanel({
                       : "Ao criar ou atualizar, o painel envia ou edita o embed nesse canal automaticamente."}
                   </p>
                 )}
+                {discordSyncNotice ? (
+                  <p
+                    className={`mt-[9px] rounded-[12px] border px-[11px] py-[9px] text-[12px] leading-[1.45] ${
+                      discordSyncNotice.tone === "success"
+                        ? "border-[#244633] bg-[#0B1710] text-[#8FE0A8]"
+                        : "border-[#3A2A1E] bg-[#170F09] text-[#F2B27D]"
+                    }`}
+                  >
+                    {discordSyncNotice.message}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p className="mt-[9px] text-[12px] leading-[1.45] text-[#8A8A8A]">

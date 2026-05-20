@@ -8,7 +8,7 @@ import {
 const PRODUCT_DISCORD_SELECT =
   "id, guild_id, title, description, media_urls, price_amount, stock_quantity, discord_publication_mode, discord_channel_id, discord_message_id";
 const DISCORD_RETRY_DELAYS_MS = [180, 420];
-const PRODUCT_MEDIA_MAX_LENGTH = 1_500_000;
+const PRODUCT_MEDIA_MAX_LENGTH = 7_000_000;
 
 export type SalesProductDiscordSyncStatus = "idle" | "synced" | "failed";
 
@@ -45,6 +45,52 @@ function sleep(ms: number) {
 
 function resolveBotToken() {
   return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || null;
+}
+
+async function readDiscordErrorDetails(response: Response) {
+  const text = await response.text().catch(() => "");
+  if (!text) return response.statusText || `HTTP ${response.status}`;
+
+  try {
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    const message = typeof payload.message === "string" ? payload.message : "";
+    const code =
+      typeof payload.code === "number" || typeof payload.code === "string"
+        ? `codigo ${payload.code}`
+        : "";
+    const errors = payload.errors ? JSON.stringify(payload.errors).slice(0, 420) : "";
+    return [message, code, errors].filter(Boolean).join(" | ") || text;
+  } catch {
+    return text;
+  }
+}
+
+function buildDiscordFailureMessage(input: {
+  status: number;
+  statusText: string;
+  resourceLabel: string;
+  details: string;
+}) {
+  const details = input.details.replace(/\s+/g, " ").trim().slice(0, 700);
+  const suffix = details ? ` Detalhe: ${details}` : "";
+
+  if (input.status === 401) {
+    return `Token do bot Discord invalido ou expirado ao ${input.resourceLabel}.${suffix}`;
+  }
+
+  if (input.status === 403) {
+    return `Bot sem permissao para ${input.resourceLabel}. Verifique se ele consegue ver o canal e enviar mensagens, embeds, componentes e anexos.${suffix}`;
+  }
+
+  if (input.status === 404) {
+    return `Canal ou mensagem Discord nao encontrado ao ${input.resourceLabel}. Atualize o canal no painel e tente novamente.${suffix}`;
+  }
+
+  if (input.status === 400) {
+    return `Discord recusou o payload Components V2 ao ${input.resourceLabel}.${suffix}`;
+  }
+
+  return `Discord respondeu com erro ao ${input.resourceLabel}: ${details || input.statusText || `HTTP ${input.status}`}`;
 }
 
 function formatProductPrice(value: number | string | null) {
@@ -101,7 +147,7 @@ async function requestDiscordWithBot<T>({
       }
 
       if (!response.ok) {
-        const text = await response.text();
+        const details = await readDiscordErrorDetails(response);
         const isRetryable = response.status === 429 || response.status >= 500;
 
         if (isRetryable && attempt < DISCORD_RETRY_DELAYS_MS.length) {
@@ -110,7 +156,12 @@ async function requestDiscordWithBot<T>({
         }
 
         throw new Error(
-          `Discord respondeu com erro ao ${resourceLabel}: ${text || response.statusText}`,
+          buildDiscordFailureMessage({
+            status: response.status,
+            statusText: response.statusText,
+            resourceLabel,
+            details,
+          }),
         );
       }
 
@@ -311,6 +362,10 @@ export async function syncSalesProductDiscordMessage(input: {
           botToken,
           resourceLabel: "enviar o embed do produto",
         });
+
+  if (!dispatchedMessage || typeof dispatchedMessage.id !== "string") {
+    throw new Error("Discord processou a requisicao, mas nao retornou o ID da mensagem do produto.");
+  }
 
   return {
     messageId: dispatchedMessage.id,
