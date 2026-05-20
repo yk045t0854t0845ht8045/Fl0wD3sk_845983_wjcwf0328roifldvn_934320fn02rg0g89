@@ -3,6 +3,7 @@ import Image from "next/image";
 import { redirect } from "next/navigation";
 import { buildDiscordAuthStartHref } from "@/lib/auth/paths";
 import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
+import { syncSalesCartPayment } from "@/lib/sales/checkoutRuntime";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 export const metadata: Metadata = {
@@ -28,6 +29,10 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
   );
+}
+
+function shouldSyncCartBeforeRender(status: string) {
+  return ["payment_pending", "paid", "delivery_failed"].includes(status);
 }
 
 function methodLabel(value: string) {
@@ -149,16 +154,39 @@ export default async function SalesOrderDeliveryPage({ params }: PageProps) {
     );
   }
 
-  const deliveriesResult = await supabase
-    .from("guild_sales_order_deliveries")
-    .select("id, delivery_method, status, delivery_payload, delivered_at")
-    .eq("cart_id", cartId)
-    .eq("auth_user_id", session.user.id)
-    .order("created_at", { ascending: true })
-    .returns<DeliveryRow[]>();
-  if (deliveriesResult.error) throw new Error(deliveriesResult.error.message);
+  let deliveries: DeliveryRow[] | null = null;
+  if (shouldSyncCartBeforeRender(cartResult.data.status)) {
+    try {
+      const synced = await syncSalesCartPayment(cartId);
+      deliveries = (synced.deliveries || []).map((delivery) => ({
+        id: delivery.id,
+        delivery_method: delivery.deliveryMethod,
+        status: delivery.status,
+        delivery_payload: {
+          productTitle: delivery.productTitle,
+          message: delivery.message,
+        },
+        delivered_at: "",
+      }));
+    } catch (error) {
+      console.warn("[sales-order] failed to sync cart before render", {
+        cartId,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
 
-  const deliveries = deliveriesResult.data || [];
+  if (!deliveries) {
+    const deliveriesResult = await supabase
+      .from("guild_sales_order_deliveries")
+      .select("id, delivery_method, status, delivery_payload, delivered_at")
+      .eq("cart_id", cartId)
+      .eq("auth_user_id", session.user.id)
+      .order("created_at", { ascending: true })
+      .returns<DeliveryRow[]>();
+    if (deliveriesResult.error) throw new Error(deliveriesResult.error.message);
+    deliveries = deliveriesResult.data || [];
+  }
 
   return (
     <main className="min-h-screen bg-black px-4 py-8 text-[#F2F2F2] sm:px-6">

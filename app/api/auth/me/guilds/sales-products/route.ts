@@ -17,10 +17,11 @@ import {
 import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
-  buildSalesProductDiscordPayload,
-  salesProductMessageLooksManaged,
-} from "@/lib/servers/salesProductDiscordPayload";
-import { markSalesProductDiscordMessageUnavailable } from "@/lib/servers/salesProductDiscordSync";
+  markSalesProductDiscordMessageUnavailable,
+  persistSalesProductDiscordSyncState,
+  syncSalesProductDiscordMessage,
+  type SalesProductDiscordSyncStatus,
+} from "@/lib/servers/salesProductDiscordSync";
 
 const PRODUCT_TITLE_MAX_LENGTH = 120;
 const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
@@ -32,7 +33,6 @@ const PRODUCT_BASE_SELECT =
 const PRODUCT_SELECT = `${PRODUCT_BASE_SELECT}, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error`;
 const GUILD_TEXT = 0;
 const GUILD_ANNOUNCEMENT = 5;
-const DISCORD_RETRY_DELAYS_MS = [180, 420];
 
 type GuildSalesProductRecord = {
   id: string;
@@ -68,17 +68,6 @@ type GuildSalesProductRecord = {
   active: boolean;
   created_at: string;
   updated_at: string;
-};
-
-type DiscordChannelMessage = {
-  id?: unknown;
-  author?: { bot?: unknown } | null;
-  components?: unknown;
-};
-
-type ProductCategorySnapshot = {
-  id: string;
-  title: string;
 };
 
 function buildDiscordRelinkResponse() {
@@ -229,137 +218,8 @@ function buildProductCode(id: string) {
   return `prd-${seed.padEnd(8, "0").slice(0, 8)}`;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function resolveBotToken() {
-  return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || null;
-}
-
 function isValidTextChannelType(type?: number) {
   return type === GUILD_TEXT || type === GUILD_ANNOUNCEMENT;
-}
-
-function formatProductPrice(value: number | string | null) {
-  const numeric = Number(value || 0);
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(Number.isFinite(numeric) ? numeric : 0);
-}
-
-async function requestDiscordWithBot<T>({
-  url,
-  botToken,
-  method = "GET",
-  body,
-  resourceLabel,
-}: {
-  url: string;
-  botToken: string;
-  method?: "GET" | "POST" | "PATCH";
-  body?: unknown;
-  resourceLabel: string;
-}) {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= DISCORD_RETRY_DELAYS_MS.length; attempt += 1) {
-    try {
-      const response = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bot ${botToken}`,
-          ...(body && !(body instanceof FormData)
-            ? { "Content-Type": "application/json" }
-            : {}),
-        },
-        body: body
-          ? body instanceof FormData
-            ? body
-            : JSON.stringify(body)
-          : undefined,
-        cache: "no-store",
-      });
-
-      if (response.status === 404 && method === "GET") {
-        return null as T;
-      }
-
-      if (!response.ok) {
-        const text = await response.text();
-        const isRetryable = response.status === 429 || response.status >= 500;
-
-        if (isRetryable && attempt < DISCORD_RETRY_DELAYS_MS.length) {
-          await sleep(DISCORD_RETRY_DELAYS_MS[attempt]);
-          continue;
-        }
-
-        throw new Error(
-          `Discord respondeu com erro ao ${resourceLabel}: ${text || response.statusText}`,
-        );
-      }
-
-      return (await response.json()) as T;
-    } catch (error) {
-      lastError =
-        error instanceof Error ? error : new Error(`Falha ao ${resourceLabel}.`);
-
-      if (attempt < DISCORD_RETRY_DELAYS_MS.length) {
-        await sleep(DISCORD_RETRY_DELAYS_MS[attempt]);
-        continue;
-      }
-    }
-  }
-
-  throw lastError || new Error(`Falha ao ${resourceLabel}.`);
-}
-
-function dataUrlToDiscordFile(dataUrl: string) {
-  const match = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i);
-  if (!match) return null;
-
-  const mimeType = match[1].toLowerCase();
-  const extension =
-    mimeType.includes("png")
-      ? "png"
-      : mimeType.includes("webp")
-        ? "webp"
-        : mimeType.includes("gif")
-          ? "gif"
-          : "jpg";
-  const binary = Buffer.from(match[2], "base64");
-  if (!binary.length || binary.length > PRODUCT_MEDIA_MAX_LENGTH) return null;
-
-  return {
-    filename: `product-image.${extension}`,
-    blob: new Blob([binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength)], {
-      type: mimeType,
-    }),
-  };
-}
-
-function dataUrlToAttachmentUrl(dataUrl: string) {
-  const file = dataUrlToDiscordFile(dataUrl);
-  return file ? `attachment://${file.filename}` : null;
-}
-
-function buildDiscordRequestBody(payload: unknown, mediaUrls: unknown) {
-  const firstMediaUrl = Array.isArray(mediaUrls)
-    ? mediaUrls.find(
-        (item): item is string => typeof item === "string" && item.trim().length > 0,
-      )
-    : "";
-  const file = firstMediaUrl ? dataUrlToDiscordFile(firstMediaUrl) : null;
-
-  if (!file) return payload;
-
-  const formData = new FormData();
-  formData.append("payload_json", JSON.stringify(payload));
-  formData.append("files[0]", file.blob, file.filename);
-  return formData;
 }
 
 function normalizeProductCode(value: unknown) {
@@ -594,44 +454,6 @@ async function validateProductCategory(
   return null;
 }
 
-async function resolveCategorySnapshot(
-  guildId: string,
-  categoryId: string | null,
-) {
-  if (!categoryId) return null;
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("guild_sales_categories")
-    .select("id, title")
-    .eq("id", categoryId)
-    .eq("guild_id", guildId)
-    .maybeSingle();
-
-  if (result.error) throw new Error(result.error.message);
-  return (result.data as ProductCategorySnapshot | null) || null;
-}
-
-async function hasActiveSalesPaymentMethod(guildId: string) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("guild_sales_payment_methods")
-    .select("id")
-    .eq("guild_id", guildId)
-    .eq("method_key", "mercado_pago")
-    .eq("status", "active")
-    .limit(1);
-
-  if (result.error) {
-    const message = result.error.message.toLowerCase();
-    if (result.error.code === "42P01" || message.includes("guild_sales_payment_methods")) {
-      return false;
-    }
-    throw new Error(result.error.message);
-  }
-
-  return Boolean(result.data?.length);
-}
-
 async function refreshCategoryProductCounts(guildId: string, categoryIds: Array<string | null>) {
   const uniqueCategoryIds = Array.from(
     new Set(categoryIds.filter((categoryId): categoryId is string => Boolean(categoryId))),
@@ -743,121 +565,40 @@ async function validateDiscordPublicationInput(input: {
   };
 }
 
-async function syncSalesProductDiscordMessage(input: {
+async function persistAndApplyDiscordSyncState(input: {
   product: GuildSalesProductRecord;
-  category: ProductCategorySnapshot | null;
+  mode: "online_only" | "channel";
+  messageId: string | null;
+  status: SalesProductDiscordSyncStatus;
+  error: string | null;
 }) {
-  if (input.product.discord_publication_mode !== "channel") {
-    return {
-      messageId: null,
-      status: "idle" as const,
-      error: null,
-    };
-  }
-
-  const channelId = input.product.discord_channel_id;
-  if (!channelId) {
-    throw new Error("Canal Discord ausente para publicar o produto.");
-  }
-
-  const botToken = resolveBotToken();
-  if (!botToken) {
-    throw new Error("DISCORD_BOT_TOKEN nao configurado no ambiente do site.");
-  }
-
-  const productCode = buildProductCode(input.product.id);
-  const mediaUrls = Array.isArray(input.product.media_urls)
-    ? input.product.media_urls.filter(
-        (item): item is string => typeof item === "string",
-      )
-    : [];
-  const firstDataImageIndex = mediaUrls.findIndex((url) =>
-    /^data:image\/[a-z0-9.+-]+;base64,/i.test(url),
-  );
-  const attachmentUrl =
-    firstDataImageIndex >= 0 ? dataUrlToAttachmentUrl(mediaUrls[firstDataImageIndex]) : null;
-  const payloadMediaUrls =
-    firstDataImageIndex >= 0
-      ? [
-          ...mediaUrls.slice(0, firstDataImageIndex),
-          attachmentUrl || "",
-          ...mediaUrls.slice(firstDataImageIndex + 1),
-        ].filter(Boolean)
-      : mediaUrls;
-  const payload = buildSalesProductDiscordPayload({
-    productCode,
-    title: input.product.title,
-    description: input.product.description || "",
-    priceLabel: formatProductPrice(input.product.price_amount),
-    stockQuantity: input.product.stock_quantity,
-    mediaUrls: payloadMediaUrls,
-    paymentReady: await hasActiveSalesPaymentMethod(input.product.guild_id),
+  const syncedAt = input.status === "synced" ? new Date().toISOString() : null;
+  await persistSalesProductDiscordSyncState({
+    productId: input.product.id,
+    guildId: input.product.guild_id,
+    mode: input.mode,
+    messageId: input.messageId,
+    status: input.status,
+    error: input.error,
   });
-  const discordBody = buildDiscordRequestBody(payload, input.product.media_urls);
-
-  const storedMessageId = input.product.discord_message_id || "";
-  const storedMessage = storedMessageId
-    ? await requestDiscordWithBot<DiscordChannelMessage | null>({
-        url: `https://discord.com/api/v10/channels/${channelId}/messages/${storedMessageId}`,
-        botToken,
-        resourceLabel: "buscar o embed do produto",
-      })
-    : null;
-
-  const managedMessage =
-    storedMessage && salesProductMessageLooksManaged(storedMessage, productCode)
-      ? storedMessage
-      : null;
-
-  const dispatchedMessage =
-    managedMessage && typeof managedMessage.id === "string"
-      ? await requestDiscordWithBot<{ id: string }>({
-          url: `https://discord.com/api/v10/channels/${channelId}/messages/${managedMessage.id}`,
-          method: "PATCH",
-          body: discordBody,
-          botToken,
-          resourceLabel: "atualizar o embed do produto",
-        })
-      : await requestDiscordWithBot<{ id: string }>({
-          url: `https://discord.com/api/v10/channels/${channelId}/messages`,
-          method: "POST",
-          body: discordBody,
-          botToken,
-          resourceLabel: "enviar o embed do produto",
-        });
 
   return {
-    messageId: dispatchedMessage.id,
-    status: "synced" as const,
-    error: null,
+    ...input.product,
+    discord_message_id: input.mode === "channel" ? input.messageId : null,
+    discord_last_synced_at: syncedAt,
+    discord_sync_status: input.status,
+    discord_sync_error: input.error,
   };
 }
 
-async function persistDiscordSyncState(input: {
-  productId: string;
-  guildId: string;
-  mode: "online_only" | "channel";
-  messageId: string | null;
-  status: "idle" | "synced" | "failed";
-  error: string | null;
-}) {
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("guild_sales_products")
-    .update({
-      discord_message_id: input.mode === "channel" ? input.messageId : null,
-      discord_last_synced_at:
-        input.status === "synced" ? new Date().toISOString() : null,
-      discord_sync_status: input.status,
-      discord_sync_error: input.error,
-    })
-    .eq("id", input.productId)
-    .eq("guild_id", input.guildId)
-    .select(PRODUCT_SELECT)
-    .single();
-
-  if (result.error) throw new Error(result.error.message);
-  return result.data as GuildSalesProductRecord;
+function buildDiscordSyncWarning(error: string) {
+  return [
+    "Produto salvo, mas o Discord recusou a publicacao do embed.",
+    error,
+    "Confira o canal, as permissoes do bot e tente salvar novamente.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export async function GET(request: Request) {
@@ -1211,47 +952,56 @@ export async function PATCH(request: Request) {
 
     if (discordPublicationMode === "channel") {
       try {
-        const category = await resolveCategorySnapshot(guildId, safeCategoryId);
         const sync = await syncSalesProductDiscordMessage({
           product: savedProduct,
-          category,
         });
-        savedProduct = await persistDiscordSyncState({
-          productId: savedProduct.id,
-          guildId,
+        savedProduct = await persistAndApplyDiscordSyncState({
+          product: savedProduct,
           mode: discordPublicationMode,
           messageId: sync.messageId,
           status: sync.status,
           error: null,
         });
       } catch (error) {
-        savedProduct = await persistDiscordSyncState({
-          productId: savedProduct.id,
-          guildId,
+        const discordSyncError = extractAuditErrorMessage(
+          error,
+          "Erro ao sincronizar embed do produto.",
+        );
+        savedProduct = await persistAndApplyDiscordSyncState({
+          product: savedProduct,
           mode: discordPublicationMode,
           messageId: savedProduct.discord_message_id,
           status: "failed",
-          error: sanitizeErrorMessage(error, "Erro ao sincronizar embed do produto."),
+          error: discordSyncError,
+        });
+        console.warn("[sales-products] Discord product embed sync failed", {
+          guildId,
+          productId: savedProduct.id,
+          channelId: savedProduct.discord_channel_id,
+          error: extractAuditErrorMessage(error, discordSyncError),
         });
 
         return applyNoStoreHeaders(
           NextResponse.json(
             {
               ok: false,
-              message: sanitizeErrorMessage(
-                error,
-                "Produto salvo, mas nao foi possivel sincronizar o embed no Discord.",
-              ),
+              code: "DISCORD_PRODUCT_EMBED_SYNC_FAILED",
+              message: buildDiscordSyncWarning(discordSyncError),
               product: buildProductResponse(savedProduct),
+              discordSync: {
+                status: "failed",
+                error: discordSyncError,
+                channelId: savedProduct.discord_channel_id,
+                messageId: savedProduct.discord_message_id,
+              },
             },
             { status: 502 },
           ),
         );
       }
     } else {
-      savedProduct = await persistDiscordSyncState({
-        productId: savedProduct.id,
-        guildId,
+      savedProduct = await persistAndApplyDiscordSyncState({
+        product: savedProduct,
         mode: discordPublicationMode,
         messageId: null,
         status: "idle",
@@ -1410,38 +1160,48 @@ export async function POST(request: Request) {
 
     if (discordPublicationMode === "channel") {
       try {
-        const category = await resolveCategorySnapshot(guildId, safeCategoryId);
         const sync = await syncSalesProductDiscordMessage({
           product: savedProduct,
-          category,
         });
-        savedProduct = await persistDiscordSyncState({
-          productId: savedProduct.id,
-          guildId,
+        savedProduct = await persistAndApplyDiscordSyncState({
+          product: savedProduct,
           mode: discordPublicationMode,
           messageId: sync.messageId,
           status: sync.status,
           error: null,
         });
       } catch (error) {
-        savedProduct = await persistDiscordSyncState({
-          productId: savedProduct.id,
-          guildId,
+        const discordSyncError = extractAuditErrorMessage(
+          error,
+          "Erro ao sincronizar embed do produto.",
+        );
+        savedProduct = await persistAndApplyDiscordSyncState({
+          product: savedProduct,
           mode: discordPublicationMode,
           messageId: savedProduct.discord_message_id,
           status: "failed",
-          error: sanitizeErrorMessage(error, "Erro ao sincronizar embed do produto."),
+          error: discordSyncError,
+        });
+        console.warn("[sales-products] Discord product embed send failed", {
+          guildId,
+          productId: savedProduct.id,
+          channelId: savedProduct.discord_channel_id,
+          error: extractAuditErrorMessage(error, discordSyncError),
         });
 
         return applyNoStoreHeaders(
           NextResponse.json(
             {
               ok: false,
-              message: sanitizeErrorMessage(
-                error,
-                "Produto salvo, mas nao foi possivel enviar o embed no Discord.",
-              ),
+              code: "DISCORD_PRODUCT_EMBED_SYNC_FAILED",
+              message: buildDiscordSyncWarning(discordSyncError),
               product: buildProductResponse(savedProduct),
+              discordSync: {
+                status: "failed",
+                error: discordSyncError,
+                channelId: savedProduct.discord_channel_id,
+                messageId: savedProduct.discord_message_id,
+              },
             },
             { status: 502 },
           ),

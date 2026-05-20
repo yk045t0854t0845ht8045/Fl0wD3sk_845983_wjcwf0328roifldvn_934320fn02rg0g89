@@ -142,7 +142,13 @@ export function buildSalesProductDiscordPayload(
           ? [
               {
                 type: COMPONENT_TYPE.MEDIA_GALLERY,
-                media: [{ url: firstImage }],
+                items: [
+                  {
+                    media: {
+                      url: firstImage,
+                    },
+                  },
+                ],
               },
             ]
           : []),

@@ -82,11 +82,19 @@ export async function POST(request: Request) {
       guildId,
       reason,
     });
+    const resultRecord = result as typeof result & Record<string, unknown>;
 
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
         alreadyRefunded: result.alreadyRefunded,
+        financialRefunded: resultRecord.financialRefunded === true || result.alreadyRefunded === true,
+        providerRefundConfirmedAfterError: resultRecord.providerRefundConfirmedAfterError === true,
+        persistenceCompleted: resultRecord.persistenceCompleted !== false,
+        persistenceFallbackApplied: resultRecord.persistenceFallbackApplied === true,
+        persistenceError: resultRecord.persistenceError || null,
+        eventLogged: resultRecord.eventLogged !== false,
+        eventError: resultRecord.eventError || null,
         cart: {
           id: result.cart.id,
           status: result.cart.status,
