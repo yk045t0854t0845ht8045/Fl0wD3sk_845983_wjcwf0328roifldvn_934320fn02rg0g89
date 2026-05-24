@@ -11,9 +11,10 @@ import {
 
 type EmailOtpChallengeRow = {
   id: string;
-  user_id: number;
+  user_id: number | null;
   email: string;
   email_normalized: string;
+  purpose: string;
   code_hash: string;
   attempts: number;
   max_attempts: number;
@@ -52,6 +53,17 @@ export class EmailOtpError extends Error {
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
+
+export type VerifiedOtpChallengeContext = {
+  challengeId: string;
+  userId: number | null;
+  email: string;
+  emailNormalized: string;
+  purpose: string;
+  metadata: unknown;
+  expiresAt: string;
+  sessionContext: PendingOtpSessionContext | null;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -132,7 +144,7 @@ async function fetchChallengeById(challengeId: string) {
   const result = await supabase
     .from("auth_email_otp_challenges")
     .select(
-      "id, user_id, email, email_normalized, code_hash, attempts, max_attempts, resend_count, last_sent_at, expires_at, consumed_at, metadata",
+      "id, user_id, email, email_normalized, purpose, code_hash, attempts, max_attempts, resend_count, last_sent_at, expires_at, consumed_at, metadata",
     )
     .eq("id", challengeId)
     .maybeSingle<EmailOtpChallengeRow>();
@@ -227,11 +239,12 @@ function serializeOtpMetadata(metadata: Record<string, unknown> | null | undefin
   return payload;
 }
 
-export async function createLoginOtpChallenge(input: {
-  userId: number;
+async function createOtpChallenge(input: {
+  userId: number | null;
   email: string;
   ipAddress: string | null;
   userAgent: string | null;
+  purpose: "login" | "email_registration";
   metadata?: Record<string, unknown> | null;
 }) {
   const normalizedEmail = normalizeAuthEmail(input.email);
@@ -248,7 +261,7 @@ export async function createLoginOtpChallenge(input: {
       user_id: input.userId,
       email: normalizedEmail,
       email_normalized: normalizedEmail,
-      purpose: "login",
+      purpose: input.purpose,
       code_hash: hashOtpCode(code),
       ip_address: input.ipAddress,
       user_agent: input.userAgent,
@@ -263,7 +276,20 @@ export async function createLoginOtpChallenge(input: {
     throw new Error(result.error?.message || "Nao foi possivel criar o desafio OTP.");
   }
 
-  await sendOtpEmailForChallenge(normalizedEmail, code);
+  try {
+    await sendOtpEmailForChallenge(normalizedEmail, code);
+  } catch (error) {
+    try {
+      await supabase
+        .from("auth_email_otp_challenges")
+        .delete()
+        .eq("id", result.data.id)
+        .is("consumed_at", null);
+    } catch {
+      // O erro original de SMTP/configuracao e mais util para quem chamou.
+    }
+    throw error;
+  }
 
   return {
     challengeId: result.data.id,
@@ -271,6 +297,32 @@ export async function createLoginOtpChallenge(input: {
     expiresAt,
     resendAvailableAt: new Date(Date.now() + getOtpResendCooldownMs()).toISOString(),
   };
+}
+
+export async function createLoginOtpChallenge(input: {
+  userId: number;
+  email: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  metadata?: Record<string, unknown> | null;
+}) {
+  return createOtpChallenge({
+    ...input,
+    purpose: "login",
+  });
+}
+
+export async function createEmailRegistrationOtpChallenge(input: {
+  email: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  metadata?: Record<string, unknown> | null;
+}) {
+  return createOtpChallenge({
+    ...input,
+    userId: null,
+    purpose: "email_registration",
+  });
 }
 
 export async function resendLoginOtpChallenge(challengeId: string) {
@@ -309,13 +361,14 @@ export async function resendLoginOtpChallenge(challengeId: string) {
   const code = generateOtpCode();
   const expiresAt = getOtpExpiresAtIso();
   const supabase = getSupabaseAdminClientOrThrow();
+  const sentAt = new Date().toISOString();
   const updateResult = await supabase
     .from("auth_email_otp_challenges")
     .update({
       code_hash: hashOtpCode(code),
       attempts: 0,
       resend_count: challenge.resend_count + 1,
-      last_sent_at: new Date().toISOString(),
+      last_sent_at: sentAt,
       expires_at: expiresAt,
     })
     .eq("id", challenge.id);
@@ -324,7 +377,22 @@ export async function resendLoginOtpChallenge(challengeId: string) {
     throw new Error(updateResult.error.message);
   }
 
-  await sendOtpEmailForChallenge(challenge.email, code);
+  try {
+    await sendOtpEmailForChallenge(challenge.email, code);
+  } catch (error) {
+    await supabase
+      .from("auth_email_otp_challenges")
+      .update({
+        code_hash: challenge.code_hash,
+        attempts: challenge.attempts,
+        resend_count: challenge.resend_count,
+        last_sent_at: challenge.last_sent_at,
+        expires_at: challenge.expires_at,
+      })
+      .eq("id", challenge.id)
+      .is("consumed_at", null);
+    throw error;
+  }
 
   return {
     challengeId: challenge.id,
@@ -337,6 +405,10 @@ export async function resendLoginOtpChallenge(challengeId: string) {
 export async function verifyLoginOtpChallenge(input: {
   challengeId: string;
   code: string;
+  beforeConsume?: (challenge: VerifiedOtpChallengeContext) => Promise<void>;
+  afterConsume?: (
+    challenge: VerifiedOtpChallengeContext,
+  ) => Promise<{ userId?: number | null } | void>;
 }) {
   const normalizedCode = normalizeOtpCode(input.code);
   const otpLength = getOtpLength();
@@ -390,6 +462,21 @@ export async function verifyLoginOtpChallenge(input: {
     throw new EmailOtpError("Codigo incorreto. Revise e tente novamente.", 400, "otp_invalid");
   }
 
+  const verifiedChallenge: VerifiedOtpChallengeContext = {
+    challengeId: challenge.id,
+    userId: challenge.user_id,
+    email: challenge.email,
+    emailNormalized: challenge.email_normalized,
+    purpose: challenge.purpose,
+    metadata: challenge.metadata,
+    expiresAt: challenge.expires_at,
+    sessionContext: parsePendingOtpSessionContext(challenge.metadata),
+  };
+
+  if (input.beforeConsume) {
+    await input.beforeConsume(verifiedChallenge);
+  }
+
   const consumeResult = await supabase
     .from("auth_email_otp_challenges")
     .update({
@@ -403,10 +490,19 @@ export async function verifyLoginOtpChallenge(input: {
     throw new Error(consumeResult.error.message);
   }
 
+  const afterConsumeResult = input.afterConsume
+    ? await input.afterConsume(verifiedChallenge)
+    : null;
+  const resolvedUserId =
+    typeof afterConsumeResult?.userId === "number"
+      ? afterConsumeResult.userId
+      : challenge.user_id;
+
   return {
-    userId: challenge.user_id,
+    userId: resolvedUserId,
     email: challenge.email,
+    purpose: challenge.purpose,
     maskedEmail: maskAuthEmail(challenge.email),
-    sessionContext: parsePendingOtpSessionContext(challenge.metadata),
+    sessionContext: verifiedChallenge.sessionContext,
   };
 }

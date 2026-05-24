@@ -324,6 +324,27 @@ export async function writeServerSettingsVaultSnapshot(input: {
   };
 }
 
+export async function deleteServerSettingsVaultSnapshot(input: {
+  guildId: string;
+  moduleKey: ServerSettingsVaultModule;
+}) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const result = await supabase
+    .from("guild_settings_secure_snapshots")
+    .delete()
+    .eq("guild_id", input.guildId)
+    .eq("module_key", input.moduleKey);
+
+  if (result.error) {
+    if (isMissingVaultRelationError(result.error)) {
+      return null;
+    }
+    throw new Error(result.error.message);
+  }
+
+  return true;
+}
+
 export async function rewriteUnreadableServerSettingsVaultSnapshot(input: {
   guildId: string;
   moduleKey: ServerSettingsVaultModule;

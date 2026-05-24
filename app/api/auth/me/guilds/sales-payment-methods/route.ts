@@ -15,6 +15,7 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import {
+  deleteServerSettingsVaultSnapshot,
   readServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
 } from "@/lib/servers/serverSettingsVault";
@@ -168,6 +169,36 @@ function hasMercadoPagoAccessToken(
   value: SalesPaymentMethodsSecureSnapshot | null | undefined,
 ) {
   return Boolean(value?.mercadoPago?.accessToken?.trim());
+}
+
+async function rollbackSalesPaymentVaultSnapshot(input: {
+  guildId: string;
+  configuredByUserId: number;
+  previousSnapshot:
+    | Awaited<ReturnType<typeof readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>>>
+    | null;
+}) {
+  try {
+    if (input.previousSnapshot?.payload) {
+      await writeServerSettingsVaultSnapshot({
+        guildId: input.guildId,
+        moduleKey: "sales_payment_methods",
+        configuredByUserId: input.configuredByUserId,
+        payload: input.previousSnapshot.payload,
+      });
+      return;
+    }
+
+    await deleteServerSettingsVaultSnapshot({
+      guildId: input.guildId,
+      moduleKey: "sales_payment_methods",
+    });
+  } catch (error) {
+    console.warn("[sales-payment-methods] failed to rollback secure vault snapshot", {
+      guildId: input.guildId,
+      error: extractAuditErrorMessage(error),
+    });
+  }
 }
 
 async function confirmSalesPaymentVaultSnapshot(input: {
@@ -628,6 +659,11 @@ export async function POST(request: Request) {
       localPayload: vaultWriteResult.payload,
     });
     if (!vaultConfirmed) {
+      await rollbackSalesPaymentVaultSnapshot({
+        guildId,
+        configuredByUserId: access.context.authUserId,
+        previousSnapshot: secureSnapshot,
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
           {
@@ -663,8 +699,24 @@ export async function POST(request: Request) {
       .select(PAYMENT_METHODS_SELECT)
       .single<SalesPaymentMethodRow>();
 
-    if (result.error) throw new Error(result.error.message);
-    const rows = await loadRows(guildId);
+    if (result.error) {
+      await rollbackSalesPaymentVaultSnapshot({
+        guildId,
+        configuredByUserId: access.context.authUserId,
+        previousSnapshot: secureSnapshot,
+      });
+      throw new Error(result.error.message);
+    }
+    let rows: SalesPaymentMethodRow[];
+    try {
+      rows = await loadRows(guildId);
+    } catch (error) {
+      console.warn("[sales-payment-methods] failed to reload payment methods after save", {
+        guildId,
+        error: extractAuditErrorMessage(error),
+      });
+      rows = [result.data];
+    }
 
     return applyNoStoreHeaders(
       NextResponse.json({

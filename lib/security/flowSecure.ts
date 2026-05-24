@@ -11,6 +11,7 @@ const SENSITIVE_KEY_PATTERN =
 export type FlowSecurePurpose =
   | "auth_password_pepper"
   | "auth_email_otp_code"
+  | "auth_email_pending_registration"
   | "auth_email_otp_session"
   | "auth_session_oauth"
   | "admin_audit_hash"

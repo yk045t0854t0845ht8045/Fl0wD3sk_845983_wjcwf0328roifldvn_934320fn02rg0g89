@@ -593,12 +593,90 @@ async function persistAndApplyDiscordSyncState(input: {
 
 function buildDiscordSyncWarning(error: string) {
   return [
-    "Produto salvo, mas o Discord recusou a publicacao do embed.",
+    "Produto nao foi salvo porque o Discord recusou a publicacao do embed.",
     error,
-    "Confira o canal, as permissoes do bot e tente salvar novamente.",
+    "Confira o canal, as permissoes do bot e tente salvar novamente. Nenhuma alteracao foi mantida no catalogo.",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildProductRollbackPayload(product: GuildSalesProductRecord) {
+  return {
+    title: product.title,
+    description: product.description,
+    category_id: product.category_id,
+    status: product.status,
+    media_urls: product.media_urls,
+    price_amount: product.price_amount,
+    compare_at_price_amount: product.compare_at_price_amount,
+    unit_price_amount: product.unit_price_amount,
+    charge_taxes: product.charge_taxes,
+    cost_per_item_amount: product.cost_per_item_amount,
+    inventory_tracked: product.inventory_tracked,
+    stock_quantity: product.stock_quantity,
+    sku: product.sku,
+    barcode: product.barcode,
+    barcode_mode: product.barcode_mode,
+    product_type: product.product_type,
+    manufacturer: product.manufacturer,
+    tags: product.tags,
+    theme_model: product.theme_model,
+    discord_publication_mode: product.discord_publication_mode,
+    discord_channel_id: product.discord_channel_id,
+    discord_message_id: product.discord_message_id,
+    discord_last_synced_at: product.discord_last_synced_at,
+    discord_sync_status: product.discord_sync_status,
+    discord_sync_error: product.discord_sync_error,
+    published_virtual_store: product.published_virtual_store,
+    published_point_of_sale: product.published_point_of_sale,
+    published_pinterest: product.published_pinterest,
+    active: product.active,
+  };
+}
+
+async function restoreProductAfterFailedSync(product: GuildSalesProductRecord) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_products")
+    .update(buildProductRollbackPayload(product))
+    .eq("guild_id", product.guild_id)
+    .eq("id", product.id);
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+}
+
+async function removeCreatedProductAfterFailedSync(product: GuildSalesProductRecord) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const hardDelete = await supabase
+    .from("guild_sales_products")
+    .delete()
+    .eq("guild_id", product.guild_id)
+    .eq("id", product.id);
+
+  if (!hardDelete.error) {
+    return;
+  }
+
+  const softDelete = await supabase
+    .from("guild_sales_products")
+    .update({
+      active: false,
+      status: "archived",
+      discord_publication_mode: "online_only",
+      discord_channel_id: null,
+      discord_message_id: null,
+      discord_last_synced_at: null,
+      discord_sync_status: "idle",
+      discord_sync_error: null,
+    })
+    .eq("guild_id", product.guild_id)
+    .eq("id", product.id);
+
+  if (softDelete.error) {
+    throw new Error(softDelete.error.message);
+  }
 }
 
 export async function GET(request: Request) {
@@ -967,13 +1045,8 @@ export async function PATCH(request: Request) {
           error,
           "Erro ao sincronizar embed do produto.",
         );
-        savedProduct = await persistAndApplyDiscordSyncState({
-          product: savedProduct,
-          mode: discordPublicationMode,
-          messageId: savedProduct.discord_message_id,
-          status: "failed",
-          error: discordSyncError,
-        });
+        await restoreProductAfterFailedSync(product);
+        await refreshCategoryProductCounts(guildId, [product.category_id, safeCategoryId]);
         console.warn("[sales-products] Discord product embed sync failed", {
           guildId,
           productId: savedProduct.id,
@@ -987,7 +1060,6 @@ export async function PATCH(request: Request) {
               ok: false,
               code: "DISCORD_PRODUCT_EMBED_SYNC_FAILED",
               message: buildDiscordSyncWarning(discordSyncError),
-              product: buildProductResponse(savedProduct),
               discordSync: {
                 status: "failed",
                 error: discordSyncError,
@@ -1175,13 +1247,8 @@ export async function POST(request: Request) {
           error,
           "Erro ao sincronizar embed do produto.",
         );
-        savedProduct = await persistAndApplyDiscordSyncState({
-          product: savedProduct,
-          mode: discordPublicationMode,
-          messageId: savedProduct.discord_message_id,
-          status: "failed",
-          error: discordSyncError,
-        });
+        await removeCreatedProductAfterFailedSync(savedProduct);
+        await refreshCategoryProductCounts(guildId, [safeCategoryId]);
         console.warn("[sales-products] Discord product embed send failed", {
           guildId,
           productId: savedProduct.id,
@@ -1195,7 +1262,6 @@ export async function POST(request: Request) {
               ok: false,
               code: "DISCORD_PRODUCT_EMBED_SYNC_FAILED",
               message: buildDiscordSyncWarning(discordSyncError),
-              product: buildProductResponse(savedProduct),
               discordSync: {
                 status: "failed",
                 error: discordSyncError,
