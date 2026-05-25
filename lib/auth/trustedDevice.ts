@@ -36,6 +36,12 @@ function resolveTrustedDeviceSalt() {
     }
   }
 
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "AUTH_REMEMBER_DEVICE_SECRET/AUTH_SECRET/NEXTAUTH_SECRET nao configurado no ambiente.",
+    );
+  }
+
   return "flowdesk-trusted-device-secret";
 }
 

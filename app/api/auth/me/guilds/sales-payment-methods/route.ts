@@ -15,6 +15,12 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import {
+  deleteServerSettingsVaultSnapshot,
   readServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
 } from "@/lib/servers/serverSettingsVault";
@@ -38,6 +44,14 @@ const PAYMENT_METHODS_BASE_SELECT =
 const PAYMENT_METHODS_MIN_SELECT = "method_key, status";
 const MISSING_SECURE_CREDENTIAL_MESSAGE =
   "Credenciais seguras ausentes. Reative o PIX e salve novamente o Access Token do Mercado Pago.";
+const SALES_PAYMENT_METHOD_KEYS = [
+  "mercado_pago",
+  "flowpay",
+  "card",
+  "boleto",
+  "paypal",
+  "nupay",
+] as const;
 
 type AccessResult =
   | {
@@ -66,6 +80,62 @@ function buildDiscordRelinkResponse() {
 
 function getTrimmedText(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function buildInvalidPayloadResponse(error: FlowSecureDtoError) {
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      { ok: false, message: error.issues[0] || error.message },
+      { status: error.statusCode },
+    ),
+  );
+}
+
+function readPaymentMethodMutationBody(payload: unknown) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      methodKey: flowSecureDto.enum(SALES_PAYMENT_METHOD_KEYS),
+      action: flowSecureDto.enum(["activate", "deactivate"] as const),
+      environment: flowSecureDto.optional(
+        flowSecureDto.enum(["production", "test"] as const),
+      ),
+      accessToken: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 500,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      publicKey: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 240,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      webhookSecret: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 240,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      statementDescriptor: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 22,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+          disallowAngleBrackets: true,
+        }),
+      ),
+    },
+    { rejectUnknown: true },
+  );
 }
 
 async function ensureGuildAccess(
@@ -168,6 +238,36 @@ function hasMercadoPagoAccessToken(
   value: SalesPaymentMethodsSecureSnapshot | null | undefined,
 ) {
   return Boolean(value?.mercadoPago?.accessToken?.trim());
+}
+
+async function rollbackSalesPaymentVaultSnapshot(input: {
+  guildId: string;
+  configuredByUserId: number;
+  previousSnapshot:
+    | Awaited<ReturnType<typeof readServerSettingsVaultSnapshot<SalesPaymentMethodsSecureSnapshot>>>
+    | null;
+}) {
+  try {
+    if (input.previousSnapshot?.payload) {
+      await writeServerSettingsVaultSnapshot({
+        guildId: input.guildId,
+        moduleKey: "sales_payment_methods",
+        configuredByUserId: input.configuredByUserId,
+        payload: input.previousSnapshot.payload,
+      });
+      return;
+    }
+
+    await deleteServerSettingsVaultSnapshot({
+      guildId: input.guildId,
+      moduleKey: "sales_payment_methods",
+    });
+  } catch (error) {
+    console.warn("[sales-payment-methods] failed to rollback secure vault snapshot", {
+      guildId: input.guildId,
+      error: extractAuditErrorMessage(error),
+    });
+  }
 }
 
 async function confirmSalesPaymentVaultSnapshot(input: {
@@ -448,7 +548,15 @@ export async function POST(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readPaymentMethodMutationBody(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const methodKey = normalizeSalesPaymentMethodKey(rawBody.methodKey);
     const action = getTrimmedText(rawBody.action, 24);
@@ -628,6 +736,11 @@ export async function POST(request: Request) {
       localPayload: vaultWriteResult.payload,
     });
     if (!vaultConfirmed) {
+      await rollbackSalesPaymentVaultSnapshot({
+        guildId,
+        configuredByUserId: access.context.authUserId,
+        previousSnapshot: secureSnapshot,
+      });
       return applyNoStoreHeaders(
         NextResponse.json(
           {
@@ -663,8 +776,24 @@ export async function POST(request: Request) {
       .select(PAYMENT_METHODS_SELECT)
       .single<SalesPaymentMethodRow>();
 
-    if (result.error) throw new Error(result.error.message);
-    const rows = await loadRows(guildId);
+    if (result.error) {
+      await rollbackSalesPaymentVaultSnapshot({
+        guildId,
+        configuredByUserId: access.context.authUserId,
+        previousSnapshot: secureSnapshot,
+      });
+      throw new Error(result.error.message);
+    }
+    let rows: SalesPaymentMethodRow[];
+    try {
+      rows = await loadRows(guildId);
+    } catch (error) {
+      console.warn("[sales-payment-methods] failed to reload payment methods after save", {
+        guildId,
+        error: extractAuditErrorMessage(error),
+      });
+      rows = [result.data];
+    }
 
     return applyNoStoreHeaders(
       NextResponse.json({

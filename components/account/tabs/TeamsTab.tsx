@@ -59,10 +59,20 @@ type Team = {
   updatedAt: string;
 };
 
+type PendingTeamInvite = {
+  membershipId: number;
+  teamId: number;
+  teamName: string;
+  invitedByDisplayName: string;
+  linkedGuildIds: string[];
+  createdAt: string;
+};
+
 type TeamsApiResponse = {
   ok: boolean;
   message?: string;
   teams?: Team[];
+  pendingInvites?: PendingTeamInvite[];
   conflictingGuildIds?: string[];
   invalidGuildIds?: string[];
 };
@@ -108,6 +118,7 @@ function buildFallbackGuildName(guildId: string) {
 export function TeamsTab() {
   const notifications = useNotifications();
   const [teams, setTeams] = useState<Team[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingTeamInvite[]>([]);
   const [managedServers, setManagedServers] = useState<ManagedServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedTeams, setExpandedTeams] = useState<Set<number>>(new Set());
@@ -118,6 +129,7 @@ export function TeamsTab() {
   // Invite
   const [inviteInput, setInviteInput] = useState<Record<number, string>>({});
   const [invitingTeamId, setInvitingTeamId] = useState<number | null>(null);
+  const [acceptingTeamId, setAcceptingTeamId] = useState<number | null>(null);
 
   // Member actions
   const [removingMemberId, setRemovingMemberId] = useState<number | null>(null);
@@ -166,6 +178,7 @@ export function TeamsTab() {
       }
 
       setTeams(teamsPayload.teams || []);
+      setPendingInvites(teamsPayload.pendingInvites || []);
       if (serversResponse.ok && serversPayload.ok) {
         setManagedServers(serversPayload.servers || []);
       }
@@ -280,6 +293,34 @@ export function TeamsTab() {
       });
     } finally {
       setInvitingTeamId(null);
+    }
+  }
+
+  async function handleAcceptTeamInvite(teamId: number) {
+    if (acceptingTeamId === teamId) return;
+    setAcceptingTeamId(teamId);
+    try {
+      const res = await fetch(`/api/auth/me/teams/${teamId}/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = (await res.json().catch(() => null)) as TeamsApiResponse | null;
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.message || "Nao foi possivel aceitar o convite.");
+      }
+      setTeams(json?.teams || []);
+      setPendingInvites(json?.pendingInvites || []);
+      notifications.success("Convite aceito. A equipe ja esta disponivel.", {
+        title: "Equipes",
+      });
+    } catch (err) {
+      notifications.error(
+        err instanceof Error ? err.message : "Erro ao aceitar convite da equipe.",
+        { title: "Equipes" },
+      );
+    } finally {
+      setAcceptingTeamId(null);
     }
   }
 
@@ -625,13 +666,57 @@ export function TeamsTab() {
     return matchSearch && matchRole;
   });
 
+  const pendingInvitesPanel = pendingInvites.length ? (
+    <div className="rounded-[18px] border border-[rgba(242,200,35,0.16)] bg-[rgba(242,200,35,0.035)] p-[18px]">
+      <div className="flex flex-col gap-[12px] sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[14px] font-semibold text-[#F1DCA2]">Convites pendentes</p>
+          <p className="mt-[4px] text-[12px] leading-[1.6] text-[#8E8056]">
+            Aceite o convite para acessar os servidores compartilhados pela equipe.
+          </p>
+        </div>
+        <span className="w-fit rounded-full border border-[rgba(242,200,35,0.18)] bg-[rgba(242,200,35,0.06)] px-[10px] py-[5px] text-[11px] font-semibold uppercase tracking-[0.12em] text-[#D9BC55]">
+          {pendingInvites.length} pendente(s)
+        </span>
+      </div>
+      <div className="mt-[14px] grid gap-[8px]">
+        {pendingInvites.map((invite) => (
+          <div
+            key={invite.membershipId}
+            className="flex flex-col gap-[12px] rounded-[14px] border border-[rgba(255,255,255,0.05)] bg-[#0A0A0A] px-[14px] py-[12px] sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-[14px] font-semibold text-[#E8E8E8]">{invite.teamName}</p>
+              <p className="mt-[3px] text-[12px] text-[#666666]">
+                Enviado por {invite.invitedByDisplayName} - {invite.linkedGuildIds.length} servidor(es)
+              </p>
+            </div>
+            <button
+              onClick={() => handleAcceptTeamInvite(invite.teamId)}
+              disabled={acceptingTeamId === invite.teamId}
+              className="flex h-[36px] shrink-0 items-center justify-center gap-[7px] rounded-[10px] bg-[#EDEDED] px-[14px] text-[12px] font-bold text-[#111111] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {acceptingTeamId === invite.teamId ? <Spinner size={13} /> : <Check className="h-[13px] w-[13px]" />}
+              Aceitar convite
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
   if (teams.length === 0) {
     return (
       <div className="mt-[32px] flex flex-col items-center justify-center rounded-[18px] border border-[#141414] bg-[#090909] py-[48px] px-[20px] text-center">
+        {pendingInvitesPanel ? (
+          <div className="mb-[18px] w-full max-w-[720px] text-left">
+            {pendingInvitesPanel}
+          </div>
+        ) : null}
         <div className="flex h-[52px] w-[52px] items-center justify-center rounded-full bg-[#111111]">
           <Users className="text-[#888888] h-[26px] w-[26px]" />
         </div>
-        <p className="mt-[16px] text-[16px] font-semibold text-[#E5E5E5]">Sem equipes</p>
+        <p className="mt-[16px] text-[16px] font-semibold text-[#E5E5E5]">Sem equipes ativas</p>
         <p className="mt-[6px] text-[14px] text-[#777777] max-w-[360px]">
           Você não possui nem faz parte de nenhuma equipe. Crie uma a partir do painel de servidores.
         </p>
@@ -655,6 +740,8 @@ export function TeamsTab() {
 
   return (
     <div className="mt-[32px] space-y-[24px]">
+      {pendingInvitesPanel}
+
       {/* Filter Card */}
       <div className="rounded-[22px] border border-[#141414] bg-[#0A0A0A] p-[20px]">
         <div className="flex flex-col gap-[16px] lg:flex-row lg:items-center lg:justify-between">

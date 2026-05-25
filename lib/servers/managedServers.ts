@@ -5,7 +5,10 @@ import {
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import type { DiscordGuild } from "@/lib/auth/discord";
-import { getLockedGuildLicenseMapByUserId } from "@/lib/payments/licenseStatus";
+import {
+  getLockedGuildLicenseMap,
+  getLockedGuildLicenseMapByUserId,
+} from "@/lib/payments/licenseStatus";
 import { reconcileRecentPaymentOrders } from "@/lib/payments/reconciliation";
 import { cleanupExpiredUnpaidServerSetups } from "@/lib/payments/setupCleanup";
 import { getUserPlanScheduledChange } from "@/lib/plans/change";
@@ -479,6 +482,16 @@ async function fetchManagedServersFresh(
       isManagedGuildId(guildId),
     ),
   );
+  const teamGuildLicenseMapResult = await withManagedServersFallback(
+    getLockedGuildLicenseMap(Array.from(acceptedTeamGuildIds)),
+    new Map() as Awaited<ReturnType<typeof getLockedGuildLicenseMap>>,
+    "team_guild_license_map",
+  );
+  for (const [guildId, record] of teamGuildLicenseMapResult.value.entries()) {
+    if (isManagedGuildId(guildId) && !normalizedLockedGuildMap.has(guildId)) {
+      normalizedLockedGuildMap.set(guildId, record);
+    }
+  }
   const configuredGuildIds = new Set(
     toUniqueManagedGuildIds(configuredGuildIdsList),
   );
@@ -580,8 +593,9 @@ async function fetchManagedServersFresh(
       const accessMode: ManagedServer["accessMode"] =
         ownedPlanGuildIds.has(guild.id) || guild.owner ? "owner" : "viewer";
       const isLinkedToTeam = globalTeamLinkedGuildIds.has(guild.id);
+      const isAcceptedTeamGuild = acceptedTeamGuildIds.has(guild.id);
       const hasPanelRegistration = Boolean(
-        acceptedTeamGuildIds.has(guild.id) ||
+        isAcceptedTeamGuild ||
           configuredGuildIds.has(guild.id) ||
           ownedPlanGuildIds.has(guild.id) ||
           lockedRecord,
@@ -647,12 +661,9 @@ async function fetchManagedServersFresh(
         isPanelVisible,
         isLinkedToTeam,
         canManage:
-          !currentLicenseBelongsToViewer &&
-          (
-            ownedPlanGuildIds.has(guild.id) ||
-            acceptedTeamGuildIds.has(guild.id) ||
-            configuredGuildIds.has(guild.id)
-          ),
+          ownedPlanGuildIds.has(guild.id) ||
+          isAcceptedTeamGuild ||
+          configuredGuildIds.has(guild.id),
         canLinkToTeam,
         blockedByPlanLimit: isOwnedPlanGuildInactive || isPendingDowngradePayment,
         pendingDowngradePayment: isPendingDowngradePayment,
@@ -678,7 +689,9 @@ async function fetchManagedServersFresh(
     !hasDatabaseCoverage &&
     (!accessibleGuildsResult.ok || accessibleGuilds.length === 0);
   const shouldMarkOptionalReadDegraded =
-    usedOptionalFallback || globalTeamLinkedGuildIdsResult.usedFallback;
+    usedOptionalFallback ||
+    teamGuildLicenseMapResult.usedFallback ||
+    globalTeamLinkedGuildIdsResult.usedFallback;
   const sync = buildManagedServersSyncState({
     authUserId: userId,
     accessibleGuildCount: accessibleGuilds.length,

@@ -14,6 +14,11 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const CATEGORY_TITLE_MAX_LENGTH = 90;
@@ -21,6 +26,9 @@ const CATEGORY_DESCRIPTION_MAX_LENGTH = 1200;
 const SEO_TITLE_MAX_LENGTH = 90;
 const SEO_DESCRIPTION_MAX_LENGTH = 180;
 const CATEGORY_IMAGE_MAX_LENGTH = 4_500_000;
+const CATEGORY_CODE_PATTERN = /^flw-[0-9]{8}$/i;
+const SAFE_CATEGORY_IMAGE_DATA_URL_PATTERN =
+  /^data:image\/(?:png|jpe?g|webp|gif);base64,/i;
 const CATEGORY_SELECT =
   "id, guild_id, title, description, collection_type, image_url, theme_model, discord_publication_mode, discord_channel_id, published_virtual_store, published_point_of_sale, seo_title, seo_description, products_count, active, sort_order, created_at, updated_at";
 const GUILD_CATEGORY = 4;
@@ -54,7 +62,7 @@ function getTrimmedText(value: unknown, maxLength: number) {
 function normalizeImageUrl(value: unknown) {
   const imageUrl = getTrimmedText(value, CATEGORY_IMAGE_MAX_LENGTH);
   if (!imageUrl) return null;
-  if (/^https?:\/\//i.test(imageUrl) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(imageUrl)) {
+  if (/^https?:\/\//i.test(imageUrl) || SAFE_CATEGORY_IMAGE_DATA_URL_PATTERN.test(imageUrl)) {
     return imageUrl;
   }
   return null;
@@ -96,7 +104,87 @@ function buildCategoryCode(id: string) {
 function normalizeCategoryCode(value: unknown) {
   if (typeof value !== "string") return "";
   const code = value.trim().toLowerCase();
-  return /^flw-[0-9]{8}$/.test(code) ? code : "";
+  return CATEGORY_CODE_PATTERN.test(code) ? code : "";
+}
+
+function buildInvalidPayloadResponse(error: FlowSecureDtoError) {
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      { ok: false, message: error.issues[0] || error.message },
+      { status: error.statusCode },
+    ),
+  );
+}
+
+function readCategoryBody(payload: unknown, input?: { requireCategoryCode?: boolean }) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      ...(input?.requireCategoryCode
+        ? {
+            categoryCode: flowSecureDto.string({
+              maxLength: 12,
+              pattern: CATEGORY_CODE_PATTERN,
+              disallowAngleBrackets: true,
+              rejectThreatPatterns: false,
+            }),
+          }
+        : {}),
+      title: flowSecureDto.string({
+        minLength: 2,
+        maxLength: CATEGORY_TITLE_MAX_LENGTH,
+        normalizeWhitespace: true,
+      }),
+      description: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: CATEGORY_DESCRIPTION_MAX_LENGTH,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      seoTitle: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: SEO_TITLE_MAX_LENGTH,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      seoDescription: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: SEO_DESCRIPTION_MAX_LENGTH,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      collectionType: flowSecureDto.optional(flowSecureDto.enum(["manual", "smart"] as const)),
+      themeModel: flowSecureDto.optional(
+        flowSecureDto.enum(["default", "compact", "featured"] as const),
+      ),
+      discordPublicationMode: flowSecureDto.optional(
+        flowSecureDto.enum(["online_only", "channel"] as const),
+      ),
+      discordChannelId: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 25,
+          allowEmpty: true,
+          pattern: /^(\d{17,20})?$/,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      imageUrl: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: CATEGORY_IMAGE_MAX_LENGTH,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      publishedVirtualStore: flowSecureDto.optional(flowSecureDto.boolean()),
+    },
+    { rejectUnknown: true },
+  );
 }
 
 function buildCategoryResponse(
@@ -389,7 +477,27 @@ export async function DELETE(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = parseFlowSecureDto(
+        await request.json().catch(() => ({})),
+        {
+          guildId: flowSecureDto.discordSnowflake(),
+          categoryCode: flowSecureDto.string({
+            maxLength: 12,
+            pattern: CATEGORY_CODE_PATTERN,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        },
+        { rejectUnknown: true },
+      );
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 32);
     const categoryCode = normalizeCategoryCode(rawBody.categoryCode);
 
@@ -439,8 +547,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const rawBody =
-      (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readCategoryBody(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const title = getTrimmedText(rawBody.title, CATEGORY_TITLE_MAX_LENGTH);
     const description = getTrimmedText(
@@ -546,8 +661,17 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const rawBody =
-      (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readCategoryBody(await request.json().catch(() => ({})), {
+        requireCategoryCode: true,
+      });
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const categoryCode = normalizeCategoryCode(rawBody.categoryCode);
     const title = getTrimmedText(rawBody.title, CATEGORY_TITLE_MAX_LENGTH);

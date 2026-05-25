@@ -14,6 +14,11 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   markSalesProductDiscordSyncFailedById,
@@ -84,6 +89,26 @@ const STOCK_BASE_SELECT = [
   "created_at",
   "updated_at",
 ].join(", ");
+const STOCK_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const STOCK_ITEM_TYPES = [
+  "accounts_access",
+  "emails",
+  "gift_cards_codes",
+  "virtual_currency",
+  "game_items",
+  "game_services",
+  "premium_subscriptions",
+  "artificial_intelligence",
+  "discord_bots",
+  "social_networks",
+  "software_licenses",
+  "courses_training",
+  "digital_links",
+  "digital_services",
+  "freelancer",
+  "other",
+] as const;
 
 type TeamPermission = TeamRolePermission;
 
@@ -117,8 +142,115 @@ function getTrimmedText(value: unknown, maxLength: number) {
 }
 
 function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
+  return STOCK_UUID_PATTERN.test(value);
+}
+
+function buildInvalidPayloadResponse(error: FlowSecureDtoError) {
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      { ok: false, message: error.issues[0] || error.message },
+      { status: error.statusCode },
+    ),
+  );
+}
+
+function optionalSafeText(maxLength: number) {
+  return flowSecureDto.optional(
+    flowSecureDto.string({
+      maxLength,
+      allowEmpty: true,
+      normalizeWhitespace: maxLength <= 220,
+      disallowAngleBrackets: true,
+      rejectThreatPatterns: false,
+    }),
+  );
+}
+
+function readStockMutationPayload(payload: unknown) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      productId: flowSecureDto.string({
+        maxLength: 60,
+        pattern: STOCK_UUID_PATTERN,
+        disallowAngleBrackets: true,
+        rejectThreatPatterns: false,
+      }),
+      itemId: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 60,
+          allowEmpty: true,
+          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      duplicateItemId: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 60,
+          allowEmpty: true,
+          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      duplicateCount: flowSecureDto.optional(
+        flowSecureDto.number({ integer: true, min: 1, max: 10 }),
+      ),
+      quantity: flowSecureDto.optional(
+        flowSecureDto.number({ integer: true, min: 0, max: 1_000_000 }),
+      ),
+      patchMode: flowSecureDto.optional(flowSecureDto.enum(["quantity"] as const)),
+      deleteAllForProduct: flowSecureDto.optional(flowSecureDto.boolean()),
+      itemType: flowSecureDto.optional(flowSecureDto.enum(STOCK_ITEM_TYPES)),
+      deliveryMethod: flowSecureDto.optional(
+        flowSecureDto.enum(["email", "discord_dm", "flowdesk_link"] as const),
+      ),
+      status: flowSecureDto.optional(
+        flowSecureDto.enum(["available", "reserved", "delivered", "disabled"] as const),
+      ),
+      productName: optionalSafeText(160),
+      category: optionalSafeText(80),
+      platform: optionalSafeText(160),
+      provider: optionalSafeText(160),
+      email: optionalSafeText(220),
+      login: optionalSafeText(220),
+      password: optionalSafeText(500),
+      accessType: optionalSafeText(160),
+      recovery: optionalSafeText(500),
+      giftCardName: optionalSafeText(160),
+      redemptionValue: optionalSafeText(80),
+      redemptionCode: optionalSafeText(500),
+      accessLink: optionalSafeText(800),
+      linkPassword: optionalSafeText(220),
+      region: optionalSafeText(120),
+      validity: optionalSafeText(120),
+      server: optionalSafeText(160),
+      buyerRequiredId: optionalSafeText(220),
+      deliveryDeadline: optionalSafeText(160),
+      serviceType: optionalSafeText(160),
+      requiredBuyerInfo: optionalSafeText(1200),
+      discordProductType: optionalSafeText(160),
+      serverOrBotLink: optionalSafeText(800),
+      tokenOrKey: optionalSafeText(700),
+      requiredPermissions: optionalSafeText(700),
+      toolName: optionalSafeText(160),
+      automationType: optionalSafeText(160),
+      softwareName: optionalSafeText(160),
+      softwareVersion: optionalSafeText(80),
+      operatingSystem: optionalSafeText(120),
+      licenseKey: optionalSafeText(700),
+      downloadLink: optionalSafeText(800),
+      subscriptionDuration: optionalSafeText(120),
+      accountType: optionalSafeText(160),
+      courseName: optionalSafeText(160),
+      itemName: optionalSafeText(160),
+      instructions: optionalSafeText(1800),
+      observations: optionalSafeText(1200),
+      payload: flowSecureDto.optional(flowSecureDto.record()),
+    },
+    { rejectUnknown: true },
   );
 }
 
@@ -611,7 +743,15 @@ export async function POST(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readStockMutationPayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const productId = getTrimmedText(rawBody.productId, 60);
     const duplicateItemId = getTrimmedText(rawBody.duplicateItemId, 60);
@@ -767,7 +907,15 @@ export async function PATCH(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readStockMutationPayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const { guildId, productId, itemId } = readStockIdentity(rawBody);
 
     if (!isGuildId(guildId) || !isUuid(productId) || !isUuid(itemId)) {
@@ -884,7 +1032,15 @@ export async function DELETE(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readStockMutationPayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const { guildId, productId, itemId } = readStockIdentity(rawBody);
     const deleteAllForProduct = rawBody.deleteAllForProduct === true;
 

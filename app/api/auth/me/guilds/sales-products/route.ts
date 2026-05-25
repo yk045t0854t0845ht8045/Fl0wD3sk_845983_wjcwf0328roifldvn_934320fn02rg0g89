@@ -15,6 +15,11 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import { extractAuditErrorMessage, sanitizeErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import {
   markSalesProductDiscordMessageUnavailable,
@@ -28,6 +33,11 @@ const PRODUCT_DESCRIPTION_MAX_LENGTH = 1800;
 const PRODUCT_TEXT_MAX_LENGTH = 120;
 const PRODUCT_MEDIA_MAX_ITEMS = 8;
 const PRODUCT_MEDIA_MAX_LENGTH = 7_000_000;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PRODUCT_CODE_PATTERN = /^prd-[0-9]{8}$/i;
+const SAFE_PRODUCT_MEDIA_DATA_URL_PATTERN =
+  /^data:image\/(?:png|jpe?g|webp|gif);base64,/i;
 const PRODUCT_BASE_SELECT =
   "id, guild_id, title, description, category_id, status, media_urls, price_amount, compare_at_price_amount, unit_price_amount, charge_taxes, cost_per_item_amount, inventory_tracked, stock_quantity, sku, barcode, barcode_mode, product_type, manufacturer, tags, theme_model, published_virtual_store, published_point_of_sale, published_pinterest, active, created_at, updated_at";
 const PRODUCT_SELECT = `${PRODUCT_BASE_SELECT}, discord_publication_mode, discord_channel_id, discord_message_id, discord_last_synced_at, discord_sync_status, discord_sync_error`;
@@ -89,8 +99,142 @@ function getTrimmedText(value: unknown, maxLength: number) {
 }
 
 function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
+  return UUID_PATTERN.test(value);
+}
+
+function buildInvalidPayloadResponse(error: FlowSecureDtoError) {
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      { ok: false, message: error.issues[0] || error.message },
+      { status: error.statusCode },
+    ),
+  );
+}
+
+function readProductDeletePayload(payload: unknown) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      productCode: flowSecureDto.string({
+        maxLength: 12,
+        pattern: PRODUCT_CODE_PATTERN,
+        disallowAngleBrackets: true,
+        rejectThreatPatterns: false,
+      }),
+    },
+    { rejectUnknown: true },
+  );
+}
+
+function readProductMutationPayload(payload: unknown, input?: { includeProductCode?: boolean }) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      ...(input?.includeProductCode
+        ? {
+            productCode: flowSecureDto.string({
+              maxLength: 12,
+              pattern: PRODUCT_CODE_PATTERN,
+              disallowAngleBrackets: true,
+              rejectThreatPatterns: false,
+            }),
+          }
+        : {}),
+      title: flowSecureDto.optional(
+        flowSecureDto.string({
+          minLength: 2,
+          maxLength: PRODUCT_TITLE_MAX_LENGTH,
+          normalizeWhitespace: true,
+        }),
+      ),
+      description: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: PRODUCT_DESCRIPTION_MAX_LENGTH,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      categoryId: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 60,
+          allowEmpty: true,
+          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      mediaUrls: flowSecureDto.optional(
+        flowSecureDto.array(
+          flowSecureDto.string({
+            maxLength: PRODUCT_MEDIA_MAX_LENGTH,
+            allowEmpty: true,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+          { maxLength: PRODUCT_MEDIA_MAX_ITEMS },
+        ),
+      ),
+      tags: flowSecureDto.optional(
+        flowSecureDto.array(
+          flowSecureDto.string({
+            maxLength: 36,
+            allowEmpty: true,
+            normalizeWhitespace: true,
+            disallowAngleBrackets: true,
+          }),
+          { maxLength: 12 },
+        ),
+      ),
+      status: flowSecureDto.optional(
+        flowSecureDto.enum(["active", "draft", "archived"] as const),
+      ),
+      themeModel: flowSecureDto.optional(
+        flowSecureDto.enum(["default", "compact", "featured"] as const),
+      ),
+      discordPublicationMode: flowSecureDto.optional(
+        flowSecureDto.enum(["online_only", "channel"] as const),
+      ),
+      discordChannelId: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 25,
+          allowEmpty: true,
+          pattern: /^(\d{17,20})?$/,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      barcodeMode: flowSecureDto.optional(flowSecureDto.enum(["auto", "manual"] as const)),
+      priceAmount: flowSecureDto.optional(flowSecureDto.unknown()),
+      compareAtPriceAmount: flowSecureDto.optional(flowSecureDto.unknown()),
+      unitPriceAmount: flowSecureDto.optional(flowSecureDto.unknown()),
+      chargeTaxes: flowSecureDto.optional(flowSecureDto.boolean()),
+      costPerItemAmount: flowSecureDto.optional(flowSecureDto.unknown()),
+      inventoryTracked: flowSecureDto.optional(flowSecureDto.boolean()),
+      sku: flowSecureDto.optional(
+        flowSecureDto.string({ maxLength: PRODUCT_TEXT_MAX_LENGTH, allowEmpty: true }),
+      ),
+      barcode: flowSecureDto.optional(
+        flowSecureDto.string({ maxLength: PRODUCT_TEXT_MAX_LENGTH, allowEmpty: true }),
+      ),
+      productType: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: PRODUCT_TEXT_MAX_LENGTH,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      manufacturer: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: PRODUCT_TEXT_MAX_LENGTH,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      publishedVirtualStore: flowSecureDto.optional(flowSecureDto.boolean()),
+    },
+    { rejectUnknown: true },
   );
 }
 
@@ -148,7 +292,7 @@ function normalizeMediaUrls(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item) => /^https?:\/\//i.test(item) || /^data:image\/[a-z0-9.+-]+;base64,/i.test(item))
+    .filter((item) => /^https?:\/\//i.test(item) || SAFE_PRODUCT_MEDIA_DATA_URL_PATTERN.test(item))
     .filter((item) => item.length <= PRODUCT_MEDIA_MAX_LENGTH)
     .slice(0, PRODUCT_MEDIA_MAX_ITEMS);
 }
@@ -593,12 +737,90 @@ async function persistAndApplyDiscordSyncState(input: {
 
 function buildDiscordSyncWarning(error: string) {
   return [
-    "Produto salvo, mas o Discord recusou a publicacao do embed.",
+    "Produto nao foi salvo porque o Discord recusou a publicacao do embed.",
     error,
-    "Confira o canal, as permissoes do bot e tente salvar novamente.",
+    "Confira o canal, as permissoes do bot e tente salvar novamente. Nenhuma alteracao foi mantida no catalogo.",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildProductRollbackPayload(product: GuildSalesProductRecord) {
+  return {
+    title: product.title,
+    description: product.description,
+    category_id: product.category_id,
+    status: product.status,
+    media_urls: product.media_urls,
+    price_amount: product.price_amount,
+    compare_at_price_amount: product.compare_at_price_amount,
+    unit_price_amount: product.unit_price_amount,
+    charge_taxes: product.charge_taxes,
+    cost_per_item_amount: product.cost_per_item_amount,
+    inventory_tracked: product.inventory_tracked,
+    stock_quantity: product.stock_quantity,
+    sku: product.sku,
+    barcode: product.barcode,
+    barcode_mode: product.barcode_mode,
+    product_type: product.product_type,
+    manufacturer: product.manufacturer,
+    tags: product.tags,
+    theme_model: product.theme_model,
+    discord_publication_mode: product.discord_publication_mode,
+    discord_channel_id: product.discord_channel_id,
+    discord_message_id: product.discord_message_id,
+    discord_last_synced_at: product.discord_last_synced_at,
+    discord_sync_status: product.discord_sync_status,
+    discord_sync_error: product.discord_sync_error,
+    published_virtual_store: product.published_virtual_store,
+    published_point_of_sale: product.published_point_of_sale,
+    published_pinterest: product.published_pinterest,
+    active: product.active,
+  };
+}
+
+async function restoreProductAfterFailedSync(product: GuildSalesProductRecord) {
+  const result = await getSupabaseAdminClientOrThrow()
+    .from("guild_sales_products")
+    .update(buildProductRollbackPayload(product))
+    .eq("guild_id", product.guild_id)
+    .eq("id", product.id);
+
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+}
+
+async function removeCreatedProductAfterFailedSync(product: GuildSalesProductRecord) {
+  const supabase = getSupabaseAdminClientOrThrow();
+  const hardDelete = await supabase
+    .from("guild_sales_products")
+    .delete()
+    .eq("guild_id", product.guild_id)
+    .eq("id", product.id);
+
+  if (!hardDelete.error) {
+    return;
+  }
+
+  const softDelete = await supabase
+    .from("guild_sales_products")
+    .update({
+      active: false,
+      status: "archived",
+      discord_publication_mode: "online_only",
+      discord_channel_id: null,
+      discord_message_id: null,
+      discord_last_synced_at: null,
+      discord_sync_status: "idle",
+      discord_sync_error: null,
+    })
+    .eq("guild_id", product.guild_id)
+    .eq("id", product.id);
+
+  if (softDelete.error) {
+    throw new Error(softDelete.error.message);
+  }
 }
 
 export async function GET(request: Request) {
@@ -709,7 +931,15 @@ export async function DELETE(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readProductDeletePayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 32);
     const productCode = normalizeProductCode(rawBody.productCode);
 
@@ -798,8 +1028,17 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const rawBody =
-      (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readProductMutationPayload(await request.json().catch(() => ({})), {
+        includeProductCode: true,
+      });
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const productCode = normalizeProductCode(rawBody.productCode);
     const title = getTrimmedText(rawBody.title, PRODUCT_TITLE_MAX_LENGTH);
@@ -967,13 +1206,8 @@ export async function PATCH(request: Request) {
           error,
           "Erro ao sincronizar embed do produto.",
         );
-        savedProduct = await persistAndApplyDiscordSyncState({
-          product: savedProduct,
-          mode: discordPublicationMode,
-          messageId: savedProduct.discord_message_id,
-          status: "failed",
-          error: discordSyncError,
-        });
+        await restoreProductAfterFailedSync(product);
+        await refreshCategoryProductCounts(guildId, [product.category_id, safeCategoryId]);
         console.warn("[sales-products] Discord product embed sync failed", {
           guildId,
           productId: savedProduct.id,
@@ -987,7 +1221,6 @@ export async function PATCH(request: Request) {
               ok: false,
               code: "DISCORD_PRODUCT_EMBED_SYNC_FAILED",
               message: buildDiscordSyncWarning(discordSyncError),
-              product: buildProductResponse(savedProduct),
               discordSync: {
                 status: "failed",
                 error: discordSyncError,
@@ -1035,8 +1268,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const rawBody =
-      (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readProductMutationPayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const title = getTrimmedText(rawBody.title, PRODUCT_TITLE_MAX_LENGTH);
     const description = getTrimmedText(
@@ -1175,13 +1415,8 @@ export async function POST(request: Request) {
           error,
           "Erro ao sincronizar embed do produto.",
         );
-        savedProduct = await persistAndApplyDiscordSyncState({
-          product: savedProduct,
-          mode: discordPublicationMode,
-          messageId: savedProduct.discord_message_id,
-          status: "failed",
-          error: discordSyncError,
-        });
+        await removeCreatedProductAfterFailedSync(savedProduct);
+        await refreshCategoryProductCounts(guildId, [safeCategoryId]);
         console.warn("[sales-products] Discord product embed send failed", {
           guildId,
           productId: savedProduct.id,
@@ -1195,7 +1430,6 @@ export async function POST(request: Request) {
               ok: false,
               code: "DISCORD_PRODUCT_EMBED_SYNC_FAILED",
               message: buildDiscordSyncWarning(discordSyncError),
-              product: buildProductResponse(savedProduct),
               discordSync: {
                 status: "failed",
                 error: discordSyncError,

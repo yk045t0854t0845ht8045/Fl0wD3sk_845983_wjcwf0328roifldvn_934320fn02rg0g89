@@ -9,6 +9,7 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
+import { invalidateManagedServersCacheForUser } from "@/lib/servers/managedServers";
 
 type TeamRouteParams = {
   params: Promise<{
@@ -58,6 +59,7 @@ export async function POST(request: Request, { params }: TeamRouteParams) {
       discordUserId: authSession.user.discord_user_id,
       teamId,
     });
+    invalidateManagedServersCacheForUser(authSession.user.id);
 
     const payload = await getUserTeamsSnapshotForUser({
       authUserId: authSession.user.id,

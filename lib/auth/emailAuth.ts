@@ -206,11 +206,21 @@ export async function resendEmailLoginOtp(challengeId: string) {
   return resendLoginOtpChallenge(challengeId);
 }
 
+type VerifiedEmailLoginOtpResult = Awaited<ReturnType<typeof verifyLoginOtpChallenge>> & {
+  userId: number;
+};
+
 export async function verifyEmailLoginOtp(challengeId: string, code: string) {
-  return verifyLoginOtpChallenge({
+  const verification = await verifyLoginOtpChallenge({
     challengeId,
     code,
   });
+
+  if (typeof verification.userId !== "number") {
+    throw new Error("Nao foi possivel identificar a conta deste codigo de login.");
+  }
+
+  return verification as VerifiedEmailLoginOtpResult;
 }
 
 export async function createEmailSession(input: {

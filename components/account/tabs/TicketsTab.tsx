@@ -69,6 +69,16 @@ function formatDate(iso: string) {
   });
 }
 
+function formatTranscriptAccessCode(value: string) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 32);
+  if (!normalized) return "";
+  return normalized.match(/.{1,4}/g)?.join("-") || normalized;
+}
+
 function buildTranscriptHref(ticket: Ticket) {
   const rawTranscriptFile =
     typeof ticket.transcript_file === "string" ? ticket.transcript_file.trim() : "";
@@ -84,7 +94,10 @@ function buildTranscriptHref(ticket: Ticket) {
   }
 
   const accessCode = typeof ticket.access_code === "string" ? ticket.access_code.trim() : "";
-  return accessCode ? `${pathname}?code=${encodeURIComponent(accessCode)}` : pathname;
+  const formattedAccessCode = formatTranscriptAccessCode(accessCode);
+  return formattedAccessCode
+    ? `${pathname.replace(/\/+$/, "")}/${encodeURIComponent(formattedAccessCode)}`
+    : pathname;
 }
 
 export function TicketsTab({ initialTickets }: { initialTickets?: Ticket[] }) {
