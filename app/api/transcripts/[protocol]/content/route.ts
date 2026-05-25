@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { getTranscriptSessionFromCookie } from "@/lib/transcripts/access";
 import {
@@ -113,8 +114,9 @@ const TRANSCRIPT_VIEWER_THEME_OVERRIDE = `
 </style>
 `;
 
-const TRANSCRIPT_VIEWER_GROUPING_SCRIPT = `
-<script id="flowdesk-transcript-grouping">
+function buildTranscriptViewerGroupingScript(nonce: string) {
+  return `
+<script id="flowdesk-transcript-grouping" nonce="${nonce}">
   (function () {
     var stream = document.querySelector(".fd-stream");
     if (!stream) return;
@@ -149,8 +151,30 @@ const TRANSCRIPT_VIEWER_GROUPING_SCRIPT = `
   })();
 </script>
 `;
+}
 
-function buildTranscriptHtmlResponse(body: string, status = 200) {
+function buildTranscriptContentSecurityPolicy(scriptNonce?: string) {
+  const scriptSrc = scriptNonce ? `'nonce-${scriptNonce}'` : "'none'";
+  return [
+    "default-src 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'self'",
+    "connect-src 'none'",
+    "img-src https: data: blob:",
+    "media-src https: data: blob:",
+    "font-src 'self' data:",
+    "style-src 'unsafe-inline'",
+    `script-src ${scriptSrc}`,
+  ].join("; ");
+}
+
+function createTranscriptScriptNonce() {
+  return crypto.randomBytes(16).toString("base64url");
+}
+
+function buildTranscriptHtmlResponse(body: string, status = 200, scriptNonce?: string) {
   return new NextResponse(body, {
     status,
     headers: {
@@ -162,6 +186,7 @@ function buildTranscriptHtmlResponse(body: string, status = 200) {
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "SAMEORIGIN",
       "Referrer-Policy": "same-origin",
+      "Content-Security-Policy": buildTranscriptContentSecurityPolicy(scriptNonce),
     },
   });
 }
@@ -205,7 +230,7 @@ function buildUnauthorizedHtml() {
 </html>`;
 }
 
-function applyTranscriptViewerTheme(html: string) {
+function applyTranscriptViewerTheme(html: string, scriptNonce: string) {
   if (!html) {
     return html;
   }
@@ -234,11 +259,11 @@ function applyTranscriptViewerTheme(html: string) {
   if (/<\/body>/i.test(themedHtml)) {
     return themedHtml.replace(
       /<\/body>/i,
-      `${TRANSCRIPT_VIEWER_GROUPING_SCRIPT}</body>`,
+      `${buildTranscriptViewerGroupingScript(scriptNonce)}</body>`,
     );
   }
 
-  return `${themedHtml}${TRANSCRIPT_VIEWER_GROUPING_SCRIPT}`;
+  return `${themedHtml}${buildTranscriptViewerGroupingScript(scriptNonce)}`;
 }
 
 export async function GET(_: Request, { params }: TranscriptRouteParams) {
@@ -260,9 +285,11 @@ export async function GET(_: Request, { params }: TranscriptRouteParams) {
       return buildTranscriptHtmlResponse(buildUnauthorizedHtml(), 404);
     }
 
+    const scriptNonce = createTranscriptScriptNonce();
     return buildTranscriptHtmlResponse(
-      applyTranscriptViewerTheme(transcript.transcript_html),
+      applyTranscriptViewerTheme(transcript.transcript_html, scriptNonce),
       200,
+      scriptNonce,
     );
   } catch {
     return buildTranscriptHtmlResponse(buildUnauthorizedHtml(), 500);
