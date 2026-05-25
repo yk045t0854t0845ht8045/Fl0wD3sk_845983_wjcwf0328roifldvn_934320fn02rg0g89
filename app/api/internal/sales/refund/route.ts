@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { refundSalesCartPayment } from "@/lib/sales/checkoutRuntime";
-import { applyNoStoreHeaders } from "@/lib/security/http";
 import { extractAuditErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import { applyNoStoreHeaders } from "@/lib/security/http";
+import { hasSecureInternalTokenAuth } from "@/lib/security/internalTokens";
 
 function resolveInternalSalesToken() {
   return (
@@ -13,28 +19,12 @@ function resolveInternalSalesToken() {
 }
 
 function isAuthorized(request: Request) {
-  const expected = resolveInternalSalesToken();
-  if (!expected) return process.env.NODE_ENV !== "production";
-
-  const authorization = request.headers.get("authorization") || "";
-  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  const flowdeskToken = request.headers.get("x-flowdesk-internal-token")?.trim();
-  const salesToken = request.headers.get("x-sales-internal-token")?.trim();
-  return bearer === expected || flowdeskToken === expected || salesToken === expected;
-}
-
-function getText(value: unknown, maxLength: number) {
-  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
-}
-
-function isGuildId(value: string) {
-  return /^\d{17,20}$/.test(value);
+  return hasSecureInternalTokenAuth({
+    request,
+    expectedTokens: [resolveInternalSalesToken()],
+    headerNames: ["x-flowdesk-internal-token", "x-sales-internal-token"],
+    allowDevWithoutToken: true,
+  });
 }
 
 function resolveRefundErrorMessage(error: unknown) {
@@ -61,26 +51,44 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const cartId = getText(body.cartId, 80);
-    const guildId = getText(body.guildId, 24);
-    const reason = getText(body.reason, 500);
-
-    if (!isUuid(cartId)) {
-      return applyNoStoreHeaders(
-        NextResponse.json({ ok: false, message: "Compra invalida." }, { status: 400 }),
+    let payload: { cartId: string; guildId: string; reason?: string | undefined };
+    try {
+      payload = parseFlowSecureDto(
+        await request.json().catch(() => ({})),
+        {
+          cartId: flowSecureDto.string({
+            maxLength: 80,
+            pattern:
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            disallowAngleBrackets: true,
+          }),
+          guildId: flowSecureDto.discordSnowflake(),
+          reason: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 500,
+              normalizeWhitespace: true,
+            }),
+          ),
+        },
+        { rejectUnknown: true },
       );
-    }
-    if (!isGuildId(guildId)) {
+    } catch (error) {
+      if (!(error instanceof FlowSecureDtoError)) {
+        throw error;
+      }
+
       return applyNoStoreHeaders(
-        NextResponse.json({ ok: false, message: "Servidor invalido." }, { status: 400 }),
+        NextResponse.json(
+          { ok: false, message: error.issues[0] || error.message },
+          { status: 400 },
+        ),
       );
     }
 
     const result = await refundSalesCartPayment({
-      cartId,
-      guildId,
-      reason,
+      cartId: payload.cartId,
+      guildId: payload.guildId,
+      reason: payload.reason || "",
     });
     const resultRecord = result as typeof result & Record<string, unknown>;
 
@@ -88,8 +96,10 @@ export async function POST(request: Request) {
       NextResponse.json({
         ok: true,
         alreadyRefunded: result.alreadyRefunded,
-        financialRefunded: resultRecord.financialRefunded === true || result.alreadyRefunded === true,
-        providerRefundConfirmedAfterError: resultRecord.providerRefundConfirmedAfterError === true,
+        financialRefunded:
+          resultRecord.financialRefunded === true || result.alreadyRefunded === true,
+        providerRefundConfirmedAfterError:
+          resultRecord.providerRefundConfirmedAfterError === true,
         persistenceCompleted: resultRecord.persistenceCompleted !== false,
         persistenceFallbackApplied: resultRecord.persistenceFallbackApplied === true,
         persistenceError: resultRecord.persistenceError || null,

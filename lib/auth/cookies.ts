@@ -73,6 +73,12 @@ function resolveSharedAuthCookieSecret() {
     }
   }
 
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "AUTH_COOKIE_SECRET/AUTH_SECRET/NEXTAUTH_SECRET nao configurado no ambiente.",
+    );
+  }
+
   return "flowdesk-shared-auth-cookie-secret";
 }
 

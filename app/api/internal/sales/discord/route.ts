@@ -4,8 +4,20 @@ import {
   createSalesCartPixPayment,
   syncSalesCartPayment,
 } from "@/lib/sales/checkoutRuntime";
-import { applyNoStoreHeaders } from "@/lib/security/http";
 import { extractAuditErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import { applyNoStoreHeaders } from "@/lib/security/http";
+import { hasSecureInternalTokenAuth } from "@/lib/security/internalTokens";
+
+const INTERNAL_SALES_ACTIONS = [
+  "create_pix_payment",
+  "sync_payment",
+  "apply_discount",
+] as const;
 
 function resolveInternalSalesToken() {
   return (
@@ -17,23 +29,12 @@ function resolveInternalSalesToken() {
 }
 
 function isAuthorized(request: Request) {
-  const expected = resolveInternalSalesToken();
-  if (!expected) return process.env.NODE_ENV !== "production";
-
-  const authorization = request.headers.get("authorization") || "";
-  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  const headerToken = request.headers.get("x-flowdesk-internal-token")?.trim();
-  return bearer === expected || headerToken === expected;
-}
-
-function getTrimmedText(value: unknown, maxLength: number) {
-  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
+  return hasSecureInternalTokenAuth({
+    request,
+    expectedTokens: [resolveInternalSalesToken()],
+    headerNames: ["x-flowdesk-internal-token", "x-sales-internal-token"],
+    allowDevWithoutToken: true,
+  });
 }
 
 const SAFE_CHECKOUT_ERROR_FRAGMENTS = [
@@ -83,34 +84,60 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const action = getTrimmedText(body.action, 40);
-    const cartId = getTrimmedText(body.cartId, 64);
-    if (!isUuid(cartId)) {
+    let payload: {
+      action: (typeof INTERNAL_SALES_ACTIONS)[number];
+      cartId: string;
+      code?: string | undefined;
+    };
+    try {
+      payload = parseFlowSecureDto(
+        await request.json().catch(() => ({})),
+        {
+          action: flowSecureDto.enum(INTERNAL_SALES_ACTIONS),
+          cartId: flowSecureDto.string({
+            maxLength: 64,
+            pattern:
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            disallowAngleBrackets: true,
+          }),
+          code: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 80,
+              normalizeWhitespace: true,
+              disallowAngleBrackets: true,
+            }),
+          ),
+        },
+        { rejectUnknown: true },
+      );
+    } catch (error) {
+      if (!(error instanceof FlowSecureDtoError)) {
+        throw error;
+      }
+
       return applyNoStoreHeaders(
-        NextResponse.json({ ok: false, message: "Carrinho invalido." }, { status: 400 }),
+        NextResponse.json(
+          { ok: false, message: error.issues[0] || error.message },
+          { status: 400 },
+        ),
       );
     }
 
-    if (action === "create_pix_payment") {
-      const result = await createSalesCartPixPayment(cartId);
+    if (payload.action === "create_pix_payment") {
+      const result = await createSalesCartPixPayment(payload.cartId);
       return applyNoStoreHeaders(NextResponse.json({ ok: true, ...result }));
     }
 
-    if (action === "sync_payment") {
-      const result = await syncSalesCartPayment(cartId);
+    if (payload.action === "sync_payment") {
+      const result = await syncSalesCartPayment(payload.cartId);
       return applyNoStoreHeaders(NextResponse.json({ ok: true, ...result }));
     }
 
-    if (action === "apply_discount") {
-      const code = getTrimmedText(body.code, 80);
-      const result = await applySalesCartDiscount({ cartId, code });
-      return applyNoStoreHeaders(NextResponse.json({ ok: true, ...result }));
-    }
-
-    return applyNoStoreHeaders(
-      NextResponse.json({ ok: false, message: "Acao invalida." }, { status: 400 }),
-    );
+    const result = await applySalesCartDiscount({
+      cartId: payload.cartId,
+      code: payload.code || "",
+    });
+    return applyNoStoreHeaders(NextResponse.json({ ok: true, ...result }));
   } catch (error) {
     console.error("[internal-sales-discord] checkout failed", error);
     return applyNoStoreHeaders(

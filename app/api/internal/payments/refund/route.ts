@@ -8,6 +8,12 @@ import {
 } from "@/lib/payments/mercadoPago";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import { extractAuditErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import { hasSecureInternalTokenAuth } from "@/lib/security/internalTokens";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const PAYMENT_REFUND_STATUS_DETAIL = "ticket_refund_official_support";
@@ -23,23 +29,12 @@ function resolveInternalPaymentsToken() {
 }
 
 function isAuthorized(request: Request) {
-  const expected = resolveInternalPaymentsToken();
-  if (!expected) return process.env.NODE_ENV !== "production";
-
-  const authorization = request.headers.get("authorization") || "";
-  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  const flowdeskToken = request.headers.get("x-flowdesk-internal-token")?.trim();
-  const paymentsToken = request.headers.get("x-payments-internal-token")?.trim();
-  return bearer === expected || flowdeskToken === expected || paymentsToken === expected;
-}
-
-function getText(value: unknown, maxLength: number) {
-  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
-}
-
-function getOrderId(value: unknown) {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  return hasSecureInternalTokenAuth({
+    request,
+    expectedTokens: [resolveInternalPaymentsToken()],
+    headerNames: ["x-flowdesk-internal-token", "x-payments-internal-token"],
+    allowDevWithoutToken: true,
+  });
 }
 
 function isAlreadyRefunded(order: {
@@ -105,9 +100,39 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const orderId = getOrderId(body.orderId);
-    const reason = getText(body.reason, 500) || "Reembolso aprovado pelo suporte oficial.";
+    let payload: { orderId: number; reason?: string | undefined };
+    try {
+      payload = parseFlowSecureDto(
+        await request.json().catch(() => ({})),
+        {
+          orderId: flowSecureDto.number({
+            integer: true,
+            min: 1,
+          }),
+          reason: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 500,
+              normalizeWhitespace: true,
+            }),
+          ),
+        },
+        { rejectUnknown: true },
+      );
+    } catch (error) {
+      if (!(error instanceof FlowSecureDtoError)) {
+        throw error;
+      }
+
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: error.issues[0] || error.message },
+          { status: 400 },
+        ),
+      );
+    }
+
+    const orderId = payload.orderId;
+    const reason = payload.reason || "Reembolso aprovado pelo suporte oficial.";
 
     if (!orderId) {
       return applyNoStoreHeaders(

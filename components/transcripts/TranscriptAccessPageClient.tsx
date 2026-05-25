@@ -1,10 +1,6 @@
 "use client";
 
-import type {
-  ClipboardEvent,
-  FormEvent,
-  KeyboardEvent,
-} from "react";
+import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { LandingGlowTag } from "@/components/landing/LandingGlowTag";
@@ -13,11 +9,25 @@ import { LandingReveal } from "@/components/landing/LandingReveal";
 type TranscriptAccessPageClientProps = {
   protocol: string;
   initialSessionExpiresAt: string | null;
+  initialAccessCode?: string | null;
   isUnavailable?: boolean;
 };
 
-const EMPTY_DIGITS = ["", "", "", ""] as const;
 const TRANSCRIPT_SKELETON_ROWS = [0, 1, 2, 3, 4] as const;
+
+function normalizeAccessCode(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 32);
+}
+
+function formatAccessCode(value: string | null | undefined) {
+  const normalized = normalizeAccessCode(value);
+  if (!normalized) return "";
+  return normalized.match(/.{1,4}/g)?.join("-") || normalized;
+}
 
 function formatRemainingTime(ms: number) {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -29,9 +39,10 @@ function formatRemainingTime(ms: number) {
 export function TranscriptAccessPageClient({
   protocol,
   initialSessionExpiresAt,
+  initialAccessCode = null,
   isUnavailable = false,
 }: TranscriptAccessPageClientProps) {
-  const [digits, setDigits] = useState<string[]>([...EMPTY_DIGITS]);
+  const [accessCode, setAccessCode] = useState(formatAccessCode(initialAccessCode));
   const [message, setMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -41,12 +52,12 @@ export function TranscriptAccessPageClient({
     initialSessionExpiresAt,
   );
   const [remainingLabel, setRemainingLabel] = useState<string | null>(null);
-  const inputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const lastSubmittedCodeRef = useRef<string | null>(null);
   const searchParams = useSearchParams();
   const autoCode = searchParams.get("code");
 
-  const code = useMemo(() => digits.join(""), [digits]);
+  const code = useMemo(() => normalizeAccessCode(accessCode), [accessCode]);
   const hasActiveSession = useMemo(() => {
     if (isUnavailable) return false;
     if (!sessionExpiresAt) return false;
@@ -69,7 +80,7 @@ export function TranscriptAccessPageClient({
         setFrameSeed((current) => current + 1);
         setMessage("A sessao expirou. Digite o codigo novamente.");
         setIsError(true);
-        setDigits([...EMPTY_DIGITS]);
+        setAccessCode("");
         void fetch(`/api/transcripts/${encodeURIComponent(protocol)}/logout`, {
           method: "POST",
           headers: {
@@ -97,61 +108,8 @@ export function TranscriptAccessPageClient({
     setIsTranscriptFrameLoading(true);
   }, [frameSeed, hasActiveSession, isUnavailable, protocol]);
 
-  function updateDigit(index: number, nextValue: string) {
-    const safeValue = nextValue.replace(/\D/g, "").slice(-1);
-    setDigits((current) => {
-      const nextDigits = [...current];
-      nextDigits[index] = safeValue;
-      return nextDigits;
-    });
-
-    if (safeValue && index < inputRefs.current.length - 1) {
-      inputRefs.current[index + 1]?.focus();
-      inputRefs.current[index + 1]?.select();
-    }
-  }
-
-  function handleKeyDown(index: number, event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Backspace" && !digits[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-      inputRefs.current[index - 1]?.select();
-      return;
-    }
-
-    if (event.key === "ArrowLeft" && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-      return;
-    }
-
-    if (event.key === "ArrowRight" && index < inputRefs.current.length - 1) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  }
-
-  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
-    const pastedDigits = event.clipboardData
-      .getData("text")
-      .replace(/\D/g, "")
-      .slice(0, 4)
-      .split("");
-
-    if (!pastedDigits.length) return;
-
-    event.preventDefault();
-    setDigits([
-      pastedDigits[0] || "",
-      pastedDigits[1] || "",
-      pastedDigits[2] || "",
-      pastedDigits[3] || "",
-    ]);
-
-    const nextIndex = Math.min(pastedDigits.length, 3);
-    inputRefs.current[nextIndex]?.focus();
-    inputRefs.current[nextIndex]?.select();
-  }
-
   const validateCode = useCallback(async (submittedCode: string) => {
-    if (isUnavailable || submittedCode.length !== 4 || isSubmitting || hasActiveSession) {
+    if (isUnavailable || submittedCode.length < 4 || isSubmitting || hasActiveSession) {
       return;
     }
 
@@ -180,7 +138,7 @@ export function TranscriptAccessPageClient({
         throw new Error(payload?.message || "Codigo invalido.");
       }
 
-      setDigits([...EMPTY_DIGITS]);
+      setAccessCode("");
       setSessionExpiresAt(payload.expiresAt);
       setFrameSeed((current) => current + 1);
       setMessage("Transcript liberado com sucesso.");
@@ -190,10 +148,10 @@ export function TranscriptAccessPageClient({
         error instanceof Error ? error.message : "Nao foi possivel validar o codigo.",
       );
       setIsError(true);
-      setDigits([...EMPTY_DIGITS]);
+      setAccessCode("");
       window.setTimeout(() => {
-        inputRefs.current[0]?.focus();
-        inputRefs.current[0]?.select();
+        inputRef.current?.focus();
+        inputRef.current?.select();
       }, 20);
     } finally {
       setIsSubmitting(false);
@@ -201,7 +159,7 @@ export function TranscriptAccessPageClient({
   }, [hasActiveSession, isSubmitting, isUnavailable, protocol]);
 
   useEffect(() => {
-    if (isUnavailable || hasActiveSession || code.length !== 4 || isSubmitting) {
+    if (isUnavailable || hasActiveSession || code.length < 4 || isSubmitting) {
       if (code.length < 4) {
         lastSubmittedCodeRef.current = null;
       }
@@ -216,15 +174,16 @@ export function TranscriptAccessPageClient({
   }, [code, hasActiveSession, isSubmitting, isUnavailable, validateCode]);
 
   useEffect(() => {
-    if (autoCode && autoCode.length === 4 && !hasActiveSession && !isSubmitting && digits.every(d => d === "")) {
-      setDigits(autoCode.split(""));
+    const normalizedAutoCode = normalizeAccessCode(autoCode || initialAccessCode);
+    if (normalizedAutoCode && !hasActiveSession && !isSubmitting && !code) {
+      setAccessCode(formatAccessCode(normalizedAutoCode));
     }
-  }, [autoCode, hasActiveSession, isSubmitting, digits]);
+  }, [autoCode, code, hasActiveSession, initialAccessCode, isSubmitting]);
 
   async function handleLockNow() {
     setSessionExpiresAt(null);
     setFrameSeed((current) => current + 1);
-    setDigits([...EMPTY_DIGITS]);
+    setAccessCode("");
     setMessage("Sessao bloqueada. Digite o codigo para continuar.");
     setIsError(false);
 
@@ -297,7 +256,7 @@ export function TranscriptAccessPageClient({
                   <h1 className="mt-[28px] bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-center text-[32px] leading-[0.98] font-normal tracking-[-0.05em] text-transparent sm:text-[40px]">
                     Digite o codigo
                     <br />
-                    de 4 digitos
+                    de acesso
                   </h1>
 
                   <p className="mx-auto mt-[18px] max-w-[390px] text-center text-[14px] leading-[1.6] text-[#7D7D7D] sm:text-[15px]">
@@ -310,31 +269,23 @@ export function TranscriptAccessPageClient({
                     onSubmit={(event: FormEvent<HTMLFormElement>) => event.preventDefault()}
                     className="mt-[26px]"
                   >
-                    <div
-                      className="mx-auto flex max-w-[352px] items-center justify-center gap-3 sm:gap-4"
-                      onPaste={handlePaste}
-                    >
-                      {digits.map((digit, index) => (
-                        <input
-                          key={`${protocol}-digit-${index}`}
-                          ref={(element) => {
-                            inputRefs.current[index] = element;
-                          }}
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          pattern="[0-9]*"
-                          maxLength={1}
-                          value={digit}
-                          onChange={(event) => updateDigit(index, event.target.value)}
-                          onKeyDown={(event) => handleKeyDown(index, event)}
-                          className={`flowdesk-stage-fade h-[72px] w-[68px] rounded-[22px] border text-center text-[30px] leading-none font-semibold outline-none transition ${
-                            isError
-                              ? "border-[#7A1C1C] bg-[#140909] text-[#F1D3D3]"
-                              : "border-[#141414] bg-[#090909] text-white focus:border-[#3A3A3A]"
-                          }`}
-                          aria-label={`Digito ${index + 1} do codigo`}
-                        />
-                      ))}
+                    <div className="mx-auto max-w-[390px]">
+                      <input
+                        ref={inputRef}
+                        inputMode="text"
+                        autoComplete="one-time-code"
+                        spellCheck={false}
+                        maxLength={39}
+                        value={accessCode}
+                        onChange={(event) => setAccessCode(formatAccessCode(event.target.value))}
+                        className={`flowdesk-stage-fade h-[64px] w-full rounded-[18px] border px-[18px] text-center font-mono text-[20px] leading-none font-semibold tracking-[0.08em] outline-none transition ${
+                          isError
+                            ? "border-[#7A1C1C] bg-[#140909] text-[#F1D3D3]"
+                            : "border-[#141414] bg-[#090909] text-white focus:border-[#3A3A3A]"
+                        }`}
+                        aria-label="Codigo de acesso do transcript"
+                        placeholder="XXXX-XXXX"
+                      />
                     </div>
 
                     {message ? (

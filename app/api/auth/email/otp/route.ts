@@ -103,14 +103,15 @@ export async function POST(request: NextRequest) {
     const rememberSession = payload.rememberSession ?? false;
 
     const verification = await verifyEmailLoginOtp(challengeId, code);
+    const userId = verification.userId;
     const authenticatedContext = extendSecurityRequestContext(requestContext, {
-      userId: verification.userId,
+      userId,
     });
     const sessionContext = verification.sessionContext;
     const redirectTo =
       nextPath || sessionContext?.nextPath || "/dashboard";
     const session = await createSessionForUser(
-      verification.userId,
+      userId,
       {
         ipAddress: extractClientIp(request),
         userAgent: request.headers.get("user-agent"),
@@ -138,7 +139,7 @@ export async function POST(request: NextRequest) {
 
     if (rememberSession) {
       const trustedDevice = await issueTrustedDevice({
-        userId: verification.userId,
+        userId,
         userAgent: request.headers.get("user-agent"),
       });
 

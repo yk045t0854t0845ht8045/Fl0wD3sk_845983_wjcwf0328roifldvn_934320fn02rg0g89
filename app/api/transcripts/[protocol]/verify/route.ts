@@ -3,6 +3,7 @@ import {
   clearTranscriptSessionCookie,
   getTranscriptSessionTtlSeconds,
   hashTranscriptAccessCode,
+  normalizeTranscriptAccessCode,
   setTranscriptSessionCookie,
 } from "@/lib/transcripts/access";
 import {
@@ -43,12 +44,12 @@ export async function POST(request: NextRequest, { params }: TranscriptRoutePara
     const body = (await request.json().catch(() => null)) as
       | { code?: string }
       | null;
-    const code = String(body?.code || "").replace(/\D/g, "").slice(0, 4);
+    const code = normalizeTranscriptAccessCode(body?.code);
 
-    if (code.length !== 4) {
+    if (code.length < 4) {
       return applyNoStoreHeaders(
         NextResponse.json(
-          { ok: false, message: "Informe o codigo de 4 digitos." },
+          { ok: false, message: "Informe o codigo de acesso do transcript." },
           { status: 400 },
         ),
       );

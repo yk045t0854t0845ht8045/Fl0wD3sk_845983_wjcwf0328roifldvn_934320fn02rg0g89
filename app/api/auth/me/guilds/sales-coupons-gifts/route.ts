@@ -14,10 +14,18 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const DISCOUNT_SELECT =
   "id, guild_id, kind, code, title, description, status, discount_type, discount_value, initial_amount, remaining_amount, minimum_order_amount, applies_to_all_products, product_ids, max_redemptions, one_per_customer, starts_at, expires_at, created_at, updated_at";
+const DISCOUNT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DISCOUNT_CODE_PATTERN = /^[A-Za-z0-9_-]{2,64}$/;
 
 type DiscountKind = "coupon" | "gift_card" | "promotion";
 type DiscountStatus = "draft" | "active" | "paused" | "expired";
@@ -61,6 +69,136 @@ function buildDiscordRelinkResponse() {
 
 function getTrimmedText(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function buildInvalidPayloadResponse(error: FlowSecureDtoError) {
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      { ok: false, message: error.issues[0] || error.message },
+      { status: error.statusCode },
+    ),
+  );
+}
+
+function readDiscountPayload(payload: unknown, input?: { includeLookupFields?: boolean }) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      ...(input?.includeLookupFields
+        ? {
+            discountId: flowSecureDto.optional(
+              flowSecureDto.string({
+                maxLength: 64,
+                allowEmpty: true,
+                pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+                disallowAngleBrackets: true,
+                rejectThreatPatterns: false,
+              }),
+            ),
+            discountCode: flowSecureDto.optional(
+              flowSecureDto.string({
+                maxLength: 80,
+                allowEmpty: true,
+                pattern: /^$|(?:dsc-[0-9]{8}|[A-Za-z0-9_-]{2,64})$/i,
+                disallowAngleBrackets: true,
+                rejectThreatPatterns: false,
+              }),
+            ),
+          }
+        : {}),
+      kind: flowSecureDto.optional(
+        flowSecureDto.enum(["coupon", "gift_card", "promotion"] as const),
+      ),
+      code: flowSecureDto.optional(
+        flowSecureDto.string({
+          minLength: 2,
+          maxLength: 64,
+          pattern: DISCOUNT_CODE_PATTERN,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      title: flowSecureDto.optional(
+        flowSecureDto.string({
+          minLength: 2,
+          maxLength: 120,
+          normalizeWhitespace: true,
+        }),
+      ),
+      description: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 800,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+        }),
+      ),
+      status: flowSecureDto.optional(
+        flowSecureDto.enum(["draft", "active", "paused", "expired"] as const),
+      ),
+      discountType: flowSecureDto.optional(flowSecureDto.enum(["fixed", "percent"] as const)),
+      discountValue: flowSecureDto.optional(flowSecureDto.unknown()),
+      remainingAmount: flowSecureDto.optional(flowSecureDto.unknown()),
+      minimumOrderAmount: flowSecureDto.optional(flowSecureDto.unknown()),
+      appliesToAllProducts: flowSecureDto.optional(flowSecureDto.boolean()),
+      productIds: flowSecureDto.optional(
+        flowSecureDto.array(
+          flowSecureDto.string({
+            maxLength: 60,
+            pattern: DISCOUNT_ID_PATTERN,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+          { maxLength: 500 },
+        ),
+      ),
+      maxRedemptions: flowSecureDto.optional(flowSecureDto.unknown()),
+      onePerCustomer: flowSecureDto.optional(flowSecureDto.boolean()),
+      startsAt: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 40,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+        }),
+      ),
+      expiresAt: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 40,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+        }),
+      ),
+    },
+    { rejectUnknown: true },
+  );
+}
+
+function readDiscountDeletePayload(payload: unknown) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      discountId: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 80,
+          allowEmpty: true,
+          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      discountCode: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 80,
+          allowEmpty: true,
+          pattern: /^$|(?:dsc-[0-9]{8}|[A-Za-z0-9_-]{2,64})$/i,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+    },
+    { rejectUnknown: true },
+  );
 }
 
 function normalizeCode(value: unknown) {
@@ -311,7 +449,17 @@ export async function PATCH(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readDiscountPayload(await request.json().catch(() => ({})), {
+        includeLookupFields: true,
+      });
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const discountId = getTrimmedText(rawBody.discountId, 64);
     const editorCode = getTrimmedText(rawBody.discountCode, 64);
@@ -443,7 +591,15 @@ export async function DELETE(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readDiscountDeletePayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 32);
     const discountId = getTrimmedText(rawBody.discountId, 80);
     const discountCode = getTrimmedText(rawBody.discountCode, 80);
@@ -495,7 +651,15 @@ export async function POST(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readDiscountPayload(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     if (!isGuildId(guildId)) {
       return applyNoStoreHeaders(

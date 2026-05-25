@@ -199,7 +199,7 @@ function buildUnauthorizedHtml() {
   <body>
     <main>
       <h1>Transcript protegido</h1>
-      <p>Valide o codigo de 4 digitos na pagina principal para liberar este transcript.</p>
+      <p>Valide o codigo de acesso na pagina principal para liberar este transcript.</p>
     </main>
   </body>
 </html>`;

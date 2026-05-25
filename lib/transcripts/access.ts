@@ -11,10 +11,14 @@ type TranscriptSessionPayload = {
 };
 
 function getTranscriptAccessSecret() {
-  const secret =
-    process.env.TRANSCRIPT_ACCESS_SECRET?.trim() ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
-    "";
+  const transcriptSecret = process.env.TRANSCRIPT_ACCESS_SECRET?.trim() || "";
+  if (transcriptSecret) return transcriptSecret;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("TRANSCRIPT_ACCESS_SECRET nao configurado no ambiente.");
+  }
+
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "";
 
   if (!secret) {
     throw new Error("Segredo de transcript indisponivel.");
@@ -43,8 +47,22 @@ export function buildTranscriptCookieName(protocol: string) {
 export function hashTranscriptAccessCode(protocol: string, code: string) {
   return crypto
     .createHmac("sha256", getTranscriptAccessSecret())
-    .update(`${protocol}:${String(code || "").trim()}`)
+    .update(`${protocol}:${normalizeTranscriptAccessCode(code)}`)
     .digest("hex");
+}
+
+export function normalizeTranscriptAccessCode(code: string | null | undefined) {
+  return String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 32);
+}
+
+export function formatTranscriptAccessCode(code: string | null | undefined) {
+  const normalized = normalizeTranscriptAccessCode(code);
+  if (!normalized) return "";
+  return normalized.match(/.{1,4}/g)?.join("-") || normalized;
 }
 
 export function createTranscriptSessionToken(protocol: string, expiresAtMs: number) {

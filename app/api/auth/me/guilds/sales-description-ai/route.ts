@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import {
   assertUserAdminInGuildOrNull,
-  isGuildId,
   resolveSessionAccessToken,
 } from "@/lib/auth/discordGuildAccess";
 import { runFlowAiText } from "@/lib/flowai/service";
@@ -14,6 +13,11 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import { sanitizeErrorMessage } from "@/lib/security/errors";
+import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
 
 const DESCRIPTION_MAX_LENGTH = 1800;
 const AI_DESCRIPTION_RATE_LIMIT_WINDOW_MS = 2 * 60_000;
@@ -266,34 +270,65 @@ export async function POST(request: Request) {
   }
 
   try {
-    const rawBody =
-      (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const guildId = getTrimmedText(rawBody.guildId, 25);
-    const kind = normalizeKind(rawBody.kind);
-    const title = getTrimmedText(rawBody.title, 120);
-    const scopeId = normalizeRateLimitScopeId(rawBody.scopeId, title);
+    let body: {
+      guildId: string;
+      kind?: "product" | "category" | undefined;
+      title: string;
+      scopeId?: string | undefined;
+      currentDescription?: string | undefined;
+    };
+    try {
+      body = parseFlowSecureDto(
+        await request.json().catch(() => ({})),
+        {
+          guildId: flowSecureDto.discordSnowflake(),
+          kind: flowSecureDto.optional(
+            flowSecureDto.enum(["product", "category"] as const),
+          ),
+          title: flowSecureDto.string({
+            minLength: 2,
+            maxLength: 120,
+            normalizeWhitespace: true,
+          }),
+          scopeId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 140,
+              pattern: /^[A-Za-z0-9:_ -]+$/,
+              normalizeWhitespace: true,
+              disallowAngleBrackets: true,
+            }),
+          ),
+          currentDescription: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: DESCRIPTION_MAX_LENGTH,
+              allowEmpty: true,
+              disallowAngleBrackets: false,
+            }),
+          ),
+        },
+        { rejectUnknown: true },
+      );
+    } catch (error) {
+      if (!(error instanceof FlowSecureDtoError)) {
+        throw error;
+      }
+
+      return applyNoStoreHeaders(
+        NextResponse.json(
+          { ok: false, message: error.issues[0] || error.message },
+          { status: 400 },
+        ),
+      );
+    }
+
+    const guildId = body.guildId;
+    const kind = normalizeKind(body.kind);
+    const title = body.title;
+    const scopeId = normalizeRateLimitScopeId(body.scopeId, title);
     const currentDescription = getTrimmedText(
-      rawBody.currentDescription,
+      body.currentDescription,
       DESCRIPTION_MAX_LENGTH,
     );
-
-    if (!isGuildId(guildId)) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          { ok: false, message: "Guild ID invalido." },
-          { status: 400 },
-        ),
-      );
-    }
-
-    if (title.length < 2) {
-      return applyNoStoreHeaders(
-        NextResponse.json(
-          { ok: false, message: "Informe um titulo antes de usar IA." },
-          { status: 400 },
-        ),
-      );
-    }
 
     const access = await ensureGuildAccess(guildId, "server_manage_tickets_overview");
     if (!access.ok) return applyNoStoreHeaders(access.response);

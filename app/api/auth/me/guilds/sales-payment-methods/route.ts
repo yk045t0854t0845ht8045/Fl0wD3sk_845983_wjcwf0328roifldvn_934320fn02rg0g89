@@ -15,6 +15,11 @@ import {
   ensureSameOriginJsonMutationRequest,
 } from "@/lib/security/http";
 import {
+  FlowSecureDtoError,
+  flowSecureDto,
+  parseFlowSecureDto,
+} from "@/lib/security/flowSecure";
+import {
   deleteServerSettingsVaultSnapshot,
   readServerSettingsVaultSnapshot,
   writeServerSettingsVaultSnapshot,
@@ -39,6 +44,14 @@ const PAYMENT_METHODS_BASE_SELECT =
 const PAYMENT_METHODS_MIN_SELECT = "method_key, status";
 const MISSING_SECURE_CREDENTIAL_MESSAGE =
   "Credenciais seguras ausentes. Reative o PIX e salve novamente o Access Token do Mercado Pago.";
+const SALES_PAYMENT_METHOD_KEYS = [
+  "mercado_pago",
+  "flowpay",
+  "card",
+  "boleto",
+  "paypal",
+  "nupay",
+] as const;
 
 type AccessResult =
   | {
@@ -67,6 +80,62 @@ function buildDiscordRelinkResponse() {
 
 function getTrimmedText(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function buildInvalidPayloadResponse(error: FlowSecureDtoError) {
+  return applyNoStoreHeaders(
+    NextResponse.json(
+      { ok: false, message: error.issues[0] || error.message },
+      { status: error.statusCode },
+    ),
+  );
+}
+
+function readPaymentMethodMutationBody(payload: unknown) {
+  return parseFlowSecureDto(
+    payload,
+    {
+      guildId: flowSecureDto.discordSnowflake(),
+      methodKey: flowSecureDto.enum(SALES_PAYMENT_METHOD_KEYS),
+      action: flowSecureDto.enum(["activate", "deactivate"] as const),
+      environment: flowSecureDto.optional(
+        flowSecureDto.enum(["production", "test"] as const),
+      ),
+      accessToken: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 500,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      publicKey: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 240,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      webhookSecret: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 240,
+          allowEmpty: true,
+          disallowAngleBrackets: true,
+          rejectThreatPatterns: false,
+        }),
+      ),
+      statementDescriptor: flowSecureDto.optional(
+        flowSecureDto.string({
+          maxLength: 22,
+          allowEmpty: true,
+          normalizeWhitespace: true,
+          disallowAngleBrackets: true,
+        }),
+      ),
+    },
+    { rejectUnknown: true },
+  );
 }
 
 async function ensureGuildAccess(
@@ -479,7 +548,15 @@ export async function POST(request: Request) {
   if (invalidMutationResponse) return applyNoStoreHeaders(invalidMutationResponse);
 
   try {
-    const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    let rawBody;
+    try {
+      rawBody = readPaymentMethodMutationBody(await request.json().catch(() => ({})));
+    } catch (error) {
+      if (error instanceof FlowSecureDtoError) {
+        return buildInvalidPayloadResponse(error);
+      }
+      throw error;
+    }
     const guildId = getTrimmedText(rawBody.guildId, 25);
     const methodKey = normalizeSalesPaymentMethodKey(rawBody.methodKey);
     const action = getTrimmedText(rawBody.action, 24);

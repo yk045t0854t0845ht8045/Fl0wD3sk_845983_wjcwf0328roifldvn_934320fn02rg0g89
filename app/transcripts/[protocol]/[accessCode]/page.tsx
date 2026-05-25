@@ -9,10 +9,11 @@ import {
 type TranscriptPageProps = {
   params: Promise<{
     protocol: string;
+    accessCode: string;
   }>;
 };
 
-export default async function TranscriptPage({ params }: TranscriptPageProps) {
+export default async function TranscriptPageWithCode({ params }: TranscriptPageProps) {
   const routeParams = await params;
   const normalizedProtocol = normalizeTranscriptProtocol(routeParams.protocol);
   const displayProtocol =
@@ -41,7 +42,7 @@ export default async function TranscriptPage({ params }: TranscriptPageProps) {
           initialSessionExpiresAt={
             session ? new Date(session.exp).toISOString() : null
           }
-          initialAccessCode={null}
+          initialAccessCode={routeParams.accessCode}
           isUnavailable={!normalizedProtocol || !transcript}
         />
       </div>
