@@ -5,6 +5,10 @@ import {
   type SavedMethod,
 } from "@/lib/payments/savedMethods";
 import { reconcilePaymentOrderRecord } from "@/lib/payments/reconciliation";
+import {
+  resolvePaymentRefundSummary,
+  type PaymentRefundSummary,
+} from "@/lib/payments/refunds";
 import { readOrderPlanTransitionPayload } from "@/lib/plans/change";
 import {
   mergeSavedMethodsWithStored,
@@ -14,9 +18,8 @@ import {
 
 const historyCache = new Map<number, { data: ManagedHistory; timestamp: number }>();
 const refreshingUserIds = new Set<number>();
-const CACHE_TTL_MS = 600000; // 10 minutes
+const CACHE_TTL_MS = 30000; // 30 seconds
 const STALE_THRESHOLD_MS = 20000; // 20 seconds
-const OFFICIAL_SUPPORT_GUILD_ID = "1353259338759671838";
 
 export type PaymentOrderStatus =
   | "pending"
@@ -24,7 +27,10 @@ export type PaymentOrderStatus =
   | "rejected"
   | "cancelled"
   | "expired"
-  | "failed";
+  | "failed"
+  | "refunded"
+  | "partially_refunded"
+  | "charged_back";
 
 export type PaymentMethod = "pix" | "card" | "trial";
 
@@ -68,12 +74,14 @@ export type HistoryOrder = {
   planName: string | null;
   providerStatus: string | null;
   providerStatusDetail: string | null;
+  providerPaymentId: string | null;
   card: unknown;
   paidAt: string | null;
   expiresAt: string | null;
   createdAt: string;
   updatedAt: string;
   technicalLabels: string[];
+  refund: PaymentRefundSummary | null;
   financialSummary: {
     coveredByInternalCredits: boolean;
     currentPlanCreditAmount: number;
@@ -226,6 +234,14 @@ function buildTechnicalHistoryLabels(
     labels.push("Estorno automatico de seguranca");
   }
 
+  if (order.status === "partially_refunded") {
+    labels.push("Reembolso parcial");
+  }
+
+  if (order.status === "charged_back" || order.provider_status === "charged_back") {
+    labels.push("Chargeback registrado");
+  }
+
   if (order.provider_status_detail === "covered_by_internal_credits") {
     labels.push("Gratuidade por credito interno");
   }
@@ -263,33 +279,24 @@ function toHistoryOrder(
     planName: order.plan_name,
     providerStatus: order.provider_status,
     providerStatusDetail: order.provider_status_detail,
+    providerPaymentId: order.provider_payment_id,
     card,
     paidAt: order.paid_at,
     expiresAt: order.expires_at,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     technicalLabels: buildTechnicalHistoryLabels(order, events),
+    refund: resolvePaymentRefundSummary(order),
     financialSummary: buildFinancialHistorySummary(order),
   };
 }
 
-function isRefundedPaymentOrder(order: PaymentOrderRecord) {
-  const status = String(order.status || "").toLowerCase();
-  const providerStatus = String(order.provider_status || "").toLowerCase();
-  const providerStatusDetail = String(order.provider_status_detail || "").toLowerCase();
-  return (
-    status === "refunded" ||
-    providerStatus === "refunded" ||
-    providerStatusDetail.includes("refund") ||
-    providerStatusDetail.includes("reembols")
-  );
+function enforceRefundHistoryTenantIsolation(orders: PaymentOrderRecord[]) {
+  return orders;
 }
 
-function enforceRefundHistoryTenantIsolation(orders: PaymentOrderRecord[]) {
-  return orders.filter((order) => {
-    if (!isRefundedPaymentOrder(order)) return true;
-    return String(order.guild_id || "") === OFFICIAL_SUPPORT_GUILD_ID;
-  });
+export function clearManagedHistoryCacheForUser(userId: number) {
+  historyCache.delete(userId);
 }
 
 export async function getManagedHistoryForUser(userId: number): Promise<ManagedHistory> {

@@ -32,10 +32,9 @@ export default async function AdminPaymentsPage() {
   const payments = await listAdminPaymentOrders(100);
   const approvedCount = payments.filter((payment) => payment.status === "approved").length;
   const pendingCount = payments.filter((payment) => payment.status === "pending").length;
-  const attentionCount = payments.filter((payment) =>
-    ["failed", "rejected", "cancelled", "expired"].includes(payment.status),
+  const refundedCount = payments.filter((payment) =>
+    ["refunded", "partially_refunded", "charged_back"].includes(payment.status),
   ).length;
-
   return (
     <section className="min-w-0">
       <AdminPageHeader
@@ -64,9 +63,9 @@ export default async function AdminPaymentsPage() {
           icon={<CreditCard className="h-[20px] w-[20px]" strokeWidth={1.9} />}
         />
         <AdminStatCard
-          label="Exigem atencao"
-          value={String(attentionCount)}
-          description="Falhas, expiracoes, cancelamentos ou rejeicoes recentes."
+          label="Reembolsos"
+          value={String(refundedCount)}
+          description="Estornos, parciais e chargebacks preservados no historico."
           icon={<CircleAlert className="h-[20px] w-[20px]" strokeWidth={1.9} />}
         />
       </div>

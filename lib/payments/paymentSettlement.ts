@@ -12,6 +12,10 @@ import { invalidateGuildLicenseCaches } from "@/lib/payments/licenseStatus";
 import { sendPaymentApprovedEmailForOrderSafe } from "@/lib/mail/transactional";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
+import {
+  buildRefundOutcome,
+  finalizePaymentRefundOutcome,
+} from "@/lib/payments/refunds";
 
 type PaymentOrderEventPayload = Record<string, unknown>;
 
@@ -417,7 +421,7 @@ async function applyAutomaticRefundForSettlementFailure<
   providerPaymentId: string;
   selectColumns: string;
 }) {
-  await autoRefundProviderPayment({
+  const providerRefundPayload = await autoRefundProviderPayment({
     providerPaymentId: input.providerPaymentId,
     providerPayment: input.providerPayment,
     orderPaymentMethod: input.order.payment_method,
@@ -434,37 +438,41 @@ async function applyAutomaticRefundForSettlementFailure<
     lastRecoveryAttemptAt: nowIso,
   });
 
-  const supabase = getSupabaseAdminClientOrThrow();
-  const result = await supabase
-    .from("payment_orders")
-    .update({
-      status: "cancelled",
-      provider_status: "refunded",
-      provider_status_detail: AUTO_REFUND_FINALIZATION_FAILURE_STATUS_DETAIL,
+  const refundOutcome = buildRefundOutcome({
+    order: {
+      ...input.order,
       provider_payload: providerPayload,
       expires_at: input.order.expires_at || nowIso,
-    })
-    .eq("id", input.order.id)
-    .select(input.selectColumns)
-    .single<TOrder>();
+    },
+    source: "provider_reconciliation",
+    reason: "Estorno automatico por falha de finalizacao do plano.",
+    refundKind: "full_refund",
+    providerPayment: input.providerPayment,
+    providerRefundPayload,
+    requestedAccessAction: "revoke_immediately",
+    riskFlags: ["finalization_failure"],
+    nowIso,
+  });
+  refundOutcome.update.provider_status_detail =
+    AUTO_REFUND_FINALIZATION_FAILURE_STATUS_DETAIL;
 
-  if (result.error || !result.data) {
-    throw new Error(
-      result.error?.message ||
-        "Falha ao atualizar o pedido apos estorno por falha de finalizacao.",
-    );
-  }
+  const result = await finalizePaymentRefundOutcome({
+    order: input.order,
+    outcome: refundOutcome,
+    selectColumns: input.selectColumns,
+  });
+  const refundedOrder = result.order as TOrder;
 
   invalidatePaymentOrderQueryCaches({
-    userId: result.data.user_id,
-    guildId: result.data.guild_id,
-    orderId: result.data.id,
-    orderNumber: result.data.order_number,
+    userId: refundedOrder.user_id,
+    guildId: refundedOrder.guild_id,
+    orderId: refundedOrder.id,
+    orderNumber: refundedOrder.order_number,
   });
-  invalidateGuildLicenseCaches(result.data.guild_id || undefined);
+  invalidateGuildLicenseCaches(refundedOrder.guild_id || undefined);
 
   await createPaymentOrderEventSafe(
-    result.data.id,
+    refundedOrder.id,
     "provider_payment_auto_refunded_after_finalization_failure",
     {
       source: input.source,
@@ -473,7 +481,7 @@ async function applyAutomaticRefundForSettlementFailure<
     },
   );
 
-  return result.data;
+  return refundedOrder;
 }
 
 export async function settleApprovedPaymentOrder<

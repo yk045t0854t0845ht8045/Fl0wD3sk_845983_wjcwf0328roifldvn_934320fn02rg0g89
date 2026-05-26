@@ -105,6 +105,9 @@ export type MercadoPagoPaymentResponse = {
   external_reference?: string | null;
   metadata?: Record<string, unknown> | null;
   transaction_amount?: number;
+  transaction_amount_refunded?: number | null;
+  refunded_amount?: number | null;
+  refunds?: Array<Record<string, unknown>> | null;
   transaction_details?: Record<string, unknown> | null;
   payer?: Record<string, unknown> | null;
   date_created?: string | null;
@@ -863,10 +866,12 @@ export function resolvePaymentStatus(status: string | null | undefined) {
       return "approved";
     case "rejected":
       return "rejected";
+    case "refunded":
+      return "refunded";
+    case "charged_back":
+      return "charged_back";
     case "canceled":
     case "cancelled":
-    case "refunded":
-    case "charged_back":
     case "reverted":
       return "cancelled";
     case "expired":
@@ -1206,11 +1211,26 @@ export async function searchMercadoPagoPaymentsByExternalReference(
   return cloneJsonValue(await loadPromise);
 }
 
-export async function refundMercadoPagoPixPayment(paymentId: string | number) {
+function buildRefundRequestBody(amount: number | null | undefined) {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return {};
+  }
+
+  return { amount: Math.round(amount * 100) / 100 };
+}
+
+export async function refundMercadoPagoPixPayment(
+  paymentId: string | number,
+  options?: { amount?: number | null; idempotencyKeySuffix?: string | null },
+) {
   const accessToken = getMercadoPagoAccessTokenOrThrow();
   const idempotencyKey = createStablePaymentIdempotencyKey({
     namespace: "mercado-pago-pix-refund",
-    parts: [String(paymentId)],
+    parts: [
+      String(paymentId),
+      typeof options?.amount === "number" ? options.amount.toFixed(2) : "full",
+      options?.idempotencyKeySuffix || "",
+    ],
   });
 
   const { payload } = await fetchMercadoPagoJson<unknown>(
@@ -1222,7 +1242,7 @@ export async function refundMercadoPagoPixPayment(paymentId: string | number) {
         "Content-Type": "application/json",
         "X-Idempotency-Key": idempotencyKey,
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(buildRefundRequestBody(options?.amount)),
       errorMessage: "Falha ao estornar pagamento PIX no Mercado Pago.",
       allowRetry: true,
     },
@@ -1232,11 +1252,18 @@ export async function refundMercadoPagoPixPayment(paymentId: string | number) {
   return payload;
 }
 
-export async function refundMercadoPagoCardPayment(paymentId: string | number) {
+export async function refundMercadoPagoCardPayment(
+  paymentId: string | number,
+  options?: { amount?: number | null; idempotencyKeySuffix?: string | null },
+) {
   const accessToken = getMercadoPagoCardAccessTokenOrThrow();
   const idempotencyKey = createStablePaymentIdempotencyKey({
     namespace: "mercado-pago-card-refund",
-    parts: [String(paymentId)],
+    parts: [
+      String(paymentId),
+      typeof options?.amount === "number" ? options.amount.toFixed(2) : "full",
+      options?.idempotencyKeySuffix || "",
+    ],
   });
 
   const { payload } = await fetchMercadoPagoJson<unknown>(
@@ -1245,8 +1272,10 @@ export async function refundMercadoPagoCardPayment(paymentId: string | number) {
       method: "POST",
       accessToken,
       headers: {
+        "Content-Type": "application/json",
         "X-Idempotency-Key": idempotencyKey,
       },
+      body: JSON.stringify(buildRefundRequestBody(options?.amount)),
       errorMessage: "Falha ao estornar validacao do cartao.",
       allowRetry: true,
     },

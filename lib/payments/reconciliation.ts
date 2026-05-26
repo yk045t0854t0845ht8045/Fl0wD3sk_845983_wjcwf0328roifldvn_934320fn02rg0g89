@@ -32,6 +32,10 @@ import {
   hasApprovedPaymentPendingSettlement,
   settleApprovedPaymentOrder,
 } from "@/lib/payments/paymentSettlement";
+import {
+  buildRefundOutcome,
+  finalizePaymentRefundOutcome,
+} from "@/lib/payments/refunds";
 import { parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
@@ -41,7 +45,10 @@ export type ReconcilablePaymentStatus =
   | "rejected"
   | "cancelled"
   | "expired"
-  | "failed";
+  | "failed"
+  | "refunded"
+  | "partially_refunded"
+  | "charged_back";
 
 export type ReconcilablePaymentMethod = "pix" | "card" | "trial";
 
@@ -398,47 +405,50 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
 
   if (resolvedStatus === "approved") {
     if (isLockedByUnpaidSetupTimeout(order)) {
-      await autoRefundProviderPayment({
+      const providerRefundPayload = await autoRefundProviderPayment({
         providerPaymentId,
         providerPayment,
         orderPaymentMethod: order.payment_method,
       });
 
-      const supabase = getSupabaseAdminClientOrThrow();
-      const refundedTimeoutOrderResult = await supabase
-        .from("payment_orders")
-        .update({
-          status: "cancelled",
-          provider_status: "refunded",
-          provider_status_detail: UNPAID_SETUP_TIMEOUT_REFUND_STATUS_DETAIL,
-          provider_external_reference: externalReference,
-          provider_qr_code: transactionData?.qr_code || order.provider_qr_code,
-          provider_qr_base64:
-            transactionData?.qr_code_base64 || order.provider_qr_base64,
-          provider_ticket_url:
-            transactionData?.ticket_url || order.provider_ticket_url,
-          provider_payload: {
-            ...mergeProviderPayload(order.provider_payload, {
-              source,
-              reconciled_by: source,
-              auto_refunded_after_setup_timeout: true,
-              payment_identifiers: paymentIdentifiers,
-              trusted_timestamps: trustedTimestamps,
-              mercado_pago: providerPayment,
-            }),
-          },
+      const refundOutcome = buildRefundOutcome({
+        order: {
+          ...order,
+          provider_payload: mergeProviderPayload(order.provider_payload, {
+            source,
+            reconciled_by: source,
+            auto_refunded_after_setup_timeout: true,
+            payment_identifiers: paymentIdentifiers,
+            trusted_timestamps: trustedTimestamps,
+            mercado_pago: providerPayment,
+          }),
           expires_at: expiresAt,
-        })
-        .eq("id", order.id)
-        .select(PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS)
-        .single<PaymentOrderReconciliationRecord>();
+        },
+        source: "provider_reconciliation",
+        reason: "Pagamento aprovado apos timeout do onboarding.",
+        refundKind: "full_refund",
+        providerPayment,
+        providerRefundPayload,
+        requestedAccessAction: "revoke_immediately",
+        riskFlags: ["approved_after_setup_timeout"],
+      });
+      refundOutcome.update.provider_status_detail =
+        UNPAID_SETUP_TIMEOUT_REFUND_STATUS_DETAIL;
+      refundOutcome.update.provider_external_reference = externalReference;
+      refundOutcome.update.provider_qr_code =
+        transactionData?.qr_code || order.provider_qr_code;
+      refundOutcome.update.provider_qr_base64 =
+        transactionData?.qr_code_base64 || order.provider_qr_base64;
+      refundOutcome.update.provider_ticket_url =
+        transactionData?.ticket_url || order.provider_ticket_url;
 
-      if (refundedTimeoutOrderResult.error || !refundedTimeoutOrderResult.data) {
-        throw new Error(
-          refundedTimeoutOrderResult.error?.message ||
-            "Falha ao atualizar pedido pago apos timeout do onboarding.",
-        );
-      }
+      const refundedTimeoutOrderResult = await finalizePaymentRefundOutcome({
+        order,
+        outcome: refundOutcome,
+        selectColumns: PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS,
+      });
+      const refundedTimeoutOrder =
+        refundedTimeoutOrderResult.order as PaymentOrderReconciliationRecord;
 
       await createPaymentOrderEventSafe(
         order.id,
@@ -451,14 +461,14 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       );
 
       invalidatePaymentOrderQueryCaches({
-        userId: refundedTimeoutOrderResult.data.user_id,
-        guildId: refundedTimeoutOrderResult.data.guild_id,
-        orderId: refundedTimeoutOrderResult.data.id,
-        orderNumber: refundedTimeoutOrderResult.data.order_number,
+        userId: refundedTimeoutOrder.user_id,
+        guildId: refundedTimeoutOrder.guild_id,
+        orderId: refundedTimeoutOrder.id,
+        orderNumber: refundedTimeoutOrder.order_number,
       });
       invalidateGuildLicenseCaches();
       return {
-        order: refundedTimeoutOrderResult.data,
+        order: refundedTimeoutOrder,
         changed: true,
         action: "refunded_timeout",
         providerStatus: "refunded",
@@ -488,47 +498,50 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
         );
 
     if (!renewalDecision.allowed) {
-      await autoRefundProviderPayment({
+      const providerRefundPayload = await autoRefundProviderPayment({
         providerPaymentId,
         providerPayment,
         orderPaymentMethod: order.payment_method,
       });
 
-      const supabase = getSupabaseAdminClientOrThrow();
-      const refundedOrderResult = await supabase
-        .from("payment_orders")
-        .update({
-          status: "cancelled",
-          provider_status: "refunded",
-          provider_status_detail: "auto_refund_duplicate_active_license",
-          provider_external_reference: externalReference,
-          provider_qr_code: transactionData?.qr_code || order.provider_qr_code,
-          provider_qr_base64:
-            transactionData?.qr_code_base64 || order.provider_qr_base64,
-          provider_ticket_url:
-            transactionData?.ticket_url || order.provider_ticket_url,
-          provider_payload: {
-            ...mergeProviderPayload(order.provider_payload, {
-              source,
-              reconciled_by: source,
-              auto_refunded_duplicate: true,
-              payment_identifiers: paymentIdentifiers,
-              trusted_timestamps: trustedTimestamps,
-              mercado_pago: providerPayment,
-            }),
-          },
+      const refundOutcome = buildRefundOutcome({
+        order: {
+          ...order,
+          provider_payload: mergeProviderPayload(order.provider_payload, {
+            source,
+            reconciled_by: source,
+            auto_refunded_duplicate: true,
+            payment_identifiers: paymentIdentifiers,
+            trusted_timestamps: trustedTimestamps,
+            mercado_pago: providerPayment,
+          }),
           expires_at: expiresAt,
-        })
-        .eq("id", order.id)
-        .select(PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS)
-        .single<PaymentOrderReconciliationRecord>();
+        },
+        source: "provider_reconciliation",
+        reason: "Pagamento duplicado enquanto ja havia uma licenca ativa.",
+        refundKind: "full_refund",
+        providerPayment,
+        providerRefundPayload,
+        requestedAccessAction: "revoke_immediately",
+        riskFlags: ["duplicate_active_license", renewalDecision.reason],
+      });
+      refundOutcome.update.provider_status_detail =
+        "auto_refund_duplicate_active_license";
+      refundOutcome.update.provider_external_reference = externalReference;
+      refundOutcome.update.provider_qr_code =
+        transactionData?.qr_code || order.provider_qr_code;
+      refundOutcome.update.provider_qr_base64 =
+        transactionData?.qr_code_base64 || order.provider_qr_base64;
+      refundOutcome.update.provider_ticket_url =
+        transactionData?.ticket_url || order.provider_ticket_url;
 
-      if (refundedOrderResult.error || !refundedOrderResult.data) {
-        throw new Error(
-          refundedOrderResult.error?.message ||
-            "Falha ao atualizar pedido estornado automaticamente.",
-        );
-      }
+      const refundedOrderResult = await finalizePaymentRefundOutcome({
+        order,
+        outcome: refundOutcome,
+        selectColumns: PAYMENT_ORDER_RECONCILIATION_SELECT_COLUMNS,
+      });
+      const refundedOrder =
+        refundedOrderResult.order as PaymentOrderReconciliationRecord;
 
       await createPaymentOrderEventSafe(order.id, "provider_payment_auto_refunded", {
         source,
@@ -538,14 +551,14 @@ async function reconcilePaymentOrderWithFetchedProviderPayment(
       });
 
       invalidatePaymentOrderQueryCaches({
-        userId: refundedOrderResult.data.user_id,
-        guildId: refundedOrderResult.data.guild_id,
-        orderId: refundedOrderResult.data.id,
-        orderNumber: refundedOrderResult.data.order_number,
+        userId: refundedOrder.user_id,
+        guildId: refundedOrder.guild_id,
+        orderId: refundedOrder.id,
+        orderNumber: refundedOrder.order_number,
       });
       invalidateGuildLicenseCaches();
       return {
-        order: refundedOrderResult.data,
+        order: refundedOrder,
         changed: true,
         action: "refunded_duplicate",
         providerStatus: "refunded",

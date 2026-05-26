@@ -60,7 +60,10 @@ type PaymentOrderStatus =
   | "rejected"
   | "cancelled"
   | "expired"
-  | "failed";
+  | "failed"
+  | "refunded"
+  | "partially_refunded"
+  | "charged_back";
 
 type PaymentOrderRecord = {
   id: number;
@@ -905,4 +908,3 @@ export async function GET(request: Request) {
     );
   }
 }
-

@@ -1006,7 +1006,7 @@ async function reconcilePixOrderFromProvider(
       const refundedOrderResult = await supabase
         .from("payment_orders")
         .update({
-          status: "cancelled",
+          status: "refunded",
           provider_status: "refunded",
           provider_status_detail:
             "auto_refund_duplicate_active_license",
@@ -2676,4 +2676,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
