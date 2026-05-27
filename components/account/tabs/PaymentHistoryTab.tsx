@@ -25,6 +25,25 @@ type RefundSummary = {
   accessUntil: string | null;
   remainingAccessSeconds: number | null;
   riskFlags: string[];
+  entries?: Array<{
+    refundId: string | null;
+    refundKey: string;
+    status: "refunded" | "partially_refunded" | "charged_back";
+    kind: string;
+    amount: number;
+    currency: string;
+    reason: string;
+    source: string;
+    actorUserId: string | null;
+    actorLabel: string | null;
+    protocol: string | null;
+    accessAction: string;
+    accessUntil: string | null;
+    riskScore: number | null;
+    riskFlags: string[];
+    createdAt: string;
+    providerPaymentId: string | null;
+  }>;
 };
 
 type Order = {
@@ -179,8 +198,41 @@ function buildRefundRows(order: Order) {
     { label: "Tempo restante", value: formatRemainingAccess(refund.remainingAccessSeconds) || "Nao aplicavel" },
     { label: "ID da transacao", value: refund.providerPaymentId || order.providerPaymentId || "Nao informado" },
     { label: "ID do reembolso", value: refund.refundId || refund.refundKey || "Nao informado" },
-    { label: "Responsavel", value: refund.actorLabel || (refund.actorUserId ? `Admin ${refund.actorUserId}` : "Sistema Flowdesk") },
+    { label: "Tipo", value: resolveRefundSourceLabel(refund.entries?.[refund.entries.length - 1]?.source, refund.actorUserId) },
+    { label: "Responsavel", value: resolveRefundActorLabel(refund.actorLabel, refund.actorUserId) },
   ];
+}
+
+function resolveRefundSourceLabel(source?: string | null, actorUserId?: string | null) {
+  if (source === "system_auto" || actorUserId === "system") return "Automatico";
+  if (source === "official_support_ticket") return actorUserId ? "Manual pelo suporte" : "Suporte oficial";
+  if (source === "admin_manual") return "Manual administrativo";
+  if (source === "mercado_pago_webhook") return "Webhook Mercado Pago";
+  if (source === "provider_reconciliation") return "Reconciliacao do provedor";
+  return actorUserId ? "Manual" : "Automatico";
+}
+
+function resolveRefundActorLabel(actorLabel?: string | null, actorUserId?: string | null) {
+  if (!actorUserId || actorUserId === "system") return "Sistema Flowdesk";
+  return actorLabel || `Discord ${actorUserId}`;
+}
+
+function buildRefundTimeline(order: Order) {
+  const entries = order.refund?.entries || [];
+  if (!entries.length) return [];
+  return entries.map((entry) => ({
+    key: entry.refundKey,
+    title: resolveRefundSourceLabel(entry.source, entry.actorUserId),
+    amount: formatCurrency(entry.amount, entry.currency || order.currency),
+    date: formatDate(entry.createdAt),
+    protocol: entry.protocol,
+    responsible:
+      entry.actorUserId && entry.actorUserId !== "system"
+        ? resolveRefundActorLabel(entry.actorLabel, entry.actorUserId)
+        : null,
+    reason: entry.reason,
+    refundId: entry.refundId || entry.refundKey,
+  }));
 }
 
 function buildPaginationItems(totalPages: number, currentPage: number) {
@@ -253,7 +305,14 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
       if (effectiveStatus === "approved" || effectiveStatus === "pending") mapStatus = effectiveStatus;
       if (effectiveStatus === "refunded" || effectiveStatus === "partially_refunded") mapStatus = "refunded";
       if (effectiveStatus === "charged_back") mapStatus = "chargeback";
-      const matchStatus = statusFilter === "all" || statusFilter === mapStatus;
+      const originalPaymentWasApproved =
+        order.status === "approved" ||
+        Boolean(order.paidAt) ||
+        ["refunded", "partially_refunded", "charged_back"].includes(String(order.status));
+      const matchStatus =
+        statusFilter === "all" ||
+        statusFilter === mapStatus ||
+        (statusFilter === "approved" && originalPaymentWasApproved);
       return matchSearch && matchStatus;
     });
   }, [orders, searchQuery, statusFilter]);
@@ -359,6 +418,7 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                   const isFree = order.amount === 0 || order.method === "trial";
                   const isExpanded = expandedOrderId === order.id;
                   const refundRows = buildRefundRows(order);
+                  const refundTimeline = buildRefundTimeline(order);
 
                   return (
                     <div
@@ -412,6 +472,11 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                           <p className={`min-w-[72px] text-right text-[17px] font-black ${isFree ? "text-[#34A853]" : "text-[#EEEEEE]"}`}>
                             {formatCurrency(order.amount, order.currency)}
                           </p>
+                          {order.refund && order.refund.status !== "none" ? (
+                            <p className="hidden min-w-[96px] text-right text-[11px] font-semibold text-[#8AB4F8] lg:block">
+                              Estorno {formatCurrency(order.refund.refundedAmount, order.refund.currency || order.currency)}
+                            </p>
+                          ) : null}
                           
                           <ChevronDown className={`h-[18px] w-[18px] text-[#444] transition-transform duration-300 ${isExpanded ? "rotate-180" : ""}`} />
                         </div>
@@ -454,6 +519,11 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                                   Registro de reembolso
                                 </p>
                               </div>
+                              <div className="mt-[14px] rounded-[12px] border border-[rgba(52,168,83,0.16)] bg-[rgba(52,168,83,0.06)] px-[13px] py-[11px]">
+                                <p className="text-[12px] font-semibold text-[#BFE9C8]">
+                                  Pagamento original preservado: pedido #{order.orderNumber}, valor {formatCurrency(order.amount, order.currency)}.
+                                </p>
+                              </div>
                               <div className="mt-[14px] grid gap-[12px] md:grid-cols-2 xl:grid-cols-3">
                                 {refundRows.map((row) => (
                                   <div key={row.label} className="min-w-0">
@@ -462,6 +532,38 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                                   </div>
                                 ))}
                               </div>
+                              {refundTimeline.length > 0 ? (
+                                <div className="mt-[16px] space-y-[10px]">
+                                  {refundTimeline.map((entry) => (
+                                    <div
+                                      key={entry.key}
+                                      className="rounded-[12px] border border-[rgba(138,180,248,0.14)] bg-[rgba(8,12,18,0.52)] px-[13px] py-[12px]"
+                                    >
+                                      <div className="flex flex-col gap-[6px] sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                          <p className="text-[13px] font-bold text-[#DCE8FF]">
+                                            {entry.title} - {entry.amount}
+                                          </p>
+                                          <p className="mt-[3px] text-[11px] font-medium text-[#7890B8]">
+                                            {entry.date}{entry.protocol ? ` - ${entry.protocol}` : ""}
+                                          </p>
+                                        </div>
+                                        {entry.responsible ? (
+                                          <span className="w-fit rounded-full border border-[rgba(138,180,248,0.18)] bg-[rgba(138,180,248,0.08)] px-[9px] py-[4px] text-[11px] font-semibold text-[#BBD2FF]">
+                                            Autorizado por {entry.responsible}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      <p className="mt-[8px] text-[12px] leading-[1.5] text-[#A9B8D6]">
+                                        {entry.reason}
+                                      </p>
+                                      <p className="mt-[6px] break-all text-[10px] font-semibold uppercase tracking-[0.12em] text-[#5E6F8F]">
+                                        ID {entry.refundId}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
 

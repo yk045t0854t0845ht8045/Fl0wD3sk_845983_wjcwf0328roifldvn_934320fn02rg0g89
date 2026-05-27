@@ -98,6 +98,7 @@ export type PaymentRefundSummary = {
   accessUntil: string | null;
   remainingAccessSeconds: number | null;
   riskFlags: string[];
+  entries: RefundLedgerEntry[];
 };
 
 export type PaymentRefundOrderRecord = {
@@ -826,6 +827,7 @@ export function resolvePaymentRefundSummary(order: {
     accessUntil,
     remainingAccessSeconds,
     riskFlags: latestEntry?.riskFlags || [],
+    entries: ledger?.entries || (latestEntry ? [latestEntry] : []),
   };
 }
 
