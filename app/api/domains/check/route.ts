@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import {
-  getOpenProviderErrorMessage,
-  OpenProviderRequestError,
-} from "@/lib/openprovider/client";
+  getNameSiloErrorMessage,
+  NameSiloRequestError,
+} from "@/lib/namesilo/client";
 import {
   checkLocalRateLimit,
   getJsonSecurityHeaders,
   normalizeDomainSearchInput,
 } from "@/lib/domains/requestGuard";
-import { streamSearchDomains } from "@/lib/openprovider/domains";
+import { streamSearchDomains } from "@/lib/namesilo/domains";
 import { getUSDToBRLRate } from "@/lib/currency";
 
 export const runtime = "nodejs";
@@ -20,17 +20,17 @@ function mapDomainError(error: unknown) {
     message: "Falha interna ao consultar dominios.",
   };
 
-  if (!(error instanceof OpenProviderRequestError)) {
+  if (!(error instanceof NameSiloRequestError)) {
     if (error instanceof Error && /timeout/i.test(error.message)) {
       return {
         status: 504,
-        message: "A Openprovider demorou demais para responder. Tente novamente em instantes.",
+        message: "A NameSilo demorou demais para responder. Tente novamente em instantes.",
       };
     }
     return fallback;
   }
 
-  if (error.maintenance) {
+  if (error.status === 503) {
     return {
       status: 503,
       message: "Nosso sistema de dominios está em manutenção no momento. Tente novamente mais tarde.",
@@ -44,8 +44,8 @@ function mapDomainError(error: unknown) {
     };
   }
 
-  const msg = getOpenProviderErrorMessage(error);
-  if (/Authentication\/Authorization Failed/i.test(msg)) {
+  const msg = getNameSiloErrorMessage(error);
+  if (/invalid api key|auth/i.test(msg)) {
     return {
       status: 502,
       message: "Falha na autenticacao com o provedor de dominios.",

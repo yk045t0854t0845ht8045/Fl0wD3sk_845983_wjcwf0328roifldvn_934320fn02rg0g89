@@ -1,5 +1,5 @@
-import { searchDomains } from "@/lib/openprovider/domains";
-import type { DomainSearchResponse } from "@/lib/openprovider/types";
+import { searchDomains } from "@/lib/namesilo/domains";
+import type { DomainSearchResponse } from "@/lib/domains/searchTypes";
 import { runFlowAiJson } from "@/lib/flowai/service";
 
 type OpenAiMessage = {

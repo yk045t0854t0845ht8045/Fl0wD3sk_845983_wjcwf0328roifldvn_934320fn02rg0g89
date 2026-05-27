@@ -1,5 +1,5 @@
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
-import { openProviderClient } from "@/lib/openprovider/client";
+import { nameSiloClient } from "@/lib/namesilo/client";
 import type { FlowAiHealthResponse } from "@/lib/flowai/service";
 import type { StatusCheckResult, SystemStatus } from "./types";
 import { getWorstSystemStatus } from "./types";
@@ -627,20 +627,17 @@ export async function checkDomainsStatus(): Promise<DomainsStatusResponse> {
   const requestId = Math.random().toString(36).slice(2, 8);
 
   try {
-    const circuitBreaker = openProviderClient.getCircuitBreakerStatus();
+    const circuitBreaker = nameSiloClient.getCircuitBreakerStatus();
 
     await Promise.race([
-      openProviderClient.post(
-        "domains/check",
+      nameSiloClient.request(
+        "checkRegisterAvailability",
         {
-          domains: [
-            { name: "example", extension: "com" },
-            { name: "flowdeskstatus", extension: "net" },
-          ],
-          with_price: false,
+          domains: "example.com,flowdeskstatus.net",
         },
         {
           maxRetries: 0,
+          timeoutMs: 8000,
           requestId,
         },
       ),
@@ -655,10 +652,10 @@ export async function checkDomainsStatus(): Promise<DomainsStatusResponse> {
 
     if (latencyMs > 8000) {
       status = "partial_outage";
-      message = `Latencia critica na Openprovider: ${latencyMs}ms.`;
+      message = `Latencia critica na NameSilo: ${latencyMs}ms.`;
     } else if (latencyMs > 4500) {
       status = "degraded_performance";
-      message = `Resposta lenta da Openprovider: ${latencyMs}ms.`;
+      message = `Resposta lenta da NameSilo: ${latencyMs}ms.`;
     }
 
     return {
@@ -671,7 +668,7 @@ export async function checkDomainsStatus(): Promise<DomainsStatusResponse> {
       circuitBreaker,
     };
   } catch (error) {
-    const circuitBreaker = openProviderClient.getCircuitBreakerStatus();
+    const circuitBreaker = nameSiloClient.getCircuitBreakerStatus();
     const latencyMs = Date.now() - startedAt;
 
     return {
