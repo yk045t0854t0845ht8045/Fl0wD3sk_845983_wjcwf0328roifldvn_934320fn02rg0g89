@@ -8,7 +8,10 @@ export type PaymentOrderStatus =
   | "rejected"
   | "cancelled"
   | "expired"
-  | "failed";
+  | "failed"
+  | "refunded"
+  | "partially_refunded"
+  | "charged_back";
 
 type IdempotencyKeyPart = string | number | boolean | null | undefined;
 
@@ -299,6 +302,10 @@ export function resolveTrustedMercadoPagoPaymentTimestamps(input: {
     paidAt:
       input.resolvedStatus === "approved"
         ? approvedAt || currentPaidAt || lastUpdatedAt || receivedAt || new Date().toISOString()
+        : input.resolvedStatus === "refunded" ||
+            input.resolvedStatus === "partially_refunded" ||
+            input.resolvedStatus === "charged_back"
+          ? currentPaidAt || approvedAt || lastUpdatedAt || receivedAt || null
         : null,
     expiresAt: providerExpiresAt || currentExpiresAt,
   };
@@ -310,6 +317,22 @@ export function resolveNextPaymentOrderStatus(
 ) {
   const current =
     typeof currentStatus === "string" ? currentStatus.trim().toLowerCase() : "";
+
+  if (
+    providerResolvedStatus === "refunded" ||
+    providerResolvedStatus === "partially_refunded" ||
+    providerResolvedStatus === "charged_back"
+  ) {
+    return providerResolvedStatus;
+  }
+
+  if (
+    current === "refunded" ||
+    current === "partially_refunded" ||
+    current === "charged_back"
+  ) {
+    return current as PaymentOrderStatus;
+  }
 
   if (providerResolvedStatus === "approved") {
     return "approved";

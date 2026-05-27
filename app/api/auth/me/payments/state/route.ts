@@ -54,7 +54,7 @@ type PaymentOrderStateRecord = {
   user_id: number;
   guild_id: string;
   payment_method: "pix" | "card" | "trial";
-  status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed";
+  status: "pending" | "approved" | "rejected" | "cancelled" | "expired" | "failed" | "refunded" | "partially_refunded" | "charged_back";
   amount: string | number;
   currency: string;
   plan_code: string;
@@ -644,4 +644,3 @@ export async function GET(request: Request) {
     );
   }
 }
-

@@ -178,22 +178,26 @@ function readStockMutationPayload(payload: unknown) {
         rejectThreatPatterns: false,
       }),
       itemId: flowSecureDto.optional(
-        flowSecureDto.string({
-          maxLength: 60,
-          allowEmpty: true,
-          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-          disallowAngleBrackets: true,
-          rejectThreatPatterns: false,
-        }),
+        flowSecureDto.nullable(
+          flowSecureDto.string({
+            maxLength: 60,
+            allowEmpty: true,
+            pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        ),
       ),
       duplicateItemId: flowSecureDto.optional(
-        flowSecureDto.string({
-          maxLength: 60,
-          allowEmpty: true,
-          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-          disallowAngleBrackets: true,
-          rejectThreatPatterns: false,
-        }),
+        flowSecureDto.nullable(
+          flowSecureDto.string({
+            maxLength: 60,
+            allowEmpty: true,
+            pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        ),
       ),
       duplicateCount: flowSecureDto.optional(
         flowSecureDto.number({ integer: true, min: 1, max: 10 }),

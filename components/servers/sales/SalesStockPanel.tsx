@@ -971,7 +971,7 @@ export function SalesStockPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           guildId,
-          itemId: editingItemId,
+          ...(editingItemId ? { itemId: editingItemId } : {}),
           ...form,
           status: formStatus,
           productId: selectedProduct.id,

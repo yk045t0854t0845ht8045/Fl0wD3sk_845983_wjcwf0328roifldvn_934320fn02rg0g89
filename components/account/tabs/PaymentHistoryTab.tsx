@@ -1,11 +1,50 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { History, CheckCircle2, XCircle, AlertCircle, QrCode, CreditCard, Search, ChevronDown, MessageSquare, RotateCcw } from "lucide-react";
+import { History, CheckCircle2, XCircle, AlertCircle, QrCode, CreditCard, Search, ChevronDown, MessageSquare, RotateCcw, ShieldAlert, ReceiptText } from "lucide-react";
 import { usePaymentHistory } from "@/hooks/useAccountData";
 
 type OrderMethod = "pix" | "card" | "trial" | string;
-type OrderStatus = "approved" | "pending" | "rejected" | "cancelled" | "expired" | "failed" | "refunded" | string;
+type OrderStatus = "approved" | "pending" | "rejected" | "cancelled" | "expired" | "failed" | "refunded" | "partially_refunded" | "charged_back" | string;
+type RefundSummary = {
+  status: "none" | "refunded" | "partially_refunded" | "charged_back";
+  originalAmount: number;
+  refundedAmount: number;
+  currency: string;
+  refundedAt: string | null;
+  reason: string | null;
+  actorUserId: string | null;
+  actorLabel: string | null;
+  method: string | null;
+  providerPaymentId: string | null;
+  refundId: string | null;
+  refundKey: string | null;
+  protocol: string | null;
+  accessAction: string | null;
+  accessLabel: string | null;
+  accessUntil: string | null;
+  remainingAccessSeconds: number | null;
+  riskFlags: string[];
+  entries?: Array<{
+    refundId: string | null;
+    refundKey: string;
+    status: "refunded" | "partially_refunded" | "charged_back";
+    kind: string;
+    amount: number;
+    currency: string;
+    reason: string;
+    source: string;
+    actorUserId: string | null;
+    actorLabel: string | null;
+    protocol: string | null;
+    accessAction: string;
+    accessUntil: string | null;
+    riskScore: number | null;
+    riskFlags: string[];
+    createdAt: string;
+    providerPaymentId: string | null;
+  }>;
+};
 
 type Order = {
   id: number;
@@ -21,7 +60,10 @@ type Order = {
   createdAt: string;
   expiresAt?: string | null;
   providerStatus?: string | null;
+  providerStatusDetail?: string | null;
+  providerPaymentId?: string | null;
   technicalLabels?: string[];
+  refund?: RefundSummary | null;
   financialSummary?: {
     coveredByInternalCredits: boolean;
     currentPlanCreditAmount: number;
@@ -62,8 +104,32 @@ function resolveMethodLabel(method: OrderMethod): { label: string; icon: React.E
 function resolveStatusDisplay(status: OrderStatus): { label: string; color: string; icon: React.ElementType } {
   if (status === "approved") return { label: "Aprovado", color: "text-[#34A853] bg-[rgba(52,168,83,0.10)]", icon: CheckCircle2 };
   if (status === "pending") return { label: "Pendente", color: "text-[#F2C823] bg-[rgba(242,200,35,0.10)]", icon: AlertCircle };
-  if (status === "refunded") return { label: "Estornado", color: "text-[#9E9E9E] bg-[rgba(158,158,158,0.10)]", icon: RotateCcw };
+  if (status === "refunded") return { label: "Reembolsado", color: "text-[#8AB4F8] bg-[rgba(138,180,248,0.10)]", icon: RotateCcw };
+  if (status === "partially_refunded") return { label: "Reembolso parcial", color: "text-[#C7A6FF] bg-[rgba(199,166,255,0.10)]", icon: RotateCcw };
+  if (status === "charged_back") return { label: "Chargeback", color: "text-[#FF8F8F] bg-[rgba(255,143,143,0.10)]", icon: ShieldAlert };
+  if (status === "cancelled") return { label: "Cancelado", color: "text-[#B7B7B7] bg-[rgba(183,183,183,0.10)]", icon: XCircle };
+  if (status === "expired") return { label: "Expirado", color: "text-[#B7B7B7] bg-[rgba(183,183,183,0.10)]", icon: XCircle };
   return { label: "Falhou", color: "text-[#DB4646] bg-[rgba(219,70,70,0.10)]", icon: XCircle };
+}
+
+function resolveEffectiveStatus(order: Order): OrderStatus {
+  if (order.refund?.status && order.refund.status !== "none") return order.refund.status;
+  const providerStatus = String(order.providerStatus || "").toLowerCase();
+  const providerDetail = String(order.providerStatusDetail || "").toLowerCase();
+  if (providerStatus === "charged_back" || providerDetail.includes("chargeback")) return "charged_back";
+  if (providerStatus === "refunded" || providerDetail.includes("refund") || providerDetail.includes("reembols")) {
+    return "refunded";
+  }
+  return order.status;
+}
+
+function formatRemainingAccess(seconds: number | null | undefined) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return null;
+  if (seconds <= 0) return "Sem tempo restante";
+  const days = Math.floor(seconds / 86400);
+  if (days >= 1) return `${days} dia${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}`;
+  const hours = Math.max(1, Math.floor(seconds / 3600));
+  return `${hours} hora${hours === 1 ? "" : "s"} restante${hours === 1 ? "" : "s"}`;
 }
 
 function buildFinancialRows(order: Order) {
@@ -117,6 +183,58 @@ function resolvePlanLabel(order: Order) {
   return "Plano contratado";
 }
 
+function buildRefundRows(order: Order) {
+  const refund = order.refund;
+  if (!refund || refund.status === "none") return [];
+
+  return [
+    { label: "Valor original", value: formatCurrency(refund.originalAmount || order.amount, refund.currency || order.currency) },
+    { label: "Valor devolvido", value: formatCurrency(refund.refundedAmount, refund.currency || order.currency) },
+    { label: "Data do reembolso", value: refund.refundedAt ? formatDate(refund.refundedAt) : "Em processamento" },
+    { label: "Motivo", value: refund.reason || "Reembolso processado pela equipe Flowdesk" },
+    { label: "Plano afetado", value: resolvePlanLabel(order) },
+    { label: "Acesso", value: refund.accessLabel || "Politica de acesso registrada" },
+    { label: "Vencimento do acesso", value: refund.accessUntil ? formatDate(refund.accessUntil) : "Nao aplicavel" },
+    { label: "Tempo restante", value: formatRemainingAccess(refund.remainingAccessSeconds) || "Nao aplicavel" },
+    { label: "ID da transacao", value: refund.providerPaymentId || order.providerPaymentId || "Nao informado" },
+    { label: "ID do reembolso", value: refund.refundId || refund.refundKey || "Nao informado" },
+    { label: "Tipo", value: resolveRefundSourceLabel(refund.entries?.[refund.entries.length - 1]?.source, refund.actorUserId) },
+    { label: "Responsavel", value: resolveRefundActorLabel(refund.actorLabel, refund.actorUserId) },
+  ];
+}
+
+function resolveRefundSourceLabel(source?: string | null, actorUserId?: string | null) {
+  if (source === "system_auto" || actorUserId === "system") return "Automatico";
+  if (source === "official_support_ticket") return actorUserId ? "Manual pelo suporte" : "Suporte oficial";
+  if (source === "admin_manual") return "Manual administrativo";
+  if (source === "mercado_pago_webhook") return "Webhook Mercado Pago";
+  if (source === "provider_reconciliation") return "Reconciliacao do provedor";
+  return actorUserId ? "Manual" : "Automatico";
+}
+
+function resolveRefundActorLabel(actorLabel?: string | null, actorUserId?: string | null) {
+  if (!actorUserId || actorUserId === "system") return "Sistema Flowdesk";
+  return actorLabel || `Discord ${actorUserId}`;
+}
+
+function buildRefundTimeline(order: Order) {
+  const entries = order.refund?.entries || [];
+  if (!entries.length) return [];
+  return entries.map((entry) => ({
+    key: entry.refundKey,
+    title: resolveRefundSourceLabel(entry.source, entry.actorUserId),
+    amount: formatCurrency(entry.amount, entry.currency || order.currency),
+    date: formatDate(entry.createdAt),
+    protocol: entry.protocol,
+    responsible:
+      entry.actorUserId && entry.actorUserId !== "system"
+        ? resolveRefundActorLabel(entry.actorLabel, entry.actorUserId)
+        : null,
+    reason: entry.reason,
+    refundId: entry.refundId || entry.refundKey,
+  }));
+}
+
 function buildPaginationItems(totalPages: number, currentPage: number) {
   if (totalPages <= 7) {
     return Array.from({ length: totalPages }, (_, index) => index + 1);
@@ -163,16 +281,38 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
   void _onNavigateTickets;
   const { orders, loading, error } = usePaymentHistory();
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "refunded" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "approved" | "pending" | "refunded" | "chargeback" | "failed">("all");
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
   const [rawCurrentPage, setRawCurrentPage] = useState(1);
 
   const filteredOrders = useMemo(() => {
     return orders.filter((order: Order) => {
-      const matchSearch = String(order.orderNumber).includes(searchQuery);
-      let mapStatus = order.status;
-      if (order.status !== "approved" && order.status !== "pending" && order.status !== "refunded") mapStatus = "failed";
-      const matchStatus = statusFilter === "all" || statusFilter === mapStatus;
+      const query = searchQuery.trim().toLowerCase();
+      const matchSearch =
+        !query ||
+        [
+          order.orderNumber,
+          order.providerPaymentId,
+          order.refund?.providerPaymentId,
+          order.refund?.refundId,
+          order.refund?.refundKey,
+          order.refund?.protocol,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query));
+      const effectiveStatus = resolveEffectiveStatus(order);
+      let mapStatus: typeof statusFilter = "failed";
+      if (effectiveStatus === "approved" || effectiveStatus === "pending") mapStatus = effectiveStatus;
+      if (effectiveStatus === "refunded" || effectiveStatus === "partially_refunded") mapStatus = "refunded";
+      if (effectiveStatus === "charged_back") mapStatus = "chargeback";
+      const originalPaymentWasApproved =
+        order.status === "approved" ||
+        Boolean(order.paidAt) ||
+        ["refunded", "partially_refunded", "charged_back"].includes(String(order.status));
+      const matchStatus =
+        statusFilter === "all" ||
+        statusFilter === mapStatus ||
+        (statusFilter === "approved" && originalPaymentWasApproved);
       return matchSearch && matchStatus;
     });
   }, [orders, searchQuery, statusFilter]);
@@ -231,7 +371,7 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
           
           <div className="flex items-center gap-[10px]">
             <div className="flex items-center gap-[6px] rounded-[14px] border border-[#141414] bg-[#0D0D0D] p-[4px] overflow-x-auto max-w-[calc(100vw-60px)] custom-scrollbar">
-              {(["all", "approved", "pending", "refunded", "failed"] as const).map((opt) => {
+              {(["all", "approved", "pending", "refunded", "chargeback", "failed"] as const).map((opt) => {
                 const isActive = statusFilter === opt;
                 return (
                   <button
@@ -247,7 +387,7 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                         : "text-[#666666] hover:bg-[#111111] hover:text-[#A6A6A6]"
                     }`}
                   >
-                    {opt === "all" ? "Todos" : opt === "approved" ? "Aprovados" : opt === "pending" ? "Pendentes" : opt === "refunded" ? "Estornados" : "Falhas"}
+                    {opt === "all" ? "Todos" : opt === "approved" ? "Aprovados" : opt === "pending" ? "Pendentes" : opt === "refunded" ? "Reembolsos" : opt === "chargeback" ? "Chargebacks" : "Falhas"}
                   </button>
                 );
               })}
@@ -273,9 +413,12 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
               <div className="space-y-[10px]">
                 {group.orders.map((order) => {
                   const { label: methodLabel, icon: MethodIcon } = resolveMethodLabel(order.method);
-                  const { label: statusLabel, color: statusColor, icon: StatusIcon } = resolveStatusDisplay(order.status);
+                  const effectiveStatus = resolveEffectiveStatus(order);
+                  const { label: statusLabel, color: statusColor, icon: StatusIcon } = resolveStatusDisplay(effectiveStatus);
                   const isFree = order.amount === 0 || order.method === "trial";
                   const isExpanded = expandedOrderId === order.id;
+                  const refundRows = buildRefundRows(order);
+                  const refundTimeline = buildRefundTimeline(order);
 
                   return (
                     <div
@@ -292,11 +435,13 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                           <div className={`flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full transition-transform duration-300 ${
                             isExpanded ? "scale-110" : ""
                           } ${
-                            order.status === "approved"
+                            effectiveStatus === "approved"
                               ? "bg-[rgba(52,168,83,0.08)] text-[#34A853]"
-                              : order.status === "pending"
+                              : effectiveStatus === "pending"
                               ? "bg-[rgba(242,200,35,0.08)] text-[#F2C823]"
-                              : "bg-[rgba(219,70,70,0.08)] text-[#DB4646]"
+                              : effectiveStatus === "refunded" || effectiveStatus === "partially_refunded"
+                                ? "bg-[rgba(138,180,248,0.08)] text-[#8AB4F8]"
+                                : "bg-[rgba(219,70,70,0.08)] text-[#DB4646]"
                           }`}>
                             <StatusIcon className="h-[22px] w-[22px]" />
                           </div>
@@ -327,6 +472,11 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                           <p className={`min-w-[72px] text-right text-[17px] font-black ${isFree ? "text-[#34A853]" : "text-[#EEEEEE]"}`}>
                             {formatCurrency(order.amount, order.currency)}
                           </p>
+                          {order.refund && order.refund.status !== "none" ? (
+                            <p className="hidden min-w-[96px] text-right text-[11px] font-semibold text-[#8AB4F8] lg:block">
+                              Estorno {formatCurrency(order.refund.refundedAmount, order.refund.currency || order.currency)}
+                            </p>
+                          ) : null}
                           
                           <ChevronDown className={`h-[18px] w-[18px] text-[#444] transition-transform duration-300 ${isExpanded ? "rotate-180" : ""}`} />
                         </div>
@@ -358,6 +508,62 @@ export function PaymentHistoryTab({ onNavigateTickets: _onNavigateTickets }: { o
                                   ? ` A sobra de ${formatCurrency(order.financialSummary.surplusCreditGrantedAmount, order.currency)} foi creditada na carteira FlowPoints.`
                                   : ""}
                               </p>
+                            </div>
+                          ) : null}
+
+                          {refundRows.length > 0 ? (
+                            <div className="mb-[22px] rounded-[16px] border border-[rgba(138,180,248,0.18)] bg-[rgba(138,180,248,0.05)] p-[16px]">
+                              <div className="flex items-center gap-[10px]">
+                                <ReceiptText className="h-[17px] w-[17px] text-[#8AB4F8]" />
+                                <p className="text-[13px] font-bold uppercase tracking-[0.14em] text-[#AFCBFF]">
+                                  Registro de reembolso
+                                </p>
+                              </div>
+                              <div className="mt-[14px] rounded-[12px] border border-[rgba(52,168,83,0.16)] bg-[rgba(52,168,83,0.06)] px-[13px] py-[11px]">
+                                <p className="text-[12px] font-semibold text-[#BFE9C8]">
+                                  Pagamento original preservado: pedido #{order.orderNumber}, valor {formatCurrency(order.amount, order.currency)}.
+                                </p>
+                              </div>
+                              <div className="mt-[14px] grid gap-[12px] md:grid-cols-2 xl:grid-cols-3">
+                                {refundRows.map((row) => (
+                                  <div key={row.label} className="min-w-0">
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-[#5E6F8F]">{row.label}</p>
+                                    <p className="mt-[5px] break-words text-[13px] font-semibold text-[#DCE8FF]">{row.value}</p>
+                                  </div>
+                                ))}
+                              </div>
+                              {refundTimeline.length > 0 ? (
+                                <div className="mt-[16px] space-y-[10px]">
+                                  {refundTimeline.map((entry) => (
+                                    <div
+                                      key={entry.key}
+                                      className="rounded-[12px] border border-[rgba(138,180,248,0.14)] bg-[rgba(8,12,18,0.52)] px-[13px] py-[12px]"
+                                    >
+                                      <div className="flex flex-col gap-[6px] sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                          <p className="text-[13px] font-bold text-[#DCE8FF]">
+                                            {entry.title} - {entry.amount}
+                                          </p>
+                                          <p className="mt-[3px] text-[11px] font-medium text-[#7890B8]">
+                                            {entry.date}{entry.protocol ? ` - ${entry.protocol}` : ""}
+                                          </p>
+                                        </div>
+                                        {entry.responsible ? (
+                                          <span className="w-fit rounded-full border border-[rgba(138,180,248,0.18)] bg-[rgba(138,180,248,0.08)] px-[9px] py-[4px] text-[11px] font-semibold text-[#BBD2FF]">
+                                            Autorizado por {entry.responsible}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      <p className="mt-[8px] text-[12px] leading-[1.5] text-[#A9B8D6]">
+                                        {entry.reason}
+                                      </p>
+                                      <p className="mt-[6px] break-all text-[10px] font-semibold uppercase tracking-[0.12em] text-[#5E6F8F]">
+                                        ID {entry.refundId}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
 

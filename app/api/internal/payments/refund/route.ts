@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
-import { clearPlanStateCacheForUser } from "@/lib/account/managedPlanState";
-import { invalidateGuildLicenseCaches } from "@/lib/payments/licenseStatus";
+import { clearManagedHistoryCacheForUser } from "@/lib/account/managedHistory";
 import { invalidatePaymentOrderQueryCaches } from "@/lib/payments/orderQueryCache";
 import {
   refundMercadoPagoCardPayment,
   refundMercadoPagoPixPayment,
 } from "@/lib/payments/mercadoPago";
+import {
+  buildRefundOutcome,
+  finalizePaymentRefundOutcome,
+  isRefundedPaymentOrder,
+  type SubscriptionAccessAction,
+} from "@/lib/payments/refunds";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 import { extractAuditErrorMessage } from "@/lib/security/errors";
 import {
@@ -17,6 +22,7 @@ import { hasSecureInternalTokenAuth } from "@/lib/security/internalTokens";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 const PAYMENT_REFUND_STATUS_DETAIL = "ticket_refund_official_support";
+const PAYMENT_REFUND_SELECT_COLUMNS = "*";
 
 function resolveInternalPaymentsToken() {
   return (
@@ -37,24 +43,6 @@ function isAuthorized(request: Request) {
   });
 }
 
-function isAlreadyRefunded(order: {
-  status?: string | null;
-  provider_status?: string | null;
-  provider_status_detail?: string | null;
-}) {
-  const status = String(order.status || "").toLowerCase();
-  const providerStatus = String(order.provider_status || "").toLowerCase();
-  const providerDetail = String(order.provider_status_detail || "").toLowerCase();
-  return (
-    status === "refunded" ||
-    providerStatus === "refunded" ||
-    providerStatus === "charged_back" ||
-    providerDetail.includes("refund") ||
-    providerDetail.includes("chargeback") ||
-    providerDetail.includes("reembols")
-  );
-}
-
 function resolveRefundErrorMessage(error: unknown) {
   const message = extractAuditErrorMessage(error, "Erro interno ao processar reembolso.");
   const normalized = message.toLowerCase();
@@ -71,27 +59,6 @@ function resolveRefundErrorMessage(error: unknown) {
   return "Erro interno ao processar reembolso.";
 }
 
-async function createPaymentOrderEventSafe(
-  paymentOrderId: number,
-  eventType: string,
-  eventPayload: Record<string, unknown>,
-) {
-  try {
-    const supabase = getSupabaseAdminClientOrThrow();
-    await supabase.from("payment_order_events").insert({
-      payment_order_id: paymentOrderId,
-      event_type: eventType,
-      event_payload: eventPayload,
-    });
-    return { ok: true as const };
-  } catch (error) {
-    return {
-      ok: false as const,
-      error: error instanceof Error ? error.message : "Falha ao registrar evento.",
-    };
-  }
-}
-
 export async function POST(request: Request) {
   try {
     if (!isAuthorized(request)) {
@@ -100,7 +67,17 @@ export async function POST(request: Request) {
       );
     }
 
-    let payload: { orderId: number; reason?: string | undefined };
+    let payload: {
+      orderId: number;
+      reason?: string | undefined;
+      refundAmount?: number | undefined;
+      protocol?: string | undefined;
+      actorUserId?: string | undefined;
+      actorLabel?: string | undefined;
+      accessAction?: SubscriptionAccessAction | undefined;
+      riskScore?: number | undefined;
+      riskFlags?: string[] | undefined;
+    };
     try {
       payload = parseFlowSecureDto(
         await request.json().catch(() => ({})),
@@ -114,6 +91,56 @@ export async function POST(request: Request) {
               maxLength: 500,
               normalizeWhitespace: true,
             }),
+          ),
+          refundAmount: flowSecureDto.optional(
+            flowSecureDto.number({
+              min: 0,
+            }),
+          ),
+          protocol: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 120,
+              normalizeWhitespace: true,
+            }),
+          ),
+          actorUserId: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 64,
+              normalizeWhitespace: true,
+            }),
+          ),
+          actorLabel: flowSecureDto.optional(
+            flowSecureDto.string({
+              maxLength: 160,
+              normalizeWhitespace: true,
+            }),
+          ),
+          accessAction: flowSecureDto.optional(
+            flowSecureDto.enum([
+              "revoke_immediately",
+              "keep_until_expiration",
+              "cancel_renewal_only",
+              "block_internal",
+              "none",
+            ]),
+          ),
+          riskScore: flowSecureDto.optional(
+            flowSecureDto.number({
+              integer: true,
+              min: 0,
+              max: 100,
+            }),
+          ),
+          riskFlags: flowSecureDto.optional(
+            flowSecureDto.array(
+              flowSecureDto.string({
+                maxLength: 80,
+                normalizeWhitespace: true,
+              }),
+              {
+                maxLength: 20,
+              },
+            ),
           ),
         },
         { rejectUnknown: true },
@@ -167,7 +194,7 @@ export async function POST(request: Request) {
       expires_at: string | null;
     };
 
-    if (isAlreadyRefunded(order)) {
+    if (isRefundedPaymentOrder(order)) {
       return applyNoStoreHeaders(
         NextResponse.json({
           ok: true,
@@ -194,10 +221,21 @@ export async function POST(request: Request) {
     }
 
     const method = String(order.payment_method || "").toLowerCase();
+    const refundOptions = {
+      amount: payload.refundAmount,
+      idempotencyKeySuffix: String(order.id),
+    };
+    let providerRefundPayload: unknown = null;
     if (method === "pix") {
-      await refundMercadoPagoPixPayment(order.provider_payment_id);
+      providerRefundPayload = await refundMercadoPagoPixPayment(
+        order.provider_payment_id,
+        refundOptions,
+      );
     } else if (method === "card") {
-      await refundMercadoPagoCardPayment(order.provider_payment_id);
+      providerRefundPayload = await refundMercadoPagoCardPayment(
+        order.provider_payment_id,
+        refundOptions,
+      );
     } else {
       return applyNoStoreHeaders(
         NextResponse.json(
@@ -208,69 +246,34 @@ export async function POST(request: Request) {
     }
 
     const nowIso = new Date().toISOString();
-    const providerPayload =
-      order.provider_payload && typeof order.provider_payload === "object"
-        ? order.provider_payload
-        : {};
-    const refundPayload = {
-      ...providerPayload,
-      ticket_refund: {
-        status: "refunded",
-        refundedAt: nowIso,
-        reason,
-        source: "official_support_ticket",
-      },
-    };
+    const refundOutcome = buildRefundOutcome({
+      order,
+      source: "official_support_ticket",
+      reason,
+      refundAmount: payload.refundAmount,
+      refundKind:
+        typeof payload.refundAmount === "number" &&
+        Number.isFinite(payload.refundAmount) &&
+        Number(order.amount || 0) > 0 &&
+        payload.refundAmount + 0.01 < Number(order.amount || 0)
+          ? "partial_refund"
+          : "full_refund",
+      providerRefundPayload,
+      actorUserId: payload.actorUserId || null,
+      actorLabel: payload.actorLabel || null,
+      protocol: payload.protocol || null,
+      requestedAccessAction: payload.accessAction || "revoke_immediately",
+      riskScore: payload.riskScore,
+      riskFlags: payload.riskFlags,
+      nowIso,
+    });
+    refundOutcome.update.provider_status_detail = PAYMENT_REFUND_STATUS_DETAIL;
 
-    const updateResult = await supabase
-      .from("payment_orders")
-      .update({
-        status: "cancelled",
-        provider_status: "refunded",
-        provider_status_detail: PAYMENT_REFUND_STATUS_DETAIL,
-        provider_payload: refundPayload,
-        expires_at: order.expires_at || nowIso,
-      })
-      .eq("id", order.id)
-      .select("*")
-      .single();
-
-    if (updateResult.error || !updateResult.data) {
-      throw new Error(
-        updateResult.error?.message || "Falha ao atualizar pedido apos reembolso.",
-      );
-    }
-
-    const planStateResult = await supabase
-      .from("auth_user_plan_state")
-      .select("last_payment_order_id")
-      .eq("user_id", order.user_id)
-      .maybeSingle();
-
-    if (!planStateResult.error && planStateResult.data?.last_payment_order_id === order.id) {
-      await supabase
-        .from("auth_user_plan_state")
-        .update({
-          status: "expired",
-          expires_at: nowIso,
-          metadata: {
-            ticketRefundedAt: nowIso,
-            ticketRefundedOrderId: order.id,
-          },
-        })
-        .eq("user_id", order.user_id);
-    }
-
-    const eventResult = await createPaymentOrderEventSafe(
-      order.id,
-      "ticket_refund_official_support_processed",
-      {
-        source: "official_support_ticket",
-        providerPaymentId: order.provider_payment_id,
-        reason,
-        refundedAt: nowIso,
-      },
-    );
+    const finalized = await finalizePaymentRefundOutcome({
+      order,
+      outcome: refundOutcome,
+      selectColumns: PAYMENT_REFUND_SELECT_COLUMNS,
+    });
 
     invalidatePaymentOrderQueryCaches({
       userId: order.user_id,
@@ -278,17 +281,32 @@ export async function POST(request: Request) {
       orderId: order.id,
       orderNumber: order.order_number,
     });
-    invalidateGuildLicenseCaches(order.guild_id || undefined);
-    clearPlanStateCacheForUser(order.user_id);
+    clearManagedHistoryCacheForUser(order.user_id);
 
-    const updatedOrder = updateResult.data as typeof order;
+    const updatedOrder = finalized.order as typeof order;
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
         alreadyRefunded: false,
         financialRefunded: true,
-        eventLogged: eventResult.ok,
-        eventError: eventResult.ok ? null : eventResult.error,
+        eventLogged: finalized.eventResult.ok,
+        eventError: finalized.eventResult.ok ? null : finalized.eventResult.error,
+        refundRecordLogged: finalized.refundRecordResult.ok,
+        refundRecordError: finalized.refundRecordResult.ok
+          ? null
+          : finalized.refundRecordResult.error,
+        accessUpdated: finalized.accessResult.ok,
+        accessError: finalized.accessResult.ok ? null : finalized.accessResult.error,
+        refund: {
+          status: refundOutcome.decision.status,
+          kind: refundOutcome.decision.kind,
+          amount: refundOutcome.decision.refundAmount,
+          currency: refundOutcome.decision.currency,
+          accessAction: refundOutcome.decision.accessAction,
+          accessUntil: refundOutcome.decision.accessUntil,
+          refundKey: refundOutcome.ledgerEntry.refundKey,
+          refundId: refundOutcome.ledgerEntry.refundId,
+        },
         order: {
           id: updatedOrder.id,
           status: updatedOrder.status,

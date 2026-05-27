@@ -33,6 +33,13 @@ function normalizeStatusTone(status: string) {
     };
   }
 
+  if (normalized === "refunded" || normalized === "partially_refunded") {
+    return {
+      shell: "border-[rgba(138,180,248,0.18)] bg-[rgba(138,180,248,0.08)] text-[#AFCBFF]",
+      dot: "bg-[#8AB4F8]",
+    };
+  }
+
   if (
     normalized === "critical" ||
     normalized === "high" ||
@@ -41,7 +48,8 @@ function normalizeStatusTone(status: string) {
     normalized === "revoked" ||
     normalized === "disabled" ||
     normalized === "rejected" ||
-    normalized === "suspended"
+    normalized === "suspended" ||
+    normalized === "charged_back"
   ) {
     return {
       shell: "border-[rgba(255,110,110,0.18)] bg-[rgba(255,110,110,0.08)] text-[#FFABAB]",
@@ -56,6 +64,10 @@ function normalizeStatusTone(status: string) {
 }
 
 function humanizeStatusLabel(status: string) {
+  if (status === "refunded") return "Refunded";
+  if (status === "partially_refunded") return "Partially Refunded";
+  if (status === "charged_back") return "Chargeback";
+
   return status
     .replace(/_/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());

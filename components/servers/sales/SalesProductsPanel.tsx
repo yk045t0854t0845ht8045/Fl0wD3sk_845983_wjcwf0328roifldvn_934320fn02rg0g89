@@ -2404,8 +2404,6 @@ export function SalesProductCreatePanel({
           discordChannelId:
             discordPublicationMode === "channel" ? discordChannelId : null,
           publishedVirtualStore,
-          publishedPointOfSale: false,
-          publishedPinterest: false,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as ProductsResponse;

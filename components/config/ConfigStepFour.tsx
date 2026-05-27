@@ -4370,7 +4370,9 @@ export function ConfigStepFour({
     const shouldUseFastApprovalPolling =
       isApprovedPaymentAwaitingBenefitDelivery(pixOrder) ||
       (pixOrder?.method === "card" && checkoutReturnStatus === "approved");
-    const pollingIntervalMs = shouldUseFastApprovalPolling ? 2500 : 8000;
+    // Quando um pagamento aprovado está aguardando entrega do benefício,
+    // usar polling mais agressivo para liberar em tempo real.
+    const pollingIntervalMs = shouldUseFastApprovalPolling ? 1000 : 8000;
     let isMounted = true;
     let activeController: AbortController | null = null;
 
@@ -4379,9 +4381,10 @@ export function ConfigStepFour({
 
       paymentPollingInFlightRef.current = true;
       activeController = new AbortController();
+      // Aumentar timeout para evitar aborts prematuros em redes lentas.
       const timeoutId = window.setTimeout(() => {
         activeController?.abort();
-      }, 7000);
+      }, 15000);
 
       try {
         const queryParams = new URLSearchParams({
