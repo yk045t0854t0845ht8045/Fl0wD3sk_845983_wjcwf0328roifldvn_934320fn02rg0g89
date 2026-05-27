@@ -3217,9 +3217,10 @@ export function ServersWorkspace({
     const perms = new Set(currentDashboardPermissions);
     const section = selectedSettingsSectionForConfig;
 
-    if (section === "overview" || section === "message") {
+    if (section === "overview") {
       return perms.has("server_manage_tickets_overview");
     }
+    if (section === "message") return perms.has("server_manage_tickets_message");
     if (
       section === "ticket_ai" ||
       section === "sales_overview" ||
@@ -3230,6 +3231,7 @@ export function ServersWorkspace({
       section === "sales_product_create" ||
       section === "sales_product_edit" ||
       section === "sales_stock" ||
+      section === "sales_stock_edit" ||
       section === "sales_payment_methods" ||
       section === "sales_coupons_gifts" ||
       section === "sales_coupons_gifts_create" ||
@@ -3237,12 +3239,13 @@ export function ServersWorkspace({
     ) {
       return perms.has("server_manage_tickets_overview");
     }
-    if (section === "entry_exit_overview" || section === "entry_exit_message") {
+    if (section === "entry_exit_overview") {
       return perms.has("server_manage_welcome_overview");
     }
-    if (section === "security_antilink") return perms.has("server_manage_security_antilink");
-    if (section === "security_autorole") return perms.has("server_manage_security_autorole");
-    if (section === "security_logs") return perms.has("server_manage_security_logs");
+    if (section === "entry_exit_message") return perms.has("server_manage_welcome_message");
+    if (section === "security_antilink") return perms.has("server_manage_antilink");
+    if (section === "security_autorole") return perms.has("server_manage_autorole");
+    if (section === "security_logs") return perms.has("server_view_security_logs");
     
     return false;
   }, [currentDashboardPermissions, selectedServer?.accessMode, selectedSettingsSectionForConfig]);

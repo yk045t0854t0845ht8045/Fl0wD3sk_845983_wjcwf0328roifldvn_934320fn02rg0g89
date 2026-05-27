@@ -157,13 +157,15 @@ function readProductMutationPayload(payload: unknown, input?: { includeProductCo
         }),
       ),
       categoryId: flowSecureDto.optional(
-        flowSecureDto.string({
-          maxLength: 60,
-          allowEmpty: true,
-          pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-          disallowAngleBrackets: true,
-          rejectThreatPatterns: false,
-        }),
+        flowSecureDto.nullable(
+          flowSecureDto.string({
+            maxLength: 60,
+            allowEmpty: true,
+            pattern: /^$|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        ),
       ),
       mediaUrls: flowSecureDto.optional(
         flowSecureDto.array(
@@ -197,13 +199,15 @@ function readProductMutationPayload(payload: unknown, input?: { includeProductCo
         flowSecureDto.enum(["online_only", "channel"] as const),
       ),
       discordChannelId: flowSecureDto.optional(
-        flowSecureDto.string({
-          maxLength: 25,
-          allowEmpty: true,
-          pattern: /^(\d{17,20})?$/,
-          disallowAngleBrackets: true,
-          rejectThreatPatterns: false,
-        }),
+        flowSecureDto.nullable(
+          flowSecureDto.string({
+            maxLength: 25,
+            allowEmpty: true,
+            pattern: /^(\d{17,20})?$/,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        ),
       ),
       barcodeMode: flowSecureDto.optional(flowSecureDto.enum(["auto", "manual"] as const)),
       priceAmount: flowSecureDto.optional(flowSecureDto.unknown()),
@@ -233,6 +237,8 @@ function readProductMutationPayload(payload: unknown, input?: { includeProductCo
         }),
       ),
       publishedVirtualStore: flowSecureDto.optional(flowSecureDto.boolean()),
+      publishedPointOfSale: flowSecureDto.optional(flowSecureDto.boolean()),
+      publishedPinterest: flowSecureDto.optional(flowSecureDto.boolean()),
     },
     { rejectUnknown: true },
   );

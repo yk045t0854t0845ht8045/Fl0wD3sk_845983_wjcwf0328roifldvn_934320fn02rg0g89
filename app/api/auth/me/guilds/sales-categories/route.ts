@@ -165,23 +165,28 @@ function readCategoryBody(payload: unknown, input?: { requireCategoryCode?: bool
         flowSecureDto.enum(["online_only", "channel"] as const),
       ),
       discordChannelId: flowSecureDto.optional(
-        flowSecureDto.string({
-          maxLength: 25,
-          allowEmpty: true,
-          pattern: /^(\d{17,20})?$/,
-          disallowAngleBrackets: true,
-          rejectThreatPatterns: false,
-        }),
+        flowSecureDto.nullable(
+          flowSecureDto.string({
+            maxLength: 25,
+            allowEmpty: true,
+            pattern: /^(\d{17,20})?$/,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        ),
       ),
       imageUrl: flowSecureDto.optional(
-        flowSecureDto.string({
-          maxLength: CATEGORY_IMAGE_MAX_LENGTH,
-          allowEmpty: true,
-          disallowAngleBrackets: true,
-          rejectThreatPatterns: false,
-        }),
+        flowSecureDto.nullable(
+          flowSecureDto.string({
+            maxLength: CATEGORY_IMAGE_MAX_LENGTH,
+            allowEmpty: true,
+            disallowAngleBrackets: true,
+            rejectThreatPatterns: false,
+          }),
+        ),
       ),
       publishedVirtualStore: flowSecureDto.optional(flowSecureDto.boolean()),
+      publishedPointOfSale: flowSecureDto.optional(flowSecureDto.boolean()),
     },
     { rejectUnknown: true },
   );

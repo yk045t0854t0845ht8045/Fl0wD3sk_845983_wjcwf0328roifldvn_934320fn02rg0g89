@@ -1042,7 +1042,6 @@ export function SalesCategoryCreatePanel({
           discordChannelId:
             discordPublicationMode === "channel" ? discordChannelId : null,
           publishedVirtualStore,
-          publishedPointOfSale: false,
           seoTitle: title,
           seoDescription: plainTextPreview(description, 180),
           imageUrl:
