@@ -5,15 +5,20 @@ export type TrustedApprovedPaymentLike = {
   payment_method?: string | null;
   provider_payment_id?: string | null;
   provider_status_detail?: string | null;
+  provider_payload?: unknown;
   paid_at?: string | null;
+  expires_at?: string | null;
   amount?: PaymentAmountLike;
 };
 
 const APPROVED_PAYMENT_TRUST_SELECT_COLUMNS = [
+  "status",
   "payment_method",
   "provider_payment_id",
   "provider_status_detail",
+  "provider_payload",
   "paid_at",
+  "expires_at",
   "amount",
 ] as const;
 
@@ -38,6 +43,26 @@ function parsePaymentAmount(value: PaymentAmountLike) {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRefundAccessAction(providerPayload: unknown) {
+  if (!isRecord(providerPayload)) return null;
+  const ledger = isRecord(providerPayload.flowdesk_refunds)
+    ? providerPayload.flowdesk_refunds
+    : null;
+  const directAction =
+    typeof ledger?.accessAction === "string" ? ledger.accessAction : null;
+  if (directAction) return directAction;
+
+  const entries = Array.isArray(ledger?.entries) ? ledger.entries : [];
+  const latestEntry = entries.filter(isRecord).at(-1);
+  return typeof latestEntry?.accessAction === "string"
+    ? latestEntry.accessAction
+    : null;
 }
 
 export function roundPaymentCurrencyAmount(value: number) {
@@ -117,10 +142,64 @@ export function isTrustedApprovedPaymentRecord(
   );
 }
 
+export function isRefundedPaymentStatusForAccess(status: string | null | undefined) {
+  const normalized = normalizeOptionalString(status)?.toLowerCase();
+  return normalized === "refunded" || normalized === "partially_refunded";
+}
+
+export function isTrustedPurchasedPaymentRecord(
+  record: TrustedApprovedPaymentLike | null | undefined,
+) {
+  if (isTrustedApprovedPaymentRecord(record)) return true;
+  if (!record) return false;
+
+  const status = normalizeOptionalString(record.status)?.toLowerCase();
+  if (!isRefundedPaymentStatusForAccess(status)) return false;
+
+  const paymentMethod = normalizeOptionalString(record.payment_method)?.toLowerCase();
+  if (paymentMethod === "trial") return true;
+
+  return Boolean(
+    normalizeOptionalString(record.provider_payment_id) &&
+      normalizeOptionalString(record.paid_at),
+  );
+}
+
+export function isTrustedLicenseEntitlementPaymentRecord(
+  record: TrustedApprovedPaymentLike | null | undefined,
+) {
+  if (isTrustedApprovedPaymentRecord(record)) return true;
+  if (!isTrustedPurchasedPaymentRecord(record)) return false;
+
+  const accessAction = readRefundAccessAction(record?.provider_payload);
+  if (
+    accessAction !== "keep_until_expiration" &&
+    accessAction !== "cancel_renewal_only" &&
+    accessAction !== "none"
+  ) {
+    return false;
+  }
+
+  const expiresAtMs = record?.expires_at ? Date.parse(record.expires_at) : Number.NaN;
+  return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
+}
+
 export function filterTrustedApprovedPaymentRecords<
   TRecord extends TrustedApprovedPaymentLike,
 >(records: TRecord[]) {
   return records.filter((record) => isTrustedApprovedPaymentRecord(record));
+}
+
+export function filterTrustedPurchasedPaymentRecords<
+  TRecord extends TrustedApprovedPaymentLike,
+>(records: TRecord[]) {
+  return records.filter((record) => isTrustedPurchasedPaymentRecord(record));
+}
+
+export function filterTrustedLicenseEntitlementPaymentRecords<
+  TRecord extends TrustedApprovedPaymentLike,
+>(records: TRecord[]) {
+  return records.filter((record) => isTrustedLicenseEntitlementPaymentRecord(record));
 }
 
 export function withApprovedPaymentTrustSelectColumns(selectColumns: string) {

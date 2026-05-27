@@ -262,7 +262,7 @@ export async function POST(request: Request) {
       actorUserId: payload.actorUserId || null,
       actorLabel: payload.actorLabel || null,
       protocol: payload.protocol || null,
-      requestedAccessAction: payload.accessAction || "revoke_immediately",
+      requestedAccessAction: payload.accessAction || null,
       riskScore: payload.riskScore,
       riskFlags: payload.riskFlags,
       nowIso,

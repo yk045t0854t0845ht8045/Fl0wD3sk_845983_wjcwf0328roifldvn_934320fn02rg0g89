@@ -2,7 +2,7 @@ import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import { resolvePlanLicenseExpiresAtIso } from "@/lib/plans/cycle";
 import { normalizeUtcTimestampIso, parseUtcTimestampMs } from "@/lib/time/utcTimestamp";
 import {
-  filterTrustedApprovedPaymentRecords,
+  filterTrustedLicenseEntitlementPaymentRecords,
   withApprovedPaymentTrustSelectColumns,
 } from "@/lib/payments/checkoutConsistency";
 
@@ -69,8 +69,13 @@ export type LicenseApprovedOrderRecord = ApprovedOrderRecord & {
   order_number?: number;
   guild_id?: string;
   user_id?: number;
+  status?: string | null;
   plan_code?: string | null;
   plan_billing_cycle_days?: number | null;
+  provider_payment_id?: string | null;
+  provider_status_detail?: string | null;
+  provider_payload?: unknown;
+  expires_at?: string | null;
 };
 
 export type ResolvedLicenseCoverage<
@@ -642,7 +647,7 @@ export async function getApprovedOrdersForGuild<
       .from("payment_orders")
       .select(trustedSelectColumns)
       .eq("guild_id", guildId)
-      .eq("status", "approved")
+      .in("status", ["approved", "refunded", "partially_refunded"])
       .order("paid_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
       .limit(limit)
@@ -652,7 +657,7 @@ export async function getApprovedOrdersForGuild<
       throw new Error(result.error.message);
     }
 
-    const data = filterTrustedApprovedPaymentRecords(result.data || []);
+    const data = filterTrustedLicenseEntitlementPaymentRecords(result.data || []);
     writeCacheEntry(
       approvedOrdersByGuildCache,
       cacheKey,
@@ -716,7 +721,7 @@ export async function getApprovedOrdersForGuilds<
     .from("payment_orders")
     .select(trustedSelectColumns)
     .in("guild_id", normalizedGuildIds)
-    .eq("status", "approved")
+    .in("status", ["approved", "refunded", "partially_refunded"])
     .order("paid_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .returns<TOrder[]>();
@@ -725,7 +730,7 @@ export async function getApprovedOrdersForGuilds<
     throw new Error(result.error.message);
   }
 
-  for (const order of filterTrustedApprovedPaymentRecords(result.data || [])) {
+  for (const order of filterTrustedLicenseEntitlementPaymentRecords(result.data || [])) {
     const guildId = order.guild_id;
     const current = ordersByGuild.get(guildId) || [];
     current.push(order);
@@ -990,7 +995,7 @@ export async function getLockedGuildLicenseMapByUserId(userId: number) {
       .from("payment_orders")
       .select("guild_id")
       .eq("user_id", userId)
-      .eq("status", "approved")
+      .in("status", ["approved", "refunded", "partially_refunded"])
       .not("guild_id", "is", null)
       .returns<{ guild_id: string }[]>(),
   ]);

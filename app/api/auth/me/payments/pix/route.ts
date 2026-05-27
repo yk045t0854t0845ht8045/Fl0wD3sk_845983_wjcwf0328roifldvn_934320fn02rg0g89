@@ -944,7 +944,9 @@ async function reconcilePixOrderFromProvider(
 ) {
   if (!order.provider_payment_id) return order;
 
-  const providerPayment = await fetchMercadoPagoPaymentById(order.provider_payment_id);
+  const providerPayment = await fetchMercadoPagoPaymentById(order.provider_payment_id, {
+    forceFresh: order.status === "pending",
+  });
   const providerPaymentId = parsePaymentId(providerPayment.id);
   if (!providerPaymentId) return order;
 
@@ -1115,6 +1117,27 @@ async function reconcilePixOrderFromProvider(
   invalidatePaymentReadCachesForOrder(updatedOrderResult.data);
   invalidateLicenseReadCachesForOrder(updatedOrderResult.data);
   return updatedOrderResult.data;
+}
+
+async function settleTrustedApprovedOrderForFastRelease(
+  order: PaymentOrderRecord,
+  source: string,
+) {
+  if (order.status !== "approved" || !isTrustedApprovedPaymentRecord(order)) {
+    return order;
+  }
+
+  try {
+    const settlement = await settleApprovedPaymentOrder({
+      order,
+      source,
+      selectColumns: PAYMENT_ORDER_SELECT_COLUMNS,
+      allowAutoRefundOnFailure: true,
+    });
+    return settlement.order;
+  } catch {
+    return order;
+  }
 }
 
 export async function createDraftOrderForCheckout(input: {
@@ -1455,6 +1478,10 @@ export async function GET(request: Request) {
       if (orderByCode.provider_payment_id) {
         try {
           orderByCode = await reconcilePixOrderFromProvider(orderByCode, "order_code");
+          orderByCode = await settleTrustedApprovedOrderForFastRelease(
+            orderByCode,
+            "payment_pix_order_code_fast_release",
+          );
         } catch {
           await createPaymentOrderEventSafe(orderByCode.id, "provider_payment_reconcile_failed", {
             source: "order_code",
@@ -1545,6 +1572,10 @@ export async function GET(request: Request) {
       try {
         latestOrder = await reconcilePixOrderFromProvider(latestOrder, "poll");
         if (latestOrder?.status === "approved") {
+          latestOrder = await settleTrustedApprovedOrderForFastRelease(
+            latestOrder,
+            "payment_pix_bootstrap_fast_release",
+          );
           // Garante cache limpo se o polling acabou de aprovar o pedido
           clearPlanStateCacheForUser(userId);
         }
@@ -1913,6 +1944,10 @@ export async function POST(request: Request) {
     ) {
       try {
         latestOrder = await reconcilePixOrderFromProvider(latestOrder, "poll");
+        latestOrder = await settleTrustedApprovedOrderForFastRelease(
+          latestOrder,
+          "payment_pix_post_fast_release",
+        );
       } catch {
         await createPaymentOrderEventSafe(latestOrder.id, "provider_payment_reconcile_failed", {
           source: "payment_pix_post",

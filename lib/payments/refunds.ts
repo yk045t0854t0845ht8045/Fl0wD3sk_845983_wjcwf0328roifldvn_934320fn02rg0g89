@@ -549,7 +549,7 @@ function resolveDefaultAccessAction(input: {
     return "cancel_renewal_only";
   }
 
-  return "revoke_immediately";
+  return "keep_until_expiration";
 }
 
 export function resolveRefundPolicyDecision(input: {
@@ -780,6 +780,7 @@ export function resolvePaymentRefundSummary(order: {
   provider_status_detail?: string | null;
   provider_payload?: unknown;
   expires_at?: string | null;
+  updated_at?: string | null;
 }): PaymentRefundSummary | null {
   const ledger = readLedgerFromPayload(order.provider_payload);
   const latestEntry = ledger?.entries[ledger.entries.length - 1] || null;
@@ -791,7 +792,12 @@ export function resolvePaymentRefundSummary(order: {
   const refundedAmount =
     ledger?.totalRefundedAmount ||
     (inferredStatus ? originalAmount : 0);
-  const accessUntil = latestEntry?.accessUntil || ledger?.accessUntil || resolveIso(order.expires_at);
+  const effectiveAccessAction = latestEntry?.accessAction || ledger?.accessAction || null;
+  const accessUntil =
+    effectiveAccessAction === "revoke_immediately" ||
+    effectiveAccessAction === "block_internal"
+      ? latestEntry?.accessUntil || ledger?.accessUntil || latestEntry?.createdAt || ledger?.lastRefundedAt || resolveIso(order.updated_at)
+      : latestEntry?.accessUntil || ledger?.accessUntil || resolveIso(order.expires_at);
   const accessUntilMs = parseUtcTimestampMs(accessUntil);
   const remainingAccessSeconds =
     Number.isFinite(accessUntilMs) && accessUntilMs > Date.now()
@@ -810,7 +816,7 @@ export function resolvePaymentRefundSummary(order: {
     originalAmount,
     refundedAmount: roundMoney(refundedAmount),
     currency: normalizeOptionalString(order.currency) || "BRL",
-    refundedAt: latestEntry?.createdAt || ledger?.lastRefundedAt || null,
+    refundedAt: latestEntry?.createdAt || ledger?.lastRefundedAt || resolveIso(order.updated_at) || null,
     reason: latestEntry?.reason || ledger?.lastReason || null,
     actorUserId: latestEntry?.actorUserId || null,
     actorLabel: latestEntry?.actorLabel || null,
@@ -819,9 +825,9 @@ export function resolvePaymentRefundSummary(order: {
     refundId: latestEntry?.refundId || null,
     refundKey: latestEntry?.refundKey || null,
     protocol: latestEntry?.protocol || null,
-    accessAction: latestEntry?.accessAction || ledger?.accessAction || null,
+    accessAction: effectiveAccessAction,
     accessLabel: buildAccessLabel({
-      action: latestEntry?.accessAction || ledger?.accessAction || null,
+      action: effectiveAccessAction,
       status,
     }),
     accessUntil,
@@ -985,6 +991,16 @@ async function mergePlanStateMetadata(userId: number, patch: Record<string, unkn
   };
 }
 
+function resolvePlanStateStatusForAccess(input: {
+  planCode?: string | null;
+  expiresAt?: string | null;
+}) {
+  const expiresAtMs = parseUtcTimestampMs(input.expiresAt);
+  const isExpired = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now();
+  if (isExpired) return "expired";
+  return input.planCode === "basic" ? "trial" : "active";
+}
+
 export async function applySubscriptionAccessOutcome(input: {
   order: PaymentRefundOrderRecord;
   outcome: RefundOutcome;
@@ -1063,10 +1079,16 @@ export async function applySubscriptionAccessOutcome(input: {
     ) {
       return { ok: false as const, error: guildUpdate.error.message };
     }
-  } else {
+  } else if (action === "keep_until_expiration" || action === "cancel_renewal_only") {
+    const accessUntil = input.outcome.decision.accessUntil || input.order.expires_at || null;
     const planUpdate = await supabase
       .from("auth_user_plan_state")
       .update({
+        status: resolvePlanStateStatusForAccess({
+          planCode: input.order.plan_code,
+          expiresAt: accessUntil,
+        }),
+        expires_at: accessUntil,
         metadata: {
           ...metadata,
           subscriptionCancellation: {
@@ -1074,11 +1096,22 @@ export async function applySubscriptionAccessOutcome(input: {
             paymentOrderId: input.order.id,
             refundKey: input.outcome.ledgerEntry.refundKey,
             accessAction: action,
-            accessUntil: input.outcome.decision.accessUntil,
+            accessUntil,
             renews: false,
             processedAt: nowIso,
           },
         },
+      })
+      .eq("user_id", input.order.user_id);
+
+    if (planUpdate.error) {
+      return { ok: false as const, error: planUpdate.error.message };
+    }
+  } else {
+    const planUpdate = await supabase
+      .from("auth_user_plan_state")
+      .update({
+        metadata,
       })
       .eq("user_id", input.order.user_id);
 

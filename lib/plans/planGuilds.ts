@@ -7,6 +7,7 @@ import {
   getLockedGuildLicenseByGuildId,
   resolveLatestLicenseCoverageFromApprovedOrders,
 } from "@/lib/payments/licenseStatus";
+import { filterTrustedLicenseEntitlementPaymentRecords } from "@/lib/payments/checkoutConsistency";
 
 export type PlanGuildRecord = {
   id?: number;
@@ -37,10 +38,16 @@ type PlanCoverage = {
 type LegacyApprovedGuildOrderRecord = {
   guild_id: string;
   user_id: number;
+  status?: string | null;
   paid_at: string | null;
+  expires_at?: string | null;
   created_at: string;
   plan_code: string | null;
   plan_billing_cycle_days: number | null;
+  payment_method?: string | null;
+  provider_payment_id?: string | null;
+  provider_status_detail?: string | null;
+  provider_payload?: unknown;
 };
 
 type PlanGuildOwnershipRecord = {
@@ -102,10 +109,10 @@ async function getLegacyLicensedGuildsForUser(userId: number) {
   const result = await supabase
     .from("payment_orders")
     .select(
-      "guild_id, user_id, paid_at, created_at, plan_code, plan_billing_cycle_days",
+      "guild_id, user_id, status, payment_method, provider_payment_id, provider_status_detail, provider_payload, paid_at, expires_at, created_at, plan_code, plan_billing_cycle_days",
     )
     .eq("user_id", userId)
-    .eq("status", "approved")
+    .in("status", ["approved", "refunded", "partially_refunded"])
     .not("guild_id", "is", null)
     .returns<LegacyApprovedGuildOrderRecord[]>();
 
@@ -114,7 +121,7 @@ async function getLegacyLicensedGuildsForUser(userId: number) {
   }
 
   const ordersByGuild = new Map<string, LegacyApprovedGuildOrderRecord[]>();
-  for (const order of result.data || []) {
+  for (const order of filterTrustedLicenseEntitlementPaymentRecords(result.data || [])) {
     const guildId = order.guild_id?.trim();
     if (!guildId) continue;
     const currentOrders = ordersByGuild.get(guildId) || [];
