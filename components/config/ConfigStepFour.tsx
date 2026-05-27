@@ -1045,9 +1045,10 @@ function isTrustedApprovedPaymentOrder(order: PixOrder | null | undefined) {
 function isApprovedPaymentBenefitDelivered(order: PixOrder | null | undefined) {
   if (!isTrustedApprovedPaymentOrder(order)) return false;
   if (!order) return false;
+  if (order.finalizationStatus === "refunded") return false;
   if (order.method === "trial") return true;
   if (isCoveredByInternalCreditsApprovedOrder(order)) return true;
-  return order.finalizationStatus === "settled";
+  return true;
 }
 
 function isApprovedPaymentAwaitingBenefitDelivery(order: PixOrder | null | undefined) {
@@ -1285,7 +1286,7 @@ function resolveApprovedRedirectConfig(
   order: PixOrder | null = null,
   hasExistingServer: boolean = false,
 ) {
-  const delayMs = 10_000;
+  const delayMs = 1_500;
   const stepOneConfigPath = buildConfigUrlWithHashRoute("/config", "", "#/step/1");
 
   if (typeof window === "undefined") {
@@ -1324,6 +1325,22 @@ function resolveApprovedRedirectConfig(
     };
   }
 
+  if (returnTarget === "hosting") {
+    const params = new URLSearchParams({
+      paymentApproved: "1",
+    });
+    if (order?.orderNumber) {
+      params.set("orderNumber", String(order.orderNumber));
+    }
+    const target = buildBrowserRoutingTargetFromInternalPath(
+      `/dashboard/hosting/step-6?${params.toString()}`,
+    );
+    return {
+      targetUrl: target.href,
+      delayMs: 800,
+    };
+  }
+
   const target = buildBrowserRoutingTargetFromInternalPath(
     mustReturnToConfigStepOne
       ? stepOneConfigPath
@@ -1336,7 +1353,7 @@ function resolveApprovedRedirectConfig(
     targetUrl: target.href,
     delayMs:
       isRenewFlow || planTransitionKind === "current"
-        ? 5_000
+        ? 1_200
         : delayMs,
   };
 }
@@ -3749,6 +3766,8 @@ export function ConfigStepFour({
         : null;
     const cachedPendingOrder =
       cachedOrder &&
+      !shouldLoadOrderByCode &&
+      checkoutQuery.status !== "approved" &&
       cachedOrder.status === "pending" &&
       cachedOrderPlanCode === activePlanCode &&
       cachedOrderPlanBillingCycleDays === activePlanSummary.billingCycleDays
@@ -3974,7 +3993,10 @@ export function ConfigStepFour({
               ? lastKnownOrderNumberRef.current === remoteOrder.orderNumber
               : false);
 
-          if (!hasTrackedApprovalContext) {
+          if (
+            !hasTrackedApprovalContext &&
+            remoteOrder.planCode !== activePlanCode
+          ) {
             removeCachedOrderByGuild(activeGuildId);
             setPixOrder(null);
             setLastKnownOrderNumber(null);
@@ -4367,12 +4389,22 @@ export function ConfigStepFour({
     const activeOrderCode = pendingPixOrderNumber;
     const checkoutQuery = readCheckoutStatusQuery();
     const checkoutReturnStatus = checkoutQuery.status;
+    const isPendingCheckoutPayment = pixOrder?.status === "pending";
     const shouldUseFastApprovalPolling =
+      isPendingCheckoutPayment ||
       isApprovedPaymentAwaitingBenefitDelivery(pixOrder) ||
       (pixOrder?.method === "card" && checkoutReturnStatus === "approved");
     // Quando um pagamento aprovado está aguardando entrega do benefício,
     // usar polling mais agressivo para liberar em tempo real.
-    const pollingIntervalMs = shouldUseFastApprovalPolling ? 1000 : 8000;
+    const pollingStartedAt = Date.now();
+    const resolvePollingIntervalMs = () => {
+      if (typeof document !== "undefined" && document.hidden) return 3500;
+      if (!shouldUseFastApprovalPolling) return 5000;
+      const elapsedMs = Date.now() - pollingStartedAt;
+      if (elapsedMs <= 45_000) return 750;
+      if (elapsedMs <= 180_000) return 1500;
+      return 3000;
+    };
     let isMounted = true;
     let activeController: AbortController | null = null;
 
@@ -4487,15 +4519,24 @@ export function ConfigStepFour({
 
     void pollLatestOrder();
 
-    const intervalId = window.setInterval(() => {
-      void pollLatestOrder();
-    }, pollingIntervalMs);
+    let scheduledPollId: number | null = null;
+    const scheduleNextPoll = () => {
+      scheduledPollId = window.setTimeout(() => {
+        void pollLatestOrder().finally(() => {
+          if (isMounted) scheduleNextPoll();
+        });
+      }, resolvePollingIntervalMs());
+    };
+
+    scheduleNextPoll();
 
     return () => {
       isMounted = false;
       activeController?.abort();
       paymentPollingInFlightRef.current = false;
-      window.clearInterval(intervalId);
+      if (scheduledPollId !== null) {
+        window.clearTimeout(scheduledPollId);
+      }
     };
   }, [
     guildId,

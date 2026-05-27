@@ -39,8 +39,8 @@ import {
 import { finalizeDowngradeEnforcementAfterApprovedOrder } from "@/lib/plans/downgradeEnforcement";
 import { licenseGuildForUser } from "@/lib/plans/planGuilds";
 import {
-  filterTrustedApprovedPaymentRecords,
-  isTrustedApprovedPaymentRecord,
+  filterTrustedLicenseEntitlementPaymentRecords,
+  filterTrustedPurchasedPaymentRecords,
   withApprovedPaymentTrustSelectColumns,
 } from "@/lib/payments/checkoutConsistency";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
@@ -85,7 +85,7 @@ const LATEST_APPROVED_ORDER_FOR_PLAN_STATE_SELECT_COLUMNS =
   "id, user_id, guild_id, payment_method, plan_code, plan_name, amount, currency, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, paid_at, expires_at, created_at";
 
 const BASIC_PLAN_ELIGIBILITY_SELECT_COLUMNS =
-  "id, plan_code, payment_method, paid_at, created_at";
+  "id, status, plan_code, payment_method, provider_payment_id, provider_status_detail, provider_payload, paid_at, expires_at, amount, created_at";
 
 const BASIC_PLAN_FIRST_PURCHASE_BONUS_DAYS = 7;
 
@@ -93,6 +93,7 @@ type PaymentOrderPlanRecord = {
   id: number;
   user_id: number;
   guild_id: string | null;
+  status?: string | null;
   payment_method?: string | null;
   plan_code?: string | null;
   plan_name?: string | null;
@@ -103,6 +104,8 @@ type PaymentOrderPlanRecord = {
   plan_max_active_tickets?: number | null;
   plan_max_automations?: number | null;
   plan_max_monthly_actions?: number | null;
+  provider_payment_id?: string | null;
+  provider_status_detail?: string | null;
   provider_payload?: unknown;
   paid_at?: string | null;
   expires_at?: string | null;
@@ -285,7 +288,7 @@ async function listApprovedOrdersForBasicPlanRules(
     .from("payment_orders")
     .select(withApprovedPaymentTrustSelectColumns(BASIC_PLAN_ELIGIBILITY_SELECT_COLUMNS))
     .eq("user_id", userId)
-    .eq("status", "approved")
+    .in("status", ["approved", "refunded", "partially_refunded"])
     .order("paid_at", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
 
@@ -301,7 +304,7 @@ async function listApprovedOrdersForBasicPlanRules(
     );
   }
 
-  return filterTrustedApprovedPaymentRecords(
+  return filterTrustedPurchasedPaymentRecords(
     ((result.data || []) as unknown) as ApprovedOrderEligibilityRecord[],
   );
 }
@@ -799,7 +802,7 @@ export async function getUserPlanState(userId: number) {
         ),
       )
       .eq("user_id", userId)
-      .eq("status", "approved")
+      .in("status", ["approved", "refunded", "partially_refunded"])
       .order("paid_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
       .limit(1)
@@ -817,11 +820,9 @@ export async function getUserPlanState(userId: number) {
   }
 
   const currentPlanState = planStateResult.data || null;
-  const latestApprovedOrder =
-    latestApprovedOrderResult.data &&
-    isTrustedApprovedPaymentRecord(latestApprovedOrderResult.data)
-      ? latestApprovedOrderResult.data
-      : null;
+  const latestApprovedOrder = filterTrustedLicenseEntitlementPaymentRecords(
+    latestApprovedOrderResult.data ? [latestApprovedOrderResult.data] : [],
+  )[0] || null;
 
   if (!latestApprovedOrder) {
     return currentPlanState;
@@ -914,11 +915,11 @@ export async function repairOrphanPlanGuildLinkForUser(input: {
     supabase
       .from("payment_orders")
       .select(
-        "id, user_id, guild_id, payment_method, plan_code, plan_name, amount, currency, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, paid_at, expires_at, created_at",
+        "id, user_id, guild_id, status, payment_method, provider_payment_id, provider_status_detail, provider_payload, plan_code, plan_name, amount, currency, plan_billing_cycle_days, plan_max_licensed_servers, plan_max_active_tickets, plan_max_automations, plan_max_monthly_actions, paid_at, expires_at, created_at",
       )
       .eq("user_id", input.userId)
       .eq("guild_id", candidateGuildId)
-      .eq("status", "approved")
+      .in("status", ["approved", "refunded", "partially_refunded"])
       .order("paid_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
       .limit(1)
@@ -946,7 +947,9 @@ export async function repairOrphanPlanGuildLinkForUser(input: {
     } as const;
   }
 
-  const candidateOrder = candidateOrderResult.data || null;
+  const candidateOrder = filterTrustedLicenseEntitlementPaymentRecords(
+    candidateOrderResult.data ? [candidateOrderResult.data] : [],
+  )[0] || null;
   if (!candidateOrder) {
     return {
       repaired: false,

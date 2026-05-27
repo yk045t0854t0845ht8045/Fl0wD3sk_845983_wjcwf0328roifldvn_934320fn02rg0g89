@@ -87,6 +87,10 @@ export function resolveDashboardViewFromSlug(slug?: string[]) {
   const normalizedSlug = slug.map((segment) => segment.trim().toLowerCase()).filter(Boolean);
   const path = normalizedSlug.join("/");
 
+  if (normalizedSlug[0] === "hosting") {
+    return DASHBOARD_VIEWS.hosting;
+  }
+
   switch (path) {
     case "domains":
       return DASHBOARD_VIEWS.domains_overview;
@@ -96,8 +100,6 @@ export function resolveDashboardViewFromSlug(slug?: string[]) {
       return DASHBOARD_VIEWS.domains_transfers;
     case "flowai-api":
       return DASHBOARD_VIEWS.flowai_api;
-    case "hosting":
-      return DASHBOARD_VIEWS.hosting;
     case "billing/subscriptions":
       return DASHBOARD_VIEWS.billing_subscriptions;
     case "billing/payment-history":

@@ -165,6 +165,7 @@ const sidebarShellClass =
   "relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
 const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
 const DASHBOARD_DISMISSED_TASKS_KEY = "flowdesk_dashboard_dismissed_tasks_v1";
+const HOSTING_ONBOARDING_STORAGE_KEY = "flowdesk_hosting_onboarding_v1";
 const DASHBOARD_HOME_SIGNAL_REFRESH_MS = 30_000;
 
 const TEAM_ICON_OPTIONS = [
@@ -839,6 +840,7 @@ export function DashboardWorkspace({
   const mobileTeamMenuRef = useRef<HTMLDivElement | null>(null);
   const desktopProfileMenuRef = useRef<HTMLDivElement | null>(null);
   const mobileProfileMenuRef = useRef<HTMLDivElement | null>(null);
+  const previousPathnameRef = useRef(pathname);
   const currentView = useMemo(
     () => resolveDashboardViewFromPathname(pathname) ?? getDashboardViewById("home"),
     [pathname],
@@ -857,8 +859,29 @@ export function DashboardWorkspace({
   const highlightedViewId = pendingViewId ?? currentView.id;
   const hasWorkspaceAlert = Boolean(workspaceAlertMessage);
   const hasResolvedContent = children !== null && children !== undefined;
+  const isHostingOnboardingRoute =
+    hasResolvedContent &&
+    (pathname === "/dashboard/hosting" || pathname.startsWith("/dashboard/hosting/step-"));
   const shouldShowDashboardLoading =
-    Boolean(latchedPendingViewId) || (!hasResolvedContent && !displayView.isEmptyHome);
+    !isHostingOnboardingRoute &&
+    (Boolean(latchedPendingViewId) || (!hasResolvedContent && !displayView.isEmptyHome));
+
+  useEffect(() => {
+    const previousPathname = previousPathnameRef.current;
+    const wasHostingRoute =
+      previousPathname === "/dashboard/hosting" ||
+      previousPathname.startsWith("/dashboard/hosting/step-");
+    const isHostingRoute =
+      pathname === "/dashboard/hosting" ||
+      pathname.startsWith("/dashboard/hosting/step-");
+
+    if (wasHostingRoute && !isHostingRoute) {
+      window.sessionStorage.removeItem(HOSTING_ONBOARDING_STORAGE_KEY);
+      window.localStorage.removeItem(HOSTING_ONBOARDING_STORAGE_KEY);
+    }
+
+    previousPathnameRef.current = pathname;
+  }, [pathname]);
 
   useNotificationEffect(teamsErrorMessage, {
     tone: "error",
@@ -2636,25 +2659,27 @@ export function DashboardWorkspace({
           </aside>
 
           <section className="min-w-0">
-            <LandingReveal delay={36} duration={240}>
-              <div className="relative z-[700] flex flex-col gap-[18px]">
-                <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
-                  <div>
-                    <LandingGlowTag className="px-[24px]">
-                      Dashboard
-                    </LandingGlowTag>
-                    <h1 className="mt-[18px] bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-[1.02] font-normal tracking-[-0.05em] text-transparent md:text-[42px]">
-                      {displayView.title}
-                    </h1>
-                    <p className="mt-[14px] max-w-[760px] text-[14px] leading-[1.55] text-[#7D7D7D] md:text-[15px]">
-                      {displayView.description}
-                    </p>
+            {!isHostingOnboardingRoute ? (
+              <LandingReveal delay={36} duration={240}>
+                <div className="relative z-[700] flex flex-col gap-[18px]">
+                  <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
+                    <div>
+                      <LandingGlowTag className="px-[24px]">
+                        Dashboard
+                      </LandingGlowTag>
+                      <h1 className="mt-[18px] bg-[linear-gradient(90deg,#DADADA_0%,#C1C1C1_100%)] bg-clip-text text-[34px] leading-[1.02] font-normal tracking-[-0.05em] text-transparent md:text-[42px]">
+                        {displayView.title}
+                      </h1>
+                      <p className="mt-[14px] max-w-[760px] text-[14px] leading-[1.55] text-[#7D7D7D] md:text-[15px]">
+                        {displayView.description}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </LandingReveal>
+              </LandingReveal>
+            ) : null}
 
-            {isHomeView ? (
+            {isHomeView && !isHostingOnboardingRoute ? (
               <LandingReveal delay={48} duration={240}>
                 <div className="mt-[24px] space-y-[24px]">
                   <section aria-label="Suas tarefas">

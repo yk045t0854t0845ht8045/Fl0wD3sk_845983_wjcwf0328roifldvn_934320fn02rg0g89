@@ -15,9 +15,9 @@ type PaymentOrderLike = {
   guild_id?: string | null;
 };
 
-const LATEST_ORDER_CACHE_TTL_MS = 12_000;
-const ORDER_BY_CODE_CACHE_TTL_MS = 12_000;
-const DRAFT_ORDER_CACHE_TTL_MS = 8_000;
+const LATEST_ORDER_CACHE_TTL_MS = 2_500;
+const ORDER_BY_CODE_CACHE_TTL_MS = 2_500;
+const DRAFT_ORDER_CACHE_TTL_MS = 3_500;
 
 const paymentOrderQueryCache = new Map<string, CacheEntry<unknown>>();
 const paymentOrderQueryInflight = new Map<string, Promise<unknown>>();

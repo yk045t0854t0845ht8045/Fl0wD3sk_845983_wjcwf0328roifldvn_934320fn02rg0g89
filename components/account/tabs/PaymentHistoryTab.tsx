@@ -183,6 +183,10 @@ function resolvePlanLabel(order: Order) {
   return "Plano contratado";
 }
 
+function resolveRefundedOrderLabel(order: Order) {
+  return `Pedido #${order.orderNumber} - ${formatCurrency(order.amount, order.currency)}`;
+}
+
 function buildRefundRows(order: Order) {
   const refund = order.refund;
   if (!refund || refund.status === "none") return [];
@@ -192,7 +196,7 @@ function buildRefundRows(order: Order) {
     { label: "Valor devolvido", value: formatCurrency(refund.refundedAmount, refund.currency || order.currency) },
     { label: "Data do reembolso", value: refund.refundedAt ? formatDate(refund.refundedAt) : "Em processamento" },
     { label: "Motivo", value: refund.reason || "Reembolso processado pela equipe Flowdesk" },
-    { label: "Plano afetado", value: resolvePlanLabel(order) },
+    { label: "Pedido reembolsado", value: resolveRefundedOrderLabel(order) },
     { label: "Acesso", value: refund.accessLabel || "Politica de acesso registrada" },
     { label: "Vencimento do acesso", value: refund.accessUntil ? formatDate(refund.accessUntil) : "Nao aplicavel" },
     { label: "Tempo restante", value: formatRemainingAccess(refund.remainingAccessSeconds) || "Nao aplicavel" },
