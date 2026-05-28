@@ -46,8 +46,13 @@ function normalizeRepository(value: unknown) {
     owner,
     name,
     id: normalizeText(record.id, 80),
+    nodeId: normalizeText(record.nodeId, 160),
     branch: normalizeText(record.branch, 120) || "main",
     fullName: `${owner}/${name}`,
+    description: normalizeText(record.description, 400),
+    language: normalizeText(record.language, 80),
+    htmlUrl: normalizeText(record.htmlUrl, 300),
+    private: typeof record.private === "boolean" ? record.private : null,
   };
 }
 

@@ -330,22 +330,6 @@ function normalizePurchaseText(value: unknown, maxLength = 180) {
   return normalized ? normalized.slice(0, maxLength) : null;
 }
 
-function normalizePaymentCurrency(value: unknown) {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toUpperCase();
-  return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
-}
-
-function parsePurchaseAmount(value: unknown) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) && value >= 0 ? roundCurrencyAmount(value) : null;
-  }
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().replace(/,/g, ".");
-  const amount = Number(normalized);
-  return Number.isFinite(amount) && amount >= 0 ? roundCurrencyAmount(amount) : null;
-}
-
 function isHostingKind(value: unknown): value is HostingKind {
   return value === "site" || value === "bot" || value === "cdn";
 }
@@ -367,8 +351,8 @@ export function resolvePurchaseContext(value: unknown): ResolvedPurchaseContext 
   const repository = normalizePurchaseText(record.repository, 220);
   const title = `${plan.name} VPS`;
   const subtitle = `${getHostingKindLabel(hostingKind)} em ${region.city}, ${region.country}`;
-  const amount = parsePurchaseAmount(record.amount) ?? roundCurrencyAmount(plan.monthlyAmount);
-  const currency = normalizePaymentCurrency(record.currency) || plan.currency || resolvePixCurrency();
+  const amount = roundCurrencyAmount(plan.monthlyAmount);
+  const currency = plan.currency || resolvePixCurrency();
 
   return {
     type: "hosting",
@@ -1607,8 +1591,25 @@ export async function GET(request: Request) {
       requestedPlanCode,
       requestedBillingPeriodCode,
     });
+    const purchaseContext = resolvePurchaseContext({
+      type:
+        url.searchParams.get("purchaseType") ||
+        (url.searchParams.get("source") === "dashboard-hosting" ? "hosting" : null),
+      hostingKind: url.searchParams.get("hostingKind"),
+      hostingPlan: url.searchParams.get("hostingPlan"),
+      hostingRegion: url.searchParams.get("hostingRegion"),
+      repository: url.searchParams.get("repository"),
+    });
+    const checkoutAmount = purchaseContext?.amount ?? checkoutPlan.amount;
+    const checkoutCurrency = purchaseContext?.currency ?? checkoutPlan.currency;
+    const checkoutProviderPayload =
+      purchaseContext?.providerPayload ||
+      buildCheckoutTransitionProviderPayload({
+        planChange: checkoutPlan.planChange,
+        flowPointsApplied: 0,
+      });
 
-    if (checkoutPlan.currentPlanRepurchaseBlocked) {
+    if (!purchaseContext && checkoutPlan.currentPlanRepurchaseBlocked) {
       return respond(
         {
           ok: false,
@@ -1619,7 +1620,7 @@ export async function GET(request: Request) {
       );
     }
 
-    if (checkoutPlan.planChange.execution === "schedule_for_renewal") {
+    if (!purchaseContext && checkoutPlan.planChange.execution === "schedule_for_renewal") {
       return respond({
         ok: true,
         order: null,
@@ -1629,7 +1630,7 @@ export async function GET(request: Request) {
       });
     }
 
-    if (checkoutPlan.plan.isTrial) {
+    if (!purchaseContext && checkoutPlan.plan.isTrial) {
       return respond(
         {
           ok: false,
@@ -1640,7 +1641,7 @@ export async function GET(request: Request) {
       );
     }
 
-    if (checkoutPlan.amount <= 0) {
+    if (checkoutAmount <= 0) {
       return respond({
         ok: true,
         order: null,
@@ -1696,25 +1697,19 @@ export async function GET(request: Request) {
       if (latestDraftOrder && !isOrderExpiredOrExpiringSoon(latestDraftOrder, ORDER_EXPIRATION_SAFETY_BUFFER_MS)) {
         order = await reuseDraftOrderForCheckout({
           order: latestDraftOrder,
-          amount: checkoutPlan.amount,
-          currency: checkoutPlan.currency,
+          amount: checkoutAmount,
+          currency: checkoutCurrency,
           plan: checkoutPlan.plan,
-          providerPayload: buildCheckoutTransitionProviderPayload({
-            planChange: checkoutPlan.planChange,
-            flowPointsApplied: 0,
-          }),
+          providerPayload: checkoutProviderPayload,
         });
       } else {
         order = await createDraftOrderForCheckout({
           userId,
           guildId,
-          amount: checkoutPlan.amount,
-          currency: checkoutPlan.currency,
+          amount: checkoutAmount,
+          currency: checkoutCurrency,
           plan: checkoutPlan.plan,
-          providerPayload: buildCheckoutTransitionProviderPayload({
-            planChange: checkoutPlan.planChange,
-            flowPointsApplied: 0,
-          }),
+          providerPayload: checkoutProviderPayload,
         });
       }
     } else if (
@@ -1725,26 +1720,20 @@ export async function GET(request: Request) {
         // Tem rascunho sem PIX: atualiza no lugar sem criar novo pedido
         order = await reuseDraftOrderForCheckout({
           order: latestDraftOrder,
-          amount: checkoutPlan.amount,
-          currency: checkoutPlan.currency,
+          amount: checkoutAmount,
+          currency: checkoutCurrency,
           plan: checkoutPlan.plan,
-          providerPayload: buildCheckoutTransitionProviderPayload({
-            planChange: checkoutPlan.planChange,
-            flowPointsApplied: 0,
-          }),
+          providerPayload: checkoutProviderPayload,
         });
       } else {
         // PIX já foi gerado ou rascunho expirado: cria novo
         order = await createDraftOrderForCheckout({
           userId,
           guildId,
-          amount: checkoutPlan.amount,
-          currency: checkoutPlan.currency,
+          amount: checkoutAmount,
+          currency: checkoutCurrency,
           plan: checkoutPlan.plan,
-          providerPayload: buildCheckoutTransitionProviderPayload({
-            planChange: checkoutPlan.planChange,
-            flowPointsApplied: 0,
-          }),
+          providerPayload: checkoutProviderPayload,
         });
       }
     } else if (
@@ -1757,25 +1746,19 @@ export async function GET(request: Request) {
       order = await createDraftOrderForCheckout({
         userId,
         guildId,
-        amount: checkoutPlan.amount,
-        currency: checkoutPlan.currency,
+        amount: checkoutAmount,
+        currency: checkoutCurrency,
         plan: checkoutPlan.plan,
-        providerPayload: buildCheckoutTransitionProviderPayload({
-          planChange: checkoutPlan.planChange,
-          flowPointsApplied: 0,
-        }),
+        providerPayload: checkoutProviderPayload,
       });
     } else if (!order) {
       order = await createDraftOrderForCheckout({
         userId,
         guildId,
-        amount: checkoutPlan.amount,
-        currency: checkoutPlan.currency,
+        amount: checkoutAmount,
+        currency: checkoutCurrency,
         plan: checkoutPlan.plan,
-        providerPayload: buildCheckoutTransitionProviderPayload({
-          planChange: checkoutPlan.planChange,
-          flowPointsApplied: 0,
-        }),
+        providerPayload: checkoutProviderPayload,
       });
     }
 
