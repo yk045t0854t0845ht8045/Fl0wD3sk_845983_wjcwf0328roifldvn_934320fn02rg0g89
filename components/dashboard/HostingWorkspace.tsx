@@ -828,69 +828,110 @@ function RepositoryStep({
 }
 
 function WorldLatencyMap({ region }: { region: HostingRegion }) {
-  const points = [
-    { x: 45, y: 47, active: true },
-    { x: 53, y: 34 },
-    { x: 56, y: 38 },
-    { x: 59, y: 34 },
-    { x: 64, y: 42 },
-    { x: 73, y: 49 },
-    { x: 77, y: 57 },
-    { x: 80, y: 61 },
+  const activePoint = {
+    x: region.coordinates.x * 10,
+    y: region.coordinates.y * 5.2,
+  };
+  const edgePoints = [
+    { label: "Virginia", x: 260, y: 205, ping: 142 },
+    { label: "Frankfurt", x: 507, y: 177, ping: 188 },
+    { label: "London", x: 480, y: 160, ping: 176 },
+    { label: "Singapore", x: 748, y: 295, ping: 312 },
+    { label: "Tokyo", x: 836, y: 210, ping: 288 },
+    { label: "Sydney", x: 850, y: 397, ping: 334 },
   ];
 
   return (
-    <div className="relative min-h-[350px] overflow-hidden rounded-[22px] border border-[#171717] bg-[#080808] p-[18px]">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_54%_44%,rgba(15,98,254,0.14),transparent_42%)]" />
+    <div className="relative min-h-[350px] overflow-hidden px-[2px] py-[4px]">
+      <div className="absolute inset-x-[8%] top-[18%] h-[62%] rounded-full bg-[radial-gradient(circle_at_44%_58%,rgba(52,168,83,0.16),transparent_34%),radial-gradient(circle_at_70%_36%,rgba(15,98,254,0.13),transparent_42%)] blur-[2px]" />
       <div className="relative z-10 flex items-center justify-between gap-[14px]">
         <div>
           <p className="text-[13px] font-semibold text-[#E8E8E8]">Mapa mundial de latencia</p>
           <p className="mt-[4px] text-[12px] text-[#777777]">Ponto ativo em {region.city}, {region.country}</p>
         </div>
-        <span className="rounded-full border border-[rgba(52,168,83,0.22)] bg-[rgba(52,168,83,0.10)] px-[10px] py-[6px] text-[12px] font-bold text-[#9BE7AC]">
+        <span className="rounded-full border border-[rgba(52,168,83,0.28)] bg-[rgba(52,168,83,0.12)] px-[10px] py-[6px] text-[12px] font-bold text-[#9BE7AC] shadow-[0_0_24px_rgba(52,168,83,0.12)]">
           {region.pingMs} ms
         </span>
       </div>
-      <div className="relative z-10 mx-auto mt-[10px] aspect-[1.75] w-full max-w-[640px]">
-        <svg viewBox="0 0 760 430" className="h-full w-full">
-          <g fill="#DDE7FF" opacity="0.18" stroke="#EAF0FF" strokeOpacity="0.12" strokeWidth="1.2">
-            <path d="M96 146c42-28 91-31 136-18 26 8 34 30 17 49-15 17-18 36-8 57 13 27 1 50-26 60-24 9-51 1-63-21-12-21-31-32-54-36-30-5-49-25-48-51 1-17 18-31 46-40Z" />
-            <path d="M210 276c27 8 44 29 44 54 0 23-17 45-41 53-18-36-25-70-3-107Z" />
-            <path d="M330 112c38-19 79-20 123-11 31 6 46 27 39 54-6 23 4 39 26 48 32 13 43 39 28 67-14 27-43 37-75 26-25-9-49-5-72 12-27 21-59 19-79-4-22-26-14-61 17-77 20-10 26-27 17-50-9-25-17-47-24-65Z" />
-            <path d="M503 119c27-21 66-24 99-10 28 12 39 37 25 62-12 21-8 38 12 52 28 20 29 55 3 75-23 18-56 15-77-7-16-17-36-23-60-18-27 6-52-10-61-36-9-28 4-55 31-66 21-8 29-25 28-52Z" />
-            <path d="M602 294c25-9 54-3 73 15 22 22 18 56-9 74-31-14-53-44-64-89Z" />
+      <div className="relative z-10 mx-auto mt-[8px] aspect-[1.92] w-full max-w-[720px]">
+        <svg viewBox="0 0 1000 520" className="h-full w-full" role="img" aria-label="Mapa mundial de latencia">
+          <defs>
+            <linearGradient id="mapLand" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0%" stopColor="#EAF1FF" stopOpacity="0.28" />
+              <stop offset="100%" stopColor="#9FB0CF" stopOpacity="0.13" />
+            </linearGradient>
+            <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+              <feGaussianBlur stdDeviation="8" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          <g fill="none" stroke="#FFFFFF" strokeOpacity="0.055" strokeWidth="1">
+            {[120, 190, 260, 330, 400].map((y) => (
+              <path key={y} d={`M54 ${y}C205 ${y - 22} 382 ${y + 18} 500 ${y}C650 ${y - 24} 804 ${y + 18} 946 ${y}`} />
+            ))}
+            {[160, 330, 500, 670, 840].map((x) => (
+              <path key={x} d={`M${x} 72C${x - 32} 180 ${x + 32} 322 ${x} 458`} />
+            ))}
           </g>
+
+          <g fill="url(#mapLand)" stroke="#F5F8FF" strokeOpacity="0.16" strokeWidth="1.15">
+            <path d="M126 152c31-31 81-43 131-34 42 8 82 34 91 72 8 33-18 50-44 58-27 8-38 22-36 49 2 32-19 58-50 67-31 9-70-2-86-30-13-24-31-34-62-40-39-8-63-32-64-67-1-30 24-53 58-61 23-5 41-8 62-14Z" />
+            <path d="M260 306c23 9 42 35 42 70 0 36-24 74-59 91-20-46-21-111 17-161Z" />
+            <path d="M400 133c38-31 91-43 155-31 46 8 79 31 89 63 10 34-10 55-39 62-21 6-30 18-20 35 13 22 47 27 71 47 28 23 22 62-10 83-42 28-101 22-135-13-21-22-40-26-75-10-45 20-91 5-110-34-18-37-3-74 35-91 25-11 34-31 21-58-9-19-3-38 18-53Z" />
+            <path d="M583 145c44-35 105-45 172-28 50 13 78 46 67 83-9 30-1 48 28 65 45 27 50 74 13 105-34 28-88 29-122 3-25-19-49-23-80-12-39 14-79-3-96-41-18-40 1-81 42-94 25-8 34-31 23-56-7-15-16-20-47-25Z" />
+            <path d="M766 346c36-15 83-6 112 22 30 30 24 78-14 101-50-23-83-66-98-123Z" />
+            <path d="M488 110c19-15 56-16 83-4-21 20-59 22-83 4Z" opacity="0.74" />
+            <path d="M642 96c30-15 69-13 97 4-28 16-68 18-97-4Z" opacity="0.68" />
+          </g>
+
+          <g strokeLinecap="round">
+            {edgePoints.map((point) => (
+              <path
+                key={`${point.label}-route`}
+                d={`M${activePoint.x} ${activePoint.y}C${(activePoint.x + point.x) / 2} ${Math.min(activePoint.y, point.y) - 58} ${(activePoint.x + point.x) / 2} ${Math.min(activePoint.y, point.y) - 58} ${point.x} ${point.y}`}
+                fill="none"
+                stroke="#7F8EA8"
+                strokeOpacity="0.16"
+                strokeWidth="1.4"
+                strokeDasharray="4 8"
+              />
+            ))}
+          </g>
+
           <g>
-            {points.map((point) => (
-              <g key={`${point.x}-${point.y}`}>
+            {edgePoints.map((point) => (
+              <g key={point.label}>
                 <path
-                  d={`M ${point.x * 7.6} ${point.y * 4.3} m -7 -10 a 10 10 0 1 1 14 0 c 0 7 -7 15 -7 15 s -7 -8 -7 -15`}
-                  fill={point.active ? "#00A878" : "#7367F0"}
+                  d={`M ${point.x} ${point.y} m -5 -8 a 8 8 0 1 1 10 0 c 0 6 -5 12 -5 12 s -5 -6 -5 -12`}
+                  fill="#7C8AA5"
+                  opacity="0.76"
                 />
-                {point.active ? (
-                  <circle
-                    cx={point.x * 7.6}
-                    cy={point.y * 4.3}
-                    r="19"
-                    fill="none"
-                    stroke="#00A878"
-                    strokeWidth="2"
-                    opacity="0.32"
-                  >
-                    <animate attributeName="r" from="12" to="30" dur="1.8s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" from="0.42" to="0" dur="1.8s" repeatCount="indefinite" />
-                  </circle>
-                ) : null}
+                <text x={point.x + 13} y={point.y + 4} fill="#8D98AD" fontSize="13" fontWeight="600">
+                  {point.ping}ms
+                </text>
               </g>
             ))}
           </g>
-          <path
-            d="M12 350C126 327 224 321 319 337C446 358 552 354 748 320"
-            fill="none"
-            stroke="#FFFFFF"
-            strokeOpacity="0.05"
-            strokeWidth="2"
-          />
+
+          <g filter="url(#softGlow)">
+            <circle cx={activePoint.x} cy={activePoint.y} r="9" fill="#34A853" />
+            <circle cx={activePoint.x} cy={activePoint.y} r="4" fill="#E8FFF0" />
+            <circle cx={activePoint.x} cy={activePoint.y} r="24" fill="none" stroke="#34A853" strokeWidth="2" opacity="0.34">
+              <animate attributeName="r" from="16" to="42" dur="1.9s" repeatCount="indefinite" />
+              <animate attributeName="opacity" from="0.46" to="0" dur="1.9s" repeatCount="indefinite" />
+            </circle>
+            <circle cx={activePoint.x} cy={activePoint.y} r="44" fill="rgba(52,168,83,0.08)" />
+          </g>
+          <g>
+            <rect x={activePoint.x + 16} y={activePoint.y - 42} width="132" height="34" rx="17" fill="#0B0F0D" fillOpacity="0.88" stroke="#34A853" strokeOpacity="0.2" />
+            <text x={activePoint.x + 32} y={activePoint.y - 20} fill="#DFFFE8" fontSize="13" fontWeight="700">
+              {region.city} - {region.pingMs}ms
+            </text>
+          </g>
         </svg>
       </div>
     </div>
@@ -1080,6 +1121,7 @@ function PaymentStep({
 }) {
   const [provisioning, setProvisioning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [autoCheckoutStarted, setAutoCheckoutStarted] = useState(false);
   const checkoutHref = useMemo(() => {
     if (!plan) return "#";
     const params = new URLSearchParams({
@@ -1088,6 +1130,8 @@ function PaymentStep({
       hostingPlan: plan.id,
       hostingRegion: region.id,
       repository: repository ? `${repository.owner}/${repository.name}` : "",
+      amount: String(plan.monthlyAmount),
+      currency: plan.currency,
       return: "hosting",
       returnPath: HOSTING_STEP_PATH_BY_STEP.payment,
       fresh: "1",
@@ -1140,6 +1184,16 @@ function PaymentStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.kind, plan?.id, region.id, repository?.id]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (autoCheckoutStarted) return;
+    if (params.has("paymentApproved") || params.has("orderNumber") || params.has("order")) return;
+    if (checkoutHref === "#") return;
+
+    setAutoCheckoutStarted(true);
+    window.location.assign(checkoutHref);
+  }, [autoCheckoutStarted, checkoutHref]);
+
   return (
     <div className="grid gap-[18px] xl:grid-cols-[minmax(0,1fr)_390px]">
       <div className="rounded-[22px] border border-[#171717] bg-[#080808] p-[22px]">
@@ -1149,13 +1203,12 @@ function PaymentStep({
           description="O checkout usa o fluxo seguro da Flowdesk. Apos aprovado, a VPS recebe um UUID e o painel de gerenciamento fica liberado."
         />
         <div className="mt-[22px] grid gap-[12px] md:grid-cols-[minmax(0,360px)]">
-          <a
-            href={checkoutHref}
-            className="inline-flex min-h-[52px] items-center justify-center gap-[10px] rounded-[14px] bg-white px-[18px] text-[14px] font-bold text-[#111111] transition-colors hover:bg-[#E8E8E8]"
-          >
-            Abrir checkout seguro
-            <ExternalLink className="h-[16px] w-[16px]" />
-          </a>
+          <div className="inline-flex min-h-[52px] w-full items-center justify-center rounded-[14px] bg-white px-[18px] text-[14px] font-bold text-[#111111]">
+            <div className="flex items-center gap-[10px] text-[#111111]">
+              <Loader2 className="h-[16px] w-[16px] animate-spin" />
+              Redirecionando para checkout seguro...
+            </div>
+          </div>
         </div>
         {provisioning ? (
           <p className="mt-[12px] flex items-center gap-[8px] text-[12px] font-semibold text-[#9AAFFF]">

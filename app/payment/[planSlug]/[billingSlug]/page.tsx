@@ -4,6 +4,12 @@ import { AccountPaymentCheckout } from "@/components/payment/AccountPaymentCheck
 import { buildLoginHref } from "@/lib/auth/paths";
 import { getCurrentUserFromSessionCookieSafe } from "@/lib/auth/session";
 import {
+  HOSTING_PLANS,
+  HOSTING_REGIONS,
+  getHostingKindLabel,
+  type HostingKind,
+} from "@/lib/hosting/catalog";
+import {
   normalizePlanBillingPeriodCodeFromSlug,
   normalizePlanCodeFromSlug,
   resolvePlanPricing,
@@ -40,6 +46,60 @@ function isTruthyQueryFlag(value: string | string[] | undefined) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function readSingleQueryValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeCheckoutAmount(value: string | string[] | undefined) {
+  const raw = readSingleQueryValue(value);
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().replace(/,/g, ".");
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : null;
+}
+
+function normalizeCurrencyCode(value: string | string[] | undefined) {
+  const raw = readSingleQueryValue(value);
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
+}
+
+function buildPurchaseContext(query: Record<string, string | string[] | undefined>) {
+  if (readSingleQueryValue(query.source) !== "dashboard-hosting") return null;
+  const hostingKind = readSingleQueryValue(query.hostingKind) as HostingKind | undefined;
+  const hostingPlanId = readSingleQueryValue(query.hostingPlan);
+  const hostingRegionId = readSingleQueryValue(query.hostingRegion);
+  if (!hostingKind || !hostingPlanId || !hostingRegionId || !(hostingKind in HOSTING_PLANS)) {
+    return null;
+  }
+
+  const plan = HOSTING_PLANS[hostingKind].find((item) => item.id === hostingPlanId);
+  const region = HOSTING_REGIONS.find((item) => item.id === hostingRegionId);
+  if (!plan || !region) return null;
+
+  const repository = readSingleQueryValue(query.repository) || null;
+  const amount = normalizeCheckoutAmount(query.amount) ?? plan.monthlyAmount;
+  const currency = normalizeCurrencyCode(query.currency) ?? plan.currency;
+
+  return {
+    type: "hosting" as const,
+    title: `${plan.name} VPS`,
+    subtitle: `${getHostingKindLabel(hostingKind)} em ${region.city}, ${region.country}`,
+    details: [
+      `${amount.toLocaleString("pt-BR", { style: "currency", currency })}/mes`,
+      region.name,
+      repository ? `Repo ${repository}` : "Repositorio selecionado",
+    ],
+    amount,
+    currency,
+    hostingKind,
+    hostingPlan: plan.id,
+    hostingRegion: region.id,
+    repository,
+  };
+}
+
 export default async function PaymentPlanBillingPage({
   params,
   searchParams,
@@ -72,6 +132,7 @@ export default async function PaymentPlanBillingPage({
   const canonicalPathname = canonicalHref.split("?")[0] || canonicalHref;
   const currentPathname = `/payment/${routeParams.planSlug}/${routeParams.billingSlug}`;
   const forceFreshCheckout = isTruthyQueryFlag(query.fresh);
+  const purchaseContext = buildPurchaseContext(query);
   const sessionResult = await getCurrentUserFromSessionCookieSafe({
     fullContext: true,
   });
@@ -104,6 +165,7 @@ export default async function PaymentPlanBillingPage({
       initialPlanCode={resolvedPricing.code}
       initialBillingPeriodCode={resolvedPricing.billingPeriodCode}
       forceFreshCheckout={forceFreshCheckout}
+      purchaseContext={purchaseContext}
     />
   );
 }
