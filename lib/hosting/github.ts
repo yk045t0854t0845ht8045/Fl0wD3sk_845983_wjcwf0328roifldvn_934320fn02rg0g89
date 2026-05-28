@@ -50,6 +50,25 @@ type GitHubRepo = {
   };
 };
 
+type GitHubTreeItem = {
+  path?: string;
+  type?: "blob" | "tree" | string;
+  size?: number;
+};
+
+type GitHubTreeResponse = {
+  tree?: GitHubTreeItem[];
+  truncated?: boolean;
+};
+
+type GitHubContentResponse = {
+  type?: string;
+  encoding?: string;
+  content?: string;
+  name?: string;
+  path?: string;
+};
+
 export function isHostingGitHubConfigured() {
   return Boolean(
     process.env.GITHUB_CLIENT_ID?.trim() &&
@@ -369,4 +388,107 @@ export async function fetchHostingGitHubRepositories(input: {
       .toLowerCase()
       .includes(query),
   );
+}
+
+function languageFromPath(path: string) {
+  const extension = path.split(".").pop()?.toLowerCase() || "";
+  const languages: Record<string, string> = {
+    js: "javascript",
+    jsx: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    json: "json",
+    css: "css",
+    scss: "scss",
+    html: "html",
+    md: "markdown",
+    yml: "yaml",
+    yaml: "yaml",
+    py: "python",
+    sql: "sql",
+    env: "dotenv",
+  };
+  return languages[extension] || null;
+}
+
+export type HostingGitHubFileNode = {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  language?: string | null;
+  children?: HostingGitHubFileNode[];
+};
+
+export async function fetchHostingGitHubRepositoryTree(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+}) {
+  const payload = await githubFetch<GitHubTreeResponse>(
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/git/trees/${encodeURIComponent(input.branch)}?recursive=1`,
+    input.token,
+  );
+  const root: HostingGitHubFileNode = {
+    name: input.repo,
+    path: "/",
+    type: "directory",
+    children: [],
+  };
+  const directoryMap = new Map<string, HostingGitHubFileNode>([["", root]]);
+  const sortedTree = [...(payload.tree || [])].sort((a, b) =>
+    String(a.path || "").localeCompare(String(b.path || "")),
+  );
+
+  for (const item of sortedTree) {
+    const itemPath = item.path?.replace(/^\/+/, "");
+    if (!itemPath) continue;
+    const parts = itemPath.split("/");
+    const name = parts[parts.length - 1] || itemPath;
+    const parentPath = parts.slice(0, -1).join("/");
+    const parent = directoryMap.get(parentPath) || root;
+    const isDirectory = item.type === "tree";
+    const node: HostingGitHubFileNode = {
+      name,
+      path: itemPath,
+      type: isDirectory ? "directory" : "file",
+      language: isDirectory ? null : languageFromPath(itemPath),
+      children: isDirectory ? [] : undefined,
+    };
+    parent.children = parent.children || [];
+    parent.children.push(node);
+    if (isDirectory) directoryMap.set(itemPath, node);
+  }
+
+  const sortChildren = (node: HostingGitHubFileNode) => {
+    if (!node.children?.length) return;
+    node.children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    node.children.forEach(sortChildren);
+  };
+  sortChildren(root);
+  return root.children || [];
+}
+
+export async function fetchHostingGitHubRepositoryFile(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  path: string;
+}) {
+  const payload = await githubFetch<GitHubContentResponse>(
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${input.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(input.branch)}`,
+    input.token,
+  );
+  if (payload.type !== "file" || payload.encoding !== "base64" || !payload.content) {
+    return null;
+  }
+  return {
+    name: payload.name || input.path.split("/").pop() || input.path,
+    path: payload.path || input.path,
+    content: Buffer.from(payload.content.replace(/\s/g, ""), "base64").toString("utf8"),
+  };
 }
