@@ -74,6 +74,12 @@ import {
 import {
   type PlanPricingDefinition,
 } from "@/lib/plans/catalog";
+import {
+  HOSTING_PLANS,
+  HOSTING_REGIONS,
+  getHostingKindLabel,
+  type HostingKind,
+} from "@/lib/hosting/catalog";
 
 import {
   resolveApprovedOrderLicenseExpiresAt,
@@ -125,12 +131,22 @@ type CreatePixPaymentBody = {
   guildId?: unknown;
   planCode?: unknown;
   billingPeriodCode?: unknown;
+  purchaseContext?: unknown;
   payerName?: unknown;
   payerDocument?: unknown;
   couponCode?: unknown;
   giftCardCode?: unknown;
   expectedTotalAmount?: unknown;
   forceNew?: unknown;
+};
+
+type ResolvedPurchaseContext = {
+  type: "hosting";
+  title: string;
+  subtitle: string;
+  amount: number;
+  currency: string;
+  providerPayload: Record<string, unknown>;
 };
 
 export type PaymentOrderRecord = {
@@ -306,6 +322,77 @@ export function parseForceNewFlag(value: unknown) {
   if (typeof value !== "string") return false;
   const normalized = value.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function normalizePurchaseText(value: unknown, maxLength = 180) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function normalizePaymentCurrency(value: unknown) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
+}
+
+function parsePurchaseAmount(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? roundCurrencyAmount(value) : null;
+  }
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/,/g, ".");
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount >= 0 ? roundCurrencyAmount(amount) : null;
+}
+
+function isHostingKind(value: unknown): value is HostingKind {
+  return value === "site" || value === "bot" || value === "cdn";
+}
+
+export function resolvePurchaseContext(value: unknown): ResolvedPurchaseContext | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.type !== "hosting") return null;
+
+  const hostingKind = isHostingKind(record.hostingKind) ? record.hostingKind : null;
+  const hostingPlanId = normalizePurchaseText(record.hostingPlan, 80);
+  const hostingRegionId = normalizePurchaseText(record.hostingRegion, 80);
+  if (!hostingKind || !hostingPlanId || !hostingRegionId) return null;
+
+  const plan = HOSTING_PLANS[hostingKind].find((item) => item.id === hostingPlanId);
+  const region = HOSTING_REGIONS.find((item) => item.id === hostingRegionId);
+  if (!plan || !region) return null;
+
+  const repository = normalizePurchaseText(record.repository, 220);
+  const title = `${plan.name} VPS`;
+  const subtitle = `${getHostingKindLabel(hostingKind)} em ${region.city}, ${region.country}`;
+  const amount = parsePurchaseAmount(record.amount) ?? roundCurrencyAmount(plan.monthlyAmount);
+  const currency = normalizePaymentCurrency(record.currency) || plan.currency || resolvePixCurrency();
+
+  return {
+    type: "hosting",
+    title,
+    subtitle,
+    amount,
+    currency,
+    providerPayload: {
+      purchase_context: {
+        type: "hosting",
+        title,
+        subtitle,
+        hostingKind,
+        hostingPlanId: plan.id,
+        hostingPlanName: plan.name,
+        hostingRegionId: region.id,
+        hostingRegionName: region.name,
+        repository,
+        billingInterval: "monthly",
+        amount,
+        currency,
+      },
+    },
+  };
 }
 
 function maskPayerDocument(
@@ -1762,6 +1849,7 @@ export async function POST(request: Request) {
               maxLength: 40,
             }),
           ),
+          purchaseContext: flowSecureDto.optional(flowSecureDto.record()),
           payerName: flowSecureDto.optional(flowSecureDto.personName()),
           payerDocument: flowSecureDto.optional(
             flowSecureDto.string({
@@ -1900,8 +1988,11 @@ export async function POST(request: Request) {
       requestedPlanCode: body.planCode,
       requestedBillingPeriodCode: body.billingPeriodCode,
     });
+    const purchaseContext = resolvePurchaseContext(body.purchaseContext);
+    const checkoutItemName = purchaseContext?.title || checkoutPlan.plan.name;
+    const checkoutProviderPayload = purchaseContext?.providerPayload || {};
 
-    if (checkoutPlan.planChange.execution === "schedule_for_renewal") {
+    if (!purchaseContext && checkoutPlan.planChange.execution === "schedule_for_renewal") {
       return respond(
         {
           ok: false,
@@ -1955,7 +2046,7 @@ export async function POST(request: Request) {
       }
     }
 
-    if (checkoutPlan.currentPlanRepurchaseBlocked) {
+    if (!purchaseContext && checkoutPlan.currentPlanRepurchaseBlocked) {
       return respond(
         {
           ok: false,
@@ -1966,7 +2057,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (checkoutPlan.plan.isTrial) {
+    if (!purchaseContext && checkoutPlan.plan.isTrial) {
       return respond(
         {
           ok: false,
@@ -1978,8 +2069,8 @@ export async function POST(request: Request) {
     }
 
     const pricing = await resolveDiscountPricing({
-      baseAmount: checkoutPlan.amount,
-      currency: checkoutPlan.currency,
+      baseAmount: purchaseContext?.amount ?? checkoutPlan.amount,
+      currency: purchaseContext?.currency ?? checkoutPlan.currency,
       couponCode: typeof body.couponCode === "string" ? body.couponCode : null,
       giftCardCode: typeof body.giftCardCode === "string" ? body.giftCardCode : null,
       userId: user.id,
@@ -2126,7 +2217,7 @@ export async function POST(request: Request) {
           amount,
           currency,
           plan_code: checkoutPlan.plan.code,
-          plan_name: checkoutPlan.plan.name,
+          plan_name: checkoutItemName,
           plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
           plan_max_licensed_servers: checkoutPlan.plan.entitlements.maxLicensedServers,
           plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
@@ -2145,11 +2236,12 @@ export async function POST(request: Request) {
           provider_payload: {
             source: "flowdesk_checkout",
             step: 4,
+            ...checkoutProviderPayload,
             pricing: pricingWithFlowPoints,
             ...transitionProviderPayload,
             plan: {
               code: checkoutPlan.plan.code,
-              name: checkoutPlan.plan.name,
+              name: checkoutItemName,
               billingCycleDays: checkoutPlan.plan.billingCycleDays,
               entitlements: {
                 ...checkoutPlan.plan.entitlements,
@@ -2183,6 +2275,7 @@ export async function POST(request: Request) {
         amount,
         currency,
         plan: checkoutPlan.plan,
+        providerPayload: checkoutProviderPayload,
       });
 
       const preparedOrderResult = await supabase
@@ -2192,7 +2285,7 @@ export async function POST(request: Request) {
           amount,
           currency,
           plan_code: checkoutPlan.plan.code,
-          plan_name: checkoutPlan.plan.name,
+          plan_name: checkoutItemName,
           plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
           plan_max_licensed_servers: checkoutPlan.plan.entitlements.maxLicensedServers,
           plan_max_active_tickets: checkoutPlan.plan.entitlements.maxActiveTickets,
@@ -2209,11 +2302,12 @@ export async function POST(request: Request) {
           provider_payload: {
             source: "flowdesk_checkout",
             step: 4,
+            ...checkoutProviderPayload,
             pricing: pricingWithFlowPoints,
             ...transitionProviderPayload,
             plan: {
               code: checkoutPlan.plan.code,
-              name: checkoutPlan.plan.name,
+              name: checkoutItemName,
               billingCycleDays: checkoutPlan.plan.billingCycleDays,
               entitlements: {
                 ...checkoutPlan.plan.entitlements,
@@ -2311,7 +2405,13 @@ export async function POST(request: Request) {
               }
             : {}),
           flowdesk_plan_code: checkoutPlan.plan.code,
-          flowdesk_plan_name: checkoutPlan.plan.name,
+          flowdesk_plan_name: checkoutItemName,
+          ...(purchaseContext
+            ? {
+                flowdesk_purchase_type: purchaseContext.type,
+                flowdesk_purchase_title: purchaseContext.title,
+              }
+            : {}),
           flowdesk_pricing_total: String(amount),
           ...(pricing.coupon?.code
             ? {
@@ -2386,6 +2486,7 @@ export async function POST(request: Request) {
           provider_payload: {
             source: "flowdesk_checkout",
             step: 4,
+            ...checkoutProviderPayload,
             mercado_pago: confirmedMercadoPagoPayment,
             payment_identifiers: paymentIdentifiers,
             trusted_timestamps: trustedTimestamps,
@@ -2393,7 +2494,7 @@ export async function POST(request: Request) {
             ...transitionProviderPayload,
             plan: {
               code: checkoutPlan.plan.code,
-              name: checkoutPlan.plan.name,
+              name: checkoutItemName,
               billingCycleDays: checkoutPlan.plan.billingCycleDays,
               entitlements: {
                 ...checkoutPlan.plan.entitlements,

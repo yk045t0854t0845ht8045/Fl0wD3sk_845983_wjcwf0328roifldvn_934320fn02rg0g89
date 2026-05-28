@@ -35,6 +35,7 @@ import {
   parseForceNewFlag,
   resolveCheckoutPlanForGuild,
   resolveFlowPointsGrantedFromSubtotal,
+  resolvePurchaseContext,
   type PaymentOrderRecord,
 } from "../../pix/route";
 import {
@@ -88,7 +89,7 @@ const CARD_REDIRECT_ROUTE_COALESCE_TTL_MS = 1500;
 function normalizeReturnTarget(value: unknown) {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  return normalized === "servers" ? "servers" : null;
+  return normalized === "servers" || normalized === "hosting" ? normalized : null;
 }
 
 function normalizeReturnTab(value: unknown) {
@@ -104,10 +105,21 @@ function buildHostedCheckoutReturnInternalPath(input: {
   order: Pick<PaymentOrderRecord, "id" | "order_number">;
   checkoutToken: string | null;
   renew: boolean;
-  returnTarget: "servers" | null;
+  returnTarget: "servers" | "hosting" | null;
   returnGuildId: string | null;
   returnTab: string;
+  returnPath: string | null;
 }) {
+  if (input.returnTarget === "hosting" && input.returnPath) {
+    const params = new URLSearchParams({
+      paymentApproved: "1",
+      orderNumber: String(input.order.order_number),
+      code: String(input.order.order_number),
+      ...(input.checkoutToken ? { checkoutToken: input.checkoutToken } : {}),
+    });
+    return `${input.returnPath}?${params.toString()}`;
+  }
+
   return buildPaymentCheckoutEntryHref({
     planCode: input.planCode,
     billingPeriodCode: input.billingPeriodCode,
@@ -160,10 +172,12 @@ export async function POST(request: Request) {
       giftCardCode?: string | null;
       expectedTotalAmount?: number | null;
       renew?: boolean;
-      returnTarget?: "servers" | null;
+      returnTarget?: "servers" | "hosting" | null;
       returnGuildId?: string | null;
       returnTab?: "plans" | "settings" | null;
+      returnPath?: string | null;
       forceNew?: boolean;
+      purchaseContext?: Record<string, unknown>;
     };
     try {
       payload = parseFlowSecureDto(
@@ -190,6 +204,7 @@ export async function POST(request: Request) {
               }),
             ),
           ),
+          purchaseContext: flowSecureDto.optional(flowSecureDto.record()),
           couponCode: flowSecureDto.optional(
             flowSecureDto.nullable(
               flowSecureDto.string({
@@ -216,7 +231,15 @@ export async function POST(request: Request) {
           ),
           renew: flowSecureDto.optional(flowSecureDto.looseBoolean()),
           returnTarget: flowSecureDto.optional(
-            flowSecureDto.nullable(flowSecureDto.enum(["servers"] as const)),
+            flowSecureDto.nullable(flowSecureDto.enum(["servers", "hosting"] as const)),
+          ),
+          returnPath: flowSecureDto.optional(
+            flowSecureDto.nullable(
+              flowSecureDto.string({
+                maxLength: 180,
+                pattern: /^\/[A-Za-z0-9/_?=&.-]*$/,
+              }),
+            ),
           ),
           returnGuildId: flowSecureDto.optional(
             flowSecureDto.nullable(flowSecureDto.discordSnowflake()),
@@ -256,6 +279,10 @@ export async function POST(request: Request) {
     const returnTarget = normalizeReturnTarget(payload.returnTarget);
     const returnGuildId = normalizeGuildId(payload.returnGuildId) || guildId;
     const returnTab = normalizeReturnTab(payload.returnTab);
+    const returnPath =
+      typeof payload.returnPath === "string" && payload.returnPath.startsWith("/")
+        ? payload.returnPath
+        : null;
 
     const access = await ensureGuildAccess(guildId);
     if (!access.ok) {
@@ -283,6 +310,7 @@ export async function POST(request: Request) {
           expectedTotalAmount ?? "__auto__",
           renew,
           returnTarget || "__none__",
+          returnPath || "__none__",
           returnGuildId || "__none__",
         returnTab,
         forceNew,
@@ -343,8 +371,11 @@ export async function POST(request: Request) {
           requestedPlanCode: payload.planCode,
           requestedBillingPeriodCode: payload.billingPeriodCode,
         });
+        const purchaseContext = resolvePurchaseContext(payload.purchaseContext);
+        const checkoutItemName = purchaseContext?.title || checkoutPlan.plan.name;
+        const checkoutProviderPayload = purchaseContext?.providerPayload || {};
 
-        if (checkoutPlan.planChange.execution === "schedule_for_renewal") {
+        if (!purchaseContext && checkoutPlan.planChange.execution === "schedule_for_renewal") {
           return respond(
             {
               ok: false,
@@ -381,7 +412,7 @@ export async function POST(request: Request) {
           );
         }
 
-        if (checkoutPlan.currentPlanRepurchaseBlocked) {
+        if (!purchaseContext && checkoutPlan.currentPlanRepurchaseBlocked) {
           return respond(
             {
               ok: false,
@@ -392,7 +423,7 @@ export async function POST(request: Request) {
           );
         }
 
-        if (checkoutPlan.plan.isTrial) {
+        if (!purchaseContext && checkoutPlan.plan.isTrial) {
           return respond(
             {
               ok: false,
@@ -404,8 +435,8 @@ export async function POST(request: Request) {
         }
 
         const pricing = await resolveDiscountPricing({
-          baseAmount: checkoutPlan.amount,
-          currency: checkoutPlan.currency,
+          baseAmount: purchaseContext?.amount ?? checkoutPlan.amount,
+          currency: purchaseContext?.currency ?? checkoutPlan.currency,
           couponCode: payload.couponCode || null,
           giftCardCode: payload.giftCardCode || null,
           userId: user.id,
@@ -518,6 +549,7 @@ export async function POST(request: Request) {
             currency,
             plan: checkoutPlan.plan,
             providerPayload: {
+              ...checkoutProviderPayload,
               pricing: pricingWithFlowPoints,
               ...transitionProviderPayload,
               hostedCheckout: {
@@ -536,6 +568,7 @@ export async function POST(request: Request) {
             currency,
             plan: checkoutPlan.plan,
             providerPayload: {
+              ...checkoutProviderPayload,
               pricing: pricingWithFlowPoints,
               ...transitionProviderPayload,
               hostedCheckout: {
@@ -564,6 +597,7 @@ export async function POST(request: Request) {
           returnTarget,
           returnGuildId,
           returnTab,
+          returnPath,
         });
         const successUrl = buildCanonicalUrlFromInternalPath(
           request,
@@ -594,7 +628,7 @@ export async function POST(request: Request) {
         const preference = await createMercadoPagoCardCheckoutPreference({
           amount,
           currency,
-          title: `Flowdesk ${checkoutPlan.plan.name}`,
+          title: `Flowdesk ${checkoutItemName}`,
           description: `Flowdesk pagamento #${securedOrder.order.order_number}`,
           externalReference,
           payerEmail,
@@ -613,7 +647,13 @@ export async function POST(request: Request) {
                 }
               : {}),
             flowdesk_plan_code: checkoutPlan.plan.code,
-            flowdesk_plan_name: checkoutPlan.plan.name,
+            flowdesk_plan_name: checkoutItemName,
+            ...(purchaseContext
+              ? {
+                  flowdesk_purchase_type: purchaseContext.type,
+                  flowdesk_purchase_title: purchaseContext.title,
+                }
+              : {}),
             flowdesk_pricing_total: String(amount),
             ...(pricing.coupon?.code
               ? {
@@ -666,7 +706,7 @@ export async function POST(request: Request) {
             amount,
             currency,
             plan_code: checkoutPlan.plan.code,
-            plan_name: checkoutPlan.plan.name,
+            plan_name: checkoutItemName,
             plan_billing_cycle_days: checkoutPlan.plan.billingCycleDays,
             plan_max_licensed_servers:
               checkoutPlan.plan.entitlements.maxLicensedServers,
@@ -685,11 +725,12 @@ export async function POST(request: Request) {
             provider_payload: {
               source: "flowdesk_checkout",
               step: 4,
+              ...checkoutProviderPayload,
               pricing: pricingWithFlowPoints,
               ...transitionProviderPayload,
               plan: {
                 code: checkoutPlan.plan.code,
-                name: checkoutPlan.plan.name,
+                name: checkoutItemName,
                 billingCycleDays: checkoutPlan.plan.billingCycleDays,
                 entitlements: {
                   ...checkoutPlan.plan.entitlements,

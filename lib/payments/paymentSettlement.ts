@@ -97,6 +97,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isNonPlanPurchaseOrder(order: PaymentSettlementOrderRecord) {
+  if (!isRecord(order.provider_payload)) return false;
+  const purchaseContext = order.provider_payload.purchase_context;
+  if (!isRecord(purchaseContext)) return false;
+  return typeof purchaseContext.type === "string" && purchaseContext.type.trim() !== "";
+}
+
 function mergeProviderPayload(currentPayload: unknown, patch: Record<string, unknown>) {
   const basePayload = isRecord(currentPayload) ? currentPayload : {};
   return {
@@ -201,6 +208,8 @@ function resolveSettlementReferenceMs(order: PaymentSettlementOrderRecord) {
 }
 
 function shouldAttemptSettlementRecovery(order: PaymentSettlementOrderRecord) {
+  if (isNonPlanPurchaseOrder(order)) return false;
+
   const status = normalizeOptionalString(order.status)?.toLowerCase();
   if (status !== "approved") return false;
 

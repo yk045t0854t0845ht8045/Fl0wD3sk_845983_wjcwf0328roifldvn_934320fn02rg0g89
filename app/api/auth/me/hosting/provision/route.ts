@@ -51,6 +51,13 @@ function normalizeRepository(value: unknown) {
   };
 }
 
+function readPurchaseContext(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const context = (payload as Record<string, unknown>).purchase_context;
+  if (!context || typeof context !== "object" || Array.isArray(context)) return null;
+  return context as Record<string, unknown>;
+}
+
 export async function POST(request: NextRequest) {
   let body: ProvisionBody;
   try {
@@ -94,7 +101,7 @@ export async function POST(request: NextRequest) {
   const supabase = getSupabaseAdminClientOrThrow();
   const { data: order, error: orderError } = await supabase
     .from("payment_orders")
-    .select("id, order_number, user_id, status, amount, plan_code")
+    .select("id, order_number, user_id, status, amount, plan_code, plan_name, provider_payload")
     .eq("order_number", orderNumber)
     .eq("user_id", session.user.id)
     .maybeSingle();
@@ -110,6 +117,21 @@ export async function POST(request: NextRequest) {
       NextResponse.json({
         ok: false,
         message: "O pedido ainda nao esta aprovado para liberar a VPS.",
+      }, { status: 409 }),
+    );
+  }
+
+  const purchaseContext = readPurchaseContext(order.provider_payload);
+  if (
+    purchaseContext?.type !== "hosting" ||
+    purchaseContext.hostingKind !== kind ||
+    purchaseContext.hostingPlanId !== plan.id ||
+    purchaseContext.hostingRegionId !== region.id
+  ) {
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        ok: false,
+        message: "Esse pagamento nao pertence a esta compra de VPS. Gere um checkout novo pela tela de hospedagem.",
       }, { status: 409 }),
     );
   }

@@ -65,9 +65,23 @@ type ConfigStepFourProps = {
   initialBillingPeriodCode?: PlanBillingPeriodCode;
   hasExplicitInitialPlan?: boolean;
   forceFreshCheckout?: boolean;
+  purchaseContext?: CheckoutPurchaseContext | null;
   initialDraft?: StepFourDraft | null;
   onDraftChange?: (guildId: string, draft: StepFourDraft) => void;
   onApproved?: (order: PixOrder) => void;
+};
+
+export type CheckoutPurchaseContext = {
+  type: "hosting";
+  title: string;
+  subtitle?: string | null;
+  details?: string[];
+  amount?: number;
+  currency?: string;
+  hostingKind: string;
+  hostingPlan: string;
+  hostingRegion: string;
+  repository?: string | null;
 };
 
 type PaymentMethod = "pix" | "card";
@@ -3123,11 +3137,13 @@ export function ConfigStepFour({
   initialBillingPeriodCode = DEFAULT_PLAN_BILLING_PERIOD_CODE,
   hasExplicitInitialPlan = false,
   forceFreshCheckout = false,
+  purchaseContext = null,
   initialDraft = null,
   onDraftChange,
   onApproved,
 }: ConfigStepFourProps) {
   const cardPaymentsEnabled = areHostedCardCheckoutsEnabled();
+  const isCustomPurchaseCheckout = Boolean(purchaseContext);
   const initialStepFourDraft = useMemo(
     () =>
       buildStepFourDraft(
@@ -3395,6 +3411,10 @@ export function ConfigStepFour({
   const manualDiscountPayload = useMemo(
     () => buildUnifiedDiscountCodePayload(normalizedDiscountCode),
     [normalizedDiscountCode],
+  );
+  const purchaseContextPayload = useMemo(
+    () => (purchaseContext ? { purchaseContext } : {}),
+    [purchaseContext],
   );
   const checkoutAmountValidationKey = useMemo(
     () =>
@@ -5363,7 +5383,11 @@ export function ConfigStepFour({
         params?.get("renew")?.trim() === "1" ||
         params?.get("renew")?.trim()?.toLowerCase() === "true";
       const rawReturnTarget = params?.get("return")?.trim().toLowerCase() || null;
-      const returnTarget = rawReturnTarget === "servers" ? "servers" : null;
+      const returnTarget =
+        rawReturnTarget === "servers" || rawReturnTarget === "hosting"
+          ? rawReturnTarget
+          : null;
+      const returnPath = params?.get("returnPath") || null;
       const returnGuildId = normalizeGuildIdFromQuery(params?.get("returnGuild") || null);
       const rawReturnTab = params?.get("returnTab");
       const returnTab = rawReturnTab
@@ -5378,11 +5402,13 @@ export function ConfigStepFour({
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
           ...manualDiscountPayload,
+          ...purchaseContextPayload,
           expectedTotalAmount: activeDiscountPreview.totalAmount,
           renew,
           returnTarget,
           returnGuildId,
           returnTab,
+          returnPath,
           forceNew: forceNewCheckoutRef.current,
         }),
       });
@@ -5475,6 +5501,7 @@ export function ConfigStepFour({
     isCheckoutAmountReady,
     isSubmittingCard,
     manualDiscountPayload,
+    purchaseContextPayload,
     pixOrder?.method,
     pixOrder?.status,
     selectedRail,
@@ -5642,6 +5669,7 @@ export function ConfigStepFour({
         planCode: selectedPlanCode,
         billingPeriodCode: selectedBillingPeriodCode,
         ...manualDiscountPayload,
+        ...purchaseContextPayload,
         expectedTotalAmount: activeDiscountPreview.totalAmount,
         forceNew: forceNewCheckoutRef.current,
       };
@@ -5760,6 +5788,7 @@ export function ConfigStepFour({
     handleCheckoutAmountMismatchRecovery,
     activeDiscountPreview.totalAmount,
     manualDiscountPayload,
+    purchaseContextPayload,
     payerDocument,
     payerName,
     selectedBillingPeriodCode,
@@ -5962,6 +5991,7 @@ export function ConfigStepFour({
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
           ...manualDiscountPayload,
+          ...purchaseContextPayload,
           expectedTotalAmount: activeDiscountPreview.totalAmount,
           forceNew: forceNewCheckoutRef.current,
         }),
@@ -6030,6 +6060,7 @@ export function ConfigStepFour({
     handleCheckoutAmountMismatchRecovery,
     isSubmittingTrial,
     manualDiscountPayload,
+    purchaseContextPayload,
     selectedBillingPeriodCode,
     selectedPlanCode,
     onApproved,
@@ -6147,6 +6178,7 @@ export function ConfigStepFour({
           planCode: selectedPlanCode,
           billingPeriodCode: selectedBillingPeriodCode,
           ...manualDiscountPayload,
+          ...purchaseContextPayload,
           payerDocument: documentDigits,
           payerName: normalizedName,
           expectedTotalAmount: activeDiscountPreview.totalAmount,
@@ -6265,6 +6297,7 @@ export function ConfigStepFour({
     activeDiscountPreview.totalAmount,
     checkoutAmountValidationMessage,
     manualDiscountPayload,
+    purchaseContextPayload,
     payerName,
     pixDocumentStatus,
     pixNameStatus,
@@ -6893,11 +6926,11 @@ export function ConfigStepFour({
       checkoutAmountValidationMessage) ||
       null) ||
     (shouldShowStatusResultPanel ? currentPaymentStatusLabel : null);
-  const planDisplayName = resolvedPlan.name;
-  const planBillingLabel = resolvedPlan.billingLabel;
+  const planDisplayName = purchaseContext?.title || resolvedPlan.name;
+  const planBillingLabel = purchaseContext ? "/mes" : resolvedPlan.billingLabel;
   const planTotalLabel = resolvedPlan.totalLabel;
-  const planPeriodLabel = resolvedPlan.checkoutPeriodLabel;
-  const planRenewalLabel = resolvedPlan.renewalLabel;
+  const planPeriodLabel = purchaseContext?.subtitle || resolvedPlan.checkoutPeriodLabel;
+  const planRenewalLabel = purchaseContext ? "Renovacao mensal da hospedagem" : resolvedPlan.renewalLabel;
   const effectiveMonthlyAmount =
     resolvedPlan.isTrial || resolvedPlan.billingPeriodMonths <= 0
       ? activeDiscountPreview.totalAmount
@@ -6987,6 +7020,7 @@ export function ConfigStepFour({
       ? `+ ${formatMoney(flowPointsGrantAmount, activeDiscountPreview.currency)}`
       : formatMoney(0, activeDiscountPreview.currency);
   const shouldShowUpgradeCreditReview =
+    !isCustomPurchaseCheckout &&
     selectedPlanChange.kind === "upgrade" &&
     (selectedPlanChange.currentCreditAmount > 0 ||
       selectedPlanChange.creditAppliedToTargetAmount > 0 ||
@@ -7170,15 +7204,26 @@ export function ConfigStepFour({
                           </svg>
                         </div>
 
-                        <div className="flex items-center gap-[12px]">
-                          <CompactPlanSelect
-                            plans={availablePlanOptions}
-                            selectedPlanCode={selectedPlanCode}
-                            onSelectPlan={handleSelectPlan}
-                            disabled={
-                              isPlanSelectionLocked || availablePlanOptions.length <= 1
-                            }
-                          />
+                        <div className="min-w-0">
+                          {isCustomPurchaseCheckout ? (
+                            <>
+                              <p className="text-[20px] font-semibold text-[#F5F5F5]">
+                                {planDisplayName}
+                              </p>
+                              <p className="mt-[5px] text-[13px] leading-[1.5] text-[#8E8E8E]">
+                                {planPeriodLabel}
+                              </p>
+                            </>
+                          ) : (
+                            <CompactPlanSelect
+                              plans={availablePlanOptions}
+                              selectedPlanCode={selectedPlanCode}
+                              onSelectPlan={handleSelectPlan}
+                              disabled={
+                                isPlanSelectionLocked || availablePlanOptions.length <= 1
+                              }
+                            />
+                          )}
                           {isPlanSelectionLocked ? (
                             <span className="inline-flex min-h-[28px] items-center gap-[8px] rounded-full bg-[#151515] px-[12px] text-[12px] font-medium text-[#D2D2D2]">
                               <ButtonLoader size={12} colorClassName="text-[#D2D2D2]" />
@@ -7222,8 +7267,23 @@ export function ConfigStepFour({
                   {phase === "cart" ? (
                     <>
                     <div className="mt-[2px]">
-                      <p className="text-[16px] font-medium text-[#F0F0F0]">Periodo</p>
-                      {availableBillingPeriodOptions.length > 0 ? (
+                      <p className="text-[16px] font-medium text-[#F0F0F0]">
+                        {isCustomPurchaseCheckout ? "Item comprado" : "Periodo"}
+                      </p>
+                      {isCustomPurchaseCheckout ? (
+                        <div className="mt-[12px] rounded-[18px] border border-[#202020] bg-[#111111] px-[16px] py-[14px]">
+                          <p className="text-[14px] font-semibold text-[#F1F1F1]">{planDisplayName}</p>
+                          {purchaseContext?.details?.length ? (
+                            <div className="mt-[10px] flex flex-wrap gap-[8px]">
+                              {purchaseContext.details.map((detail) => (
+                                <span key={detail} className="rounded-full bg-[#191919] px-[10px] py-[5px] text-[12px] font-medium text-[#BDBDBD]">
+                                  {detail}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : availableBillingPeriodOptions.length > 0 ? (
                         <BillingPeriodSwitcher
                           className="mt-[12px]"
                           periods={availableBillingPeriodOptions}
@@ -7463,7 +7523,9 @@ export function ConfigStepFour({
 
                   <div className="mt-[18px] space-y-[14px] text-[15px] text-[#E6E6E6]">
                     <div className="flex items-center justify-between gap-[14px]">
-                      <span className="text-[#DDDDDD]">Total do novo ciclo</span>
+                      <span className="text-[#DDDDDD]">
+                        {isCustomPurchaseCheckout ? "Subtotal do item" : "Total do novo ciclo"}
+                      </span>
                       <div className="flex items-center gap-[10px]">
                         {showCompareAmount ? (
                           <span className="text-[14px] text-[#7B7B7B] line-through">
@@ -7484,7 +7546,9 @@ export function ConfigStepFour({
                     </div>
 
                     <div className="flex items-center justify-between gap-[14px]">
-                      <span className="text-[#DDDDDD]">Equivale por mes</span>
+                      <span className="text-[#DDDDDD]">
+                        {isCustomPurchaseCheckout ? "Mensalidade" : "Equivale por mes"}
+                      </span>
                       <div className="flex items-center gap-[10px]">
                         {showCompareAmount ? (
                           <span className="text-[14px] text-[#7B7B7B] line-through">
