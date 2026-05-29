@@ -21,5 +21,5 @@ export default async function DashboardHostingStepPage({
     notFound();
   }
 
-  return <HostingWorkspace initialStep={initialStep} />;
+  return <HostingWorkspace initialStep={initialStep} forceOnboarding />;
 }

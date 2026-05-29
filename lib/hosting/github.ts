@@ -9,6 +9,7 @@ import {
   decryptFlowSecureValue,
   encryptFlowSecureValue,
 } from "@/lib/security/flowSecure";
+import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import type { HostingGitHubAccount, HostingRepository } from "@/lib/hosting/catalog";
 
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
@@ -194,13 +195,92 @@ export function setHostingGitHubTokenCookie(
   });
 }
 
-export async function readHostingGitHubToken() {
-  const encrypted = (await cookies()).get(GITHUB_TOKEN_COOKIE)?.value || null;
-  return decryptFlowSecureValue(encrypted, {
-    purpose: "auth_session_oauth",
-    subcontext: "hosting_github",
+function encryptHostingGitHubTokenForUser(userId: number, token: string) {
+  return encryptFlowSecureValue(token, {
+    purpose: "hosting_github_token",
+    subcontext: `user:${userId}`,
+  });
+}
+
+function decryptHostingGitHubTokenForUser(userId: number, value: string | null | undefined) {
+  return decryptFlowSecureValue(value, {
+    purpose: "hosting_github_token",
+    subcontext: `user:${userId}`,
     allowPlaintextFallback: false,
   });
+}
+
+export async function storeHostingGitHubTokenForUser(input: {
+  userId: number;
+  token: string;
+  login?: string | null;
+  accountType?: string | null;
+  avatarUrl?: string | null;
+}) {
+  const encryptedToken = encryptHostingGitHubTokenForUser(input.userId, input.token);
+  if (!encryptedToken) throw new Error("Nao foi possivel proteger o token do GitHub.");
+
+  await getSupabaseAdminClientOrThrow()
+    .from("hosting_github_connections")
+    .upsert(
+      {
+        user_id: input.userId,
+        github_login: input.login || null,
+        github_account_type: input.accountType || null,
+        github_avatar_url: input.avatarUrl || null,
+        encrypted_token: encryptedToken,
+        token_status: "active",
+        last_validated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
+}
+
+export async function readHostingGitHubStoredToken(userId: number) {
+  try {
+    const { data } = await getSupabaseAdminClientOrThrow()
+      .from("hosting_github_connections")
+      .select("encrypted_token, token_status")
+      .eq("user_id", userId)
+      .eq("token_status", "active")
+      .maybeSingle<{ encrypted_token: string | null; token_status: string | null }>();
+
+    if (!data?.encrypted_token) return null;
+    return decryptHostingGitHubTokenForUser(userId, data.encrypted_token);
+  } catch {
+    return null;
+  }
+}
+
+export async function markHostingGitHubTokenInvalid(userId: number, reason?: string | null) {
+  await getSupabaseAdminClientOrThrow()
+    .from("hosting_github_connections")
+    .update({
+      token_status: "invalid",
+      last_error: reason || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+}
+
+export async function readHostingGitHubToken(userId?: number | null) {
+  const encrypted = (await cookies()).get(GITHUB_TOKEN_COOKIE)?.value || null;
+  let cookieToken: string | null = null;
+  if (encrypted) {
+    try {
+      cookieToken = decryptFlowSecureValue(encrypted, {
+          purpose: "auth_session_oauth",
+          subcontext: "hosting_github",
+          allowPlaintextFallback: false,
+        });
+    } catch {
+      cookieToken = null;
+    }
+  }
+  if (cookieToken) return cookieToken;
+  if (!userId) return null;
+  return readHostingGitHubStoredToken(userId);
 }
 
 export async function hasHostingGitHubTokenCookie() {

@@ -98,6 +98,36 @@ type HostingProvisionResponse = {
   redirectUrl?: string;
 };
 
+export type HostingProjectCard = {
+  id: number;
+  vps_code: string;
+  hosting_kind: HostingKind;
+  hosting_plan_id: string;
+  hosting_region_id: string;
+  github_owner: string;
+  github_repo: string;
+  github_branch: string;
+  status: string;
+  runtime_status?: string | null;
+  billing_status?: string | null;
+  access_expires_at?: string | null;
+  refund_access_until?: string | null;
+  created_at?: string | null;
+  payment_orders?: {
+    status?: string | null;
+    amount?: number | null;
+    currency?: string | null;
+    paid_at?: string | null;
+    expires_at?: string | null;
+  } | Array<{
+    status?: string | null;
+    amount?: number | null;
+    currency?: string | null;
+    paid_at?: string | null;
+    expires_at?: string | null;
+  }> | null;
+};
+
 function resolveStepDirection(from: HostingStep, to: HostingStep): StepDirection {
   return STEP_ORDER.indexOf(to) >= STEP_ORDER.indexOf(from) ? "forward" : "backward";
 }
@@ -148,6 +178,180 @@ function resolveKindIcon(kind: HostingKind) {
   if (kind === "site") return Globe2;
   if (kind === "bot") return Bot;
   return ImageIcon;
+}
+
+function formatHostingDate(value?: string | null) {
+  if (!value) return "Sem data";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Sem data";
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function readProjectPayment(project: HostingProjectCard) {
+  return Array.isArray(project.payment_orders)
+    ? project.payment_orders[0] || null
+    : project.payment_orders || null;
+}
+
+function resolveProjectCardStatus(project: HostingProjectCard) {
+  const payment = readProjectPayment(project);
+  const accessUntil = project.refund_access_until || project.access_expires_at || payment?.expires_at || null;
+  const accessMs = accessUntil ? Date.parse(accessUntil) : Number.NaN;
+  const expired = Boolean(accessUntil && Number.isFinite(accessMs) && accessMs <= Date.now());
+  const paymentStatus = String(payment?.status || "").toLowerCase();
+  const billingStatus = String(project.billing_status || "").toLowerCase();
+  if (paymentStatus === "charged_back" || billingStatus === "charged_back") {
+    return { label: "Contestada", tone: "danger" as const, accessUntil };
+  }
+  if (expired || billingStatus === "expired") {
+    return { label: "Expirada", tone: "danger" as const, accessUntil };
+  }
+  if (project.status === "suspended" || billingStatus === "past_due") {
+    return { label: "Suspensa", tone: "warning" as const, accessUntil };
+  }
+  if (paymentStatus === "refunded" || paymentStatus === "partially_refunded" || billingStatus === "refunded") {
+    return { label: "Restornada ate vencimento", tone: "warning" as const, accessUntil };
+  }
+  if (project.status === "active") {
+    return { label: "Ativa", tone: "success" as const, accessUntil };
+  }
+  return { label: "Provisionando", tone: "info" as const, accessUntil };
+}
+
+function HostingProjectsOverview({
+  projects,
+  githubConnected,
+  onCreate,
+  onReconnect,
+}: {
+  projects: HostingProjectCard[];
+  githubConnected: boolean;
+  onCreate: () => void;
+  onReconnect: () => void;
+}) {
+  if (!githubConnected) {
+    return (
+      <HostingShell>
+        <div className="mx-auto flex min-h-[420px] w-full max-w-[620px] items-center justify-center">
+          <div className="w-full rounded-[24px] border border-[#171717] bg-[#080808] p-[22px] text-center shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+            <span className="mx-auto flex h-[56px] w-[56px] items-center justify-center rounded-[18px] border border-[#202020] bg-[#101010] text-white">
+              <GitBranch className="h-[25px] w-[25px]" />
+            </span>
+            <h2 className="mt-[18px] text-[26px] font-semibold tracking-[-0.04em] text-white">
+              Reconecte o GitHub
+            </h2>
+            <p className="mx-auto mt-[10px] max-w-[460px] text-[14px] leading-[1.55] text-[#8E8E8E]">
+              Suas VPS continuam protegidas, mas precisamos validar o GitHub novamente para listar projetos, arquivos e deploys com seguranca.
+            </p>
+            <button
+              type="button"
+              onClick={onReconnect}
+              className="mt-[18px] inline-flex h-[44px] items-center justify-center gap-[9px] rounded-[12px] bg-[#F2F2F2] px-[16px] text-[13px] font-semibold text-[#050505] transition-colors hover:bg-white"
+            >
+              <GitBranch className="h-[16px] w-[16px]" />
+              Conectar GitHub
+            </button>
+          </div>
+        </div>
+      </HostingShell>
+    );
+  }
+
+  return (
+    <HostingShell>
+      <div className="flex flex-col gap-[14px] md:flex-row md:items-end md:justify-between">
+        <SectionHeader
+          eyebrow="Hospedagem"
+          title="Suas VPS"
+          description="Gerencie as hospedagens ativas, acompanhe vencimento, repositorio, plano e abra o painel operacional de cada VPS."
+        />
+        <button
+          type="button"
+          onClick={onCreate}
+          className="inline-flex h-[44px] items-center justify-center gap-[9px] rounded-[12px] bg-[#0F62FE] px-[16px] text-[13px] font-semibold text-white transition-colors hover:bg-[#2A73FF]"
+        >
+          <Rocket className="h-[16px] w-[16px]" />
+          Adquirir uma hospedagem
+        </button>
+      </div>
+
+      <div className="grid gap-[14px] xl:grid-cols-2">
+        {projects.map((project) => {
+          const Icon = resolveKindIcon(project.hosting_kind);
+          const plan = HOSTING_PLANS[project.hosting_kind]?.find((item) => item.id === project.hosting_plan_id);
+          const region = HOSTING_REGIONS.find((item) => item.id === project.hosting_region_id) || HOSTING_REGIONS[0];
+          const status = resolveProjectCardStatus(project);
+          const statusClass =
+            status.tone === "success"
+              ? "border-[rgba(52,168,83,0.28)] bg-[rgba(52,168,83,0.10)] text-[#9BE7AC]"
+              : status.tone === "warning"
+                ? "border-[rgba(255,190,80,0.28)] bg-[rgba(255,190,80,0.10)] text-[#FFD28A]"
+                : status.tone === "danger"
+                  ? "border-[rgba(255,82,82,0.28)] bg-[rgba(255,82,82,0.10)] text-[#FF9B9B]"
+                  : "border-[rgba(15,98,254,0.28)] bg-[rgba(15,98,254,0.10)] text-[#9BC2FF]";
+          return (
+            <a
+              key={project.vps_code}
+              href={resolveVpsInternalPath(project.vps_code)}
+              className="group overflow-hidden rounded-[22px] border border-[#171717] bg-[#080808] transition-colors hover:border-[#2A2A2A]"
+            >
+              <div className="grid min-h-[226px] md:grid-cols-[190px_minmax(0,1fr)]">
+                <div className="relative overflow-hidden border-b border-[#171717] bg-[#0B0B0B] p-[18px] md:border-b-0 md:border-r">
+                  <div className="absolute inset-x-0 bottom-0 h-[90px] bg-[linear-gradient(180deg,rgba(15,98,254,0)_0%,rgba(15,98,254,0.16)_100%)]" />
+                  <div className="relative flex h-full min-h-[150px] flex-col justify-between">
+                    <span className="flex h-[54px] w-[54px] items-center justify-center rounded-[16px] border border-[#202020] bg-[#111111] text-white">
+                      <Icon className="h-[25px] w-[25px]" />
+                    </span>
+                    <div>
+                      <p className="font-mono text-[12px] font-semibold text-[#777777]">{project.vps_code.slice(0, 8)}</p>
+                      <p className="mt-[5px] text-[13px] font-semibold text-[#DADADA]">{getHostingKindLabel(project.hosting_kind)}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="min-w-0 p-[18px]">
+                  <div className="flex flex-wrap items-start justify-between gap-[12px]">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-[20px] font-semibold tracking-[-0.04em] text-white">
+                        {project.github_repo}
+                      </h3>
+                      <p className="mt-[5px] truncate font-mono text-[12px] text-[#858585]">
+                        {project.github_owner}/{project.github_repo} - {project.github_branch}
+                      </p>
+                    </div>
+                    <span className={`rounded-full border px-[10px] py-[6px] text-[11px] font-bold uppercase tracking-[0.12em] ${statusClass}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  <div className="mt-[18px] grid gap-[10px] sm:grid-cols-3">
+                    {[
+                      ["Plano", plan?.name || project.hosting_plan_id],
+                      ["Regiao", `${region.city}, ${region.country}`],
+                      ["Acesso ate", formatHostingDate(status.accessUntil)],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-[14px] border border-[#151515] bg-[#0B0B0B] p-[12px]">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#555555]">{label}</p>
+                        <p className="mt-[5px] truncate text-[13px] font-semibold text-[#DADADA]">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-[16px] flex items-center justify-between gap-[12px]">
+                    <span className="text-[12px] text-[#777777]">Runtime: {project.runtime_status || "offline"}</span>
+                    <span className="inline-flex items-center gap-[7px] text-[13px] font-semibold text-[#9BC2FF]">
+                      Abrir painel
+                      <ExternalLink className="h-[14px] w-[14px]" />
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </HostingShell>
+  );
 }
 
 function HostingShell({
@@ -1357,8 +1561,14 @@ function ReadyStep({
 
 export function HostingWorkspace({
   initialStep = "kind",
+  initialProjects = [],
+  forceOnboarding = false,
+  githubConnected = false,
 }: {
   initialStep?: HostingStep;
+  initialProjects?: HostingProjectCard[];
+  forceOnboarding?: boolean;
+  githubConnected?: boolean;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState<HostingDraft>({
@@ -1436,6 +1646,33 @@ export function HostingWorkspace({
     });
   }
 
+  function startNewHosting() {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(STORAGE_KEY);
+    }
+    setStepDirection("forward");
+    const next = { ...DEFAULT_DRAFT, step: "kind" as const };
+    draftRef.current = next;
+    setDraft(next);
+    router.push(HOSTING_STEP_PATH_BY_STEP.kind, {
+      scroll: false,
+    });
+  }
+
+  function reconnectGithubFromOverview() {
+    setStepDirection("forward");
+    const next = {
+      ...DEFAULT_DRAFT,
+      kind: initialProjects[0]?.hosting_kind || null,
+      step: "github" as const,
+    };
+    draftRef.current = next;
+    setDraft(next);
+    router.push(HOSTING_STEP_PATH_BY_STEP.github, {
+      scroll: false,
+    });
+  }
+
   const repository =
     draft.selectedRepository ||
     MOCK_GITHUB_REPOSITORIES.find((repo) => repo.id === draft.selectedRepositoryId) ||
@@ -1470,6 +1707,17 @@ export function HostingWorkspace({
         region={region}
         plan={plan}
         onReset={reset}
+      />
+    );
+  }
+
+  if (!forceOnboarding && initialStep === "kind" && initialProjects.length > 0) {
+    return (
+      <HostingProjectsOverview
+        projects={initialProjects}
+        githubConnected={githubConnected}
+        onCreate={startNewHosting}
+        onReconnect={reconnectGithubFromOverview}
       />
     );
   }

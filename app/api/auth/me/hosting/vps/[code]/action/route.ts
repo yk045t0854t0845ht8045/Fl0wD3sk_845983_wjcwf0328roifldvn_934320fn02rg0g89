@@ -5,6 +5,7 @@ import {
   getHostingProjectForUser,
   normalizeVpsCode,
   requestVpsAgent,
+  resolveHostingAccessState,
   resolveRuntimeStatus,
   type VpsAction,
 } from "@/lib/hosting/vpsRuntime";
@@ -69,6 +70,32 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
   }
 
   const supabase = getSupabaseAdminClientOrThrow();
+  const paymentStatus = project.payment_order_id
+    ? await supabase
+        .from("payment_orders")
+        .select("status, expires_at")
+        .eq("id", project.payment_order_id)
+        .maybeSingle<{ status: string; expires_at: string | null }>()
+    : { data: null };
+  const accessState = resolveHostingAccessState({
+    projectStatus: project.status,
+    billingStatus: project.billing_status,
+    accessExpiresAt: project.access_expires_at || paymentStatus.data?.expires_at || null,
+    refundAccessUntil: project.refund_access_until,
+    paymentStatus: paymentStatus.data?.status,
+  });
+
+  if (accessState.blocked && action !== "sync") {
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        ok: false,
+        message: accessState.isAccessExpired
+          ? "A VPS venceu. Regularize o pagamento para executar acoes."
+          : "A VPS esta bloqueada para acoes operacionais.",
+      }, { status: 402 }),
+    );
+  }
+
   await appendVpsEvent({
     projectId: project.id,
     userId: session.user.id,

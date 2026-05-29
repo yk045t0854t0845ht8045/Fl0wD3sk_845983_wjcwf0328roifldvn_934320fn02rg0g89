@@ -11,6 +11,7 @@ import {
   buildFlowCwvSiteGraph,
   buildFlowCwvSiteMetadata,
 } from "@/lib/seo/flowCwv";
+import { RouteInteractionRecovery } from "@/components/RouteInteractionRecovery";
 import { RoutePrefetcher } from "@/components/RoutePrefetcher";
 
 import "./globals.css";
@@ -56,6 +57,7 @@ export default async function RootLayout({
         />
         <NotificationsProvider>
           <RoutePrefetcher />
+          <RouteInteractionRecovery />
           {children}
           <CookieConsentManager initialConsentValue={initialConsentValue} />
         </NotificationsProvider>

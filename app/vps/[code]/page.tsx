@@ -9,7 +9,8 @@ import {
   getHostingKindLabel,
   type HostingKind,
 } from "@/lib/hosting/catalog";
-import { resolveRuntimeStatus } from "@/lib/hosting/vpsRuntime";
+import { readHostingGitHubToken } from "@/lib/hosting/github";
+import { resolveHostingAccessState, resolveRuntimeStatus } from "@/lib/hosting/vpsRuntime";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 
 type VpsPanelPageProps = {
@@ -34,6 +35,12 @@ type HostingProjectRow = {
   runtime_status: string | null;
   runtime_status_payload: unknown;
   runtime_last_seen_at: string | null;
+  billing_status: string | null;
+  access_expires_at: string | null;
+  refund_access_until: string | null;
+  refunded_at: string | null;
+  suspended_at: string | null;
+  suspension_reason: string | null;
   windows_runtime: string;
   provisioning_payload: unknown;
   created_at: string;
@@ -177,7 +184,7 @@ export default async function VpsPanelPage({ params }: VpsPanelPageProps) {
   const { data: project, error } = await supabase
     .from("hosting_projects")
     .select(
-      "id, vps_code, user_id, payment_order_id, hosting_kind, hosting_plan_id, hosting_region_id, github_owner, github_repo, github_repo_id, github_branch, status, runtime_status, runtime_status_payload, runtime_last_seen_at, windows_runtime, provisioning_payload, created_at, updated_at",
+      "id, vps_code, user_id, payment_order_id, hosting_kind, hosting_plan_id, hosting_region_id, github_owner, github_repo, github_repo_id, github_branch, status, runtime_status, runtime_status_payload, runtime_last_seen_at, billing_status, access_expires_at, refund_access_until, refunded_at, suspended_at, suspension_reason, windows_runtime, provisioning_payload, created_at, updated_at",
     )
     .eq("vps_code", code)
     .eq("user_id", user.id)
@@ -250,12 +257,38 @@ export default async function VpsPanelPage({ params }: VpsPanelPageProps) {
   const paymentAmount = paymentOrder
     ? formatMoney(paymentOrder.amount, paymentOrder.currency)
     : formatMoney(plan?.monthlyAmount, plan?.currency);
+  const accessState = resolveHostingAccessState({
+    projectStatus: project.status,
+    billingStatus: project.billing_status,
+    accessExpiresAt: project.access_expires_at,
+    refundAccessUntil: project.refund_access_until,
+    paymentStatus: paymentOrder?.status,
+  });
+
+  if (accessState.blocked) {
+    return (
+      <AppMaintenanceScreen
+        badgeLabel="Painel VPS"
+        title="Acesso da VPS bloqueado"
+        description={
+          accessState.chargedBack
+            ? "Esta hospedagem foi bloqueada por contestacao do pagamento."
+            : accessState.isAccessExpired
+              ? `O acesso desta hospedagem venceu em ${formatDateTime(accessState.accessUntil)}.`
+              : project.suspension_reason || "Regularize o pagamento para reativar o gerenciamento desta VPS."
+        }
+        refreshLabel="Ver hospedagens"
+        fallbackHref="/dashboard/hosting"
+      />
+    );
+  }
   const runtimePayload = isRecord(project.runtime_status_payload)
     ? project.runtime_status_payload
     : {};
   const fileTree = Array.isArray(runtimePayload.fileTree)
     ? runtimePayload.fileTree
     : [];
+  const githubConnected = Boolean(await readHostingGitHubToken(user.id));
 
   const snapshot: VpsWorkspaceSnapshot = {
     project: {
@@ -283,6 +316,7 @@ export default async function VpsPanelPage({ params }: VpsPanelPageProps) {
       paidAtLabel: paymentOrder?.paid_at
         ? `Pago em ${formatDateTime(paymentOrder.paid_at)}`
         : `Criado em ${formatDateTime(paymentOrder?.created_at)}`,
+      githubConnected,
     },
     metrics: [],
     logs: [],

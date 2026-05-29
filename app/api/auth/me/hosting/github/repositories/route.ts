@@ -4,6 +4,7 @@ import {
   isHostingGitHubConfigured,
   readHostingGitHubToken,
 } from "@/lib/hosting/github";
+import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 
 export async function GET(request: NextRequest) {
@@ -17,7 +18,8 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const token = await readHostingGitHubToken();
+  const session = await getCurrentAuthSessionFromCookie();
+  const token = await readHostingGitHubToken(session?.user?.id);
   if (!token) {
     return applyNoStoreHeaders(
       NextResponse.json({

@@ -51,7 +51,8 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
       }),
     );
   } catch {
-    const token = await readHostingGitHubToken();
+    const token = await readHostingGitHubToken(loaded.project.user_id);
+    let githubFailed = false;
     if (token && path) {
       const file = await fetchHostingGitHubRepositoryFile({
         token,
@@ -59,7 +60,10 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
         repo: loaded.project.github_repo,
         branch: loaded.project.github_branch,
         path,
-      }).catch(() => null);
+      }).catch(() => {
+        githubFailed = true;
+        return null;
+      });
       if (file) {
         return applyNoStoreHeaders(
           NextResponse.json({ ok: true, file, agentConnected: false, source: "github" }),
@@ -73,7 +77,10 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
         owner: loaded.project.github_owner,
         repo: loaded.project.github_repo,
         branch: loaded.project.github_branch,
-      }).catch(() => null);
+      }).catch(() => {
+        githubFailed = true;
+        return null;
+      });
       if (tree) {
         const currentPayload = isRecord(loaded.project.runtime_status_payload)
           ? loaded.project.runtime_status_payload
@@ -104,6 +111,12 @@ export async function GET(request: NextRequest, { params }: RouteProps) {
         tree: Array.isArray(payload.fileTree) ? payload.fileTree : [],
         file: null,
         agentConnected: false,
+        reconnectRequired: !token || githubFailed,
+        message: !token
+          ? "Reconecte o GitHub para espelhar os arquivos."
+          : githubFailed
+            ? "Nao consegui validar o GitHub deste repositorio. Reconecte a conta."
+            : undefined,
       }),
     );
   }

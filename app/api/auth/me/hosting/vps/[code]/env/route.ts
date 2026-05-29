@@ -24,6 +24,19 @@ type NormalizedEnvVariableInput = {
   sensitive: boolean;
 };
 
+function buildDotEnvContent(variables: NormalizedEnvVariableInput[]) {
+  return variables
+    .map((variable) => {
+      const escaped = variable.value
+        .replace(/\\/g, "\\\\")
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r")
+        .replace(/"/g, '\\"');
+      return `${variable.key}="${escaped}"`;
+    })
+    .join("\n");
+}
+
 function normalizeEnvironment(value: unknown) {
   return value === "development" || value === "preview" || value === "production"
     ? value
@@ -205,6 +218,13 @@ export async function POST(request: NextRequest, { params }: RouteProps) {
     method: "POST",
     path: `/v1/vps/${loaded.project.vps_code}/env`,
     body: {
+      mode: "dotenv",
+      envFiles: Object.fromEntries(
+        ["development", "preview", "production"].map((environment) => [
+          environment,
+          buildDotEnvContent(normalizedVariables.filter((item) => item.environment === environment)),
+        ]),
+      ),
       variables: normalizedVariables.map((item) => ({
         environment: item.environment,
         key: item.key,

@@ -3,7 +3,9 @@ import {
   consumeHostingGitHubHandoffToken,
   fetchHostingGitHubProfile,
   setHostingGitHubTokenCookie,
+  storeHostingGitHubTokenForUser,
 } from "@/lib/hosting/github";
+import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 
 type CompleteGitHubBody = {
@@ -36,7 +38,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const session = await getCurrentAuthSessionFromCookie();
     const profile = await fetchHostingGitHubProfile(token);
+    if (session?.user?.id) {
+      await storeHostingGitHubTokenForUser({
+        userId: session.user.id,
+        token,
+        login: profile.user.login,
+        accountType: profile.user.type,
+        avatarUrl: profile.user.avatarUrl,
+      }).catch(() => null);
+    }
     const response = NextResponse.json({
       ok: true,
       connected: true,

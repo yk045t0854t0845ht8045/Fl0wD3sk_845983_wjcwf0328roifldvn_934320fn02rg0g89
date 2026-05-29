@@ -1,6 +1,10 @@
 import { createHash, createHmac } from "crypto";
 import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import type { HostingKind } from "@/lib/hosting/catalog";
+import {
+  decryptFlowSecureValue,
+  encryptFlowSecureValue,
+} from "@/lib/security/flowSecure";
 
 export type VpsRuntimeStatus =
   | "online"
@@ -29,6 +33,12 @@ export type HostingProjectAccess = {
   runtime_status?: VpsRuntimeStatus;
   runtime_status_payload?: unknown;
   runtime_last_seen_at?: string | null;
+  billing_status?: string | null;
+  access_expires_at?: string | null;
+  refund_access_until?: string | null;
+  refunded_at?: string | null;
+  suspended_at?: string | null;
+  suspension_reason?: string | null;
   windows_runtime: string;
   provisioning_payload: unknown;
   created_at: string;
@@ -107,7 +117,7 @@ export async function getHostingProjectForUser(input: {
   const { data, error } = await supabase
     .from("hosting_projects")
     .select(
-      "id, vps_code, user_id, payment_order_id, hosting_kind, hosting_plan_id, hosting_region_id, github_owner, github_repo, github_repo_id, github_branch, status, runtime_status, runtime_status_payload, runtime_last_seen_at, windows_runtime, provisioning_payload, created_at, updated_at",
+      "id, vps_code, user_id, payment_order_id, hosting_kind, hosting_plan_id, hosting_region_id, github_owner, github_repo, github_repo_id, github_branch, status, runtime_status, runtime_status_payload, runtime_last_seen_at, billing_status, access_expires_at, refund_access_until, refunded_at, suspended_at, suspension_reason, windows_runtime, provisioning_payload, created_at, updated_at",
     )
     .eq("vps_code", input.vpsCode)
     .eq("user_id", input.userId)
@@ -115,6 +125,41 @@ export async function getHostingProjectForUser(input: {
 
   if (error) throw error;
   return data || null;
+}
+
+export function resolveHostingAccessState(input: {
+  projectStatus?: string | null;
+  billingStatus?: string | null;
+  accessExpiresAt?: string | null;
+  refundAccessUntil?: string | null;
+  paymentStatus?: string | null;
+}) {
+  const nowMs = Date.now();
+  const accessUntil = input.refundAccessUntil || input.accessExpiresAt || null;
+  const accessUntilMs = accessUntil ? Date.parse(accessUntil) : Number.NaN;
+  const isAccessExpired = Boolean(accessUntil && Number.isFinite(accessUntilMs) && accessUntilMs <= nowMs);
+  const paymentStatus = String(input.paymentStatus || "").toLowerCase();
+  const billingStatus = String(input.billingStatus || "").toLowerCase();
+  const refunded = paymentStatus === "refunded" || paymentStatus === "partially_refunded" || billingStatus === "refunded";
+  const chargedBack = paymentStatus === "charged_back" || billingStatus === "charged_back";
+  const cancelled = billingStatus === "cancelled" || input.projectStatus === "cancelled";
+  const suspended = input.projectStatus === "suspended" || billingStatus === "past_due" || billingStatus === "expired";
+  const blocked = chargedBack || cancelled || isAccessExpired || (suspended && !refunded);
+
+  return {
+    accessUntil,
+    isAccessExpired,
+    refunded,
+    chargedBack,
+    cancelled,
+    suspended,
+    blocked,
+    label: blocked
+      ? "Bloqueada"
+      : refunded
+        ? "Restornada, acesso mantido ate a expiracao"
+        : "Ativa",
+  };
 }
 
 export async function appendVpsEvent(input: {
@@ -221,6 +266,20 @@ function resolveEnvSecret() {
 export function encryptEnvValue(value: string) {
   const secret = resolveEnvSecret();
   if (!secret) throw new Error("HOSTING_ENV_SECRET nao configurado.");
-  const digest = createHash("sha256").update(secret).digest("hex");
-  return createHmac("sha256", digest).update(value).digest("hex");
+  const encrypted = encryptFlowSecureValue(value, {
+    purpose: "hosting_env_secret",
+    subcontext: createHash("sha256").update(secret).digest("hex"),
+  });
+  if (!encrypted) throw new Error("Valor de variavel invalido.");
+  return encrypted;
+}
+
+export function decryptEnvValue(value: string | null | undefined) {
+  const secret = resolveEnvSecret();
+  if (!secret) throw new Error("HOSTING_ENV_SECRET nao configurado.");
+  return decryptFlowSecureValue(value, {
+    purpose: "hosting_env_secret",
+    subcontext: createHash("sha256").update(secret).digest("hex"),
+    allowPlaintextFallback: false,
+  });
 }

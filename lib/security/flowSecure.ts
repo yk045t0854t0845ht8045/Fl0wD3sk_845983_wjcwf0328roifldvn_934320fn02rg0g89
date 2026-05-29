@@ -19,6 +19,8 @@ export type FlowSecurePurpose =
   | "dev_certificate_token"
   | "dev_login_token"
   | "diagnostic_fingerprint"
+  | "hosting_env_secret"
+  | "hosting_github_token"
   | "payment_pii"
   | "rate_limit_ip"
   | "server_settings_snapshot"
