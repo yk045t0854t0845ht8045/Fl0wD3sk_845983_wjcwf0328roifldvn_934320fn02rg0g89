@@ -9,6 +9,7 @@ import {
   decryptFlowSecureValue,
   encryptFlowSecureValue,
 } from "@/lib/security/flowSecure";
+import { getSupabaseAdminClientOrThrow } from "@/lib/supabaseAdmin";
 import type { HostingGitHubAccount, HostingRepository } from "@/lib/hosting/catalog";
 
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
@@ -48,6 +49,25 @@ type GitHubRepo = {
   owner: {
     login: string;
   };
+};
+
+type GitHubTreeItem = {
+  path?: string;
+  type?: "blob" | "tree" | string;
+  size?: number;
+};
+
+type GitHubTreeResponse = {
+  tree?: GitHubTreeItem[];
+  truncated?: boolean;
+};
+
+type GitHubContentResponse = {
+  type?: string;
+  encoding?: string;
+  content?: string;
+  name?: string;
+  path?: string;
 };
 
 export function isHostingGitHubConfigured() {
@@ -175,13 +195,92 @@ export function setHostingGitHubTokenCookie(
   });
 }
 
-export async function readHostingGitHubToken() {
-  const encrypted = (await cookies()).get(GITHUB_TOKEN_COOKIE)?.value || null;
-  return decryptFlowSecureValue(encrypted, {
-    purpose: "auth_session_oauth",
-    subcontext: "hosting_github",
+function encryptHostingGitHubTokenForUser(userId: number, token: string) {
+  return encryptFlowSecureValue(token, {
+    purpose: "hosting_github_token",
+    subcontext: `user:${userId}`,
+  });
+}
+
+function decryptHostingGitHubTokenForUser(userId: number, value: string | null | undefined) {
+  return decryptFlowSecureValue(value, {
+    purpose: "hosting_github_token",
+    subcontext: `user:${userId}`,
     allowPlaintextFallback: false,
   });
+}
+
+export async function storeHostingGitHubTokenForUser(input: {
+  userId: number;
+  token: string;
+  login?: string | null;
+  accountType?: string | null;
+  avatarUrl?: string | null;
+}) {
+  const encryptedToken = encryptHostingGitHubTokenForUser(input.userId, input.token);
+  if (!encryptedToken) throw new Error("Nao foi possivel proteger o token do GitHub.");
+
+  await getSupabaseAdminClientOrThrow()
+    .from("hosting_github_connections")
+    .upsert(
+      {
+        user_id: input.userId,
+        github_login: input.login || null,
+        github_account_type: input.accountType || null,
+        github_avatar_url: input.avatarUrl || null,
+        encrypted_token: encryptedToken,
+        token_status: "active",
+        last_validated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
+}
+
+export async function readHostingGitHubStoredToken(userId: number) {
+  try {
+    const { data } = await getSupabaseAdminClientOrThrow()
+      .from("hosting_github_connections")
+      .select("encrypted_token, token_status")
+      .eq("user_id", userId)
+      .eq("token_status", "active")
+      .maybeSingle<{ encrypted_token: string | null; token_status: string | null }>();
+
+    if (!data?.encrypted_token) return null;
+    return decryptHostingGitHubTokenForUser(userId, data.encrypted_token);
+  } catch {
+    return null;
+  }
+}
+
+export async function markHostingGitHubTokenInvalid(userId: number, reason?: string | null) {
+  await getSupabaseAdminClientOrThrow()
+    .from("hosting_github_connections")
+    .update({
+      token_status: "invalid",
+      last_error: reason || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+}
+
+export async function readHostingGitHubToken(userId?: number | null) {
+  const encrypted = (await cookies()).get(GITHUB_TOKEN_COOKIE)?.value || null;
+  let cookieToken: string | null = null;
+  if (encrypted) {
+    try {
+      cookieToken = decryptFlowSecureValue(encrypted, {
+          purpose: "auth_session_oauth",
+          subcontext: "hosting_github",
+          allowPlaintextFallback: false,
+        });
+    } catch {
+      cookieToken = null;
+    }
+  }
+  if (cookieToken) return cookieToken;
+  if (!userId) return null;
+  return readHostingGitHubStoredToken(userId);
 }
 
 export async function hasHostingGitHubTokenCookie() {
@@ -369,4 +468,107 @@ export async function fetchHostingGitHubRepositories(input: {
       .toLowerCase()
       .includes(query),
   );
+}
+
+function languageFromPath(path: string) {
+  const extension = path.split(".").pop()?.toLowerCase() || "";
+  const languages: Record<string, string> = {
+    js: "javascript",
+    jsx: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    json: "json",
+    css: "css",
+    scss: "scss",
+    html: "html",
+    md: "markdown",
+    yml: "yaml",
+    yaml: "yaml",
+    py: "python",
+    sql: "sql",
+    env: "dotenv",
+  };
+  return languages[extension] || null;
+}
+
+export type HostingGitHubFileNode = {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  language?: string | null;
+  children?: HostingGitHubFileNode[];
+};
+
+export async function fetchHostingGitHubRepositoryTree(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+}) {
+  const payload = await githubFetch<GitHubTreeResponse>(
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/git/trees/${encodeURIComponent(input.branch)}?recursive=1`,
+    input.token,
+  );
+  const root: HostingGitHubFileNode = {
+    name: input.repo,
+    path: "/",
+    type: "directory",
+    children: [],
+  };
+  const directoryMap = new Map<string, HostingGitHubFileNode>([["", root]]);
+  const sortedTree = [...(payload.tree || [])].sort((a, b) =>
+    String(a.path || "").localeCompare(String(b.path || "")),
+  );
+
+  for (const item of sortedTree) {
+    const itemPath = item.path?.replace(/^\/+/, "");
+    if (!itemPath) continue;
+    const parts = itemPath.split("/");
+    const name = parts[parts.length - 1] || itemPath;
+    const parentPath = parts.slice(0, -1).join("/");
+    const parent = directoryMap.get(parentPath) || root;
+    const isDirectory = item.type === "tree";
+    const node: HostingGitHubFileNode = {
+      name,
+      path: itemPath,
+      type: isDirectory ? "directory" : "file",
+      language: isDirectory ? null : languageFromPath(itemPath),
+      children: isDirectory ? [] : undefined,
+    };
+    parent.children = parent.children || [];
+    parent.children.push(node);
+    if (isDirectory) directoryMap.set(itemPath, node);
+  }
+
+  const sortChildren = (node: HostingGitHubFileNode) => {
+    if (!node.children?.length) return;
+    node.children.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    node.children.forEach(sortChildren);
+  };
+  sortChildren(root);
+  return root.children || [];
+}
+
+export async function fetchHostingGitHubRepositoryFile(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  path: string;
+}) {
+  const payload = await githubFetch<GitHubContentResponse>(
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${input.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(input.branch)}`,
+    input.token,
+  );
+  if (payload.type !== "file" || payload.encoding !== "base64" || !payload.content) {
+    return null;
+  }
+  return {
+    name: payload.name || input.path.split("/").pop() || input.path,
+    path: payload.path || input.path,
+    content: Buffer.from(payload.content.replace(/\s/g, ""), "base64").toString("utf8"),
+  };
 }

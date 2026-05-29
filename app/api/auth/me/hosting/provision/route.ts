@@ -46,8 +46,13 @@ function normalizeRepository(value: unknown) {
     owner,
     name,
     id: normalizeText(record.id, 80),
+    nodeId: normalizeText(record.nodeId, 160),
     branch: normalizeText(record.branch, 120) || "main",
     fullName: `${owner}/${name}`,
+    description: normalizeText(record.description, 400),
+    language: normalizeText(record.language, 80),
+    htmlUrl: normalizeText(record.htmlUrl, 300),
+    private: typeof record.private === "boolean" ? record.private : null,
   };
 }
 
@@ -56,6 +61,12 @@ function readPurchaseContext(payload: unknown) {
   const context = (payload as Record<string, unknown>).purchase_context;
   if (!context || typeof context !== "object" || Array.isArray(context)) return null;
   return context as Record<string, unknown>;
+}
+
+function addDaysIso(base: string | null | undefined, days: number) {
+  const baseMs = base ? Date.parse(base) : Number.NaN;
+  const startMs = Number.isFinite(baseMs) ? baseMs : Date.now();
+  return new Date(startMs + days * 86_400_000).toISOString();
 }
 
 export async function POST(request: NextRequest) {
@@ -101,7 +112,7 @@ export async function POST(request: NextRequest) {
   const supabase = getSupabaseAdminClientOrThrow();
   const { data: order, error: orderError } = await supabase
     .from("payment_orders")
-    .select("id, order_number, user_id, status, amount, plan_code, plan_name, provider_payload")
+    .select("id, order_number, user_id, status, amount, plan_code, plan_name, provider_payload, paid_at, expires_at")
     .eq("order_number", orderNumber)
     .eq("user_id", session.user.id)
     .maybeSingle();
@@ -135,6 +146,8 @@ export async function POST(request: NextRequest) {
       }, { status: 409 }),
     );
   }
+
+  const accessExpiresAt = order.expires_at || addDaysIso(order.paid_at, 30);
 
   const { data: existingProject, error: existingError } = await supabase
     .from("hosting_projects")
@@ -173,9 +186,16 @@ export async function POST(request: NextRequest) {
       github_repo_id: repository.id,
       github_branch: repository.branch,
       status: "pending_provision",
+      billing_status: "active",
+      access_expires_at: accessExpiresAt,
       provisioning_payload: {
         source: "dashboard_hosting",
         windowsRuntime: "windows-vps",
+        access: {
+          startsAt: order.paid_at || new Date().toISOString(),
+          expiresAt: accessExpiresAt,
+          sourceOrderNumber: order.order_number,
+        },
         repository,
         plan,
         region,

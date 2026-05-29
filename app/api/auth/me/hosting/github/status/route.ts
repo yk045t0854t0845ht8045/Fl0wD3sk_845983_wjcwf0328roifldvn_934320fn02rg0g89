@@ -3,8 +3,11 @@ import {
   fetchHostingGitHubProfile,
   hasHostingGitHubTokenCookie,
   isHostingGitHubConfigured,
+  markHostingGitHubTokenInvalid,
   readHostingGitHubToken,
+  storeHostingGitHubTokenForUser,
 } from "@/lib/hosting/github";
+import { getCurrentAuthSessionFromCookie } from "@/lib/auth/session";
 import { applyNoStoreHeaders } from "@/lib/security/http";
 
 export async function GET() {
@@ -23,8 +26,9 @@ export async function GET() {
     );
   }
 
+  const session = await getCurrentAuthSessionFromCookie();
   const tokenPresent = await hasHostingGitHubTokenCookie();
-  const token = await readHostingGitHubToken();
+  const token = await readHostingGitHubToken(session?.user?.id);
   if (!token) {
     return applyNoStoreHeaders(
       NextResponse.json({
@@ -45,6 +49,15 @@ export async function GET() {
 
   try {
     const profile = await fetchHostingGitHubProfile(token);
+    if (session?.user?.id) {
+      await storeHostingGitHubTokenForUser({
+        userId: session.user.id,
+        token,
+        login: profile.user.login,
+        accountType: profile.user.type,
+        avatarUrl: profile.user.avatarUrl,
+      }).catch(() => null);
+    }
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: true,
@@ -58,6 +71,12 @@ export async function GET() {
       }),
     );
   } catch (error) {
+    if (session?.user?.id) {
+      await markHostingGitHubTokenInvalid(
+        session.user.id,
+        error instanceof Error ? error.message : "Falha ao validar GitHub.",
+      ).catch(() => null);
+    }
     return applyNoStoreHeaders(
       NextResponse.json({
         ok: false,

@@ -2693,6 +2693,45 @@ export function ServersWorkspace({
     setSelectedSettingsSectionForConfig(settingsSection);
   }, []);
 
+  const syncBrowserHistoryServerRoute = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    const nextPathname = window.location.pathname;
+    const nextRoute = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    setPendingWorkspacePaneKey(null);
+    setIsTeamMenuOpen(false);
+    setIsProfileMenuOpen(false);
+
+    if (!isServersWorkspacePath(nextPathname)) {
+      window.setTimeout(() => {
+        router.replace(nextRoute, { scroll: false });
+      }, 0);
+      return;
+    }
+
+    const nextRouteState = parseWorkspaceRoute(nextPathname);
+    applySelectedServerRouteState(
+      nextRouteState.guildId,
+      nextRouteState.tab,
+      nextRouteState.settingsSection,
+    );
+  }, [applySelectedServerRouteState, router]);
+
+  useEffect(() => {
+    function handlePageShow() {
+      syncBrowserHistoryServerRoute();
+    }
+
+    window.addEventListener("popstate", syncBrowserHistoryServerRoute);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      window.removeEventListener("popstate", syncBrowserHistoryServerRoute);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [syncBrowserHistoryServerRoute]);
+
   const openProjectsOverview = useCallback((mode: "push" | "replace" = "push") => {
     setPendingWorkspacePaneKey(buildWorkspacePaneKey(null, "settings", "overview"));
     navigateToUrl("/servers/", mode);

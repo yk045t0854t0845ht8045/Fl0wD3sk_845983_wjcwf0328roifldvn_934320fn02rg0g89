@@ -124,6 +124,55 @@ function unlockBodyScroll() {
   window.scrollTo(0, savedScrollY);
 }
 
+export function resetBodyScrollLock() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const state = window.__flowdeskBodyScrollLockState__;
+  const { body, documentElement } = document;
+  const savedScrollY = state?.scrollY ?? window.scrollY;
+
+  if (state?.bodyStyles) {
+    body.style.overflow = state.bodyStyles.overflow;
+    body.style.position = state.bodyStyles.position;
+    body.style.top = state.bodyStyles.top;
+    body.style.left = state.bodyStyles.left;
+    body.style.right = state.bodyStyles.right;
+    body.style.width = state.bodyStyles.width;
+    body.style.paddingRight = state.bodyStyles.paddingRight;
+    body.style.touchAction = state.bodyStyles.touchAction;
+    body.style.overscrollBehavior = state.bodyStyles.overscrollBehavior;
+  } else if (body.style.position === "fixed" || body.style.touchAction === "none") {
+    body.style.overflow = "";
+    body.style.position = "";
+    body.style.top = "";
+    body.style.left = "";
+    body.style.right = "";
+    body.style.width = "";
+    body.style.paddingRight = "";
+    body.style.touchAction = "";
+    body.style.overscrollBehavior = "";
+  }
+
+  if (state?.htmlStyles) {
+    documentElement.style.overflow = state.htmlStyles.overflow;
+    documentElement.style.overscrollBehavior =
+      state.htmlStyles.overscrollBehavior;
+  } else {
+    documentElement.style.overflow = "";
+    documentElement.style.overscrollBehavior = "";
+  }
+
+  if (state) {
+    state.count = 0;
+    state.bodyStyles = null;
+    state.htmlStyles = null;
+  }
+
+  window.scrollTo(0, savedScrollY);
+}
+
 export function useBodyScrollLock(active: boolean) {
   useEffect(() => {
     if (!active || typeof window === "undefined") {

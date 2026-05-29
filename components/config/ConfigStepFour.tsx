@@ -805,6 +805,10 @@ function isCachedPixOrder(value: unknown): value is PixOrder {
   );
 }
 
+function isCustomPaymentSurfacePathname(pathname: string) {
+  return pathname.startsWith("/payment/vps/") || pathname.startsWith("/payment/hosting/");
+}
+
 function replaceCurrentPlanPath(
   planCode: PlanCode,
   billingPeriodCode: PlanBillingPeriodCode,
@@ -813,6 +817,9 @@ function replaceCurrentPlanPath(
 
   const url = new URL(window.location.href);
   const isPaymentSurface = isPaymentCheckoutPathname(url.pathname);
+  if (isPaymentSurface && isCustomPaymentSurfacePathname(url.pathname)) {
+    return;
+  }
   const nextPathname = isPaymentSurface
     ? buildPaymentCheckoutPath({
         planCode,
@@ -1379,8 +1386,9 @@ function setCheckoutStatusQuery(input: {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
   const isPaymentSurface = isPaymentCheckoutPathname(url.pathname);
+  const isCustomPaymentSurface = isCustomPaymentSurfacePathname(url.pathname);
 
-  if (isPaymentSurface) {
+  if (isPaymentSurface && !isCustomPaymentSurface) {
     const pathDetails = readPaymentCheckoutPathDetails({
       pathname: url.pathname,
       fallbackPlanCode: DEFAULT_PLAN_CODE,
@@ -1488,6 +1496,21 @@ function buildPaymentOrderLookupUrl(input: {
   return `/api/auth/me/payments/order?${params.toString()}`;
 }
 
+function appendPurchaseContextSearchParams(
+  params: URLSearchParams,
+  purchaseContext: CheckoutPurchaseContext | null,
+) {
+  if (!purchaseContext) return;
+  params.set("purchaseType", purchaseContext.type);
+  params.set("source", "dashboard-hosting");
+  params.set("hostingKind", purchaseContext.hostingKind);
+  params.set("hostingPlan", purchaseContext.hostingPlan);
+  params.set("hostingRegion", purchaseContext.hostingRegion);
+  if (purchaseContext.repository) {
+    params.set("repository", purchaseContext.repository);
+  }
+}
+
 function clearCheckoutStatusQuery() {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
@@ -1496,7 +1519,7 @@ function clearCheckoutStatusQuery() {
   );
   let removedOneTimeKey = false;
 
-  if (isPaymentCheckoutPathname(url.pathname)) {
+  if (isPaymentCheckoutPathname(url.pathname) && !isCustomPaymentSurfacePathname(url.pathname)) {
     url.pathname = buildPaymentBasePathFromCurrentPathname(url.pathname);
   }
 
@@ -2707,14 +2730,14 @@ function MethodSelectorPanel(props: MethodSelectorPanelProps) {
       {!canInteract && !isOrderLoading && !hasOrderReady ? (
         <div className="mt-[14px] rounded-[18px] border border-[#1E1E1E] bg-[#0D0D0D] px-[14px] py-[14px] text-center">
           <p className="text-[12px] leading-[1.7] text-[#C2C2C2]">
-            Nao conseguimos deixar o pedido pronto agora. Tente preparar uma nova cobranca segura.
+            Nao conseguimos preparar a cobranca agora. Revise a conexao e gere uma nova tentativa segura.
           </p>
           <button
             type="button"
             onClick={onRetryPrepareOrder}
             className="mt-[12px] inline-flex h-[40px] items-center justify-center rounded-[12px] border border-[#272727] bg-[#121212] px-[14px] text-[13px] font-medium text-[#E1E1E1] transition-colors hover:border-[#323232] hover:bg-[#171717]"
           >
-            Tentar novamente
+            Preparar nova tentativa
           </button>
         </div>
       ) : null}
@@ -3217,6 +3240,7 @@ export function ConfigStepFour({
   const [methodMessage, setMethodMessage] = useState<string | null>(null);
   const [cardRedirectRequestKey, setCardRedirectRequestKey] = useState(0);
   const [paymentBootstrapRequestKey, setPaymentBootstrapRequestKey] = useState(0);
+  const [paymentBootstrapFailed, setPaymentBootstrapFailed] = useState(false);
   const [pixTermsAccepted, setPixTermsAccepted] = useState(false);
   const [couponCode, setCouponCode] = useState(
     sanitizeDiscountCodeInput(
@@ -3319,6 +3343,7 @@ export function ConfigStepFour({
       setSelectedRail(null);
       setCopied(false);
       setMethodMessage(null);
+      setPaymentBootstrapFailed(false);
       setView("methods");
     }
   }, [forceFreshCheckout, guildId]);
@@ -3326,6 +3351,18 @@ export function ConfigStepFour({
   useEffect(() => {
     lastKnownOrderNumberRef.current = lastKnownOrderNumber;
   }, [lastKnownOrderNumber]);
+
+  useEffect(() => {
+    setPaymentBootstrapFailed(false);
+  }, [
+    guildId,
+    purchaseContext?.hostingKind,
+    purchaseContext?.hostingPlan,
+    purchaseContext?.hostingRegion,
+    purchaseContext?.repository,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
 
   const documentDigits = useMemo(() => normalizeBrazilDocumentDigits(payerDocument), [payerDocument]);
   const cardDocumentDigits = useMemo(() => normalizeBrazilDocumentDigits(cardDocument), [cardDocument]);
@@ -3516,6 +3553,27 @@ export function ConfigStepFour({
           recurringEnabled: payload.plan.recurringEnabled,
           recurringMethodId: payload.plan.recurringMethodId,
         };
+
+        if (isCustomPurchaseCheckout) {
+          const customResolvedPlan = resolvePlanSummary(
+            selectedPlanCode,
+            selectedBillingPeriodCode,
+            nextAvailablePlans,
+          );
+          const customFlowPointsBalance = roundMoney(
+            Math.max(0, payload.plan.planChange.flowPointsBalance),
+          );
+          setAvailablePlans(nextAvailablePlans);
+          setAccountPlan(payload.plan.accountPlan || null);
+          setResolvedPlan(customResolvedPlan);
+          setSelectedPlanChange(
+            buildFallbackPlanChangeSummary(customResolvedPlan, customFlowPointsBalance),
+          );
+          setKnownFlowPointsBalance(customFlowPointsBalance);
+          setScheduledPlanChange(null);
+          return;
+        }
+
         setAvailablePlans(nextAvailablePlans);
         setAccountPlan(payload.plan.accountPlan || null);
         setSelectedPlanCode(nextPlanCode);
@@ -3563,7 +3621,18 @@ export function ConfigStepFour({
       isMounted = false;
       controller.abort();
     };
-  }, [guildId, selectedBillingPeriodCode, selectedPlanCode]);
+  }, [
+    guildId,
+    isCustomPurchaseCheckout,
+    selectedBillingPeriodCode,
+    selectedPlanCode,
+  ]);
+
+  useEffect(() => {
+    if (!isCustomPurchaseCheckout) return;
+    if (typeof purchaseContext?.amount !== "number") return;
+    setCheckoutBaseAmountOverride(roundMoney(Math.max(0, purchaseContext.amount)));
+  }, [isCustomPurchaseCheckout, purchaseContext?.amount]);
 
   useEffect(() => {
     if (phase !== "cart") return;
@@ -3943,6 +4012,7 @@ export function ConfigStepFour({
                 if (shouldForceNewOrder) {
                   params.set("forceNew", "1");
                 }
+                appendPurchaseContextSearchParams(params, purchaseContext);
 
                 return `/api/auth/me/payments/pix?${params.toString()}`;
               })();
@@ -3961,6 +4031,7 @@ export function ConfigStepFour({
           payload.order
         ) {
           forceNewCheckoutRef.current = false;
+          setPaymentBootstrapFailed(false);
         }
 
         const remoteOrder =
@@ -4033,6 +4104,7 @@ export function ConfigStepFour({
 
           setPixOrder(remoteOrder);
           setLastKnownOrderNumber(remoteOrder.orderNumber);
+          setPaymentBootstrapFailed(false);
           setPhase("checkout");
           setView("methods");
           setMethodMessage(
@@ -4083,6 +4155,7 @@ export function ConfigStepFour({
         if (remoteOrder) {
           writeCachedOrderByGuild(activeGuildId, remoteOrder);
           setLastKnownOrderNumber(remoteOrder.orderNumber);
+          setPaymentBootstrapFailed(false);
           clearCheckoutStatusQuery();
         }
 
@@ -4223,6 +4296,7 @@ export function ConfigStepFour({
     initialPlanCode,
     isPlanLoading,
     paymentBootstrapRequestKey,
+    purchaseContext,
     selectedPlanChange.execution,
     selectedPlanChange.immediateSubtotalAmount,
     selectedBillingPeriodCode,
@@ -4290,6 +4364,7 @@ export function ConfigStepFour({
 
   useEffect(() => {
     if (isLoadingOrder || isPreparingBaseOrder || isPlanLoading) return;
+    if (paymentBootstrapFailed) return;
     if (paymentOrderLookupInFlightRef.current) return;
     if (resolvedPlan.isTrial) return;
     if (!resolvedPlan.isAvailable) return;
@@ -4330,6 +4405,7 @@ export function ConfigStepFour({
         if (shouldForceNewOrder) {
           params.set("forceNew", "1");
         }
+        appendPurchaseContextSearchParams(params, purchaseContext);
 
         const response = await fetch(
           `/api/auth/me/payments/pix?${params.toString()}`,
@@ -4348,6 +4424,7 @@ export function ConfigStepFour({
 
         setPixOrder(payload.order);
         setLastKnownOrderNumber(payload.order.orderNumber);
+        setPaymentBootstrapFailed(false);
         writeCachedOrderByGuild(guildId, payload.order);
         if (shouldForceNewOrder) {
           forceNewCheckoutRef.current = false;
@@ -4368,6 +4445,7 @@ export function ConfigStepFour({
         } else {
           setMethodMessage(message);
         }
+        setPaymentBootstrapFailed(true);
       } finally {
         window.clearTimeout(timeoutId);
         orderBootstrapInFlightRef.current = false;
@@ -4388,6 +4466,7 @@ export function ConfigStepFour({
     isPlanLoading,
     isLoadingOrder,
     isPreparingBaseOrder,
+    paymentBootstrapFailed,
     isSubmittingCard,
     isSubmittingPix,
     lastKnownOrderNumber,
@@ -4396,6 +4475,7 @@ export function ConfigStepFour({
     resolvedPlan.isAvailable,
     resolvedPlan.isTrial,
     activeDiscountPreview.totalAmount,
+    purchaseContext,
     selectedPlanChange.execution,
     selectedBillingPeriodCode,
     selectedPlanCode,
@@ -4418,12 +4498,12 @@ export function ConfigStepFour({
     // usar polling mais agressivo para liberar em tempo real.
     const pollingStartedAt = Date.now();
     const resolvePollingIntervalMs = () => {
-      if (typeof document !== "undefined" && document.hidden) return 3500;
-      if (!shouldUseFastApprovalPolling) return 5000;
+      if (typeof document !== "undefined" && document.hidden) return 1500;
+      if (!shouldUseFastApprovalPolling) return 2500;
       const elapsedMs = Date.now() - pollingStartedAt;
-      if (elapsedMs <= 45_000) return 750;
-      if (elapsedMs <= 180_000) return 1500;
-      return 3000;
+      if (elapsedMs <= 30_000) return 350;
+      if (elapsedMs <= 120_000) return 800;
+      return 1500;
     };
     let isMounted = true;
     let activeController: AbortController | null = null;
@@ -4433,10 +4513,9 @@ export function ConfigStepFour({
 
       paymentPollingInFlightRef.current = true;
       activeController = new AbortController();
-      // Aumentar timeout para evitar aborts prematuros em redes lentas.
       const timeoutId = window.setTimeout(() => {
         activeController?.abort();
-      }, 15000);
+      }, 8000);
 
       try {
         const queryParams = new URLSearchParams({
@@ -5030,8 +5109,9 @@ export function ConfigStepFour({
   );
 
   useEffect(() => {
+    if (isCustomPurchaseCheckout) return;
     replaceCurrentPlanPath(selectedPlanCode, selectedBillingPeriodCode);
-  }, [selectedBillingPeriodCode, selectedPlanCode]);
+  }, [isCustomPurchaseCheckout, selectedBillingPeriodCode, selectedPlanCode]);
 
   useEffect(() => {
     if (!shouldShowStatusResultPanel) return;
@@ -5202,6 +5282,7 @@ export function ConfigStepFour({
       setPixOrder(null);
       setLastKnownOrderNumber(null);
       setCopied(false);
+      setPaymentBootstrapFailed(false);
       setMethodMessage(null);
       setPixFormError(null);
       setPixFormHasInputError(false);
@@ -5549,6 +5630,7 @@ export function ConfigStepFour({
     setCopied(false);
     setIsLoadingOrder(false);
     setIsPreparingBaseOrder(false);
+    setPaymentBootstrapFailed(false);
     setMethodMessage("Preparando um novo pedido seguro...");
     setPaymentBootstrapRequestKey((current) => current + 1);
   }, [guildId]);

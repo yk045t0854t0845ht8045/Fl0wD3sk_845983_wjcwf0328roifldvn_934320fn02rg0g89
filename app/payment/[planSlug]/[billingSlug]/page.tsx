@@ -50,21 +50,6 @@ function readSingleQueryValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function normalizeCheckoutAmount(value: string | string[] | undefined) {
-  const raw = readSingleQueryValue(value);
-  if (typeof raw !== "string") return null;
-  const normalized = raw.trim().replace(/,/g, ".");
-  const amount = Number(normalized);
-  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : null;
-}
-
-function normalizeCurrencyCode(value: string | string[] | undefined) {
-  const raw = readSingleQueryValue(value);
-  if (typeof raw !== "string") return null;
-  const normalized = raw.trim().toUpperCase();
-  return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
-}
-
 function buildPurchaseContext(query: Record<string, string | string[] | undefined>) {
   if (readSingleQueryValue(query.source) !== "dashboard-hosting") return null;
   const hostingKind = readSingleQueryValue(query.hostingKind) as HostingKind | undefined;
@@ -79,8 +64,8 @@ function buildPurchaseContext(query: Record<string, string | string[] | undefine
   if (!plan || !region) return null;
 
   const repository = readSingleQueryValue(query.repository) || null;
-  const amount = normalizeCheckoutAmount(query.amount) ?? plan.monthlyAmount;
-  const currency = normalizeCurrencyCode(query.currency) ?? plan.currency;
+  const amount = plan.monthlyAmount;
+  const currency = plan.currency;
 
   return {
     type: "hosting" as const,
