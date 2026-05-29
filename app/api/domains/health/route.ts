@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { openProviderClient } from "@/lib/openprovider/client";
+import { nameSiloClient } from "@/lib/namesilo/client";
 import { getJsonSecurityHeaders } from "@/lib/domains/requestGuard";
 
 export const runtime = "nodejs";
@@ -10,28 +10,21 @@ export async function GET() {
   console.log(`[Domains Health][${requestId}] Health check requested`);
 
   try {
-    // Check circuit breaker status
-    const circuitBreakerStatus = openProviderClient.getCircuitBreakerStatus();
-
-    // Perform a simple domain check to test connectivity
-    const testDomains = [
-      { name: "example", extension: "com" },
-      { name: "test", extension: "org" },
-    ];
+    const circuitBreakerStatus = nameSiloClient.getCircuitBreakerStatus();
 
     const startTime = Date.now();
     await Promise.race([
-      // Test request with short timeout
-      openProviderClient.post("domains/check", {
-        domains: testDomains,
-        with_price: false,
-      }, {
-        maxRetries: 0, // No retries for health check
-        requestId,
-      }),
-      // Timeout after 5 seconds
+      nameSiloClient.request(
+        "checkRegisterAvailability",
+        { domains: "example.com,test.org" },
+        {
+          maxRetries: 0,
+          timeoutMs: 5000,
+          requestId,
+        },
+      ),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Health check timeout")), 5000)
+        setTimeout(() => reject(new Error("Health check timeout")), 5000),
       ),
     ]);
     const responseTime = Date.now() - startTime;
@@ -42,6 +35,7 @@ export async function GET() {
       responseTime,
       circuitBreaker: circuitBreakerStatus,
       apiConnectivity: "ok",
+      provider: "namesilo",
       version: process.env.npm_package_version || "unknown",
     };
 
@@ -50,16 +44,16 @@ export async function GET() {
     return NextResponse.json(health, {
       headers: getJsonSecurityHeaders(requestId),
     });
-
   } catch (error) {
-    const circuitBreakerStatus = openProviderClient.getCircuitBreakerStatus();
+    const circuitBreakerStatus = nameSiloClient.getCircuitBreakerStatus();
 
     const health = {
-      status: circuitBreakerStatus.state === 'open' ? "unhealthy" : "degraded",
+      status: circuitBreakerStatus.state === "open" ? "unhealthy" : "degraded",
       timestamp: new Date().toISOString(),
       error: error instanceof Error ? error.message : "Unknown error",
       circuitBreaker: circuitBreakerStatus,
       apiConnectivity: "failed",
+      provider: "namesilo",
       version: process.env.npm_package_version || "unknown",
     };
 
