@@ -1,29 +1,40 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
+  ArrowLeft,
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
+  CircleHelp,
   Code2,
+  Cog,
   Copy,
   Cpu,
   Database,
   Download,
   Eye,
   File,
+  FilePlus2,
   Folder,
+  FolderPlus,
   GitBranch,
   Globe2,
   HardDrive,
   History,
+  Image as ImageIcon,
   KeyRound,
   Layers,
   Loader2,
+  LogOut,
+  MessageSquare,
   MoreHorizontal,
+  Paperclip,
   Pause,
+  Pencil,
   Play,
   Plus,
   Power,
@@ -31,14 +42,18 @@ import {
   RotateCcw,
   Save,
   Search,
+  Send,
   Server,
+  Sparkles,
   Terminal,
   Trash2,
   Upload,
+  UserRound,
   Wifi,
   X,
 } from "lucide-react";
 import { useNotifications } from "@/components/notifications/NotificationsProvider";
+import { buildDiscordAuthStartHref, buildLoginHref } from "@/lib/auth/paths";
 
 type RuntimeStatus = "online" | "offline" | "restarting" | "deploying" | "crashed" | "suspended" | "unknown";
 type TabId = "overview" | "metrics" | "console" | "files" | "deploys" | "env";
@@ -116,7 +131,68 @@ type VpsFileNode = {
   children?: VpsFileNode[];
 };
 
+type FileContextMenuState =
+  | {
+      kind: "node";
+      x: number;
+      y: number;
+      node: VpsFileNode;
+    }
+  | {
+      kind: "empty";
+      x: number;
+      y: number;
+      parentPath: string;
+    }
+  | null;
+
+type FileInlineDraft = {
+  parentPath: string;
+  type: "file" | "directory";
+  value: string;
+} | null;
+
+type FlowChatMessage = {
+  id: string | number;
+  role: "assistant" | "user";
+  content: string;
+  createdAt: string;
+  model?: string | null;
+};
+
+type FlowChatAttachment = {
+  id: string;
+  name: string;
+  type: string;
+};
+
+type FlowChatSession = {
+  id: number;
+  title: string;
+  model?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type FlowChatQuota = {
+  used: number;
+  limit: number;
+  requestCount: number;
+  requestLimit: number;
+  remaining: number;
+  resetAt: string;
+  blockedUntil: string | null;
+  blocked: boolean;
+};
+
 export type VpsWorkspaceSnapshot = {
+  account: {
+    authUserId: number;
+    discordUserId: string | null;
+    displayName: string;
+    username: string;
+    avatarUrl: string | null;
+  };
   project: {
     vpsCode: string;
     status: string;
@@ -154,6 +230,10 @@ type VpsWorkspaceProps = {
   initialSnapshot: VpsWorkspaceSnapshot;
 };
 
+type SavedPanelAccount = VpsWorkspaceSnapshot["account"] & {
+  lastSeenAt: number;
+};
+
 const ENV_OPTIONS = [
   { value: "production", label: "Production" },
   { value: "preview", label: "Preview" },
@@ -178,24 +258,210 @@ const CONSOLE_STATUS_OPTIONS = [
   { value: "other", label: "Outros" },
 ] as const;
 
+const vpsSidebarShellClass =
+  "relative overflow-hidden border border-[#0E0E0E] bg-[#050505] shadow-[0_24px_80px_rgba(0,0,0,0.42)]";
+const SAVED_PANEL_ACCOUNTS_KEY = "flowdesk_saved_panel_accounts_v1";
+const OFFICIAL_DISCORD_INVITE_URL = "https://discord.gg/flowdesk";
+const FILE_EDITOR_LINE_HEIGHT = 22.1;
+const FILE_EDITOR_OVERSCAN_LINES = 48;
+
+function accountInitial(name: string, username: string) {
+  const base = name || username || "F";
+  return base.trim().charAt(0).toUpperCase() || "F";
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function SidebarSearchShortcutIcon() {
+  return (
+    <span className="inline-flex h-[28px] min-w-[28px] items-center justify-center rounded-[9px] border border-[#1A1A1A] bg-[#101010] px-[8px] text-[12px] font-medium text-[#A7A7A7]">
+      F
+    </span>
+  );
+}
+
+function resolveSavedAccountKey(account: {
+  authUserId: number;
+  discordUserId: string | null;
+}) {
+  return account.discordUserId || `auth:${account.authUserId}`;
+}
+
+function normalizeSavedPanelAccounts(input: unknown) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Partial<SavedPanelAccount>;
+      if (
+        typeof record.authUserId !== "number" ||
+        typeof record.displayName !== "string" ||
+        typeof record.username !== "string" ||
+        typeof record.lastSeenAt !== "number"
+      ) {
+        return null;
+      }
+
+      return {
+        authUserId: record.authUserId,
+        discordUserId: typeof record.discordUserId === "string" ? record.discordUserId : null,
+        displayName: record.displayName,
+        username: record.username,
+        avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl : null,
+        lastSeenAt: record.lastSeenAt,
+      } satisfies SavedPanelAccount;
+    })
+    .filter((value): value is SavedPanelAccount => value !== null)
+    .slice(0, 3);
+}
+
+function mergeSavedPanelAccounts(
+  currentAccount: SavedPanelAccount,
+  previousAccounts: SavedPanelAccount[],
+) {
+  const currentAccountKey = resolveSavedAccountKey(currentAccount);
+  return [
+    currentAccount,
+    ...previousAccounts.filter((account) => resolveSavedAccountKey(account) !== currentAccountKey),
+  ]
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+    .slice(0, 3);
+}
+
+function AccountAvatar({
+  avatarUrl,
+  displayName,
+  username,
+  className = "h-[36px] w-[36px]",
+}: {
+  avatarUrl: string | null;
+  displayName: string;
+  username: string;
+  className?: string;
+}) {
+  if (avatarUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        className={`${className} rounded-full border border-[#1C1C1C] bg-[#111111] object-cover`}
+      />
+    );
+  }
+
+  return (
+    <span className={`${className} inline-flex items-center justify-center rounded-full border border-[#1C1C1C] bg-[#111111] text-[13px] font-semibold text-[#DADADA]`}>
+      {accountInitial(displayName, username)}
+    </span>
+  );
+}
+
 function languageFromFilePath(path: string) {
-  const extension = path.split(".").pop()?.toLowerCase() || "";
+  const baseName = path.split("/").pop()?.toLowerCase() || "";
+  const extension = baseName.includes(".") ? baseName.split(".").pop()?.toLowerCase() || "" : baseName;
+  const exactLanguages: Record<string, string> = {
+    dockerfile: "docker",
+    makefile: "makefile",
+    "package.json": "node",
+    "package-lock.json": "node",
+    "pnpm-lock.yaml": "node",
+    "yarn.lock": "node",
+    "bun.lockb": "node",
+    "tsconfig.json": "typescript",
+    "jsconfig.json": "javascript",
+    "next.config.js": "javascript",
+    "next.config.mjs": "javascript",
+    "next.config.ts": "typescript",
+    "vite.config.js": "javascript",
+    "vite.config.ts": "typescript",
+    "tailwind.config.js": "javascript",
+    "tailwind.config.ts": "typescript",
+  };
+  if (exactLanguages[baseName]) return exactLanguages[baseName];
+
   const languages: Record<string, string> = {
     js: "javascript",
+    mjs: "javascript",
+    cjs: "javascript",
     jsx: "javascript",
     ts: "typescript",
+    mts: "typescript",
+    cts: "typescript",
     tsx: "typescript",
     json: "json",
+    jsonc: "json",
     css: "css",
     scss: "scss",
+    sass: "scss",
+    less: "css",
     html: "html",
+    htm: "html",
     md: "markdown",
+    mdx: "markdown",
     yml: "yaml",
     yaml: "yaml",
     py: "python",
+    pyw: "python",
+    rb: "ruby",
+    php: "php",
+    java: "java",
+    kt: "kotlin",
+    kts: "kotlin",
+    swift: "swift",
+    go: "go",
+    rs: "rust",
+    c: "c",
+    h: "c",
+    cc: "cpp",
+    cpp: "cpp",
+    cxx: "cpp",
+    hpp: "cpp",
+    cs: "csharp",
+    dart: "dart",
+    lua: "lua",
+    r: "r",
+    scala: "scala",
+    sh: "shell",
+    bash: "shell",
+    zsh: "shell",
+    fish: "shell",
+    ps1: "powershell",
+    bat: "batch",
+    cmd: "batch",
+    cbl: "cobol",
+    cob: "cobol",
+    cpy: "cobol",
     sql: "sql",
+    prisma: "prisma",
+    graphql: "graphql",
+    gql: "graphql",
     env: "dotenv",
     xml: "xml",
+    svg: "svg",
+    toml: "toml",
+    ini: "ini",
+    lock: "lockfile",
+    png: "image",
+    jpg: "image",
+    jpeg: "image",
+    gif: "image",
+    webp: "image",
+    ico: "image",
+    avif: "image",
+    woff: "font",
+    woff2: "font",
+    ttf: "font",
+    otf: "font",
+    zip: "archive",
+    rar: "archive",
+    "7z": "archive",
+    gz: "archive",
   };
   return languages[extension] || null;
 }
@@ -208,15 +474,67 @@ function FileTextIcon({ className = "" }: { className?: string }) {
   return <span className={`font-mono text-[12px] font-bold leading-none ${className}`}>MD</span>;
 }
 
+function LanguageBadgeIcon({ label, className = "" }: { label: string; className?: string }) {
+  return (
+    <span className={`inline-flex h-[15px] min-w-[15px] shrink-0 items-center justify-center rounded-[3px] font-mono text-[8px] font-black leading-none ${className}`}>
+      {label}
+    </span>
+  );
+}
+
+function makeLanguageBadge(label: string) {
+  return function GeneratedLanguageBadge({ className = "" }: { className?: string }) {
+    return <LanguageBadgeIcon label={label} className={className} />;
+  };
+}
+
 function fileIconStyle(node: VpsFileNode) {
   if (node.type === "directory") {
     return { Icon: Folder, className: "text-[#9BC2FF]" };
   }
 
   const language = (node.language || languageFromFilePath(node.path) || "").toLowerCase();
-  const extension = node.path.split(".").pop()?.toLowerCase() || "";
-  if (language === "typescript" || extension === "ts" || extension === "tsx") return { Icon: Code2, className: "text-[#62B3FF]" };
-  if (language === "javascript" || extension === "js" || extension === "jsx") return { Icon: Code2, className: "text-[#F5D76E]" };
+  const baseName = node.path.split("/").pop()?.toLowerCase() || "";
+  const extension = baseName.includes(".") ? baseName.split(".").pop()?.toLowerCase() || "" : baseName;
+  const badgeIcons: Record<string, { label: string; className: string }> = {
+    javascript: { label: "JS", className: "text-[#F5D76E]" },
+    typescript: { label: "TS", className: "text-[#62B3FF]" },
+    node: { label: "N", className: "text-[#9BE7AC]" },
+    python: { label: "PY", className: "text-[#8AB6FF]" },
+    ruby: { label: "RB", className: "text-[#FF8EAA]" },
+    php: { label: "PHP", className: "text-[#B997FF]" },
+    java: { label: "JAVA", className: "text-[#FFB86B]" },
+    kotlin: { label: "KT", className: "text-[#C792EA]" },
+    swift: { label: "SW", className: "text-[#FF9B73]" },
+    go: { label: "GO", className: "text-[#7DD3FC]" },
+    rust: { label: "RS", className: "text-[#FFB86B]" },
+    c: { label: "C", className: "text-[#A8D1FF]" },
+    cpp: { label: "C++", className: "text-[#8AB6FF]" },
+    csharp: { label: "C#", className: "text-[#B997FF]" },
+    dart: { label: "D", className: "text-[#69C6FF]" },
+    lua: { label: "LUA", className: "text-[#9BC2FF]" },
+    r: { label: "R", className: "text-[#8AB6FF]" },
+    scala: { label: "SC", className: "text-[#FF8E8E]" },
+    shell: { label: "SH", className: "text-[#9BE7AC]" },
+    powershell: { label: "PS", className: "text-[#62B3FF]" },
+    batch: { label: "BAT", className: "text-[#CFCFCF]" },
+    cobol: { label: "COB", className: "text-[#D7BA7D]" },
+    docker: { label: "DK", className: "text-[#69C6FF]" },
+    makefile: { label: "MK", className: "text-[#CFCFCF]" },
+    prisma: { label: "PR", className: "text-[#9BC2FF]" },
+    graphql: { label: "GQL", className: "text-[#FF8EAA]" },
+    svg: { label: "SVG", className: "text-[#FFB86B]" },
+    toml: { label: "TOML", className: "text-[#D7BA7D]" },
+    ini: { label: "INI", className: "text-[#CFCFCF]" },
+    lockfile: { label: "LOCK", className: "text-[#A0A0A0]" },
+    image: { label: "IMG", className: "text-[#9BE7AC]" },
+    font: { label: "FONT", className: "text-[#DADADA]" },
+    archive: { label: "ZIP", className: "text-[#D7BA7D]" },
+  };
+  if (badgeIcons[language]) {
+    const badge = badgeIcons[language];
+    return { Icon: makeLanguageBadge(badge.label), className: badge.className };
+  }
   if (language === "json") return { Icon: BracesIcon, className: "text-[#F2C66D]" };
   if (language === "css" || language === "scss") return { Icon: Globe2, className: "text-[#8AB6FF]" };
   if (language === "html" || language === "xml") return { Icon: Globe2, className: "text-[#FF9B73]" };
@@ -309,6 +627,109 @@ function renderHighlightedLine(line: string, language: string) {
   if (language === "dotenv") return highlightEnv(line);
   if (language === "markdown") return <span className={line.startsWith("#") ? "text-[#569CD6]" : "text-[#DADADA]"}>{line}</span>;
   return highlightGenericCode(line, language);
+}
+
+function joinFilePath(parentPath: string, name: string) {
+  const cleanParent = parentPath.replace(/^\/+|\/+$/g, "");
+  const cleanName = name.replace(/^\/+|\/+$/g, "");
+  return cleanParent ? `${cleanParent}/${cleanName}` : cleanName;
+}
+
+function parentFilePath(path: string) {
+  const normalized = path.replace(/^\/+|\/+$/g, "");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(0, index) : "";
+}
+
+function fileNameFromPath(path: string) {
+  return path.split("/").filter(Boolean).pop() || path;
+}
+
+function sortFileTree(nodes: VpsFileNode[]) {
+  return [...nodes].sort((left, right) => {
+    if (left.type !== right.type) return left.type === "directory" ? -1 : 1;
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function updateFileTree(
+  nodes: VpsFileNode[],
+  updater: (nodes: VpsFileNode[]) => VpsFileNode[],
+) {
+  return sortFileTree(updater(nodes));
+}
+
+function addNodeToTree(nodes: VpsFileNode[], parentPath: string, node: VpsFileNode): VpsFileNode[] {
+  if (!parentPath) {
+    if (nodes.some((item) => item.path === node.path)) return nodes;
+    return sortFileTree([...nodes, node]);
+  }
+
+  return nodes.map((item) => {
+    if (item.path === parentPath && item.type === "directory") {
+      const children = item.children || [];
+      if (children.some((child) => child.path === node.path)) return item;
+      return { ...item, children: sortFileTree([...children, node]) };
+    }
+    if (item.children?.length) return { ...item, children: addNodeToTree(item.children, parentPath, node) };
+    return item;
+  });
+}
+
+function removeNodeFromTree(nodes: VpsFileNode[], path: string): VpsFileNode[] {
+  return nodes
+    .filter((item) => item.path !== path)
+    .map((item) => item.children?.length ? { ...item, children: removeNodeFromTree(item.children, path) } : item);
+}
+
+function findNodeInTree(nodes: VpsFileNode[], path: string): VpsFileNode | null {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    if (node.children?.length) {
+      const found = findNodeInTree(node.children, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function rebaseNodePath(node: VpsFileNode, targetPath: string): VpsFileNode {
+  const oldPath = node.path;
+  const rebaseChild = (child: VpsFileNode): VpsFileNode => {
+    const nextPath = child.path === oldPath ? targetPath : child.path.replace(`${oldPath}/`, `${targetPath}/`);
+    return {
+      ...child,
+      path: nextPath,
+      children: child.children?.map(rebaseChild),
+    };
+  };
+  return rebaseChild({ ...node, name: fileNameFromPath(targetPath), path: targetPath });
+}
+
+function renameNodeInTree(nodes: VpsFileNode[], path: string, targetPath: string): VpsFileNode[] {
+  const node = findNodeInTree(nodes, path);
+  if (!node) return nodes;
+  const parentPath = parentFilePath(targetPath);
+  const withoutNode = removeNodeFromTree(nodes, path);
+  return addNodeToTree(withoutNode, parentPath, rebaseNodePath(node, targetPath));
+}
+
+function moveNodeInTree(nodes: VpsFileNode[], path: string, targetParentPath: string): VpsFileNode[] {
+  const node = findNodeInTree(nodes, path);
+  if (!node) return nodes;
+  const targetPath = joinFilePath(targetParentPath, node.name);
+  if (targetPath === path || targetPath.startsWith(`${path}/`)) return nodes;
+  return renameNodeInTree(nodes, path, targetPath);
+}
+
+function flattenFileTreePaths(nodes: VpsFileNode[]) {
+  const output: string[] = [];
+  const visit = (node: VpsFileNode) => {
+    output.push(node.path);
+    (node.children || []).forEach(visit);
+  };
+  nodes.forEach(visit);
+  return output;
 }
 
 const TAB_ROUTE_SEGMENTS: Record<TabId, string> = {
@@ -420,6 +841,54 @@ function createDraftRow(overrides: Partial<EnvDraftRow> = {}): EnvDraftRow {
     sensitive: true,
     showValue: false,
     ...overrides,
+  };
+}
+
+function createClientId(prefix = "id") {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildFlowChatFallback(input: {
+  fileTreeLoaded: boolean;
+}) {
+  return [
+    "Estou com acesso ao contexto do projeto para orientar voce com seguranca.",
+    input.fileTreeLoaded
+      ? "Cite o nome ou caminho do arquivo no chat e eu tento localizar pelo Explorer/GitHub para sugerir trechos copiaveis."
+      : "A lista de arquivos ainda nao carregou; cite o caminho do arquivo para eu orientar melhor.",
+    "A IA principal nao respondeu agora, entao mantive uma resposta local e segura.",
+  ].join("\n\n");
+}
+
+function createInitialFlowQuota(): FlowChatQuota {
+  return {
+    used: 0,
+    limit: 20_000,
+    requestCount: 0,
+    requestLimit: 35,
+    remaining: 20_000,
+    resetAt: "",
+    blockedUntil: null,
+    blocked: false,
+  };
+}
+
+function normalizeFlowQuota(input: Partial<FlowChatQuota> | null | undefined): FlowChatQuota {
+  const limit = Math.max(1, Number(input?.limit || 20_000));
+  const used = Math.max(0, Math.min(limit, Number(input?.used || 0)));
+  const requestLimit = Math.max(1, Number(input?.requestLimit || 35));
+  const requestCount = Math.max(0, Number(input?.requestCount || 0));
+  const blockedUntil = typeof input?.blockedUntil === "string" ? input.blockedUntil : null;
+  return {
+    used,
+    limit,
+    requestCount,
+    requestLimit,
+    remaining: Math.max(0, limit - used),
+    resetAt: typeof input?.resetAt === "string" ? input.resetAt : "",
+    blockedUntil,
+    blocked: Boolean(input?.blocked || blockedUntil || used >= limit || requestCount >= requestLimit),
   };
 }
 
@@ -767,6 +1236,130 @@ function CustomSelect({
   );
 }
 
+function FlowChatMessageContent({
+  content,
+  onCopy,
+}: {
+  content: string;
+  onCopy: (value: string) => void;
+}) {
+  const parts: Array<{ type: "text"; value: string } | { type: "code"; value: string; language: string }> = [];
+  const regex = /```([A-Za-z0-9_+#.-]*)?\n?([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", value: content.slice(lastIndex, match.index) });
+    }
+    parts.push({
+      type: "code",
+      language: (match[1] || "text").trim().toLowerCase() || "text",
+      value: match[2] || "",
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    parts.push({ type: "text", value: content.slice(lastIndex) });
+  }
+
+  if (!parts.length) parts.push({ type: "text", value: content });
+
+  return (
+    <div className="space-y-[10px]">
+      {parts.map((part, index) => {
+        if (part.type === "text") {
+          return part.value.trim() ? (
+            <FlowMarkdownText key={`text-${index}`} text={part.value.trim()} />
+          ) : null;
+        }
+
+        const codeLines = part.value.replace(/\s+$/g, "").split(/\r\n|\r|\n/);
+        const language = part.language || "text";
+        return (
+          <div key={`code-${index}`} className="overflow-hidden rounded-[14px] border border-[#242424] bg-[#050505]">
+            <div className="flex h-[34px] items-center justify-between border-b border-[#171717] bg-[#0B0B0B] px-[10px]">
+              <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7A7A7A]">
+                {language}
+              </span>
+              <button
+                type="button"
+                onClick={() => onCopy(part.value)}
+                className="inline-flex h-[24px] items-center gap-[6px] rounded-[7px] border border-[#242424] bg-[#111111] px-[8px] text-[11px] font-semibold text-[#DADADA] hover:bg-[#171717] hover:text-white"
+              >
+                <Copy className="h-[12px] w-[12px]" />
+                Copiar
+              </button>
+            </div>
+            <div className="max-h-[320px] overflow-auto p-[10px] [scrollbar-color:#2A2A2A_#050505] [scrollbar-width:thin]">
+              <pre className="m-0 min-w-max font-mono text-[12px] leading-[20px]">
+                {codeLines.map((line, lineIndex) => (
+                  <div key={`${lineIndex}-${line}`} className="grid grid-cols-[34px_minmax(0,1fr)] gap-[10px]">
+                    <span className="select-none text-right text-[#444444]">{lineIndex + 1}</span>
+                    <span className="whitespace-pre text-[#DADADA]">
+                      {line ? renderHighlightedLine(line, language) : " "}
+                    </span>
+                  </div>
+                ))}
+              </pre>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FlowMarkdownText({ text }: { text: string }) {
+  const lines = text.split(/\r\n|\r|\n/);
+  return (
+    <div className="space-y-[6px]">
+      {lines.map((line, index) => {
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+          const level = heading[1].length;
+          const className = level === 1
+            ? "mt-[4px] text-[15px] font-bold leading-[1.35] text-white"
+            : level === 2
+              ? "mt-[4px] text-[14px] font-bold leading-[1.35] text-[#F1F1F1]"
+              : "mt-[3px] text-[13px] font-bold leading-[1.35] text-[#E8E8E8]";
+          return (
+            <p key={`${index}-${line}`} className={className}>
+              <FlowInlineMarkdown text={heading[2].trim()} />
+            </p>
+          );
+        }
+
+        if (!line.trim()) return <div key={`${index}-empty`} className="h-[4px]" />;
+
+        return (
+          <p key={`${index}-${line}`} className="whitespace-pre-wrap">
+            <FlowInlineMarkdown text={line} />
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function FlowInlineMarkdown({ text }: { text: string }) {
+  const tokens = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
+  return (
+    <>
+      {tokens.map((token, index) => {
+        if (token.startsWith("**") && token.endsWith("**")) {
+          return <strong key={`${index}-${token}`} className="font-semibold text-white">{token.slice(2, -2)}</strong>;
+        }
+        if (token.startsWith("`") && token.endsWith("`")) {
+          return <code key={`${index}-${token}`} className="rounded-[5px] border border-[#242424] bg-[#080808] px-[5px] py-[1px] font-mono text-[12px] text-[#E8E8E8]">{token.slice(1, -1)}</code>;
+        }
+        return <span key={`${index}-${token}`}>{token}</span>;
+      })}
+    </>
+  );
+}
+
 export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -782,12 +1375,38 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   const [consoleStatusFilter, setConsoleStatusFilter] = useState("all");
   const [selectedConsoleKey, setSelectedConsoleKey] = useState<string | null>(null);
   const [logsRefreshing, setLogsRefreshing] = useState(false);
+  const [sidebarSearchText, setSidebarSearchText] = useState("");
   const [selectedFile, setSelectedFile] = useState<VpsFileNode | null>(null);
   const [fileContent, setFileContent] = useState("");
   const [fileDirty, setFileDirty] = useState(false);
   const [filesBusy, setFilesBusy] = useState(false);
   const [fileQuery, setFileQuery] = useState("");
+  const [fileEditorViewport, setFileEditorViewport] = useState({ scrollTop: 0, scrollLeft: 0, height: 720 });
   const [explorerWidth, setExplorerWidth] = useState(300);
+  const [flowChatOpen, setFlowChatOpen] = useState(false);
+  const [flowChatWidth, setFlowChatWidth] = useState(380);
+  const [flowChatInput, setFlowChatInput] = useState("");
+  const [flowChatBusy, setFlowChatBusy] = useState(false);
+  const [flowChatHistoryOpen, setFlowChatHistoryOpen] = useState(false);
+  const [flowChatSessions, setFlowChatSessions] = useState<FlowChatSession[]>([]);
+  const [flowChatSessionId, setFlowChatSessionId] = useState<number | null>(null);
+  const [flowChatQuota, setFlowChatQuota] = useState<FlowChatQuota>(() => createInitialFlowQuota());
+  const [flowChatAttachments, setFlowChatAttachments] = useState<FlowChatAttachment[]>([]);
+  const [flowChatMessages, setFlowChatMessages] = useState<FlowChatMessage[]>([
+    {
+      id: "flow-welcome",
+      role: "assistant",
+      content: "Estou pronto para revisar o projeto, explicar arquivos e gerar trechos de codigo copiaveis. Cite o nome/caminho do arquivo ou descreva o que voce quer montar.",
+      createdAt: "",
+      model: "Flow",
+    },
+  ]);
+  const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(() => new Set());
+  const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState>(null);
+  const [fileInlineDraft, setFileInlineDraft] = useState<FileInlineDraft>(null);
+  const [renamingFilePath, setRenamingFilePath] = useState<string | null>(null);
+  const [renamingValue, setRenamingValue] = useState("");
+  const [draggedFilePath, setDraggedFilePath] = useState<string | null>(null);
   const [envSearch, setEnvSearch] = useState("");
   const [envFilter, setEnvFilter] = useState("all");
   const [envSort, setEnvSort] = useState("updated");
@@ -798,6 +1417,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   const [envSaving, setEnvSaving] = useState(false);
   const [githubReconnectOpen, setGithubReconnectOpen] = useState(!initialSnapshot.project.githubConnected);
   const [githubReconnectBusy, setGithubReconnectBusy] = useState(false);
+  const [githubReconnectSsoUrl, setGithubReconnectSsoUrl] = useState<string | null>(null);
+  const [githubReconnectInstallUrl, setGithubReconnectInstallUrl] = useState<string | null>(null);
   const [githubReconnectMessage, setGithubReconnectMessage] = useState(
     initialSnapshot.project.githubConnected
       ? ""
@@ -805,29 +1426,125 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   );
   const [envEnvironment, setEnvEnvironment] = useState<EnvName>("production");
   const [envRows, setEnvRows] = useState<EnvDraftRow[]>([createDraftRow()]);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [savedAccounts, setSavedAccounts] = useState<SavedPanelAccount[]>([]);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const consoleRef = useRef<HTMLDivElement | null>(null);
+  const flowChatScrollRef = useRef<HTMLDivElement | null>(null);
+  const fileEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lineNumbersRef = useRef<HTMLDivElement | null>(null);
   const highlightedCodeRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const flowChatImageInputRef = useRef<HTMLInputElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+  const fileContextMenuRef = useRef<HTMLDivElement | null>(null);
   const autoSyncedFilesRef = useRef(false);
+  const initializedExplorerRef = useRef(false);
+  const currentAccount = snapshot.account;
   const latestMetric = snapshot.metrics[snapshot.metrics.length - 1] || null;
   const shouldShowTabSkeleton = Boolean(pendingTab && pendingTab === tab);
   const centeredMainTabs = tab === "overview" || tab === "metrics" || tab === "deploys" || tab === "env";
-  const lineCount = useMemo(
-    () => Math.max(32, fileContent ? fileContent.split(/\r\n|\r|\n/).length : 1),
-    [fileContent],
-  );
+  const flowQuotaPercent = Math.min(100, Math.max(0, (flowChatQuota.used / Math.max(1, flowChatQuota.limit)) * 100));
+  const flowQuotaResetLabel = flowChatQuota.blockedUntil || flowChatQuota.resetAt
+    ? formatDate(flowChatQuota.blockedUntil || flowChatQuota.resetAt)
+    : "proxima janela diaria";
+  const fileLines = useMemo(() => (fileContent ? fileContent.split(/\r\n|\r|\n/) : [""]), [fileContent]);
+  const lineCount = Math.max(32, fileLines.length);
   const highlightedLanguage = useMemo(() => resolveHighlightLanguage(selectedFile), [selectedFile]);
-  const highlightedLines = useMemo(
-    () => (fileContent ? fileContent.split(/\r\n|\r|\n/) : [""]),
-    [fileContent],
+  const visibleLineStart = Math.max(
+    0,
+    Math.floor(fileEditorViewport.scrollTop / FILE_EDITOR_LINE_HEIGHT) - FILE_EDITOR_OVERSCAN_LINES,
   );
+  const visibleLineEnd = Math.min(
+    lineCount,
+    Math.ceil((fileEditorViewport.scrollTop + fileEditorViewport.height) / FILE_EDITOR_LINE_HEIGHT) + FILE_EDITOR_OVERSCAN_LINES,
+  );
+  const visibleLines = fileLines.slice(visibleLineStart, visibleLineEnd);
+  const editorVirtualHeight = lineCount * FILE_EDITOR_LINE_HEIGHT;
+
+  useEffect(() => {
+    try {
+      const previous = normalizeSavedPanelAccounts(
+        JSON.parse(window.localStorage.getItem(SAVED_PANEL_ACCOUNTS_KEY) || "[]"),
+      );
+      const currentSnapshot: SavedPanelAccount = {
+        ...currentAccount,
+        lastSeenAt: Date.now(),
+      };
+      const nextAccounts = mergeSavedPanelAccounts(currentSnapshot, previous);
+      setSavedAccounts(nextAccounts);
+      window.localStorage.setItem(SAVED_PANEL_ACCOUNTS_KEY, JSON.stringify(nextAccounts));
+    } catch {
+      const fallback = [{ ...currentAccount, lastSeenAt: Date.now() }];
+      setSavedAccounts(fallback);
+    }
+  }, [currentAccount]);
+
+  useEffect(() => {
+    if (!isProfileMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (profileMenuRef.current?.contains(event.target as Node)) return;
+      setIsProfileMenuOpen(false);
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [isProfileMenuOpen]);
+
+  useEffect(() => {
+    if (!fileContextMenu) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (fileContextMenuRef.current?.contains(event.target as Node)) return;
+      setFileContextMenu(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFileContextMenu(null);
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [fileContextMenu]);
 
   const notify = useCallback((tone: NotifyTone, message: string, title = "VPS") => {
     if (tone === "success") notifications.success(message, { title });
     else if (tone === "error") notifications.error(message, { title });
     else notifications.show(message, { title, tone: "default" });
   }, [notifications]);
+
+  const handleLogout = useCallback(async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      window.location.assign(buildLoginHref("/dashboard/hosting"));
+    }
+  }, [isLoggingOut]);
+
+  const handleSwitchSavedAccount = useCallback((account: SavedPanelAccount) => {
+    if (resolveSavedAccountKey(account) === resolveSavedAccountKey(currentAccount)) {
+      setIsProfileMenuOpen(false);
+      return;
+    }
+    if (!account.discordUserId) {
+      window.location.assign(buildLoginHref("/dashboard/hosting"));
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        "flowdesk_pending_account_switch_v1",
+        JSON.stringify({
+          discordUserId: account.discordUserId,
+          requestedAt: Date.now(),
+        }),
+      );
+    } catch {
+      // noop
+    }
+    window.location.assign(buildDiscordAuthStartHref("/dashboard/hosting"));
+  }, [currentAccount]);
 
   const navigateToTab = useCallback((nextTab: TabId) => {
     if (nextTab === tab) return;
@@ -857,6 +1574,26 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
   }, [explorerWidth]);
+
+  const startFlowChatResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = flowChatWidth;
+    const pointerId = event.pointerId;
+    event.currentTarget.setPointerCapture(pointerId);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.min(560, Math.max(320, startWidth - (moveEvent.clientX - startX)));
+      setFlowChatWidth(Math.round(nextWidth));
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+  }, [flowChatWidth]);
 
   useEffect(() => {
     setTab((current) => (current === routeTab ? current : routeTab));
@@ -902,6 +1639,35 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
     }
   }, [logsPaused, snapshot.logs.length, tab]);
 
+  useEffect(() => {
+    if (!flowChatOpen) return;
+    window.requestAnimationFrame(() => {
+      flowChatScrollRef.current?.scrollTo({
+        top: flowChatScrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+  }, [flowChatMessages.length, flowChatBusy, flowChatOpen]);
+
+  useEffect(() => {
+    const textarea = fileEditorTextareaRef.current;
+    if (!textarea) return;
+    const updateEditorSize = () => {
+      setFileEditorViewport((current) => ({
+        ...current,
+        height: textarea.clientHeight || current.height,
+      }));
+    };
+    updateEditorSize();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateEditorSize) : null;
+    observer?.observe(textarea);
+    window.addEventListener("resize", updateEditorSize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateEditorSize);
+    };
+  }, [tab, flowChatOpen]);
+
   const filteredLogs = useMemo(
     () =>
       snapshot.logs.filter((log) => {
@@ -935,9 +1701,9 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
 
   const selectedConsoleEntry = useMemo(
     () =>
-      visibleConsoleEntries.find((entry) => entry.key === selectedConsoleKey) ||
-      visibleConsoleEntries[visibleConsoleEntries.length - 1] ||
-      null,
+      selectedConsoleKey
+        ? visibleConsoleEntries.find((entry) => entry.key === selectedConsoleKey) || null
+        : null,
     [selectedConsoleKey, visibleConsoleEntries],
   );
 
@@ -945,6 +1711,19 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
     () => visibleConsoleEntries.findIndex((entry) => entry.key === selectedConsoleEntry?.key),
     [selectedConsoleEntry?.key, visibleConsoleEntries],
   );
+  const latestDeployment = snapshot.deployments[0] || null;
+  const recentActions = snapshot.actions.slice(-5).reverse();
+  const metricSummary = {
+    cpu: metricValue(latestMetric, "cpu_percent"),
+    ram: metricValue(latestMetric, "ram_percent"),
+    disk: metricValue(latestMetric, "disk_percent"),
+    rx: metricValue(latestMetric, "network_rx_kbps"),
+    tx: metricValue(latestMetric, "network_tx_kbps"),
+    processes: metricValue(latestMetric, "process_count"),
+    uptime: metricValue(latestMetric, "uptime_seconds"),
+    appRam: metricValue(latestMetric, "app_ram_mb"),
+    appCpu: metricValue(latestMetric, "app_cpu_percent"),
+  };
 
   const filteredEnvVars = useMemo(() => {
     const query = envSearch.trim().toLowerCase();
@@ -1046,6 +1825,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
       if (!response.ok || !payload.ok) throw new Error(payload.message || "Nao foi possivel sincronizar arquivos.");
       if (payload.reconnectRequired) {
         setGithubReconnectOpen(true);
+        setGithubReconnectSsoUrl(null);
+        setGithubReconnectInstallUrl(null);
         setGithubReconnectMessage(payload.message || "Reconecte o GitHub para espelhar arquivos.");
       }
       setSnapshot((current) => ({ ...current, fileTree: payload.tree || [] }));
@@ -1079,6 +1860,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
       project: { ...current.project, githubConnected: true },
     }));
     setGithubReconnectOpen(false);
+    setGithubReconnectSsoUrl(null);
+    setGithubReconnectInstallUrl(null);
     setGithubReconnectMessage("");
     notify("success", "GitHub reconectado com seguranca.");
     if (tab === "files") {
@@ -1102,6 +1885,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
       project: { ...current.project, githubConnected: true },
     }));
     setGithubReconnectOpen(false);
+    setGithubReconnectSsoUrl(null);
+    setGithubReconnectInstallUrl(null);
     setGithubReconnectMessage("");
     notify("success", "GitHub validado.");
     if (tab === "files") {
@@ -1112,6 +1897,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   const openGithubReconnectPopup = useCallback(() => {
     if (githubReconnectBusy) return;
     setGithubReconnectBusy(true);
+    setGithubReconnectSsoUrl(null);
+    setGithubReconnectInstallUrl(null);
     setGithubReconnectMessage("Abrindo GitHub em uma janela segura...");
 
     const popup = window.open(
@@ -1182,6 +1969,12 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   }, [snapshot.fileTree.length, syncFiles, tab]);
 
   useEffect(() => {
+    if (initializedExplorerRef.current || !snapshot.fileTree.length) return;
+    initializedExplorerRef.current = true;
+    setExpandedFilePaths(new Set(snapshot.fileTree.filter((node) => node.type === "directory").map((node) => node.path)));
+  }, [snapshot.fileTree]);
+
+  useEffect(() => {
     if (tab !== "files") return;
 
     const syncQuietly = () => {
@@ -1203,6 +1996,16 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
     if (node.type !== "file") return;
     setSelectedFile(node);
     setFileDirty(false);
+    setFileEditorViewport((current) => ({ ...current, scrollTop: 0, scrollLeft: 0 }));
+    if (fileEditorTextareaRef.current) {
+      fileEditorTextareaRef.current.scrollTop = 0;
+      fileEditorTextareaRef.current.scrollLeft = 0;
+    }
+    if (lineNumbersRef.current) lineNumbersRef.current.scrollTop = 0;
+    if (highlightedCodeRef.current) {
+      highlightedCodeRef.current.scrollTop = 0;
+      highlightedCodeRef.current.scrollLeft = 0;
+    }
     const response = await fetch(`/api/auth/me/hosting/vps/${snapshot.project.vpsCode}/files?path=${encodeURIComponent(node.path)}`);
     const payload = await response.json().catch(() => ({})) as { file?: { content?: string } };
     setFileContent(payload.file?.content || "");
@@ -1210,18 +2013,307 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
 
   async function saveFile() {
     if (!selectedFile || !fileDirty) return;
+    setFilesBusy(true);
     const response = await fetch(`/api/auth/me/hosting/vps/${snapshot.project.vpsCode}/files`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: selectedFile.path, content: fileContent }),
     });
-    const payload = await response.json().catch(() => ({})) as { ok?: boolean; message?: string };
+    const payload = await response.json().catch(() => ({})) as {
+      ok?: boolean;
+      message?: string;
+      source?: string;
+      commit?: { commitSha?: string | null; commitUrl?: string | null } | null;
+      reconnectRequired?: boolean;
+      ssoUrl?: string | null;
+      installAppUrl?: string | null;
+    };
+    setFilesBusy(false);
     if (!response.ok || !payload.ok) {
-      notify("error", payload.message || "Falha ao salvar arquivo.");
+      if (payload.reconnectRequired) {
+        setGithubReconnectOpen(true);
+        setGithubReconnectSsoUrl(payload.ssoUrl || null);
+        setGithubReconnectInstallUrl(payload.installAppUrl || null);
+        setGithubReconnectMessage(payload.message || "Autorize o GitHub novamente para salvar alteracoes neste repositorio.");
+      }
+      if (!payload.reconnectRequired) notify("error", payload.message || "Falha ao salvar arquivo.");
       return;
     }
     setFileDirty(false);
-    notify("success", "Arquivo salvo com seguranca.");
+    notify(
+      "success",
+      payload.message || (payload.source === "github" ? "Arquivo commitado no GitHub." : "Arquivo salvo com seguranca."),
+    );
+  }
+
+  async function loadFlowChatHistory(chatId?: number | null) {
+    try {
+      const params = new URLSearchParams();
+      if (chatId) params.set("chatId", String(chatId));
+      const response = await fetch(`/api/auth/me/hosting/vps/${snapshot.project.vpsCode}/flow-chat?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        ok?: boolean;
+        chats?: FlowChatSession[];
+        messages?: Array<{
+          id: number;
+          role: "user" | "assistant";
+          content: string;
+          model?: string | null;
+          created_at?: string | null;
+        }>;
+        quota?: Partial<FlowChatQuota>;
+      };
+      if (!response.ok || !payload.ok) return;
+      setFlowChatSessions(payload.chats || []);
+      if (payload.quota) setFlowChatQuota(normalizeFlowQuota(payload.quota));
+      if (chatId) {
+        setFlowChatSessionId(chatId);
+        setFlowChatMessages((payload.messages || []).map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.created_at || "",
+          model: null,
+        })));
+      }
+    } catch {
+      // History is optional while the SQL migration is being applied.
+    }
+  }
+
+  function startNewFlowChat() {
+    setFlowChatSessionId(null);
+    setFlowChatMessages([
+      {
+        id: "flow-welcome",
+        role: "assistant",
+        content: "Estou pronto para revisar o projeto, explicar arquivos e gerar trechos de codigo copiaveis. Cite o nome/caminho do arquivo ou descreva o que voce quer montar.",
+        createdAt: "",
+        model: "Flow",
+      },
+    ]);
+    setFlowChatHistoryOpen(false);
+  }
+
+  function setFileTree(nextTree: VpsFileNode[]) {
+    setSnapshot((current) => ({ ...current, fileTree: nextTree }));
+  }
+
+  async function runFileOperation(input: {
+    action: "create-file" | "create-folder" | "rename" | "delete" | "move";
+    path?: string;
+    targetPath?: string;
+    type?: "file" | "directory";
+  }) {
+    setFilesBusy(true);
+    try {
+      const response = await fetch(`/api/auth/me/hosting/vps/${snapshot.project.vpsCode}/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; tree?: VpsFileNode[]; message?: string };
+      if (!response.ok || !payload.ok) throw new Error(payload.message || "Nao foi possivel alterar arquivos.");
+      if (payload.tree) setFileTree(payload.tree);
+      return true;
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "Falha ao alterar arquivo.", "Arquivos");
+      return false;
+    } finally {
+      setFilesBusy(false);
+    }
+  }
+
+  function startCreateFile(parentPath = "", type: "file" | "directory" = "file") {
+    setFileContextMenu(null);
+    setRenamingFilePath(null);
+    setFileInlineDraft({ parentPath, type, value: "" });
+    if (parentPath) setExpandedFilePaths((current) => new Set([...current, parentPath]));
+  }
+
+  async function commitInlineCreate() {
+    if (!fileInlineDraft) return;
+    const draft = fileInlineDraft;
+    const name = draft.value.trim();
+    setFileInlineDraft(null);
+    if (!name) return;
+    const path = joinFilePath(draft.parentPath, name);
+    const node: VpsFileNode = {
+      name,
+      path,
+      type: draft.type,
+      language: draft.type === "file" ? languageFromFilePath(path) : null,
+      children: draft.type === "directory" ? [] : undefined,
+    };
+    setSnapshot((current) => ({
+      ...current,
+      fileTree: updateFileTree(current.fileTree, (nodes) => addNodeToTree(nodes, draft.parentPath, node)),
+    }));
+    if (draft.type === "file") {
+      setSelectedFile(node);
+      setFileContent("");
+      setFileDirty(false);
+    }
+    const ok = await runFileOperation({ action: draft.type === "file" ? "create-file" : "create-folder", path, type: draft.type });
+    if (ok) notify("success", `${draft.type === "file" ? "Arquivo" : "Pasta"} criado.`, "Arquivos");
+  }
+
+  function startRenameFile(node: VpsFileNode) {
+    setFileContextMenu(null);
+    setFileInlineDraft(null);
+    setRenamingFilePath(node.path);
+    setRenamingValue(node.name);
+  }
+
+  async function commitRenameFile(node: VpsFileNode) {
+    const name = renamingValue.trim();
+    setRenamingFilePath(null);
+    if (!name || name === node.name) return;
+    const targetPath = joinFilePath(parentFilePath(node.path), name);
+    setSnapshot((current) => ({
+      ...current,
+      fileTree: updateFileTree(current.fileTree, (nodes) => renameNodeInTree(nodes, node.path, targetPath)),
+    }));
+    if (selectedFile?.path === node.path) {
+      setSelectedFile({ ...node, name, path: targetPath, language: node.type === "file" ? languageFromFilePath(targetPath) : null });
+    }
+    const ok = await runFileOperation({ action: "rename", path: node.path, targetPath, type: node.type });
+    if (ok) notify("success", "Renomeado com sucesso.", "Arquivos");
+  }
+
+  async function deleteFileNode(node: VpsFileNode) {
+    setFileContextMenu(null);
+    setSnapshot((current) => ({
+      ...current,
+      fileTree: updateFileTree(current.fileTree, (nodes) => removeNodeFromTree(nodes, node.path)),
+    }));
+    if (selectedFile?.path === node.path || selectedFile?.path.startsWith(`${node.path}/`)) {
+      setSelectedFile(null);
+      setFileContent("");
+      setFileDirty(false);
+    }
+    const ok = await runFileOperation({ action: "delete", path: node.path, type: node.type });
+    if (ok) notify("success", `${node.type === "directory" ? "Pasta" : "Arquivo"} removido.`, "Arquivos");
+  }
+
+  async function moveFileNode(path: string, targetParentPath: string) {
+    const node = findNodeInTree(snapshot.fileTree, path);
+    if (!node || node.path === targetParentPath || targetParentPath.startsWith(`${node.path}/`)) return;
+    const targetPath = joinFilePath(targetParentPath, node.name);
+    setSnapshot((current) => ({
+      ...current,
+      fileTree: updateFileTree(current.fileTree, (nodes) => moveNodeInTree(nodes, path, targetParentPath)),
+    }));
+    if (selectedFile?.path === path) setSelectedFile({ ...node, path: targetPath });
+    const ok = await runFileOperation({ action: "move", path, targetPath, type: node.type });
+    if (ok) notify("success", "Movido com sucesso.", "Arquivos");
+  }
+
+  function copyFileNode(node: VpsFileNode) {
+    setFileContextMenu(null);
+    navigator.clipboard?.writeText(node.path).then(
+      () => notify("success", "Caminho copiado.", "Arquivos"),
+      () => notify("error", "Nao consegui copiar.", "Arquivos"),
+    );
+  }
+
+  function copyExplorerPath(path = "") {
+    setFileContextMenu(null);
+    const value = path || "/";
+    navigator.clipboard?.writeText(value).then(
+      () => notify("success", "Caminho copiado.", "Arquivos"),
+      () => notify("error", "Nao consegui copiar.", "Arquivos"),
+    );
+  }
+
+  function addFlowChatImages(files: FileList | null) {
+    if (!files?.length) return;
+    const nextFiles = Array.from(files)
+      .filter((file) => file.type.startsWith("image/"))
+      .slice(0, 4)
+      .map((file) => ({
+        id: createClientId("flow-image"),
+        name: file.name,
+        type: file.type,
+      }));
+    if (!nextFiles.length) {
+      notify("error", "Selecione uma imagem valida.", "Flow");
+      return;
+    }
+    setFlowChatAttachments((current) => [...current, ...nextFiles].slice(-6));
+    if (flowChatImageInputRef.current) flowChatImageInputRef.current.value = "";
+  }
+
+  async function sendFlowChatMessage() {
+    const message = flowChatInput.trim() || (flowChatAttachments.length ? "Analise as imagens anexadas com o contexto do projeto." : "");
+    if (!message || flowChatBusy || flowChatQuota.blocked) return;
+
+    const userMessage: FlowChatMessage = {
+      id: createClientId("flow-user"),
+      role: "user",
+      content: flowChatAttachments.length
+        ? `${message}\n\nImagens anexadas: ${flowChatAttachments.map((item) => item.name).join(", ")}`
+        : message,
+      createdAt: new Date().toISOString(),
+    };
+    setFlowChatMessages((current) => [...current, userMessage]);
+    setFlowChatInput("");
+    const attachments = flowChatAttachments;
+    setFlowChatAttachments([]);
+    setFlowChatBusy(true);
+
+    try {
+      const response = await fetch(`/api/auth/me/hosting/vps/${snapshot.project.vpsCode}/flow-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          chatId: flowChatSessionId,
+          fileTreePaths: flattenFileTreePaths(snapshot.fileTree).slice(0, 2000),
+          repository: snapshot.project.repository.fullName,
+          branch: snapshot.project.repository.branch,
+          runtime: snapshot.project.runtime,
+          attachments: attachments.map((item) => ({ name: item.name, type: item.type })),
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        ok?: boolean;
+        message?: string;
+        model?: string;
+        chatId?: number | null;
+        quota?: Partial<FlowChatQuota>;
+      };
+      if (payload.quota) setFlowChatQuota(normalizeFlowQuota(payload.quota));
+      const content = response.ok && payload.ok && payload.message
+        ? payload.message
+        : response.status === 429
+          ? payload.message || "Voce atingiu o limite diario do Flow. Tente novamente quando a janela renovar."
+          : buildFlowChatFallback({ fileTreeLoaded: snapshot.fileTree.length > 0 });
+      const assistantMessage: FlowChatMessage = {
+        id: createClientId("flow-assistant"),
+        role: "assistant",
+        content,
+        createdAt: new Date().toISOString(),
+        model: null,
+      };
+      setFlowChatMessages((current) => [...current, assistantMessage]);
+      if (payload.chatId) {
+        setFlowChatSessionId(payload.chatId);
+        void loadFlowChatHistory();
+      }
+    } catch {
+      setFlowChatMessages((current) => [...current, {
+        id: createClientId("flow-fallback"),
+        role: "assistant",
+        content: buildFlowChatFallback({ fileTreeLoaded: snapshot.fileTree.length > 0 }),
+        createdAt: new Date().toISOString(),
+        model: null,
+      }]);
+    } finally {
+      setFlowChatBusy(false);
+    }
   }
 
   function openCreateEnvDrawer() {
@@ -1374,6 +2466,23 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
     { id: "env", label: "Env", icon: <KeyRound className="h-[15px] w-[15px]" /> },
   ];
 
+  const normalizedSidebarSearch = normalizeSearchText(sidebarSearchText);
+  const filteredSidebarTabs = tabs.filter((item) =>
+    !normalizedSidebarSearch ||
+    normalizeSearchText(`${item.label} ${item.id}`).includes(normalizedSidebarSearch),
+  );
+  const actionItems: Array<{ id: "start" | "restart" | "stop" | "sync"; label: string; icon: typeof Play }> = [
+    { id: "start", label: "Iniciar VPS", icon: Play },
+    { id: "restart", label: "Reiniciar VPS", icon: RotateCcw },
+    { id: "stop", label: "Parar VPS", icon: Power },
+    { id: "sync", label: "Verificar status", icon: RefreshCw },
+  ];
+  const filteredActionItems = actionItems.filter((item) =>
+    !normalizedSidebarSearch ||
+    normalizeSearchText(`${item.label} ${item.id}`).includes(normalizedSidebarSearch),
+  );
+  const showSidebarEmptyState = Boolean(normalizedSidebarSearch && !filteredSidebarTabs.length && !filteredActionItems.length && !normalizeSearchText("Dashboard voltar hospedagem").includes(normalizedSidebarSearch));
+
   const filteredTree = useMemo(() => {
     if (!fileQuery.trim()) return snapshot.fileTree;
     const query = fileQuery.trim().toLowerCase();
@@ -1390,70 +2499,223 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
   return (
     <main className="min-h-screen bg-[#050505] text-[#F1F1F1]">
       <div className="flex h-screen min-h-screen overflow-hidden">
-        <aside className="sticky top-0 flex h-screen w-[280px] shrink-0 flex-col border-r border-[#171717] bg-[#080808] max-lg:hidden">
-          <div className="border-b border-[#171717] p-[14px]">
-            <div className="flex flex-col gap-[14px]">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-[8px]">
-                <span className={`inline-flex items-center gap-[7px] rounded-full border px-[9px] py-[5px] text-[10px] font-bold uppercase tracking-[0.13em] ${statusClasses(snapshot.project.runtimeStatus)}`}>
+        <aside className="hidden h-screen w-[318px] shrink-0 lg:block">
+          <div className={`${vpsSidebarShellClass} h-full rounded-none border-y-0 border-l-0 border-r-[#151515]`}>
+            <div className="flex h-full flex-col px-[14px] py-[14px]">
+              <div className="flex w-full items-center justify-between gap-[12px] rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px] text-left">
+                <div className="flex min-w-0 items-center gap-[10px]">
+                  <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#4B8DFF_0%,#0F62FE_58%,#06204E_100%)] shadow-[0_0_30px_rgba(15,98,254,0.20)]">
+                    <Server className="h-[17px] w-[17px] text-white" strokeWidth={2.1} />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-[15px] font-medium leading-none tracking-[-0.03em] text-[#E5E5E5]" title={`${snapshot.project.planName} - ${snapshot.project.repository.name}`}>
+                      {snapshot.project.repository.name}
+                    </p>
+                    <p className="mt-[5px] truncate text-[12px] leading-none text-[#6D6D6D]" title={snapshot.project.planName}>
+                      {snapshot.project.planName} - {snapshot.project.kindLabel}
+                    </p>
+                  </div>
+                </div>
+                <span className={`inline-flex h-[28px] min-w-[28px] items-center justify-center rounded-[10px] border px-[8px] text-[10px] font-bold uppercase tracking-[0.1em] ${statusClasses(snapshot.project.runtimeStatus)}`} title={statusLabel(snapshot.project.runtimeStatus)}>
                   <span className="h-[7px] w-[7px] rounded-full bg-current" />
-                  {statusLabel(snapshot.project.runtimeStatus)}
-                </span>
-                <span className="inline-flex items-center gap-[7px] rounded-full border border-[#1D1D1D] bg-[#0D0D0D] px-[9px] py-[5px] text-[10px] font-bold uppercase tracking-[0.13em] text-[#8E8E8E]">
-                  <Server className="h-[13px] w-[13px] text-[#0F62FE]" />
-                  {snapshot.project.kindLabel}
                 </span>
               </div>
-              <h1 className="mt-[12px] break-words text-[19px] font-semibold leading-[1.12] tracking-[-0.035em] text-white">
-                {snapshot.project.planName} - {snapshot.project.repository.name}
-              </h1>
-              <p className="mt-[7px] break-all font-mono text-[11px] leading-[1.45] text-[#777777]">
-                {snapshot.project.vpsCode}
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-[8px]">
-              {[
-                ["start", "Iniciar", Play],
-                ["restart", "Reiniciar", RotateCcw],
-                ["stop", "Parar", Power],
-                ["sync", "Status", RefreshCw],
-              ].map(([action, label, Icon]) => (
-                <button
-                key={String(action)}
-                type="button"
-                disabled={Boolean(busyAction)}
-                onClick={() => void runAction(action as "start" | "stop" | "restart" | "sync")}
-                  className="inline-flex h-[36px] items-center justify-center gap-[6px] rounded-[10px] border border-[#1F1F1F] bg-[#101010] px-[9px] text-[11px] font-semibold text-[#DADADA] transition-colors hover:border-[#303030] hover:bg-[#151515] disabled:cursor-not-allowed disabled:opacity-55"
-                >
-                  {busyAction === action ? <Loader2 className="h-[14px] w-[14px] animate-spin" /> : <Icon className="h-[14px] w-[14px]" />}
-                  {String(label)}
-                </button>
-              ))}
-            </div>
-          </div>
-          </div>
 
-          <nav className="flex-1 space-y-[4px] overflow-y-auto p-[10px]">
-            {tabs.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => navigateToTab(item.id)}
-                className={`flex h-[38px] w-full items-center gap-[10px] rounded-[10px] px-[11px] text-left text-[13px] font-semibold transition-colors ${
-                  tab === item.id ? "bg-[#0F62FE] text-white" : "text-[#9B9B9B] hover:bg-[#111111] hover:text-white"
-                }`}
-              >
-                {item.icon}
-                {item.label}
-              </button>
-            ))}
-          </nav>
-          <div className="border-t border-[#171717] p-[14px]">
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#555555]">Repositorio</p>
-            <p className="mt-[6px] truncate font-mono text-[12px] font-semibold text-[#DADADA]">{snapshot.project.repository.fullName}</p>
-            <p className="mt-[4px] text-[12px] text-[#777777]">{snapshot.project.regionLabel}</p>
+              <div className="mt-[10px] rounded-[16px] border border-[#111111] bg-[#070707] px-[12px] py-[10px]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#555555]">Codigo da VPS</p>
+                <p className="mt-[6px] truncate font-mono text-[11px] font-semibold text-[#DADADA]" title={snapshot.project.vpsCode}>{snapshot.project.vpsCode}</p>
+              </div>
+
+              <div className="mt-[14px] flex items-center gap-[10px] rounded-[16px] border border-[#141414] bg-[#080808] px-[14px] py-[12px]">
+                <Search className="h-[18px] w-[18px] shrink-0 text-[#6F6F6F]" strokeWidth={1.85} aria-hidden="true" />
+                <input
+                  type="text"
+                  value={sidebarSearchText}
+                  onChange={(event) => setSidebarSearchText(event.currentTarget.value)}
+                  placeholder="Buscar..."
+                  autoComplete="off"
+                  className="min-w-0 flex-1 bg-transparent text-[15px] text-[#D5D5D5] outline-none placeholder:text-[#5A5A5A]"
+                />
+                <SidebarSearchShortcutIcon />
+              </div>
+
+              <div className="mt-[14px] min-h-0 flex-1 overflow-y-auto pr-[2px] thin-scrollbar">
+                <div className="space-y-[4px]">
+                  {(!normalizedSidebarSearch || normalizeSearchText("Dashboard voltar hospedagem").includes(normalizedSidebarSearch)) ? (
+                    <button
+                      type="button"
+                      onClick={() => router.push("/dashboard/hosting")}
+                      className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B5B5B5] transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3]"
+                    >
+                      <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#8A8A8A] group-hover:text-[#DADADA]">
+                        <ArrowLeft className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[15px] font-medium leading-none tracking-[-0.03em]">
+                        Dashboard
+                      </span>
+                    </button>
+                  ) : null}
+
+                  {filteredSidebarTabs.map((item) => {
+                    const isActive = tab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => navigateToTab(item.id)}
+                        className={`group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-all duration-200 ${
+                          isActive
+                            ? "bg-[#1E1E1E] text-[#F0F0F0]"
+                            : "text-[#B5B5B5] hover:bg-[#111111] hover:text-[#E3E3E3]"
+                        }`}
+                      >
+                        <span className={`inline-flex h-[22px] w-[22px] items-center justify-center ${isActive ? "text-[#F0F0F0]" : "text-[#8A8A8A] group-hover:text-[#DADADA]"}`}>
+                          {item.icon}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[15px] font-medium leading-none tracking-[-0.03em]">
+                          {item.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {filteredActionItems.length ? (
+                  <div className="mt-[12px] border-t border-[#121212] pt-[12px]">
+                    <p className="mb-[6px] px-[12px] text-[10px] font-bold uppercase tracking-[0.16em] text-[#555555]">Acoes</p>
+                    <div className="space-y-[4px]">
+                      {filteredActionItems.map((item) => {
+                        const Icon = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            disabled={Boolean(busyAction)}
+                            onClick={() => void runAction(item.id)}
+                            className="group flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B5B5B5] transition-all duration-200 hover:bg-[#111111] hover:text-[#E3E3E3] disabled:cursor-not-allowed disabled:opacity-55"
+                          >
+                            <span className="inline-flex h-[22px] w-[22px] items-center justify-center text-[#8A8A8A] group-hover:text-[#DADADA]">
+                              {busyAction === item.id ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} />}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[15px] font-medium leading-none tracking-[-0.03em]">
+                              {item.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {showSidebarEmptyState ? (
+                  <div className="mt-[14px] rounded-[16px] border border-[#141414] bg-[#080808] px-[14px] py-[14px]">
+                    <p className="text-[13px] leading-[1.55] text-[#6F6F6F]">
+                      Nenhum item encontrado para essa pesquisa.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-auto shrink-0 pt-[14px]">
+                <div className="px-[2px]">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#555555]">Repositorio</p>
+                  <p className="mt-[6px] truncate font-mono text-[12px] font-semibold text-[#DADADA]" title={snapshot.project.repository.fullName}>{snapshot.project.repository.fullName}</p>
+                  <p className="mt-[4px] truncate text-[12px] text-[#777777]" title={snapshot.project.regionLabel}>{snapshot.project.regionLabel}</p>
+                </div>
+                <div className="mt-[14px] border-t border-[#151515] pt-[14px]">
+                  <div ref={profileMenuRef} className="relative">
+                    {isProfileMenuOpen ? (
+                      <div className="absolute inset-x-0 bottom-[calc(100%+10px)] z-[140] overflow-hidden rounded-[22px] border border-[#151515] bg-[#070707] p-[12px] shadow-[0_26px_80px_rgba(0,0,0,0.54)]">
+                        <div className="space-y-[8px]">
+                          <button
+                            type="button"
+                            onClick={() => window.location.assign(buildDiscordAuthStartHref("/dashboard/hosting"))}
+                            className="flex w-full items-center gap-[12px] rounded-[16px] border border-[#171717] bg-[#0D0D0D] px-[12px] py-[12px] text-left text-[#D8D8D8] transition-colors hover:border-[#222222] hover:bg-[#111111]"
+                          >
+                            <span className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[11px] border border-[#1A1A1A] bg-[#101010] text-[#CFCFCF]">
+                              <Plus className="h-[18px] w-[18px]" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[14px] font-medium leading-none tracking-[-0.03em]">Adicionar outra conta</span>
+                              <span className="mt-[6px] block truncate text-[11px] leading-none text-[#686868]">Ate 3 contas salvas neste navegador</span>
+                            </span>
+                          </button>
+
+                          <div className="border-t border-[#121212] pt-[12px]">
+                            <p className="px-[4px] text-[11px] uppercase tracking-[0.16em] text-[#5F5F5F]">Contas salvas</p>
+                            <div className="mt-[10px] space-y-[6px]">
+                              {savedAccounts.map((account) => {
+                                const isCurrent = resolveSavedAccountKey(account) === resolveSavedAccountKey(currentAccount);
+                                return (
+                                  <button
+                                    key={resolveSavedAccountKey(account)}
+                                    type="button"
+                                    onClick={() => handleSwitchSavedAccount(account)}
+                                    className={`flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left transition-colors ${
+                                      isCurrent ? "bg-[#141414] text-[#ECECEC]" : "text-[#A7A7A7] hover:bg-[#111111] hover:text-[#E6E6E6]"
+                                    }`}
+                                  >
+                                    <AccountAvatar avatarUrl={account.avatarUrl} displayName={account.displayName} username={account.username} className="h-[36px] w-[36px] shrink-0" />
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block truncate text-[14px] font-medium leading-none tracking-[-0.03em]">{account.displayName}</span>
+                                      <span className="mt-[6px] block truncate text-[11px] leading-none text-[#666666]">@{account.username}</span>
+                                    </span>
+                                    {isCurrent ? (
+                                      <span className="inline-flex rounded-full border border-[rgba(0,98,255,0.28)] bg-[rgba(0,98,255,0.1)] px-[8px] py-[5px] text-[10px] font-medium leading-none text-[#8AB6FF]">ativa</span>
+                                    ) : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="border-t border-[#121212] pt-[12px]">
+                            <div className="space-y-[4px]">
+                              <button type="button" onClick={() => router.push("/account")} className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B7B7B7] transition-colors hover:bg-[#111111] hover:text-[#ECECEC]">
+                                <UserRound className="h-[18px] w-[18px]" />
+                                <span className="text-[14px] font-medium leading-none">Minha conta</span>
+                              </button>
+                              <button type="button" onClick={() => router.push("/account/status")} className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B7B7B7] transition-colors hover:bg-[#111111] hover:text-[#ECECEC]">
+                                <Cog className="h-[18px] w-[18px]" />
+                                <span className="text-[14px] font-medium leading-none">Configuracoes</span>
+                              </button>
+                              <button type="button" onClick={() => window.open(OFFICIAL_DISCORD_INVITE_URL, "_blank", "noopener,noreferrer")} className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#B7B7B7] transition-colors hover:bg-[#111111] hover:text-[#ECECEC]">
+                                <CircleHelp className="h-[18px] w-[18px]" />
+                                <span className="text-[14px] font-medium leading-none">Ajuda</span>
+                              </button>
+                              <button type="button" onClick={() => void handleLogout()} disabled={isLoggingOut} className="flex w-full items-center gap-[12px] rounded-[14px] px-[12px] py-[11px] text-left text-[#DB9E9E] transition-colors hover:bg-[#111111] hover:text-[#F1C0C0] disabled:cursor-not-allowed disabled:opacity-70">
+                                {isLoggingOut ? <Loader2 className="h-[18px] w-[18px] animate-spin" /> : <LogOut className="h-[18px] w-[18px]" />}
+                                <span className="text-[14px] font-medium leading-none">Sair</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setIsProfileMenuOpen((current) => !current)}
+                      className="flex w-full items-center justify-between gap-[12px] rounded-[18px] border border-[#111111] bg-[#080808] px-[10px] py-[10px] text-left transition-colors hover:border-[#1A1A1A] hover:bg-[#0B0B0B]"
+                      aria-expanded={isProfileMenuOpen}
+                      aria-haspopup="menu"
+                    >
+                      <div className="flex min-w-0 items-center gap-[10px]">
+                        <AccountAvatar avatarUrl={currentAccount.avatarUrl} displayName={currentAccount.displayName} username={currentAccount.username} className="h-[38px] w-[38px] shrink-0" />
+                        <div className="min-w-0">
+                          <p className="truncate text-[15px] font-medium leading-none tracking-[-0.03em] text-[#E5E5E5]">{currentAccount.displayName}</p>
+                          <p className="mt-[5px] truncate text-[12px] leading-none text-[#686868]">@{currentAccount.username}</p>
+                        </div>
+                      </div>
+                      <span className="inline-flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[10px] text-[#7E7E7E] transition-colors hover:bg-[#101010] hover:text-[#D8D8D8]">
+                        <ChevronDown className={`h-[14px] w-[14px] shrink-0 transition-transform ${isProfileMenuOpen ? "rotate-180" : ""}`} strokeWidth={1.9} />
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-        </aside>
+                </aside>
 
         <section className="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-[64px] items-center justify-between gap-[12px] border-b border-[#171717] bg-[#080808] px-[14px] lg:px-[22px]">
@@ -1489,9 +2751,9 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
               </div>
             </div>
           </div>
-          <div className={tab === "files" ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto p-[18px] lg:p-[24px]"}>
+          <div className={tab === "files" || tab === "console" ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto p-[18px] lg:p-[24px]"}>
             {shouldShowTabSkeleton ? (
-              <div className={centeredMainTabs ? "mx-auto w-full max-w-[1180px]" : ""}>
+              <div className={centeredMainTabs ? "mx-auto w-full max-w-[1180px]" : tab === "console" ? "h-full p-[18px] lg:p-[24px]" : ""}>
                 <TabMainSkeleton tab={tab} />
               </div>
             ) : (
@@ -1499,76 +2761,210 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
 
         {tab === "overview" ? (
           <section className="grid gap-[14px]">
+            <div className="overflow-hidden rounded-[24px] border border-[#171717] bg-[#070707]">
+              <div className="grid lg:grid-cols-[minmax(0,1.2fr)_360px]">
+                <div className="border-b border-[#171717] p-[18px] lg:border-b-0 lg:border-r">
+                  <div className="flex flex-wrap items-start justify-between gap-[14px]">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#606060]">Instancia Windows</p>
+                      <h2 className="mt-[8px] truncate text-[28px] font-semibold tracking-[-0.055em] text-white" title={snapshot.project.repository.fullName}>
+                        {snapshot.project.repository.name}
+                      </h2>
+                      <p className="mt-[8px] max-w-[760px] text-[13px] leading-[1.6] text-[#8A8A8A]">
+                        Deploy conectado ao GitHub, provisionado em {snapshot.project.regionLabel}. O painel acompanha status,
+                        uso de recursos, logs e arquivos sincronizados da VPS.
+                      </p>
+                    </div>
+                    <span className={`inline-flex items-center gap-[8px] rounded-full border px-[11px] py-[7px] text-[11px] font-bold uppercase tracking-[0.13em] ${statusClasses(snapshot.project.runtimeStatus)}`}>
+                      <span className="h-[7px] w-[7px] rounded-full bg-current" />
+                      {statusLabel(snapshot.project.runtimeStatus)}
+                    </span>
+                  </div>
+                  <div className="mt-[18px] grid gap-[10px] md:grid-cols-3">
+                    {[
+                      ["Runtime", snapshot.project.runtime],
+                      ["Branch", snapshot.project.repository.branch],
+                      ["Ultimo contato", formatDate(snapshot.project.runtimeLastSeenAt)],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-[16px] border border-[#151515] bg-[#0B0B0B] p-[12px]">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#555555]">{label}</p>
+                        <p className="mt-[7px] truncate text-[13px] font-semibold text-[#E7E7E7]" title={value}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-[18px]">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#606060]">Plano atual</p>
+                  <p className="mt-[9px] text-[22px] font-semibold tracking-[-0.04em] text-white">{snapshot.project.planName}</p>
+                  <p className="mt-[4px] text-[13px] text-[#8A8A8A]">{snapshot.project.planPrice}</p>
+                  <div className="mt-[14px] space-y-[8px]">
+                    {snapshot.project.planSpecs.slice(0, 4).map((spec) => (
+                      <div key={spec} className="flex items-center gap-[8px] text-[12px] text-[#CFCFCF]">
+                        <Check className="h-[14px] w-[14px] text-[#64D987]" />
+                        <span className="truncate">{spec}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-[16px] rounded-[14px] border border-[#151515] bg-[#050505] p-[12px]">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#555555]">Pagamento</p>
+                    <p className="mt-[7px] truncate text-[13px] font-semibold text-[#E7E7E7]">{snapshot.project.paymentLabel}</p>
+                    <p className="mt-[4px] text-[12px] text-[#777777]">{snapshot.project.paidAtLabel}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="grid gap-[14px] md:grid-cols-2 xl:grid-cols-4">
-              {[
-                ["CPU", `${metricValue(latestMetric, "cpu_percent").toFixed(1)}%`, Cpu],
-                ["RAM", `${metricValue(latestMetric, "ram_percent").toFixed(1)}%`, Database],
-                ["Disco", `${metricValue(latestMetric, "disk_percent").toFixed(1)}%`, HardDrive],
-                ["Uptime", formatUptime(metricValue(latestMetric, "uptime_seconds")), Wifi],
-              ].map(([label, value, Icon]) => (
-                <article key={String(label)} className="min-h-[118px] rounded-[20px] border border-[#171717] bg-[#080808] p-[16px]">
+              {([
+                ["CPU", `${metricSummary.cpu.toFixed(1)}%`, metricSummary.cpu, Cpu],
+                ["RAM", `${metricSummary.ram.toFixed(1)}%`, metricSummary.ram, Database],
+                ["Disco", `${metricSummary.disk.toFixed(1)}%`, metricSummary.disk, HardDrive],
+                ["Uptime", formatUptime(metricSummary.uptime), 72, Wifi],
+              ] as Array<[string, string, number, typeof Cpu]>).map(([label, value, width, Icon]) => (
+                <article key={String(label)} className="min-h-[128px] rounded-[20px] border border-[#171717] bg-[#080808] p-[16px]">
                   <div className="flex items-center justify-between">
                     <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#606060]">{String(label)}</p>
                     <Icon className="h-[17px] w-[17px] text-[#0F62FE]" />
                   </div>
                   <p className="mt-[12px] text-[24px] font-semibold tracking-[-0.03em] text-white">{String(value)}</p>
-                  <div className="mt-[12px] h-[5px] overflow-hidden rounded-full bg-[#111111]">
-                    <div className="h-full rounded-full bg-[#0F62FE]" style={{ width: String(label) === "Uptime" ? "72%" : `${Math.min(100, metricValue(latestMetric, String(label) === "CPU" ? "cpu_percent" : String(label) === "RAM" ? "ram_percent" : "disk_percent"))}%` }} />
+                  <div className="mt-[14px] h-[5px] overflow-hidden rounded-full bg-[#111111]">
+                    <div className="h-full rounded-full bg-[#0F62FE]" style={{ width: `${Math.min(100, Number(width) || 0)}%` }} />
                   </div>
+                  <p className="mt-[9px] text-[11px] text-[#666666]">{latestMetric ? "Atualizado em tempo real" : "Aguardando primeira amostra"}</p>
                 </article>
               ))}
             </div>
-            <div className="grid gap-[14px] lg:grid-cols-3">
-              {[
-                ["Repositorio", snapshot.project.repository.fullName],
-                ["Branch", snapshot.project.repository.branch],
-                ["Regiao", snapshot.project.regionLabel],
-                ["Plano", `${snapshot.project.planName} - ${snapshot.project.planPrice}`],
-                ["Pagamento", `${snapshot.project.paymentLabel} - ${snapshot.project.paymentAmount}`],
-                ["Ultimo contato", formatDate(snapshot.project.runtimeLastSeenAt)],
-              ].map(([label, value]) => (
-                <article key={label} className="min-h-[82px] rounded-[18px] border border-[#171717] bg-[#080808] p-[14px]">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#555555]">{label}</p>
-                  <p className="mt-[7px] break-words text-[13px] font-semibold text-[#DADADA]">{value}</p>
-                </article>
-              ))}
+
+            <div className="grid gap-[14px] xl:grid-cols-[minmax(0,1fr)_380px]">
+              <article className="rounded-[22px] border border-[#171717] bg-[#080808] p-[16px]">
+                <div className="flex items-center justify-between gap-[12px]">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#606060]">Atividade recente</p>
+                    <h3 className="mt-[7px] text-[18px] font-semibold tracking-[-0.035em] text-white">Runtime e automacoes</h3>
+                  </div>
+                  <Activity className="h-[19px] w-[19px] text-[#0F62FE]" />
+                </div>
+                <div className="mt-[16px] space-y-[8px]">
+                  {recentActions.length ? recentActions.map((action, index) => (
+                    <div key={`${String(action.id || index)}-${String(action.created_at || index)}`} className="grid grid-cols-[28px_minmax(0,1fr)_86px] items-center gap-[10px] rounded-[14px] border border-[#151515] bg-[#0B0B0B] p-[10px]">
+                      <span className="flex h-[28px] w-[28px] items-center justify-center rounded-[10px] bg-[#111111] text-[#9BC2FF]">
+                        <RefreshCw className="h-[14px] w-[14px]" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-[13px] font-semibold text-[#E7E7E7]">{String(action.action || "acao")}</span>
+                        <span className="mt-[3px] block truncate text-[11px] text-[#666666]">{String(action.message || "Evento operacional registrado")}</span>
+                      </span>
+                      <span className="truncate text-right text-[11px] font-semibold text-[#8A8A8A]">{String(action.status || "ok")}</span>
+                    </div>
+                  )) : (
+                    <div className="rounded-[16px] border border-[#151515] bg-[#0B0B0B] p-[14px] text-[13px] text-[#777777]">
+                      Nenhuma acao operacional recente registrada.
+                    </div>
+                  )}
+                </div>
+              </article>
+
+              <article className="rounded-[22px] border border-[#171717] bg-[#080808] p-[16px]">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#606060]">Deploy atual</p>
+                <h3 className="mt-[7px] truncate text-[18px] font-semibold tracking-[-0.035em] text-white">
+                  {latestDeployment?.commit_message || "Aguardando deploy"}
+                </h3>
+                <div className="mt-[14px] space-y-[10px] text-[12px]">
+                  {[
+                    ["Status", latestDeployment?.status || "sem deploy"],
+                    ["Ambiente", latestDeployment?.environment || "production"],
+                    ["Branch", latestDeployment?.branch || snapshot.project.repository.branch],
+                    ["Commit", latestDeployment?.commit_sha ? latestDeployment.commit_sha.slice(0, 8) : "pendente"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex items-center justify-between gap-[14px] border-b border-[#121212] pb-[9px] last:border-b-0 last:pb-0">
+                      <span className="text-[#777777]">{label}</span>
+                      <span className="truncate font-mono font-semibold text-[#DADADA]">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
             </div>
           </section>
         ) : null}
 
         {tab === "metrics" ? (
-          <section className="grid gap-[14px] lg:grid-cols-2">
-            {[
-              ["CPU", "cpu_percent", "%", Cpu],
-              ["RAM", "ram_percent", "%", Database],
-              ["Disco", "disk_percent", "%", HardDrive],
-              ["Download", "network_rx_kbps", "kb/s", Download],
-              ["Upload", "network_tx_kbps", "kb/s", Wifi],
-              ["Processos", "process_count", "", Activity],
-            ].map(([label, key, suffix, Icon]) => {
-              const values = snapshot.metrics.map((item) => metricValue(item, key as keyof VpsMetric));
-              const current = values[values.length - 1] || 0;
-              const peak = Math.max(0, ...values);
-              return (
-                <article key={String(key)} className="rounded-[22px] border border-[#171717] bg-[#080808] p-[16px]">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#606060]">{String(label)}</p>
-                      <p className="mt-[8px] text-[24px] font-semibold text-white">{current.toFixed(suffix === "" ? 0 : 1)}{String(suffix)}</p>
+          <section className="grid gap-[14px]">
+            <div className="rounded-[24px] border border-[#171717] bg-[#070707] p-[18px]">
+              <div className="flex flex-wrap items-start justify-between gap-[14px]">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#606060]">Observabilidade</p>
+                  <h2 className="mt-[8px] text-[26px] font-semibold tracking-[-0.055em] text-white">Metricas em tempo real</h2>
+                  <p className="mt-[8px] max-w-[720px] text-[13px] leading-[1.6] text-[#8A8A8A]">
+                    Janela com as ultimas {snapshot.metrics.length || 0} amostras da VPS, incluindo sistema, rede e consumo da aplicacao.
+                  </p>
+                </div>
+                <div className="grid min-w-[280px] grid-cols-2 gap-[8px]">
+                  {[
+                    ["Download", `${metricSummary.rx.toFixed(1)} kb/s`],
+                    ["Upload", `${metricSummary.tx.toFixed(1)} kb/s`],
+                    ["Processos", metricSummary.processes.toFixed(0)],
+                    ["App RAM", `${metricSummary.appRam.toFixed(1)} MB`],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-[14px] border border-[#151515] bg-[#0B0B0B] p-[10px]">
+                      <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#555555]">{label}</p>
+                      <p className="mt-[6px] truncate text-[13px] font-semibold text-[#E7E7E7]">{value}</p>
                     </div>
-                    <Icon className="h-[20px] w-[20px] text-[#0F62FE]" />
-                  </div>
-                  <div className="mt-[14px]"><Sparkline values={values} /></div>
-                  <p className="mt-[8px] text-[12px] text-[#777777]">Pico: {peak.toFixed(suffix === "" ? 0 : 1)}{String(suffix)}</p>
-                </article>
-              );
-            })}
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-[14px] lg:grid-cols-2">
+              {([
+                ["CPU", "cpu_percent", "%", Cpu, "Carga do processador da VPS Windows"],
+                ["RAM", "ram_percent", "%", Database, "Memoria total usada pelo ambiente"],
+                ["Disco", "disk_percent", "%", HardDrive, "Uso do volume NVMe provisionado"],
+                ["Download", "network_rx_kbps", "kb/s", Download, "Entrada de rede observada"],
+                ["Upload", "network_tx_kbps", "kb/s", Wifi, "Saida de rede observada"],
+                ["Processos", "process_count", "", Activity, "Processos ativos do runtime"],
+              ] as Array<[string, keyof VpsMetric, string, typeof Cpu, string]>).map(([label, key, suffix, Icon, description]) => {
+                const values = snapshot.metrics.map((item) => metricValue(item, key as keyof VpsMetric));
+                const current = values[values.length - 1] || 0;
+                const peak = Math.max(0, ...values);
+                const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+                return (
+                  <article key={String(key)} className="overflow-hidden rounded-[22px] border border-[#171717] bg-[#080808]">
+                    <div className="flex items-start justify-between gap-[12px] border-b border-[#151515] p-[16px]">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#606060]">{String(label)}</p>
+                        <p className="mt-[7px] truncate text-[12px] text-[#777777]">{String(description)}</p>
+                      </div>
+                      <span className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-[14px] border border-[#171717] bg-[#0D0D0D]">
+                        <Icon className="h-[19px] w-[19px] text-[#0F62FE]" />
+                      </span>
+                    </div>
+                    <div className="p-[16px]">
+                      <div className="flex items-end justify-between gap-[12px]">
+                        <p className="text-[28px] font-semibold tracking-[-0.045em] text-white">{current.toFixed(suffix === "" ? 0 : 1)}{String(suffix)}</p>
+                        <div className="text-right text-[11px] text-[#777777]">
+                          <p>Pico <span className="font-mono text-[#DADADA]">{peak.toFixed(suffix === "" ? 0 : 1)}{String(suffix)}</span></p>
+                          <p className="mt-[3px]">Media <span className="font-mono text-[#DADADA]">{average.toFixed(suffix === "" ? 0 : 1)}{String(suffix)}</span></p>
+                        </div>
+                      </div>
+                      <div className="mt-[16px] rounded-[16px] border border-[#111111] bg-[#050505] px-[10px] py-[12px]">
+                        <Sparkline values={values} />
+                      </div>
+                      <div className="mt-[12px] h-[5px] overflow-hidden rounded-full bg-[#111111]">
+                        <div className="h-full rounded-full bg-[#0F62FE]" style={{ width: `${Math.min(100, suffix === "" ? (current / Math.max(1, peak)) * 100 : current)}%` }} />
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </section>
         ) : null}
 
         {tab === "console" ? (
-          <section className="grid h-[calc(100vh-112px)] min-h-[560px] overflow-hidden rounded-[18px] border border-[#171717] bg-[#050505] xl:grid-cols-[minmax(0,1fr)_352px]">
-            <div className="flex min-w-0 flex-col">
+          <section className={`grid h-full min-h-0 overflow-hidden border border-[#171717] bg-[#050505] ${
+            selectedConsoleEntry ? "xl:grid-cols-[minmax(0,1fr)_352px]" : "xl:grid-cols-1"
+          }`}>
+            <div className="flex min-h-0 min-w-0 flex-col">
               <div className="flex flex-col gap-[10px] border-b border-[#171717] bg-[#070707] p-[10px] lg:flex-row lg:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-[10px] rounded-[10px] border border-[#1B1B1B] bg-[#030303] px-[12px]">
                   <Search className="h-[15px] w-[15px] text-[#777777]" />
@@ -1635,12 +3031,12 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
                 <span>Request</span>
                 <span>Messages</span>
               </div>
-              <div ref={consoleRef} className="min-h-0 flex-1 overflow-auto bg-[#030303] font-mono text-[12px]">
+              <div ref={consoleRef} className="h-0 min-h-0 flex-1 overflow-x-auto overflow-y-auto bg-[#030303] font-mono text-[12px] [scrollbar-color:#2A2A2A_#050505] [scrollbar-gutter:stable] [scrollbar-width:thin]">
                 {visibleConsoleEntries.length ? visibleConsoleEntries.map((entry) => (
                   <button
                     key={entry.key}
                     onClick={() => setSelectedConsoleKey(entry.key)}
-                    className={`grid w-full grid-cols-[104px_1fr_1.4fr_minmax(220px,2fr)] gap-[12px] border-b border-[#0D0D0D] px-[12px] py-[7px] text-left transition-colors hover:bg-[#141414] ${
+                    className={`grid w-full min-w-[980px] grid-cols-[104px_1fr_1.4fr_minmax(220px,2fr)] gap-[12px] border-b border-[#0D0D0D] px-[12px] py-[7px] text-left transition-colors hover:bg-[#141414] ${
                       selectedConsoleEntry?.key === entry.key ? "bg-[#191919]" : "odd:bg-[#060606] even:bg-[#0A0A0A]"
                     }`}
                   >
@@ -1661,8 +3057,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
               </div>
             </div>
 
-            <aside className="min-h-0 overflow-auto border-t border-[#171717] bg-[#070707] xl:border-l xl:border-t-0">
-              {selectedConsoleEntry ? (
+            {selectedConsoleEntry ? (
+              <aside className="min-h-0 overflow-auto border-t border-[#171717] bg-[#070707] xl:border-l xl:border-t-0">
                 <div className="p-[14px]">
                   <div className="flex items-start justify-between gap-[10px]">
                     <div className="min-w-0">
@@ -1767,12 +3163,8 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
                     {selectedConsoleEntry.status >= 500 ? "Request failed" : `Response finished in ${selectedConsoleEntry.durationMs ?? 0}ms`}
                   </p>
                 </div>
-              ) : (
-                <div className="flex h-full items-center justify-center p-[24px] text-center text-[13px] text-[#777777]">
-                  Selecione um evento do console para ver request, firewall, middleware e payload.
-                </div>
-              )}
-            </aside>
+              </aside>
+            ) : null}
           </section>
         ) : null}
 
@@ -1784,21 +3176,80 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
             <aside className="relative min-h-0 border-r border-[#171717] bg-[#080808]">
               <div className="flex h-[48px] items-center justify-between gap-[10px] border-b border-[#171717] px-[12px]">
                 <div className="min-w-0">
-                  <p className="text-[12px] font-bold uppercase tracking-[0.14em] text-[#8E8E8E]">Explorer</p>
+                  <p className="truncate text-[12px] font-bold uppercase tracking-[0.14em] text-[#E2E2E2]" title={snapshot.project.repository.fullName}>{snapshot.project.repository.fullName}</p>
                   <p className="mt-[2px] text-[10px] text-[#575757]">{explorerWidth}px</p>
                 </div>
-                <span className="inline-flex h-[26px] items-center gap-[6px] rounded-full border border-[#1F1F1F] bg-[#101010] px-[9px] text-[10px] font-bold uppercase tracking-[0.12em] text-[#777777]">
-                  {filesBusy ? <Loader2 className="h-[12px] w-[12px] animate-spin text-[#9BC2FF]" /> : <span className="h-[6px] w-[6px] rounded-full bg-[#34A853]" />}
-                  Live
-                </span>
+                <div className="flex shrink-0 items-center gap-[3px]">
+                  <button type="button" onClick={() => startCreateFile("", "file")} className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-[#AFAFAF] hover:bg-[#111111] hover:text-white" title="Novo arquivo">
+                    <FilePlus2 className="h-[15px] w-[15px]" />
+                  </button>
+                  <button type="button" onClick={() => startCreateFile("", "directory")} className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-[#AFAFAF] hover:bg-[#111111] hover:text-white" title="Nova pasta">
+                    <FolderPlus className="h-[15px] w-[15px]" />
+                  </button>
+                  <button type="button" onClick={() => void syncFiles()} disabled={filesBusy} className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-[#AFAFAF] hover:bg-[#111111] hover:text-white disabled:opacity-50" title="Atualizar">
+                    {filesBusy ? <Loader2 className="h-[15px] w-[15px] animate-spin" /> : <RefreshCw className="h-[15px] w-[15px]" />}
+                  </button>
+                  <button type="button" onClick={() => setExpandedFilePaths(new Set())} className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-[#AFAFAF] hover:bg-[#111111] hover:text-white" title="Recolher tudo">
+                    <Layers className="h-[15px] w-[15px]" />
+                  </button>
+                </div>
               </div>
               <div className="m-[10px] flex items-center gap-[8px] rounded-[10px] border border-[#171717] bg-[#0B0B0B] px-[10px]">
                 <Search className="h-[15px] w-[15px] text-[#777777]" />
                 <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="Buscar arquivo" className="h-[38px] min-w-0 flex-1 bg-transparent text-[13px] text-white outline-none" />
               </div>
-              <div className="h-[calc(100vh-160px)] overflow-auto px-[6px] pb-[12px]">
+              <div
+                className="h-[calc(100vh-160px)] overflow-auto px-[6px] pb-[12px]"
+                onContextMenu={(event) => {
+                  if (event.defaultPrevented) return;
+                  event.preventDefault();
+                  setFileContextMenu({ kind: "empty", x: event.clientX, y: event.clientY, parentPath: "" });
+                }}
+              >
+                {fileInlineDraft && !fileInlineDraft.parentPath ? (
+                  <InlineFileDraft
+                    draft={fileInlineDraft}
+                    level={0}
+                    onChange={(value) => setFileInlineDraft((current) => current ? { ...current, value } : current)}
+                    onCommit={() => void commitInlineCreate()}
+                    onCancel={() => setFileInlineDraft(null)}
+                  />
+                ) : null}
                 {filteredTree.length ? filteredTree.map((node) => (
-                  <FileTreeNode key={node.path} node={node} activePath={selectedFile?.path || ""} onSelect={loadFile} />
+                  <FileTreeNode
+                    key={node.path}
+                    node={node}
+                    activePath={selectedFile?.path || ""}
+                    onSelect={loadFile}
+                    expandedPaths={expandedFilePaths}
+                    onToggle={(path) => setExpandedFilePaths((current) => {
+                      const next = new Set(current);
+                      if (next.has(path)) next.delete(path);
+                      else next.add(path);
+                      return next;
+                    })}
+                    onContextMenu={(event, contextNode) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setFileContextMenu({ kind: "node", x: event.clientX, y: event.clientY, node: contextNode });
+                    }}
+                    inlineDraft={fileInlineDraft}
+                    onInlineDraftChange={(value) => setFileInlineDraft((current) => current ? { ...current, value } : current)}
+                    onInlineDraftCommit={() => void commitInlineCreate()}
+                    onInlineDraftCancel={() => setFileInlineDraft(null)}
+                    renamingPath={renamingFilePath}
+                    renamingValue={renamingValue}
+                    onRenamingChange={setRenamingValue}
+                    onRenameCommit={(contextNode) => void commitRenameFile(contextNode)}
+                    onRenameCancel={() => setRenamingFilePath(null)}
+                    draggedPath={draggedFilePath}
+                    onDragStart={(contextNode) => setDraggedFilePath(contextNode.path)}
+                    onDragEnd={() => setDraggedFilePath(null)}
+                    onDropOnDirectory={(contextNode) => {
+                      if (draggedFilePath) void moveFileNode(draggedFilePath, contextNode.path);
+                      setDraggedFilePath(null);
+                    }}
+                  />
                 )) : (
                   <div className="m-[8px] rounded-[12px] border border-[#151515] bg-[#0B0B0B] p-[14px] text-[13px] text-[#777777]">
                     {filesBusy ? "Espelhando arquivos do GitHub..." : "Aguardando arquivos do repositorio."}
@@ -1813,67 +3264,330 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
                 title="Redimensionar Explorer"
               />
             </aside>
-            <div className="flex min-h-0 min-w-0 flex-col bg-[#050505]">
-              <div className="flex h-[48px] items-center justify-between gap-[12px] border-b border-[#171717] bg-[#080808] px-[12px]">
-                <div className="min-w-0">
-                  <p className="min-w-0 truncate font-mono text-[13px] text-[#DADADA]">{selectedFile?.path || "Selecione um arquivo"}</p>
-                  {selectedFile ? (
-                    <p className="mt-[2px] text-[10px] font-bold uppercase tracking-[0.12em] text-[#555555]">
-                      {highlightedLanguage}
-                    </p>
-                  ) : null}
-                </div>
-                <button disabled={!selectedFile || !fileDirty} onClick={saveFile} className="inline-flex h-[32px] items-center gap-[8px] rounded-[9px] bg-[#0F62FE] px-[11px] text-[12px] font-semibold text-white disabled:opacity-45">
-                  <Save className="h-[15px] w-[15px]" /> Salvar
-                </button>
-              </div>
-              <div className="grid min-h-0 flex-1 grid-cols-[48px_minmax(0,1fr)]">
-                <div
-                  ref={lineNumbersRef}
-                  className="select-none overflow-hidden border-r border-[#111111] bg-[#070707] py-[12px] text-right font-mono text-[13px] leading-[22.1px] text-[#444444]"
-                >
-                  {Array.from({ length: lineCount }).map((_, index) => (
-                    <div key={index} className="h-[22.1px] pr-[10px] leading-[22.1px]">{index + 1}</div>
-                  ))}
-                </div>
-                <div className="relative min-h-0 min-w-0 bg-[#050505]">
-                  <div
-                    ref={highlightedCodeRef}
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 overflow-hidden p-[12px] font-mono text-[13px] leading-[22.1px]"
-                  >
-                    <pre className="m-0 min-w-max whitespace-pre">
-                      {highlightedLines.map((line, index) => (
-                        <div key={index} className="h-[22.1px] leading-[22.1px]">
-                          {line ? renderHighlightedLine(line, highlightedLanguage) : " "}
-                        </div>
-                      ))}
-                    </pre>
+            <div className="flex min-h-0 min-w-0 bg-[#050505]">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <div className="flex h-[48px] items-center justify-between gap-[12px] border-b border-[#171717] bg-[#080808] px-[12px]">
+                  <div className="min-w-0">
+                    <p className="min-w-0 truncate font-mono text-[13px] text-[#DADADA]">{selectedFile?.path || "Selecione um arquivo"}</p>
+                    {selectedFile ? (
+                      <p className="mt-[2px] text-[10px] font-bold uppercase tracking-[0.12em] text-[#555555]">
+                        {highlightedLanguage}
+                      </p>
+                    ) : null}
                   </div>
-                  <textarea
-                    value={fileContent}
-                    onChange={(event) => {
-                      setFileContent(event.target.value);
-                      setFileDirty(true);
-                    }}
-                    onScroll={(event) => {
-                      if (lineNumbersRef.current) {
-                        lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
-                      }
-                      if (highlightedCodeRef.current) {
-                        highlightedCodeRef.current.scrollTop = event.currentTarget.scrollTop;
-                        highlightedCodeRef.current.scrollLeft = event.currentTarget.scrollLeft;
-                      }
-                    }}
-                    spellCheck={false}
-                    wrap="off"
-                    className="absolute inset-0 h-full min-h-0 w-full resize-none overflow-auto border-0 bg-transparent p-[12px] font-mono text-[13px] leading-[22.1px] text-transparent caret-[#E8E8E8] outline-none selection:bg-[rgba(15,98,254,0.35)] placeholder:text-[#5A5A5A]"
-                    placeholder="O conteudo real aparece quando um arquivo sincronizado for selecionado."
-                  />
+                  <div className="flex shrink-0 items-center gap-[8px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFlowChatOpen((current) => {
+                          const next = !current;
+                          if (next) void loadFlowChatHistory();
+                          return next;
+                        });
+                      }}
+                      className={`inline-flex h-[32px] items-center gap-[8px] rounded-[9px] px-[11px] text-[12px] font-semibold transition-colors ${
+                        flowChatOpen
+                          ? "border border-[#2A2A2A] bg-[#171717] text-white"
+                          : "border border-[#242424] bg-[#E6E6E6] text-[#050505] hover:bg-white"
+                      }`}
+                    >
+                      <Sparkles className="h-[15px] w-[15px]" /> Falar com Flow
+                    </button>
+                    <button disabled={!selectedFile || !fileDirty} onClick={saveFile} className="inline-flex h-[32px] items-center gap-[8px] rounded-[9px] bg-[#0F62FE] px-[11px] text-[12px] font-semibold text-white disabled:opacity-45">
+                      <Save className="h-[15px] w-[15px]" /> Salvar
+                    </button>
+                  </div>
+                </div>
+                <div className="grid min-h-0 flex-1 grid-cols-[48px_minmax(0,1fr)]">
+                  <div
+                    ref={lineNumbersRef}
+                    className="select-none overflow-hidden border-r border-[#111111] bg-[#070707] py-[12px] text-right font-mono text-[13px] leading-[22.1px] text-[#444444]"
+                  >
+                    <div style={{ height: editorVirtualHeight }}>
+                      <div style={{ transform: `translateY(${visibleLineStart * FILE_EDITOR_LINE_HEIGHT}px)` }}>
+                        {Array.from({ length: visibleLineEnd - visibleLineStart }).map((_, index) => {
+                          const lineNumber = visibleLineStart + index + 1;
+                          return (
+                            <div key={lineNumber} className="h-[22.1px] pr-[10px] leading-[22.1px]">
+                              {lineNumber}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="relative min-h-0 min-w-0 bg-[#050505]">
+                    <div
+                      ref={highlightedCodeRef}
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 overflow-hidden p-[12px] font-mono text-[13px] leading-[22.1px]"
+                    >
+                      <pre className="m-0 min-w-max whitespace-pre" style={{ height: editorVirtualHeight }}>
+                        <div style={{ transform: `translateY(${visibleLineStart * FILE_EDITOR_LINE_HEIGHT}px)` }}>
+                          {visibleLines.map((line, index) => (
+                          <div key={visibleLineStart + index} className="h-[22.1px] leading-[22.1px]">
+                            {line ? renderHighlightedLine(line, highlightedLanguage) : " "}
+                          </div>
+                          ))}
+                        </div>
+                      </pre>
+                    </div>
+                    <textarea
+                      ref={fileEditorTextareaRef}
+                      value={fileContent}
+                      onChange={(event) => {
+                        setFileContent(event.target.value);
+                        setFileDirty(true);
+                      }}
+                      onScroll={(event) => {
+                        if (lineNumbersRef.current) {
+                          lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
+                        }
+                        if (highlightedCodeRef.current) {
+                          highlightedCodeRef.current.scrollTop = event.currentTarget.scrollTop;
+                          highlightedCodeRef.current.scrollLeft = event.currentTarget.scrollLeft;
+                        }
+                        setFileEditorViewport({
+                          scrollTop: event.currentTarget.scrollTop,
+                          scrollLeft: event.currentTarget.scrollLeft,
+                          height: event.currentTarget.clientHeight || fileEditorViewport.height,
+                        });
+                      }}
+                      spellCheck={false}
+                      wrap="off"
+                      className="absolute inset-0 h-full min-h-0 w-full resize-none overflow-auto border-0 bg-transparent p-[12px] font-mono text-[13px] leading-[22.1px] text-transparent caret-[#E8E8E8] outline-none selection:bg-[rgba(15,98,254,0.35)] placeholder:text-[#5A5A5A]"
+                      placeholder="O conteudo real aparece quando um arquivo sincronizado for selecionado."
+                    />
+                  </div>
                 </div>
               </div>
+              {flowChatOpen ? (
+                <aside
+                  className="relative hidden min-h-0 shrink-0 flex-col border-l border-[#171717] bg-[#080808] md:flex"
+                  style={{ width: flowChatWidth }}
+                >
+                  <button
+                    type="button"
+                    onPointerDown={startFlowChatResize}
+                    className="absolute left-[-4px] top-0 z-20 h-full w-[8px] cursor-col-resize border-x border-transparent transition-colors hover:border-[rgba(255,255,255,0.18)] hover:bg-[rgba(255,255,255,0.08)]"
+                    aria-label="Redimensionar chat Flow"
+                    title="Redimensionar chat Flow"
+                  />
+                  <div className="flex h-[48px] items-center justify-between gap-[10px] border-b border-[#171717] px-[12px]">
+                    <div className="flex min-w-0 items-center gap-[9px]">
+                      <span className="flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[9px] border border-[#242424] bg-[#111111] text-[#E8E8E8]">
+                        <Bot className="h-[15px] w-[15px]" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-semibold text-white">Flow</p>
+                        <p className="truncate text-[10px] text-[#686868]">Assistente do projeto</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-[4px]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFlowChatHistoryOpen((current) => !current);
+                          void loadFlowChatHistory();
+                        }}
+                        className={`flex h-[30px] w-[30px] items-center justify-center rounded-[9px] transition-colors ${
+                          flowChatHistoryOpen ? "bg-[#151515] text-white" : "text-[#9B9B9B] hover:bg-[#111111] hover:text-white"
+                        }`}
+                        aria-label="Historico do Flow"
+                        title="Historico do Flow"
+                      >
+                        <History className="h-[15px] w-[15px]" />
+                      </button>
+                      <button type="button" onClick={() => setFlowChatOpen(false)} className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] text-[#9B9B9B] hover:bg-[#111111] hover:text-white" aria-label="Fechar Flow">
+                        <X className="h-[15px] w-[15px]" />
+                      </button>
+                    </div>
+                  </div>
+                  {flowChatHistoryOpen ? (
+                    <div className="absolute right-[10px] top-[54px] z-40 w-[min(330px,calc(100%-20px))] overflow-hidden rounded-[16px] border border-[#242424] bg-[#090909] shadow-[0_22px_70px_rgba(0,0,0,0.55)]">
+                      <div className="flex items-center justify-between border-b border-[#171717] px-[12px] py-[10px]">
+                        <div>
+                          <p className="text-[12px] font-semibold text-white">Historico</p>
+                          <p className="text-[10px] text-[#686868]">Conversas desta VPS</p>
+                        </div>
+                        <button type="button" onClick={startNewFlowChat} className="rounded-[8px] border border-[#242424] bg-[#111111] px-[9px] py-[6px] text-[11px] font-semibold text-[#DADADA] hover:bg-[#171717] hover:text-white">
+                          Novo chat
+                        </button>
+                      </div>
+                      <div className="max-h-[320px] overflow-auto p-[6px] [scrollbar-color:#2A2A2A_#090909] [scrollbar-width:thin]">
+                        {flowChatSessions.length ? flowChatSessions.map((chat) => (
+                          <button
+                            key={chat.id}
+                            type="button"
+                            onClick={() => void loadFlowChatHistory(chat.id).then(() => setFlowChatHistoryOpen(false))}
+                            className={`flex w-full flex-col rounded-[11px] px-[10px] py-[9px] text-left transition-colors ${
+                              chat.id === flowChatSessionId ? "bg-[#171717]" : "hover:bg-[#111111]"
+                            }`}
+                          >
+                            <span className="truncate text-[12px] font-semibold text-[#E8E8E8]">{chat.title || "Novo chat"}</span>
+                            <span className="mt-[2px] text-[10px] text-[#666666]">{formatDate(chat.updated_at || chat.created_at || "")}</span>
+                          </button>
+                        )) : (
+                          <div className="px-[10px] py-[18px] text-center text-[12px] text-[#777777]">
+                            Nenhuma conversa salva ainda.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div ref={flowChatScrollRef} className="min-h-0 flex-1 space-y-[12px] overflow-auto p-[12px] [scrollbar-color:#2A2A2A_#080808] [scrollbar-width:thin]">
+                    {flowChatMessages.map((message) => (
+                      <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[92%] rounded-[18px] border px-[13px] py-[11px] text-[13px] leading-[1.55] ${
+                          message.role === "user"
+                            ? "border-[#1E3D75] bg-[#0F62FE] text-white"
+                            : "border-[#1C1C1C] bg-[#101010] text-[#DADADA]"
+                        }`}>
+                          <FlowChatMessageContent
+                            content={message.content}
+                            onCopy={(value) => {
+                              navigator.clipboard?.writeText(value).then(
+                                () => notify("success", "Codigo copiado.", "Flow"),
+                                () => notify("error", "Nao consegui copiar o codigo.", "Flow"),
+                              );
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                    {flowChatBusy ? (
+                      <div className="flex items-center gap-[8px] text-[12px] text-[#777777]">
+                        <Loader2 className="h-[14px] w-[14px] animate-spin" />
+                        Flow analisando contexto...
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="border-t border-[#171717] p-[10px]">
+                    <div className="overflow-hidden rounded-[18px] border border-[#202020] bg-[#101010]">
+                      {flowChatQuota.blocked ? (
+                        <div className="border-b border-[#2A1D1D] bg-[#170B0B] px-[12px] py-[10px] text-[12px] leading-[1.45] text-[#FFB4B4]">
+                          Voce atingiu o limite diario do Flow. A IA volta em {flowQuotaResetLabel}.
+                        </div>
+                      ) : null}
+                      <div className="p-[9px]">
+                      <input
+                        ref={flowChatImageInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => addFlowChatImages(event.target.files)}
+                      />
+                      <textarea
+                        value={flowChatInput}
+                        onChange={(event) => setFlowChatInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void sendFlowChatMessage();
+                          }
+                        }}
+                        placeholder="Pergunte, peça review ou uma alteração no arquivo..."
+                        disabled={flowChatQuota.blocked}
+                        className="max-h-[160px] min-h-[76px] w-full resize-none bg-transparent text-[13px] leading-[1.5] text-white outline-none placeholder:text-[#5F5F5F] disabled:cursor-not-allowed disabled:opacity-55"
+                      />
+                      {flowChatAttachments.length ? (
+                        <div className="mt-[8px] flex flex-wrap gap-[6px]">
+                          {flowChatAttachments.map((attachment) => (
+                            <span key={attachment.id} className="inline-flex h-[26px] max-w-full items-center gap-[6px] rounded-[8px] border border-[#242424] bg-[#080808] px-[8px] text-[11px] text-[#CFCFCF]">
+                              <ImageIcon className="h-[13px] w-[13px] text-[#9BE7AC]" />
+                              <span className="max-w-[160px] truncate">{attachment.name}</span>
+                              <button type="button" onClick={() => setFlowChatAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="text-[#777777] hover:text-white" aria-label="Remover imagem">
+                                <X className="h-[12px] w-[12px]" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="mt-[8px] flex items-center justify-between gap-[10px]">
+                        <div className="flex items-center gap-[6px]">
+                          <button type="button" onClick={() => flowChatImageInputRef.current?.click()} className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] text-[#9B9B9B] hover:bg-[#191919] hover:text-white" title="Adicionar imagem">
+                            <ImageIcon className="h-[15px] w-[15px]" />
+                          </button>
+                          <button type="button" onClick={() => notify("info", "Anexos preparados para a proxima etapa do agente.", "Flow")} className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] text-[#9B9B9B] hover:bg-[#191919] hover:text-white" title="Anexar contexto">
+                            <Paperclip className="h-[15px] w-[15px]" />
+                          </button>
+                          <span className="hidden items-center gap-[5px] text-[11px] text-[#686868] xl:inline-flex">
+                            <MessageSquare className="h-[13px] w-[13px]" />
+                            Projeto
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-[9px]">
+                          <div
+                            className="relative h-[28px] w-[28px] rounded-full"
+                            title={`${flowChatQuota.used.toLocaleString("pt-BR")}/${flowChatQuota.limit.toLocaleString("pt-BR")} tokens usados. Renova em ${flowQuotaResetLabel}. ${flowChatQuota.requestCount}/${flowChatQuota.requestLimit} envios.`}
+                            style={{ background: `conic-gradient(#0F62FE ${flowQuotaPercent}%, #242424 ${flowQuotaPercent}% 100%)` }}
+                          >
+                            <div className="absolute inset-[3px] rounded-full bg-[#101010]" />
+                            <div className="absolute inset-0 flex items-center justify-center text-[8px] font-black text-[#CFCFCF]">
+                              {Math.round(flowQuotaPercent)}
+                            </div>
+                          </div>
+                          <button type="button" disabled={(!flowChatInput.trim() && !flowChatAttachments.length) || flowChatBusy || flowChatQuota.blocked} onClick={() => void sendFlowChatMessage()} className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[#E8E8E8] text-[#050505] transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-45" aria-label="Enviar mensagem">
+                            {flowChatBusy ? <Loader2 className="h-[15px] w-[15px] animate-spin" /> : <Send className="h-[15px] w-[15px]" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  </div>
+                </aside>
+              ) : null}
             </div>
           </section>
+        ) : null}
+
+        {fileContextMenu ? (
+          <div
+            ref={fileContextMenuRef}
+            className="fixed z-[80] w-[196px] overflow-hidden rounded-[14px] border border-[#242424] bg-[#0B0B0B] p-[6px] shadow-[0_18px_60px_rgba(0,0,0,0.48)]"
+            style={{ left: fileContextMenu.x, top: fileContextMenu.y }}
+          >
+            {fileContextMenu.kind === "empty" ? (
+              <>
+                <button onClick={() => startCreateFile(fileContextMenu.parentPath, "file")} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                  <FilePlus2 className="h-[14px] w-[14px]" /> New File
+                </button>
+                <button onClick={() => startCreateFile(fileContextMenu.parentPath, "directory")} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                  <FolderPlus className="h-[14px] w-[14px]" /> New Folder
+                </button>
+                <div className="my-[5px] h-px bg-[#171717]" />
+                <button onClick={() => copyExplorerPath(fileContextMenu.parentPath)} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                  <Copy className="h-[14px] w-[14px]" /> Copy Path
+                </button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => startRenameFile(fileContextMenu.node)} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                  <Pencil className="h-[14px] w-[14px]" /> Rename
+                </button>
+                {fileContextMenu.node.type === "file" ? (
+                  <button onClick={() => copyFileNode(fileContextMenu.node)} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                    <Copy className="h-[14px] w-[14px]" /> Copy
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={() => startCreateFile(fileContextMenu.node.path, "file")} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                      <FilePlus2 className="h-[14px] w-[14px]" /> Add File
+                    </button>
+                    <button onClick={() => startCreateFile(fileContextMenu.node.path, "directory")} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#E8E8E8] hover:bg-[#191919]">
+                      <FolderPlus className="h-[14px] w-[14px]" /> Add Folder
+                    </button>
+                  </>
+                )}
+                <div className="my-[5px] h-px bg-[#171717]" />
+                <button onClick={() => void deleteFileNode(fileContextMenu.node)} className="flex h-[36px] w-full items-center gap-[10px] rounded-[9px] px-[10px] text-left text-[13px] font-semibold text-[#FF7373] hover:bg-[#191919]">
+                  <Trash2 className="h-[14px] w-[14px]" /> Delete
+                </button>
+              </>
+            )}
+          </div>
         ) : null}
 
         {tab === "deploys" ? (
@@ -2034,6 +3748,26 @@ export function VpsWorkspace({ initialSnapshot }: VpsWorkspaceProps) {
                     Agora nao
                   </button>
                 ) : null}
+                {githubReconnectSsoUrl ? (
+                  <a
+                    href={githubReconnectSsoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-[42px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#0D0D0D] px-[14px] text-[13px] font-semibold text-[#DADADA] hover:bg-[#121212] hover:text-white"
+                  >
+                    Autorizar SSO
+                  </a>
+                ) : null}
+                {githubReconnectInstallUrl ? (
+                  <a
+                    href={githubReconnectInstallUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-[42px] items-center justify-center rounded-[12px] border border-[#202020] bg-[#0D0D0D] px-[14px] text-[13px] font-semibold text-[#DADADA] hover:bg-[#121212] hover:text-white"
+                  >
+                    Instalar App
+                  </a>
+                ) : null}
                 <button
                   type="button"
                   onClick={openGithubReconnectPopup}
@@ -2179,23 +3913,85 @@ function FileTreeNode({
   node,
   activePath,
   onSelect,
+  expandedPaths,
+  onToggle,
+  onContextMenu,
+  inlineDraft,
+  onInlineDraftChange,
+  onInlineDraftCommit,
+  onInlineDraftCancel,
+  renamingPath,
+  renamingValue,
+  onRenamingChange,
+  onRenameCommit,
+  onRenameCancel,
+  draggedPath,
+  onDragStart,
+  onDragEnd,
+  onDropOnDirectory,
   level = 0,
 }: {
   node: VpsFileNode;
   activePath: string;
   onSelect: (node: VpsFileNode) => void;
+  expandedPaths: Set<string>;
+  onToggle: (path: string) => void;
+  onContextMenu: (event: ReactMouseEvent, node: VpsFileNode) => void;
+  inlineDraft: FileInlineDraft;
+  onInlineDraftChange: (value: string) => void;
+  onInlineDraftCommit: () => void;
+  onInlineDraftCancel: () => void;
+  renamingPath: string | null;
+  renamingValue: string;
+  onRenamingChange: (value: string) => void;
+  onRenameCommit: (node: VpsFileNode) => void;
+  onRenameCancel: () => void;
+  draggedPath: string | null;
+  onDragStart: (node: VpsFileNode) => void;
+  onDragEnd: () => void;
+  onDropOnDirectory: (node: VpsFileNode) => void;
   level?: number;
 }) {
-  const [open, setOpen] = useState(level < 1);
   const isDirectory = node.type === "directory";
-  const { Icon, className: iconClassName } = fileIconStyle(node);
+  const open = isDirectory && expandedPaths.has(node.path);
+  const isRenaming = renamingPath === node.path;
+  const isDropTarget = isDirectory && draggedPath && draggedPath !== node.path && !node.path.startsWith(`${draggedPath}/`);
+  const previewName = isRenaming ? renamingValue.trim() || node.name : node.name;
+  const previewPath = isRenaming ? joinFilePath(parentFilePath(node.path), previewName) : node.path;
+  const { Icon, className: iconClassName } = fileIconStyle({
+    ...node,
+    name: previewName,
+    path: previewPath,
+    language: isRenaming && node.type === "file" ? languageFromFilePath(previewPath) : node.language,
+  });
   return (
     <div>
       <button
         type="button"
-        onClick={() => isDirectory ? setOpen((current) => !current) : onSelect(node)}
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", node.path);
+          onDragStart(node);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={(event) => {
+          if (!isDropTarget) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        }}
+        onDrop={(event) => {
+          if (!isDropTarget) return;
+          event.preventDefault();
+          onDropOnDirectory(node);
+        }}
+        onContextMenu={(event) => {
+          event.stopPropagation();
+          onContextMenu(event, node);
+        }}
+        onClick={() => isDirectory ? onToggle(node.path) : onSelect(node)}
         className={`flex h-[32px] w-full items-center gap-[8px] rounded-[10px] px-[8px] text-left text-[13px] transition-colors ${
-          activePath === node.path ? "bg-[#0F62FE] text-white" : "text-[#BDBDBD] hover:bg-[#111111] hover:text-white"
+          activePath === node.path ? "bg-[#0F62FE] text-white" : isDropTarget ? "bg-[rgba(15,98,254,0.13)] text-white" : "text-[#BDBDBD] hover:bg-[#111111] hover:text-white"
         }`}
         style={{ paddingLeft: 8 + level * 12 }}
       >
@@ -2210,15 +4006,105 @@ function FileTreeNode({
             <Icon className={`h-[15px] w-[15px] ${iconClassName}`} />
           </>
         )}
-        <span className="min-w-0 truncate">{node.name}</span>
+        {isRenaming ? (
+          <input
+            autoFocus
+            value={renamingValue}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => onRenamingChange(event.target.value)}
+            onBlur={() => onRenameCommit(node)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onRenameCommit(node);
+              if (event.key === "Escape") onRenameCancel();
+            }}
+            className="h-[24px] min-w-0 flex-1 rounded-[6px] border border-[#303030] bg-[#050505] px-[7px] text-[12px] text-white outline-none"
+          />
+        ) : (
+          <span className="min-w-0 truncate">{node.name}</span>
+        )}
       </button>
       {isDirectory && open ? (
         <div>
+          {inlineDraft && inlineDraft.parentPath === node.path ? (
+            <InlineFileDraft
+              draft={inlineDraft}
+              level={level + 1}
+              onChange={onInlineDraftChange}
+              onCommit={onInlineDraftCommit}
+              onCancel={onInlineDraftCancel}
+            />
+          ) : null}
           {(node.children || []).map((child) => (
-            <FileTreeNode key={child.path} node={child} activePath={activePath} onSelect={onSelect} level={level + 1} />
+            <FileTreeNode
+              key={child.path}
+              node={child}
+              activePath={activePath}
+              onSelect={onSelect}
+              expandedPaths={expandedPaths}
+              onToggle={onToggle}
+              onContextMenu={onContextMenu}
+              inlineDraft={inlineDraft}
+              onInlineDraftChange={onInlineDraftChange}
+              onInlineDraftCommit={onInlineDraftCommit}
+              onInlineDraftCancel={onInlineDraftCancel}
+              renamingPath={renamingPath}
+              renamingValue={renamingValue}
+              onRenamingChange={onRenamingChange}
+              onRenameCommit={onRenameCommit}
+              onRenameCancel={onRenameCancel}
+              draggedPath={draggedPath}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              onDropOnDirectory={onDropOnDirectory}
+              level={level + 1}
+            />
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function InlineFileDraft({
+  draft,
+  level,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  draft: NonNullable<FileInlineDraft>;
+  level: number;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  const draftName = draft.value.trim() || (draft.type === "directory" ? "nova-pasta" : "arquivo");
+  const draftPath = joinFilePath(draft.parentPath, draftName);
+  const { Icon, className: iconClassName } = fileIconStyle({
+    name: draftName,
+    path: draftPath,
+    type: draft.type,
+    language: draft.type === "file" ? languageFromFilePath(draftPath) : null,
+  });
+  return (
+    <div
+      className="flex h-[32px] w-full items-center gap-[8px] rounded-[10px] px-[8px] text-left text-[13px] text-[#BDBDBD]"
+      style={{ paddingLeft: 8 + level * 12 }}
+    >
+      <span className="w-[13px]" />
+      <Icon className={`h-[15px] w-[15px] ${iconClassName}`} />
+      <input
+        autoFocus
+        value={draft.value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={() => draft.value.trim() ? onCommit() : onCancel()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") onCommit();
+          if (event.key === "Escape") onCancel();
+        }}
+        placeholder={draft.type === "directory" ? "nova-pasta" : "arquivo.ts"}
+        className="h-[24px] min-w-0 flex-1 rounded-[6px] border border-[#303030] bg-[#050505] px-[7px] text-[12px] text-white outline-none placeholder:text-[#555555]"
+      />
     </div>
   );
 }

@@ -19,6 +19,17 @@ const GITHUB_STATE_COOKIE = "flowdesk_hosting_github_state";
 const GITHUB_TOKEN_COOKIE = "flowdesk_hosting_github_token";
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const HANDOFF_TTL_MS = 2 * 60 * 1000;
+const GITHUB_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+const HOSTING_GITHUB_OAUTH_SCOPE = "read:user user:email read:org repo workflow admin:repo_hook";
+
+export type HostingGitHubTokenBundle = {
+  accessToken: string;
+  refreshToken?: string | null;
+  accessTokenExpiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  scope?: string | null;
+  tokenType?: string | null;
+};
 
 type GitHubUser = {
   id: number;
@@ -46,6 +57,12 @@ type GitHubRepo = {
   updated_at?: string | null;
   pushed_at?: string | null;
   default_branch?: string | null;
+  permissions?: {
+    admin?: boolean;
+    maintain?: boolean;
+    push?: boolean;
+    pull?: boolean;
+  } | null;
   owner: {
     login: string;
   };
@@ -68,6 +85,43 @@ type GitHubContentResponse = {
   content?: string;
   name?: string;
   path?: string;
+  sha?: string;
+};
+
+type GitHubCommitFileResponse = {
+  content?: {
+    name?: string;
+    path?: string;
+    sha?: string;
+    html_url?: string;
+  } | null;
+  commit?: {
+    sha?: string;
+    html_url?: string;
+  } | null;
+};
+
+type GitHubRefResponse = {
+  ref?: string;
+  object?: {
+    sha?: string;
+    type?: string;
+  };
+};
+
+type GitHubPullRequestResponse = {
+  number?: number;
+  html_url?: string;
+  state?: string;
+};
+
+type GitHubInstallationResponse = {
+  id?: number;
+};
+
+type GitHubInstallationTokenResponse = {
+  token?: string;
+  expires_at?: string;
 };
 
 export function isHostingGitHubConfigured() {
@@ -213,41 +267,122 @@ function decryptHostingGitHubTokenForUser(userId: number, value: string | null |
 export async function storeHostingGitHubTokenForUser(input: {
   userId: number;
   token: string;
+  refreshToken?: string | null;
+  accessTokenExpiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  scope?: string | null;
+  tokenType?: string | null;
   login?: string | null;
   accountType?: string | null;
   avatarUrl?: string | null;
 }) {
   const encryptedToken = encryptHostingGitHubTokenForUser(input.userId, input.token);
   if (!encryptedToken) throw new Error("Nao foi possivel proteger o token do GitHub.");
+  const encryptedRefreshToken = input.refreshToken
+    ? encryptHostingGitHubTokenForUser(input.userId, input.refreshToken)
+    : null;
+  const payload: Record<string, unknown> = {
+    user_id: input.userId,
+    encrypted_token: encryptedToken,
+    token_status: "active",
+    last_validated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (input.login !== undefined) payload.github_login = input.login || null;
+  if (input.accountType !== undefined) payload.github_account_type = input.accountType || null;
+  if (input.avatarUrl !== undefined) payload.github_avatar_url = input.avatarUrl || null;
+  if (input.refreshToken !== undefined) payload.encrypted_refresh_token = encryptedRefreshToken;
+  if (input.accessTokenExpiresAt !== undefined) payload.access_token_expires_at = input.accessTokenExpiresAt || null;
+  if (input.refreshTokenExpiresAt !== undefined) payload.refresh_token_expires_at = input.refreshTokenExpiresAt || null;
+  if (input.scope !== undefined) payload.scopes = input.scope || null;
+  if (input.tokenType !== undefined) payload.token_type = input.tokenType || null;
+  if (input.refreshToken !== undefined) payload.refreshed_at = new Date().toISOString();
 
   await getSupabaseAdminClientOrThrow()
     .from("hosting_github_connections")
-    .upsert(
-      {
-        user_id: input.userId,
-        github_login: input.login || null,
-        github_account_type: input.accountType || null,
-        github_avatar_url: input.avatarUrl || null,
-        encrypted_token: encryptedToken,
-        token_status: "active",
-        last_validated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" },
-    );
+    .upsert(payload, { onConflict: "user_id" });
+}
+
+async function refreshHostingGitHubStoredToken(input: {
+  userId: number;
+  refreshToken: string;
+}) {
+  const response = await fetch(GITHUB_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: process.env.GITHUB_CLIENT_ID?.trim(),
+      client_secret: process.env.GITHUB_CLIENT_SECRET?.trim(),
+      grant_type: "refresh_token",
+      refresh_token: input.refreshToken,
+    }),
+  });
+  const payload = await response.json() as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    scope?: string;
+    token_type?: string;
+    error?: string;
+    error_description?: string;
+  };
+  if (!response.ok || !payload.access_token) {
+    throw new Error(payload.error_description || payload.error || "Falha ao renovar GitHub.");
+  }
+  const now = Date.now();
+  const bundle: HostingGitHubTokenBundle = {
+    accessToken: payload.access_token,
+    refreshToken: payload.refresh_token || input.refreshToken,
+    accessTokenExpiresAt: typeof payload.expires_in === "number"
+      ? new Date(now + payload.expires_in * 1000).toISOString()
+      : null,
+    refreshTokenExpiresAt: typeof payload.refresh_token_expires_in === "number"
+      ? new Date(now + payload.refresh_token_expires_in * 1000).toISOString()
+      : null,
+    scope: payload.scope || null,
+    tokenType: payload.token_type || null,
+  };
+  await storeHostingGitHubTokenForUser({
+    userId: input.userId,
+    token: bundle.accessToken,
+    refreshToken: bundle.refreshToken,
+    accessTokenExpiresAt: bundle.accessTokenExpiresAt,
+    refreshTokenExpiresAt: bundle.refreshTokenExpiresAt,
+    scope: bundle.scope,
+    tokenType: bundle.tokenType,
+  });
+  return bundle.accessToken;
 }
 
 export async function readHostingGitHubStoredToken(userId: number) {
   try {
     const { data } = await getSupabaseAdminClientOrThrow()
       .from("hosting_github_connections")
-      .select("encrypted_token, token_status")
+      .select("encrypted_token, encrypted_refresh_token, token_status, access_token_expires_at, refresh_token_expires_at")
       .eq("user_id", userId)
-      .eq("token_status", "active")
-      .maybeSingle<{ encrypted_token: string | null; token_status: string | null }>();
+      .maybeSingle<{
+        encrypted_token: string | null;
+        encrypted_refresh_token: string | null;
+        token_status: string | null;
+        access_token_expires_at: string | null;
+        refresh_token_expires_at: string | null;
+      }>();
 
     if (!data?.encrypted_token) return null;
-    return decryptHostingGitHubTokenForUser(userId, data.encrypted_token);
+    if (data.token_status === "revoked") return null;
+    const token = decryptHostingGitHubTokenForUser(userId, data.encrypted_token);
+    if (!token) return null;
+    const expiresAtMs = data.access_token_expires_at ? Date.parse(data.access_token_expires_at) : Number.NaN;
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs - GITHUB_TOKEN_REFRESH_SKEW_MS > Date.now()) return token;
+    const refreshToken = decryptHostingGitHubTokenForUser(userId, data.encrypted_refresh_token);
+    if (!refreshToken) return token;
+    const refreshExpiresAtMs = data.refresh_token_expires_at ? Date.parse(data.refresh_token_expires_at) : Number.NaN;
+    if (Number.isFinite(refreshExpiresAtMs) && refreshExpiresAtMs <= Date.now()) return token;
+    return await refreshHostingGitHubStoredToken({ userId, refreshToken });
   } catch {
     return null;
   }
@@ -288,9 +423,14 @@ export async function hasHostingGitHubTokenCookie() {
 }
 
 export function createHostingGitHubHandoffToken(token: string) {
+  return createHostingGitHubHandoffTokenBundle({ accessToken: token });
+}
+
+export function createHostingGitHubHandoffTokenBundle(bundle: HostingGitHubTokenBundle) {
   return encryptFlowSecureValue(
     JSON.stringify({
-      token,
+      token: bundle.accessToken,
+      bundle,
       exp: Date.now() + HANDOFF_TTL_MS,
     }),
     {
@@ -301,6 +441,11 @@ export function createHostingGitHubHandoffToken(token: string) {
 }
 
 export function consumeHostingGitHubHandoffToken(value: unknown) {
+  const bundle = consumeHostingGitHubHandoffTokenBundle(value);
+  return bundle?.accessToken || null;
+}
+
+export function consumeHostingGitHubHandoffTokenBundle(value: unknown): HostingGitHubTokenBundle | null {
   if (typeof value !== "string" || !value.trim()) return null;
 
   const decrypted = decryptFlowSecureValue(value, {
@@ -314,11 +459,27 @@ export function consumeHostingGitHubHandoffToken(value: unknown) {
   try {
     const parsed = JSON.parse(decrypted) as {
       token?: unknown;
+      bundle?: unknown;
       exp?: unknown;
     };
-    if (typeof parsed.token !== "string" || !parsed.token.trim()) return null;
     if (typeof parsed.exp !== "number" || parsed.exp < Date.now()) return null;
-    return parsed.token;
+    const bundle = parsed.bundle && typeof parsed.bundle === "object"
+      ? parsed.bundle as Partial<HostingGitHubTokenBundle>
+      : null;
+    const accessToken = typeof bundle?.accessToken === "string" && bundle.accessToken.trim()
+      ? bundle.accessToken
+      : typeof parsed.token === "string" && parsed.token.trim()
+        ? parsed.token
+        : null;
+    if (!accessToken) return null;
+    return {
+      accessToken,
+      refreshToken: typeof bundle?.refreshToken === "string" ? bundle.refreshToken : null,
+      accessTokenExpiresAt: typeof bundle?.accessTokenExpiresAt === "string" ? bundle.accessTokenExpiresAt : null,
+      refreshTokenExpiresAt: typeof bundle?.refreshTokenExpiresAt === "string" ? bundle.refreshTokenExpiresAt : null,
+      scope: typeof bundle?.scope === "string" ? bundle.scope : null,
+      tokenType: typeof bundle?.tokenType === "string" ? bundle.tokenType : null,
+    };
   } catch {
     return null;
   }
@@ -328,9 +489,10 @@ export function buildHostingGitHubAuthorizeUrl(request: NextRequest, state: stri
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID?.trim() || "",
     redirect_uri: resolveHostingGitHubRedirectUri(request),
-    scope: "read:user repo read:org",
+    scope: HOSTING_GITHUB_OAUTH_SCOPE,
     state,
     allow_signup: "true",
+    prompt: "consent",
   });
 
   return `${GITHUB_AUTHORIZE_URL}?${params.toString()}`;
@@ -356,6 +518,11 @@ export async function exchangeHostingGitHubCode(input: {
 
   const payload = await response.json() as {
     access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    scope?: string;
+    token_type?: string;
     error?: string;
     error_description?: string;
   };
@@ -364,7 +531,71 @@ export async function exchangeHostingGitHubCode(input: {
     throw new Error(payload.error_description || payload.error || "Falha ao vincular o GitHub.");
   }
 
-  return payload.access_token;
+  const now = Date.now();
+  return {
+    accessToken: payload.access_token,
+    refreshToken: payload.refresh_token || null,
+    accessTokenExpiresAt: typeof payload.expires_in === "number"
+      ? new Date(now + payload.expires_in * 1000).toISOString()
+      : null,
+    refreshTokenExpiresAt: typeof payload.refresh_token_expires_in === "number"
+      ? new Date(now + payload.refresh_token_expires_in * 1000).toISOString()
+      : null,
+    scope: payload.scope || null,
+    tokenType: payload.token_type || null,
+  } satisfies HostingGitHubTokenBundle;
+}
+
+export class HostingGitHubApiError extends Error {
+  status: number;
+  githubMessage: string | null;
+  documentationUrl: string | null;
+  ssoUrl: string | null;
+  constructor(status: number, message?: string, details?: {
+    githubMessage?: string | null;
+    documentationUrl?: string | null;
+    ssoUrl?: string | null;
+  }) {
+    super(message || details?.githubMessage || `GitHub respondeu ${status}.`);
+    this.name = "HostingGitHubApiError";
+    this.status = status;
+    this.githubMessage = details?.githubMessage || null;
+    this.documentationUrl = details?.documentationUrl || null;
+    this.ssoUrl = details?.ssoUrl || null;
+  }
+}
+
+export function isPermanentHostingGitHubAuthError(error: unknown) {
+  return error instanceof HostingGitHubApiError && (error.status === 401 || error.status === 403);
+}
+
+function encodeBase64UrlJson(value: unknown) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function createHostingGitHubAppJwt() {
+  const appId = resolveHostingGitHubAppId();
+  const privateKey = resolveHostingGitHubAppPrivateKey();
+  if (!appId || !privateKey) return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = [
+    encodeBase64UrlJson({ alg: "RS256", typ: "JWT" }),
+    encodeBase64UrlJson({
+      iat: now - 60,
+      exp: now + 9 * 60,
+      iss: appId,
+    }),
+  ].join(".");
+
+  try {
+    const signer = crypto.createSign("RSA-SHA256");
+    signer.update(unsigned);
+    signer.end();
+    return `${unsigned}.${signer.sign(privateKey).toString("base64url")}`;
+  } catch {
+    return null;
+  }
 }
 
 async function githubFetch<TValue>(path: string, token: string) {
@@ -378,10 +609,126 @@ async function githubFetch<TValue>(path: string, token: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub respondeu ${response.status}.`);
+    throw await createHostingGitHubApiError(response);
   }
 
   return await response.json() as TValue;
+}
+
+async function createHostingGitHubApiError(response: Response) {
+  const ssoHeader = response.headers.get("x-github-sso");
+  const ssoUrl = ssoHeader?.match(/url=([^;]+)/i)?.[1] || null;
+  const payload = await response.json().catch(() => null) as {
+    message?: string;
+    documentation_url?: string;
+  } | null;
+  const githubMessage = typeof payload?.message === "string" ? payload.message : null;
+  return new HostingGitHubApiError(response.status, githubMessage || undefined, {
+    githubMessage,
+    documentationUrl: typeof payload?.documentation_url === "string" ? payload.documentation_url : null,
+    ssoUrl,
+  });
+}
+
+async function githubRequest<TValue>(input: {
+  token: string;
+  method: "GET" | "POST" | "PATCH" | "PUT";
+  path: string;
+  body?: unknown;
+}) {
+  const response = await fetch(`${GITHUB_API_URL}${input.path}`, {
+    method: input.method,
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${input.token}`,
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: input.body === undefined ? undefined : JSON.stringify(input.body),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await createHostingGitHubApiError(response);
+  }
+
+  return await response.json().catch(() => ({})) as TValue;
+}
+
+async function githubAppRequest<TValue>(input: {
+  jwt: string;
+  method: "GET" | "POST";
+  path: string;
+  body?: unknown;
+}) {
+  const response = await fetch(`${GITHUB_API_URL}${input.path}`, {
+    method: input.method,
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${input.jwt}`,
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: input.body === undefined ? undefined : JSON.stringify(input.body),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw await createHostingGitHubApiError(response);
+  }
+
+  return await response.json().catch(() => ({})) as TValue;
+}
+
+export async function readHostingGitHubInstallationTokenForRepository(input: {
+  owner: string;
+  repo: string;
+}) {
+  const jwt = createHostingGitHubAppJwt();
+  if (!jwt) return null;
+
+  try {
+    const installation = await githubAppRequest<GitHubInstallationResponse>({
+      jwt,
+      method: "GET",
+      path: `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/installation`,
+    });
+    if (!installation.id) return null;
+
+    const tokenPayload = await githubAppRequest<GitHubInstallationTokenResponse>({
+      jwt,
+      method: "POST",
+      path: `/app/installations/${installation.id}/access_tokens`,
+      body: {
+        permissions: {
+          contents: "write",
+          metadata: "read",
+          pull_requests: "write",
+          workflows: "write",
+          actions: "write",
+        },
+      },
+    }).catch(async (error) => {
+      if (error instanceof HostingGitHubApiError && error.status === 422) {
+        return githubAppRequest<GitHubInstallationTokenResponse>({
+          jwt,
+          method: "POST",
+          path: `/app/installations/${installation.id}/access_tokens`,
+        });
+      }
+      throw error;
+    });
+
+    return tokenPayload.token
+      ? {
+          token: tokenPayload.token,
+          installationId: installation.id,
+          expiresAt: tokenPayload.expires_at || null,
+        }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function mapUserToAccount(user: GitHubUser): HostingGitHubAccount {
@@ -427,6 +774,7 @@ function mapRepo(repo: GitHubRepo): HostingRepository {
     updatedAt: formatUpdatedAt(repo.pushed_at || repo.updated_at),
     branch: repo.default_branch || "main",
     private: repo.private,
+    canWrite: Boolean(repo.permissions?.admin || repo.permissions?.maintain || repo.permissions?.push),
     htmlUrl: repo.html_url || undefined,
   };
 }
@@ -552,6 +900,77 @@ export async function fetchHostingGitHubRepositoryTree(input: {
   return root.children || [];
 }
 
+function encodeGitHubContentPath(path: string) {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function encodeGitHubRefBranch(branch: string) {
+  return branch.split("/").map(encodeURIComponent).join("/");
+}
+
+function normalizeFallbackBranch(value: string) {
+  return value
+    .trim()
+    .replace(/^refs\/heads\//, "")
+    .replace(/[^A-Za-z0-9._/-]+/g, "-")
+    .replace(/\/+/g, "/")
+    .replace(/(^[./-]+|[./-]+$)/g, "")
+    .slice(0, 120) || `flowdesk/update-${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function shouldTryGitHubFallbackBranch(error: unknown) {
+  return error instanceof HostingGitHubApiError && (
+    error.status === 403 ||
+    error.status === 409 ||
+    error.status === 422
+  );
+}
+
+function resolveHostingGitHubAppId() {
+  return (
+    process.env.GITHUB_HOSTING_APP_ID ||
+    process.env.GITHUB_APP_ID ||
+    ""
+  ).trim();
+}
+
+function resolveHostingGitHubAppSlug() {
+  return (
+    process.env.GITHUB_HOSTING_APP_SLUG ||
+    process.env.GITHUB_APP_SLUG ||
+    ""
+  ).trim();
+}
+
+function resolveHostingGitHubAppPrivateKey() {
+  const raw =
+    process.env.GITHUB_HOSTING_APP_PRIVATE_KEY ||
+    process.env.GITHUB_APP_PRIVATE_KEY ||
+    "";
+  const base64 =
+    process.env.GITHUB_HOSTING_APP_PRIVATE_KEY_BASE64 ||
+    process.env.GITHUB_APP_PRIVATE_KEY_BASE64 ||
+    "";
+
+  if (raw.trim()) return raw.trim().replace(/\\n/g, "\n");
+  if (!base64.trim()) return "";
+
+  try {
+    return Buffer.from(base64.trim(), "base64").toString("utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function isHostingGitHubAppConfigured() {
+  return Boolean(resolveHostingGitHubAppId() && resolveHostingGitHubAppPrivateKey());
+}
+
+export function buildHostingGitHubAppInstallUrl() {
+  const slug = resolveHostingGitHubAppSlug();
+  return slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : null;
+}
+
 export async function fetchHostingGitHubRepositoryFile(input: {
   token: string;
   owner: string;
@@ -560,7 +979,7 @@ export async function fetchHostingGitHubRepositoryFile(input: {
   path: string;
 }) {
   const payload = await githubFetch<GitHubContentResponse>(
-    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${input.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(input.branch)}`,
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${encodeGitHubContentPath(input.path)}?ref=${encodeURIComponent(input.branch)}`,
     input.token,
   );
   if (payload.type !== "file" || payload.encoding !== "base64" || !payload.content) {
@@ -569,6 +988,205 @@ export async function fetchHostingGitHubRepositoryFile(input: {
   return {
     name: payload.name || input.path.split("/").pop() || input.path,
     path: payload.path || input.path,
+    sha: payload.sha || null,
     content: Buffer.from(payload.content.replace(/\s/g, ""), "base64").toString("utf8"),
   };
+}
+
+async function readGitHubFileSha(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  path: string;
+}) {
+  try {
+    const current = await githubFetch<GitHubContentResponse>(
+      `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${encodeGitHubContentPath(input.path)}?ref=${encodeURIComponent(input.branch)}`,
+      input.token,
+    );
+    return current.sha || null;
+  } catch (error) {
+    if (error instanceof HostingGitHubApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+async function commitGitHubContentToBranch(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  path: string;
+  content: string;
+  message: string;
+}) {
+  const sha = await readGitHubFileSha(input);
+
+  const payload = await githubRequest<GitHubCommitFileResponse>({
+    token: input.token,
+    method: "PUT",
+    path: `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/contents/${encodeGitHubContentPath(input.path)}`,
+    body: {
+      message: input.message,
+      content: Buffer.from(input.content, "utf8").toString("base64"),
+      branch: input.branch,
+      ...(sha ? { sha } : {}),
+    },
+  });
+
+  return {
+    path: payload.content?.path || input.path,
+    sha: payload.content?.sha || null,
+    htmlUrl: payload.content?.html_url || null,
+    commitSha: payload.commit?.sha || null,
+    commitUrl: payload.commit?.html_url || null,
+  };
+}
+
+async function ensureGitHubFallbackBranch(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  baseBranch: string;
+  fallbackBranch: string;
+}) {
+  const baseRef = await githubFetch<GitHubRefResponse>(
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/git/ref/heads/${encodeGitHubRefBranch(input.baseBranch)}`,
+    input.token,
+  );
+  const baseSha = baseRef.object?.sha;
+  if (!baseSha) {
+    throw new HostingGitHubApiError(422, "Nao consegui localizar a branch base no GitHub.");
+  }
+
+  try {
+    await githubRequest<GitHubRefResponse>({
+      token: input.token,
+      method: "POST",
+      path: `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/git/refs`,
+      body: {
+        ref: `refs/heads/${input.fallbackBranch}`,
+        sha: baseSha,
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof HostingGitHubApiError) || error.status !== 422) throw error;
+  }
+
+  return input.fallbackBranch;
+}
+
+async function findOpenGitHubPullRequest(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  baseBranch: string;
+  headBranch: string;
+}) {
+  const pulls = await githubFetch<GitHubPullRequestResponse[]>(
+    `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls?state=open&base=${encodeURIComponent(input.baseBranch)}&head=${encodeURIComponent(`${input.owner}:${input.headBranch}`)}`,
+    input.token,
+  ).catch(() => []);
+  return pulls[0] || null;
+}
+
+async function createGitHubPullRequest(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  baseBranch: string;
+  headBranch: string;
+  title: string;
+  body: string;
+}) {
+  try {
+    return await githubRequest<GitHubPullRequestResponse>({
+      token: input.token,
+      method: "POST",
+      path: `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls`,
+      body: {
+        title: input.title,
+        head: `${input.owner}:${input.headBranch}`,
+        base: input.baseBranch,
+        body: input.body,
+        maintainer_can_modify: true,
+      },
+    });
+  } catch (error) {
+    if (error instanceof HostingGitHubApiError && error.status === 422) {
+      const existing = await findOpenGitHubPullRequest(input);
+      if (existing) return existing;
+    }
+    throw error;
+  }
+}
+
+export async function commitHostingGitHubRepositoryFile(input: {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  path: string;
+  content: string;
+  message: string;
+  fallbackBranch?: string | null;
+  pullRequestTitle?: string | null;
+  pullRequestBody?: string | null;
+  allowFallbackBranch?: boolean;
+}) {
+  try {
+    const commit = await commitGitHubContentToBranch(input);
+    return {
+      ...commit,
+      mode: "direct" as const,
+      branch: input.branch,
+      baseBranch: input.branch,
+      pullRequestUrl: null,
+      pullRequestNumber: null,
+      fallbackReason: null,
+    };
+  } catch (error) {
+    if (!input.allowFallbackBranch || !shouldTryGitHubFallbackBranch(error)) throw error;
+
+    const fallbackBranch = normalizeFallbackBranch(
+      input.fallbackBranch || `flowdesk/vps-${crypto.randomBytes(6).toString("hex")}`,
+    );
+    await ensureGitHubFallbackBranch({
+      token: input.token,
+      owner: input.owner,
+      repo: input.repo,
+      baseBranch: input.branch,
+      fallbackBranch,
+    });
+    const commit = await commitGitHubContentToBranch({
+      ...input,
+      branch: fallbackBranch,
+      message: `${input.message} (branch Flowdesk)`,
+    });
+    const pullRequest = await createGitHubPullRequest({
+      token: input.token,
+      owner: input.owner,
+      repo: input.repo,
+      baseBranch: input.branch,
+      headBranch: fallbackBranch,
+      title: input.pullRequestTitle || `Flowdesk: atualiza ${input.path}`,
+      body: input.pullRequestBody || [
+        "Alteracao criada automaticamente pelo painel Flowdesk.",
+        "",
+        `Arquivo: \`${input.path}\``,
+        `Branch base: \`${input.branch}\``,
+      ].join("\n"),
+    }).catch(() => null);
+
+    return {
+      ...commit,
+      mode: "branch" as const,
+      branch: fallbackBranch,
+      baseBranch: input.branch,
+      pullRequestUrl: pullRequest?.html_url || null,
+      pullRequestNumber: pullRequest?.number || null,
+      fallbackReason: error instanceof HostingGitHubApiError ? error.githubMessage || error.message : null,
+    };
+  }
 }

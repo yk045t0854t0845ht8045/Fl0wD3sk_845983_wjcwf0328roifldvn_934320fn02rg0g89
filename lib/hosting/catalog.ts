@@ -20,6 +20,7 @@ export type HostingRepository = {
   updatedAt: string;
   branch: string;
   private: boolean;
+  canWrite?: boolean;
   htmlUrl?: string;
 };
 

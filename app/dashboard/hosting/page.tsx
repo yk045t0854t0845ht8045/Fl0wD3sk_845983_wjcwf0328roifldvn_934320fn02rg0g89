@@ -2,6 +2,7 @@ import { HostingWorkspace } from "@/components/dashboard/HostingWorkspace";
 import { getCurrentUserFromSessionCookieSafe } from "@/lib/auth/session";
 import {
   fetchHostingGitHubProfile,
+  isPermanentHostingGitHubAuthError,
   markHostingGitHubTokenInvalid,
   readHostingGitHubToken,
 } from "@/lib/hosting/github";
@@ -19,15 +20,17 @@ export default async function DashboardHostingPage() {
   if (session.user?.id) {
     const token = await readHostingGitHubToken(session.user.id);
     if (token) {
+      githubConnected = true;
       try {
         await fetchHostingGitHubProfile(token);
-        githubConnected = true;
       } catch (error) {
-        await markHostingGitHubTokenInvalid(
-          session.user.id,
-          error instanceof Error ? error.message : "GitHub invalido.",
-        ).catch(() => null);
-        githubConnected = false;
+        if (isPermanentHostingGitHubAuthError(error)) {
+          await markHostingGitHubTokenInvalid(
+            session.user.id,
+            error instanceof Error ? error.message : "GitHub invalido.",
+          ).catch(() => null);
+          githubConnected = false;
+        }
       }
     }
     const supabase = getSupabaseAdminClientOrThrow();

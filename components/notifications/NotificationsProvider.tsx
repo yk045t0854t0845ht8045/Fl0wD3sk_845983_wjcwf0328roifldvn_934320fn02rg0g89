@@ -63,7 +63,6 @@ type NotificationCollections = {
 };
 
 const MAX_VISIBLE_NOTIFICATIONS = 3;
-const MAX_BUFFERED_NOTIFICATIONS = 36;
 const DEFAULT_NOTIFICATION_DURATION_MS = 5200;
 const MINIMUM_RESUME_DURATION_MS = 180;
 const INITIAL_NOTIFICATION_ANIMATION_DELAY_MS = 640;
@@ -431,46 +430,18 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
     (id: string) => {
       clearDismissTimer(id);
 
-      const promotedItems: NotificationItem[] = [];
       updateCollections((current) => {
         const nextVisible = current.visible.filter((item) => item.id !== id);
-        const removedVisibleItem = nextVisible.length !== current.visible.length;
         const nextQueued = current.queued.filter((item) => item.id !== id);
-
-        if (removedVisibleItem) {
-          while (
-            nextVisible.length < MAX_VISIBLE_NOTIFICATIONS &&
-            nextQueued.length > 0
-          ) {
-            const nextQueuedItem = nextQueued.shift();
-            if (!nextQueuedItem) {
-              break;
-            }
-
-            promotedItems.push(nextQueuedItem);
-            nextVisible.push(nextQueuedItem);
-          }
-        }
 
         return {
           visible: nextVisible,
-          queued: nextQueued,
+          queued: nextQueued.slice(0, 0),
         };
-      });
-
-      promotedItems.forEach((item) => {
-        if (expandedRef.current) {
-          setPausedDismissTimer(item.id, item.durationMs);
-          return;
-        }
-
-        scheduleDismiss(item.id, item.durationMs);
       });
     },
     [
       clearDismissTimer,
-      scheduleDismiss,
-      setPausedDismissTimer,
       updateCollections,
     ],
   );
@@ -612,31 +583,19 @@ export function NotificationsProvider({ children }: NotificationsProviderProps) 
 
         targetId = item.id;
         targetDelayMs = item.durationMs;
-
-        if (current.visible.length < MAX_VISIBLE_NOTIFICATIONS) {
-          shouldRunVisibleTimer = true;
-          return {
-            visible: [item, ...current.visible],
-            queued: current.queued,
-          };
+        shouldRunVisibleTimer = true;
+        const nextVisible = [item, ...current.visible].slice(0, MAX_VISIBLE_NOTIFICATIONS);
+        const nextVisibleIds = new Set(nextVisible.map((visibleItem) => visibleItem.id));
+        for (const visibleItem of current.visible) {
+          if (!nextVisibleIds.has(visibleItem.id)) droppedIds.push(visibleItem.id);
         }
-
-        const nextQueued = [...current.queued, item];
-        while (
-          current.visible.length + nextQueued.length >
-          MAX_BUFFERED_NOTIFICATIONS
-        ) {
-          const droppedItem = nextQueued.shift();
-          if (!droppedItem) {
-            break;
-          }
-
-          droppedIds.push(droppedItem.id);
+        for (const queuedItem of current.queued) {
+          droppedIds.push(queuedItem.id);
         }
 
         return {
-          visible: current.visible,
-          queued: nextQueued,
+          visible: nextVisible,
+          queued: [],
         };
       });
 

@@ -3,6 +3,7 @@ import {
   fetchHostingGitHubProfile,
   hasHostingGitHubTokenCookie,
   isHostingGitHubConfigured,
+  isPermanentHostingGitHubAuthError,
   markHostingGitHubTokenInvalid,
   readHostingGitHubToken,
   storeHostingGitHubTokenForUser,
@@ -71,7 +72,7 @@ export async function GET() {
       }),
     );
   } catch (error) {
-    if (session?.user?.id) {
+    if (session?.user?.id && isPermanentHostingGitHubAuthError(error)) {
       await markHostingGitHubTokenInvalid(
         session.user.id,
         error instanceof Error ? error.message : "Falha ao validar GitHub.",

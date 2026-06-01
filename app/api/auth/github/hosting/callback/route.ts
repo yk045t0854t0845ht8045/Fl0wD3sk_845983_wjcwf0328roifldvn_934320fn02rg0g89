@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   clearHostingGitHubStateCookie,
-  createHostingGitHubHandoffToken,
+  createHostingGitHubHandoffTokenBundle,
   exchangeHostingGitHubCode,
   isHostingGitHubConfigured,
   readHostingGitHubStateCookie,
@@ -66,14 +66,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const token = await exchangeHostingGitHubCode({ code, request });
-    const handoffToken = createHostingGitHubHandoffToken(token);
+    const tokenBundle = await exchangeHostingGitHubCode({ code, request });
+    const handoffToken = createHostingGitHubHandoffTokenBundle(tokenBundle);
     const response = popupHtml({
       ok: true,
       message: "GitHub conectado com sucesso.",
       handoffToken,
     });
-    setHostingGitHubTokenCookie(request, response, token);
+    setHostingGitHubTokenCookie(request, response, tokenBundle.accessToken);
     clearHostingGitHubStateCookie(request, response);
     return applyNoStoreHeaders(response);
   } catch (error) {

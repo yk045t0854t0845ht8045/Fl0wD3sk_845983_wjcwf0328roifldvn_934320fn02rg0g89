@@ -173,6 +173,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const { data: duplicateRepositoryProject, error: duplicateRepositoryError } = await supabase
+    .from("hosting_projects")
+    .select("vps_code, github_owner, github_repo, status")
+    .eq("user_id", session.user.id)
+    .not("status", "in", "(deleted,cancelled)")
+    .or(
+      [
+        `github_repo_id.eq.${repository.id}`,
+        `and(github_owner.eq.${repository.owner},github_repo.eq.${repository.name})`,
+      ].join(","),
+    )
+    .maybeSingle();
+
+  if (duplicateRepositoryError) {
+    return applyNoStoreHeaders(
+      NextResponse.json({ ok: false, message: duplicateRepositoryError.message }, { status: 500 }),
+    );
+  }
+
+  if (duplicateRepositoryProject?.vps_code) {
+    return applyNoStoreHeaders(
+      NextResponse.json({
+        ok: false,
+        duplicateRepository: true,
+        vpsCode: duplicateRepositoryProject.vps_code,
+        message: `Este repositorio ja esta vinculado a VPS ${duplicateRepositoryProject.vps_code}. Escolha outro repositorio para criar uma nova hospedagem.`,
+      }, { status: 409 }),
+    );
+  }
+
   const { data: project, error: insertError } = await supabase
     .from("hosting_projects")
     .insert({

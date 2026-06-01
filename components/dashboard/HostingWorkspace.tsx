@@ -89,6 +89,8 @@ type GitHubRepositoriesResponse = {
   ok: boolean;
   message?: string;
   repositories?: HostingRepository[];
+  hiddenUsedCount?: number;
+  hiddenNoWriteCount?: number;
 };
 
 type HostingProvisionResponse = {
@@ -232,6 +234,124 @@ function HostingProjectsOverview({
   onCreate: () => void;
   onReconnect: () => void;
 }) {
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectMessage, setReconnectMessage] = useState<string | null>(null);
+
+  async function completeReconnect(handoffToken: unknown) {
+    if (typeof handoffToken !== "string" || !handoffToken.trim()) {
+      setReconnectMessage("GitHub autorizou, mas a validacao temporaria nao chegou ao painel.");
+      return false;
+    }
+
+    const response = await fetch("/api/auth/me/hosting/github/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ handoffToken }),
+    });
+    const payload = await response.json() as GitHubCompleteResponse;
+    setReconnectMessage(payload.message || null);
+    if (response.ok && payload.connected) {
+      onReconnect();
+      return true;
+    }
+    return false;
+  }
+
+  async function processReconnectPayload(input: unknown) {
+    const data = input as {
+      source?: string;
+      ok?: boolean;
+      message?: string;
+      handoffToken?: string | null;
+    };
+    if (data?.source !== "flowdesk-hosting-github") return false;
+    window.localStorage.removeItem(GITHUB_HANDOFF_STORAGE_KEY);
+    setReconnectMessage(data.message || null);
+    if (!data.ok) return true;
+    await completeReconnect(data.handoffToken);
+    return true;
+  }
+
+  async function processStoredReconnectHandoff() {
+    try {
+      const raw = window.localStorage.getItem(GITHUB_HANDOFF_STORAGE_KEY);
+      if (!raw) return false;
+      return await processReconnectPayload(JSON.parse(raw) as unknown);
+    } catch {
+      window.localStorage.removeItem(GITHUB_HANDOFF_STORAGE_KEY);
+      return false;
+    }
+  }
+
+  async function reconnectGitHub() {
+    if (reconnecting) return;
+    setReconnecting(true);
+    setReconnectMessage(null);
+    const width = 540;
+    const height = 720;
+    const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
+    const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
+    const popup = window.open(
+      "/api/auth/github/hosting/start?mode=reconnect",
+      "flowdesk-hosting-github-reconnect",
+      `width=${width},height=${height},left=${left},top=${top},popup=yes`,
+    );
+
+    if (!popup) {
+      setReconnecting(false);
+      setReconnectMessage("Permita popups para reconectar o GitHub.");
+      return;
+    }
+
+    let finished = false;
+    let timeoutId = 0;
+    let pollIntervalId = 0;
+
+    const finish = () => {
+      finished = true;
+      window.clearTimeout(timeoutId);
+      window.clearInterval(pollIntervalId);
+      window.removeEventListener("message", handleMessage);
+      setReconnecting(false);
+    };
+
+    const poll = async () => {
+      const processed = await processStoredReconnectHandoff();
+      if (processed) {
+        finish();
+        return;
+      }
+      if (popup.closed) {
+        const response = await fetch("/api/auth/me/hosting/github/status", { cache: "no-store" });
+        const payload = await response.json() as GitHubStatusResponse;
+        if (payload.connected) {
+          onReconnect();
+        } else {
+          setReconnectMessage(payload.message || "A reconexao do GitHub nao foi concluida.");
+        }
+        finish();
+      }
+    };
+
+    const handleMessage = (event: MessageEvent) => {
+      void processReconnectPayload(event.data).then((processed) => {
+        if (processed) finish();
+      });
+    };
+
+    window.addEventListener("message", handleMessage);
+    pollIntervalId = window.setInterval(() => {
+      if (!finished) void poll();
+    }, 700);
+    timeoutId = window.setTimeout(() => {
+      if (!finished) {
+        setReconnectMessage("Tempo limite ao reconectar GitHub. Tente novamente.");
+        finish();
+      }
+    }, 120_000);
+  }
+
   if (!githubConnected) {
     return (
       <HostingShell>
@@ -248,12 +368,18 @@ function HostingProjectsOverview({
             </p>
             <button
               type="button"
-              onClick={onReconnect}
+              onClick={() => void reconnectGitHub()}
+              disabled={reconnecting}
               className="mt-[18px] inline-flex h-[44px] items-center justify-center gap-[9px] rounded-[12px] bg-[#F2F2F2] px-[16px] text-[13px] font-semibold text-[#050505] transition-colors hover:bg-white"
             >
-              <GitBranch className="h-[16px] w-[16px]" />
-              Conectar GitHub
+              {reconnecting ? <Loader2 className="h-[16px] w-[16px] animate-spin" /> : <GitBranch className="h-[16px] w-[16px]" />}
+              {reconnecting ? "Conectando..." : "Conectar GitHub"}
             </button>
+            {reconnectMessage ? (
+              <p className="mx-auto mt-[12px] max-w-[460px] rounded-[14px] border border-[#1B1B1B] bg-[#0B0B0B] px-[12px] py-[10px] text-[12px] leading-[1.5] text-[#8E8E8E]">
+                {reconnectMessage}
+              </p>
+            ) : null}
           </div>
         </div>
       </HostingShell>
@@ -815,6 +941,8 @@ function RepositoryStep({
   const [repositories, setRepositories] = useState<HostingRepository[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+  const [hiddenUsedCount, setHiddenUsedCount] = useState(0);
+  const [hiddenNoWriteCount, setHiddenNoWriteCount] = useState(0);
   const selectedAccount = draft.selectedGithubAccountLogin || accounts[0]?.login || "";
   const selectedAccountRecord = accounts.find((account) => account.login === selectedAccount) || accounts[0] || null;
 
@@ -854,8 +982,12 @@ function RepositoryStep({
         throw new Error(payload.message || "Nao foi possivel carregar repositorios.");
       }
       setRepositories(payload.repositories || []);
+      setHiddenUsedCount(payload.hiddenUsedCount || 0);
+      setHiddenNoWriteCount(payload.hiddenNoWriteCount || 0);
     } catch (error) {
       setRepositories([]);
+      setHiddenUsedCount(0);
+      setHiddenNoWriteCount(0);
       setMessage(error instanceof Error ? error.message : "Nao foi possivel carregar repositorios.");
     } finally {
       setLoading(false);
@@ -939,7 +1071,21 @@ function RepositoryStep({
         ) : null}
         {!loading && !message && repositories.length === 0 ? (
           <div className="p-[18px] text-[13px] font-medium text-[#777777]">
-            Nenhum repositorio encontrado nessa conta.
+            {hiddenUsedCount > 0
+              ? "Todos os repositorios encontrados nessa conta ja estao vinculados a uma VPS. Escolha outra conta/organizacao ou crie um novo repositorio."
+              : hiddenNoWriteCount > 0
+                ? "Os repositorios encontrados nessa conta nao liberaram escrita para o Flowdesk. Reconecte o GitHub com acesso total ou ajuste a permissao da organizacao."
+                : "Nenhum repositorio encontrado nessa conta."}
+          </div>
+        ) : null}
+        {!loading && !message && hiddenUsedCount > 0 && repositories.length > 0 ? (
+          <div className="border-b border-[#151515] bg-[#0B0B0B] px-[18px] py-[12px] text-[12px] font-medium text-[#8E8E8E]">
+            {hiddenUsedCount} repositorio(s) ja vinculado(s) a outra VPS foram ocultados para evitar duplicidade.
+          </div>
+        ) : null}
+        {!loading && !message && hiddenNoWriteCount > 0 ? (
+          <div className="border-b border-[#151515] bg-[#0B0B0B] px-[18px] py-[12px] text-[12px] font-medium text-[#8E8E8E]">
+            {hiddenNoWriteCount} repositorio(s) sem permissao de escrita foram ocultados. Reconecte o GitHub com acesso total ou ajuste a permissao na organizacao.
           </div>
         ) : null}
         {!loading && !message ? repositories.map((repo) => {
@@ -1660,17 +1806,10 @@ export function HostingWorkspace({
   }
 
   function reconnectGithubFromOverview() {
-    setStepDirection("forward");
-    const next = {
-      ...DEFAULT_DRAFT,
-      kind: initialProjects[0]?.hosting_kind || null,
-      step: "github" as const,
-    };
-    draftRef.current = next;
-    setDraft(next);
-    router.push(HOSTING_STEP_PATH_BY_STEP.github, {
-      scroll: false,
-    });
+    window.sessionStorage.removeItem(STORAGE_KEY);
+    draftRef.current = DEFAULT_DRAFT;
+    setDraft(DEFAULT_DRAFT);
+    router.refresh();
   }
 
   const repository =
